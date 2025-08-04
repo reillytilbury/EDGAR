@@ -1,0 +1,11 @@
+# Environment variables
+.env
+
+# programs database
+git rm --cached -r program_databases
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
