@@ -43,7 +43,7 @@ def log_mse_loss(y_est, y, eps=1e-3):
     Returns:
         jnp.ndarray: The log MSE loss.
     """
-    return 10 * (jnp.log(y_est + eps) - jnp.log(y + eps)) ** 2
+    return (jnp.log(y_est + eps) - jnp.log(y + eps)) ** 2
 
 def quadratic_loss(y_est, y):
     """
@@ -56,4 +56,17 @@ def quadratic_loss(y_est, y):
     Returns:
         jnp.ndarray: The quadratic loss.
     """
-    return 10 * (y_est - y) ** 2 
+    return (y_est - y) ** 2 
+
+def abs_loss(y_est, y):
+    """
+    Absolute loss function between predicted and true values.
+    
+    Args:
+        y_est (jnp.ndarray): Predicted values.
+        y (jnp.ndarray): True values.
+
+    Returns:
+        jnp.ndarray: The absolute loss.
+    """
+    return jnp.abs(y_est - y)

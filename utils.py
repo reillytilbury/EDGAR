@@ -1,14 +1,18 @@
 import os
 import asyncio
-import diagnostic
+import diagnostic, hypothesis_engine
 import ast
 import jax
 import time
 import numpy as np
+import scipy as sc
 import asyncio
+import pickle
 import jax.numpy as jnp
 import pandas as pd
-from typing import Tuple, Union, List
+import optax
+from dotenv import load_dotenv
+from typing import Callable, Dict, Any, Optional, Sequence, Union, Tuple, List
 # gemini client
 from google import genai
 from google.genai import types
@@ -21,7 +25,8 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("google.genai").setLevel(logging.ERROR)
 # load dotenv to load environment variables from .env file
-from dotenv import load_dotenv
+
+
 
 def vmap_over_cells(model_fn):
     """Return a version of `model_fn` that accepts
@@ -754,6 +759,606 @@ Critically, detail all your improvements within the function's docstring. For ea
     
     return text_prompt
 
+def unbiased_signal_fraction(R, min_repeats=2):
+    """
+    Compute unbiased fraction of stimulus-related variance (Sahani & Linden, 2003)
+    using explicit repeats per angle (no binning).
+
+    Parameters
+    ----------
+    R : array, shape (n_repeats, n_cells, n_angles)
+        Neural responses: repeats × cells × unique angles.
+    min_repeats : int
+        Minimum repeats per stimulus (default: 2).
+
+    Returns
+    -------
+    signal_fraction : array, shape (n_cells,)
+        Fraction of total variance explained by the stimulus.
+    components : dict
+        Contains:
+          - 'S2': stimulus-related variance per cell
+          - 'V2': noise variance per cell
+          - 'mu_angles': mean response per angle (n_cells × n_angles)
+          - 'var_angles': within-angle variance (n_cells × n_angles)
+    """
+
+    n_repeats, n_cells, n_angles = R.shape
+    if n_repeats < min_repeats:
+        raise ValueError(f"Need at least {min_repeats} repeats per angle, got {n_repeats}.")
+
+    # ----------------------------------------------------------------
+    # Per-angle means and within-angle variances
+    # ----------------------------------------------------------------
+    mu_angles = np.mean(R, axis=0)        # (n_cells, n_angles)
+    var_angles = np.var(R, axis=0, ddof=1)  # (n_cells, n_angles)
+
+    # ----------------------------------------------------------------
+    # Unbiased stimulus-related and noise variances
+    # ----------------------------------------------------------------
+    N = n_angles
+    R_s = np.full(N, n_repeats, dtype=float)  # repeats per stimulus, constant
+
+    # Global mean across all stimuli
+    fbar_dot = np.mean(mu_angles, axis=1)  # (n_cells,)
+
+    # Across-stimulus variance (stimulus-related term)
+    term1 = np.mean((mu_angles - fbar_dot[:, None])**2, axis=1)
+
+    # Bias correction term (Eq. from Sahani & Linden, 2003)
+    term2 = ((N - 1) / N**2) * np.sum(var_angles / R_s[None, :], axis=1)
+
+    S2 = term1 - term2  # unbiased stimulus-related variance
+    V2 = np.sum(var_angles / R_s[None, :], axis=1) / N  # average noise variance
+
+    # Fraction of total variance due to the stimulus
+    signal_fraction = S2 / (S2 + V2)
+    signal_fraction = np.clip(signal_fraction, 0, 1)
+
+    return signal_fraction, {
+        "S2": S2,
+        "V2": V2,
+        "mu_angles": mu_angles,
+        "var_angles": var_angles,
+    }
+
+def load_data(data_dir: Union[str, List[List[str]]],
+              data_type: str = 'stringer',
+              shuffle: bool = False,
+              conc_thresh: float = 0.4, 
+              activity_thresh: float = 0.0, 
+              signal_fraction_thresh: float = 0.0,
+              n_bins: int = 256, 
+              min_repeats: int = 6) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Load and preprocess neural data from a specified directory.
+
+    Parameters
+    ----------
+    data_dir : str
+        Path to the .npy file containing neural data (if 'stringer' or 'ali') or [[data_paths], [metadata_paths]] (if 'jacob').
+    data_type : str
+        Type of data to load ('stringer' or 'jacob' or 'ali')
+    shuffle : bool
+        Whether to shuffle the repeats for each trial. Only relevant if we have exact repeats (i.e., Jacob's data).
+    conc_thresh : float
+        Concentration threshold for filtering neurons.
+    activity_thresh : float
+        Activity threshold for filtering neurons.
+    signal_fraction_thresh : float
+        Signal fraction threshold for filtering neurons.
+    n_bins : int
+        Number of bins for response averaging.
+    min_repeats : int
+        Minimum number of repeats for response averaging.
+
+    Returns 
+    -------
+    response : jnp.ndarray
+        Preprocessed neural response. (n_repeats, n_cells, n_bins)
+    angles : jnp.ndarray
+        Preprocessed stimulus angles. (n_bins,)
+    """
+    assert data_type in ['stringer', 'jacob', 'ali'], "data_type must be either 'stringer', 'jacob', or 'ali'"
+
+    # load data matrix (n_cells, n_trials) and angles (n_trials,)
+    if data_type == 'stringer':
+        neural_data = np.load(data_dir, allow_pickle=True).item()
+        response = extract_stimulus_related_response(neural_data, n_pcs=0)
+        angles = neural_data['istim']
+        if shuffle:
+            # shuffle responses for each trial
+            n_trials = angles.shape[0]
+            perm = np.random.permutation(n_trials)
+            response = response[:, perm]
+            angles = angles[perm]
+
+    elif data_type == 'jacob':
+        assert isinstance(data_dir, list) and len(data_dir) == 2, "For 'jacob' data_type, data_dir must be a list of two lists: [[data_paths], [metadata_paths]]"
+        data_dirs, metadata_dirs = data_dir
+        responses = []
+        for data_dir in data_dirs:
+            response = np.load(data_dir).T
+            responses.append(response)
+        angles = []
+        for metadata_dir in metadata_dirs:
+            mat_data = sc.io.loadmat(metadata_dir, simplify_cells=True)
+            # in the single block case the first and last angles should be removed
+            if 'BZ016' in metadata_dir:
+                angles.append(np.array([entry['gratingOrient'] for entry in mat_data['block']['paramsValues']])[1:-1])
+            else: 
+                angles.append(np.array([entry['gratingOrient'] for entry in mat_data['block']['paramsValues']]))
+        # remove responses where angle = 1
+        for i in range(len(responses)):
+            responses[i] = responses[i][:, angles[i] != 1]
+            angles[i] = angles[i][angles[i] != 1]
+            angles[i] = np.deg2rad(angles[i])
+        # for each repeat, reorder angles and responses
+        for i in range(len(responses)):
+            responses[i] = responses[i][:, np.argsort(angles[i])]
+            angles[i] = np.sort(angles[i])
+        # now turn responses into an array and replace angles with any of its entries
+        response = np.array(responses)
+        n_blocks = response.shape[0]
+        angles = angles[0]
+        # optionally shuffle repeats for each trial
+        if shuffle:
+            for trial in range(len(angles)):
+                perm = np.random.permutation(n_blocks)
+                response[:, :, trial] = response[perm, :, trial]
+        # Jacob's data included 0 as well as 2pi, so shift any angles starting with 6.2831 to 2pi - small epsilon
+        angles[angles >= 6.2831] = 2 * np.pi - 1e-5
+        response_flat = np.transpose(response, (1, 2, 0))  # n_cells x n_trials x n_blocks
+        response_flat = response_flat.reshape(response_flat.shape[0], -1)  # n_cells x (n_trials*n_blocks)
+        angles_flat = np.repeat(angles, n_blocks)  # now angles is (n_trials*n_blocks)
+        response, angles = response_flat, angles_flat
+    
+    else:  # 'ali' data
+        # with open(data_dir, 'rb') as f:
+        #     neural_data = pickle.load(f)
+        # response = neural_data['resps'].T    # shape (n_cells, n_trials)
+        # angles = neural_data['stims'].astype(float) 
+        # angles = angles % 360  # ensure angles are in [0, 360)
+        # angles = np.deg2rad(angles)  # convert to radians
+        # angles = angles % (2 * np.pi)  # ensure angles are in [0, 2pi)
+        # # set each cell's 1th percentile response to 0
+        # response = response - np.percentile(response, 1, axis=1, keepdims=True)
+        # response[response < 0] = 0
+        angles = np.load(data_dir[0])
+        angles = np.deg2rad(angles)  # convert to radians
+        response = np.load(data_dir[1])
+        response = response.mean(axis=-1)
+        response = response.T  # shape (n_cells, n_trials)
+        # optionally shuffle responses for each trial
+        if shuffle:
+            n_trials = angles.shape[0]
+            perm = np.random.permutation(n_trials)
+            response = response[:, perm]
+            angles = angles[perm]
+
+    # Activity, concentration filtering
+    active = (response > 0).astype(np.float32)
+    firing_probs = np.mean(active, axis=1)
+    conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
+    good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
+    n_good_cells = len(good_cells)
+    print(f"Selected {n_good_cells} / {response.shape[0]} cells with activity > {activity_thresh} and concentration > {conc_thresh}.")
+
+    # Keep only good cells
+    conc = conc[good_cells]
+    firing_probs = firing_probs[good_cells]
+    response = response[good_cells, :]
+
+    # bin responses
+    bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    # digitize angles
+    bin_indices = np.digitize(angles, bin_edges) - 1
+    # raise error if any bin has fewer than min_repeats
+    min_bin_counts = np.min(np.bincount(bin_indices, minlength=n_bins))
+    if min_bin_counts < min_repeats:
+        raise ValueError(f"Not enough repeats in some bins. Minimum repeats: {min_bin_counts}, required: {min_repeats}")
+    response_binned = np.zeros((min_repeats, n_good_cells, n_bins))
+    for b in range(n_bins):
+        relevant_indices = np.where(bin_indices == b)[0]
+        n_responses = len(relevant_indices)
+        pool_size = n_responses // min_repeats
+        # take average of each pool
+        mean_responses = []
+        for r in range(min_repeats):
+            # this choice of pool indices mixes blocks
+            # pool_indices = relevant_indices[r * pool_size:(r + 1) * pool_size]
+            # this choice of indices keeps blocks separate
+            pool_indices = relevant_indices[r::min_repeats][:pool_size]
+            mean_responses.append(np.mean(response[:, pool_indices], axis=1))
+        response_binned[:, :, b] = np.array(mean_responses)
+    angles = bin_centers
+    response = response_binned
+
+    # Convert to JAX arrays
+    response, angles = jnp.asarray(response), jnp.asarray(angles)
+
+    # Normalize responses so that for each cell and repeat, the RMS across bins is 1
+    activity_norms = jnp.linalg.norm(response, axis=-1)
+    normalization_factors = activity_norms / jnp.sqrt(n_bins)
+    response = response / normalization_factors[:, :, None]
+    # compute signal fraction for each cell
+    signal_fraction = unbiased_signal_fraction(np.array(response))[0]
+    reliable_cells = jnp.where(signal_fraction > signal_fraction_thresh)[0]
+    n_reliable_cells = len(reliable_cells)
+    print(f"Selected {n_reliable_cells} / {n_good_cells} cells with signal fraction > {signal_fraction_thresh}.")
+    # keep only reliable cells
+    response = response[:, reliable_cells, :]
+    return response, angles
+
+def train_with_patience_optimization(
+    x_data: jnp.ndarray,
+    y_data: jnp.ndarray,
+    neuron_model: Callable,
+    parameter_estimator: Callable,
+    loss_function: Callable,
+    val1_fraction: float = 0,
+    val2_fraction: float = 0,
+    num_steps: int = 6_000,
+    learning_rate: float = 1e-3,
+    patience_values: list = (50, 100, 150, 200, 250, 300, 350, 400, 450, 500),
+    print_every: int = 100,
+    manual_exponents: jnp.ndarray = None,
+    seed: int = 42,
+    cellwise_patience: bool = True,  # NEW
+) -> Dict[str, Any]:
+    """
+    Train with two validation sets and patience optimization.
+
+    - val1_fraction: used for early-stopping step (per cell)
+    - val2_fraction: used for patience tuning (per cell or global)
+    - cellwise_patience: if True, pick patience per cell; else one global patience
+    """
+    rng = np.random.default_rng(seed)
+    n_trials = x_data.shape[1]
+
+    # ---------------------------
+    # Split indices
+    # ---------------------------
+    if val1_fraction < 0 or val2_fraction < 0 or (val1_fraction + val2_fraction) >= 1:
+        raise ValueError("Require 0 ≤ val1_frac, val2_frac and val1_frac + val2_frac < 1.")
+
+    if val1_fraction == 0 and val2_fraction == 0:
+        training_trials = np.arange(n_trials)
+        val1_trials = np.array([], dtype=int)
+        val2_trials = np.array([], dtype=int)
+    else:
+        n_val1 = int(np.floor(n_trials * val1_fraction))
+        n_val2 = int(np.floor(n_trials * val2_fraction))
+        all_idx = np.arange(n_trials)
+        rng.shuffle(all_idx)
+        val2_trials = all_idx[:n_val2]
+        val1_trials = all_idx[n_val2:n_val2 + n_val1]
+        training_trials = all_idx[n_val2 + n_val1:]
+
+    print(f"Data split: {len(training_trials)} train, {len(val1_trials)} val1, {len(val2_trials)} val2")
+
+    x_train, y_train = x_data[:, training_trials], y_data[:, training_trials]
+    x_val1 = x_data[:, val1_trials] if val1_fraction > 0 else None
+    y_val1 = y_data[:, val1_trials] if val1_fraction > 0 else None
+    x_val2 = x_data[:, val2_trials] if val2_fraction > 0 else None
+    y_val2 = y_data[:, val2_trials] if val2_fraction > 0 else None
+
+    # ---------------------------
+    # Loss helpers
+    # ---------------------------
+    loss_single = lambda p, x, y: jnp.nanmean(loss_function(neuron_model(x, *p), y), axis=-1)
+    loss_total = jax.vmap(loss_single, in_axes=(0, 0, 0), out_axes=0)
+
+    @jax.jit
+    def mean_loss(params, x, y):
+        return jnp.nanmean(loss_total(params, x, y))
+
+    # ---------------------------
+    # Optimizer
+    # ---------------------------
+    def make_train_fns(x, y):
+        obj = lambda p: mean_loss(p, x, y)
+        obj_and_grad = jax.value_and_grad(obj)
+        opt = optax.adam(learning_rate)
+        def init_state(p0): return opt.init(p0)
+        @jax.jit
+        def step(p, opt_state):
+            loss_val, grads = obj_and_grad(p)
+            updates, opt_state = opt.update(grads, opt_state, p)
+            p = optax.apply_updates(p, updates)
+            return p, opt_state, loss_val
+        return init_state, step
+
+    # ---------------------------
+    # Init params
+    # ---------------------------
+    def init_params_from(x, y):
+        p0 = hypothesis_engine.compute_initial_params(
+            param_estimator=parameter_estimator,
+            neuron_model=neuron_model,
+            x=np.asarray(x),
+            y=np.asarray(y),
+        ).copy()
+        # if we are in the standard model, enforce theta2 = theta1 + pi
+        if p0.shape[1] == 11:
+            # set param 6 (theta2) to param 0 + pi
+            p0 = p0.at[:, 6].set((p0[:, 0] + jnp.pi) % (2 * jnp.pi))
+        if manual_exponents is not None:
+            p0 = p0.at[:, 5].set(manual_exponents)
+            p0 = p0.at[:, 10].set(manual_exponents)
+        return p0
+
+    # ============================================================
+    # CASE 1: No val sets → single-phase training
+    # ============================================================
+    if val1_fraction == 0 and val2_fraction == 0:
+        print("\n=== Single-phase training on ALL data ===\n")
+        params = init_params_from(x_data, y_data)
+        n_cells, n_params = params.shape
+        init_opt, train_step = make_train_fns(x_data, y_data)
+        opt_state = init_opt(params)
+        params_dynamic = np.zeros((num_steps, n_cells, n_params), dtype=np.float32)
+        for step in range(1, num_steps + 1):
+            params, opt_state, loss_val = train_step(params, opt_state)
+            params_dynamic[step - 1] = params
+            if step % print_every == 0:
+                print(f"Step {step:4d} | Loss(all): {float(loss_val):.4f}")
+        return {
+            "params": params,
+            "loss": np.array(loss_total(params, x_data, y_data)),
+            "params_dynamic": params_dynamic,
+            "data_splits": {
+                "train_trials": training_trials,
+                "val1_trials": val1_trials,
+                "val2_trials": val2_trials,
+            },
+        }
+
+    # ============================================================
+    # Phase A: Train on train
+    # ============================================================
+    print("\n=== Phase A: Train on TRAIN only ===\n")
+    params_A = init_params_from(x_train, y_train)
+    n_cells, n_params = params_A.shape
+    init_opt_A, train_step_A = make_train_fns(x_train, y_train)
+    opt_state_A = init_opt_A(params_A)
+    params_dynamic_A = np.zeros((num_steps, n_cells, n_params), dtype=np.float32)
+    val1_loss_dynamic = np.zeros((num_steps, n_cells), dtype=np.float32)
+
+    val1_loss_cells = jax.jit(lambda p: loss_total(p, x_val1, y_val1))
+    for step in range(1, num_steps + 1):
+        params_A, opt_state_A, train_loss_val = train_step_A(params_A, opt_state_A)
+        params_dynamic_A[step - 1] = params_A
+        val1_loss_dynamic[step - 1] = np.array(val1_loss_cells(params_A))
+        if step % print_every == 0:
+            print(f"Step {step:4d} | Train mean: {float(train_loss_val):.4f} | "
+                  f"Val1 mean: {float(np.nanmean(val1_loss_dynamic[step - 1])):.4f}")
+
+    # ============================================================
+    # Phase B: Patience selection (per-cell or global)
+    # ============================================================
+    print("\n=== Phase B: Patience selection ===\n")
+    best_steps_val1 = np.argmin(val1_loss_dynamic, axis=0)
+    patience_per_cell = np.zeros(n_cells, dtype=int)
+
+    # Helper for per-cell loss
+    val2_loss_single = jax.jit(lambda p, x, y: jnp.nanmean(loss_function(neuron_model(x, *p), y)))
+
+    if val2_fraction > 0:
+        if cellwise_patience:
+            # ----- per-cell patience -----
+            for i in range(n_cells):
+                metrics = []
+                for p in patience_values:
+                    step_idx = int(np.clip(best_steps_val1[i] + p, 0, num_steps - 1))
+                    params_tmp = params_dynamic_A[step_idx, i]
+                    metric = float(val2_loss_single(params_tmp, x_val2[i], y_val2[i]))
+                    metrics.append(metric)
+                patience_per_cell[i] = patience_values[int(np.argmin(metrics))]
+            print(f"Cellwise patience selected (range {min(patience_per_cell)}–{max(patience_per_cell)})")
+        else:
+            # ----- global patience -----
+            mean_metrics = []
+            for p in patience_values:
+                step_idxs = np.clip(best_steps_val1 + p, 0, num_steps - 1)
+                params_tmp = np.array([params_dynamic_A[step_idxs[i], i] for i in range(n_cells)])
+                loss_val2 = np.array([val2_loss_single(params_tmp[i], x_val2[i], y_val2[i]) for i in range(n_cells)])
+                mean_metrics.append(np.nanmean(loss_val2))
+            best_p = patience_values[int(np.argmin(mean_metrics))]
+            patience_per_cell[:] = best_p
+            print(f"Global patience selected: {best_p}")
+    else:
+        # fallback: use val1 again if no val2
+        for i in range(n_cells):
+            metrics = [val1_loss_dynamic[int(np.clip(best_steps_val1[i] + p, 0, num_steps - 1)), i]
+                       for p in patience_values]
+            patience_per_cell[i] = patience_values[int(np.argmin(metrics))]
+        print("Patience selected using val1 (no val2 set).")
+
+    best_steps_final = np.clip(best_steps_val1 + patience_per_cell, 0, num_steps - 1)
+
+    # ============================================================
+    # Phase C: Retrain on ALL data
+    # ============================================================
+    print("\n=== Phase C: Retrain on ALL data ===\n")
+    params_C0 = init_params_from(x_data, y_data)
+    init_opt_C, train_step_C = make_train_fns(x_data, y_data)
+    opt_state_C = init_opt_C(params_C0)
+    params_dynamic_C = np.zeros((num_steps, n_cells, n_params), dtype=np.float32)
+    params_C = params_C0
+
+    for step in range(1, num_steps + 1):
+        params_C, opt_state_C, total_loss_val = train_step_C(params_C, opt_state_C)
+        params_dynamic_C[step - 1] = params_C
+        if step % print_every == 0:
+            print(f"Step {step:4d} | Loss(all): {float(total_loss_val):.4f}")
+
+    # Clip just in case
+    best_steps_final = np.clip(best_steps_final, 0, num_steps - 1)
+    final_params = params_dynamic_C[best_steps_final, np.arange(n_cells)]
+    final_loss = np.array(loss_total(final_params, x_data, y_data))
+
+    return {
+        "params": final_params,
+        "loss": final_loss,
+        "params_dynamic": params_dynamic_C,
+        "data_splits": {
+            "train_trials": training_trials,
+            "val1_trials": val1_trials,
+            "val2_trials": val2_trials,
+        },
+        "best_steps": best_steps_final,
+        "patience_per_cell": patience_per_cell,
+        "cellwise_patience": cellwise_patience,
+    }
+
+def train_simplified(
+    x_data: jnp.ndarray,
+    y_data: jnp.ndarray,
+    neuron_model: Callable,
+    parameter_estimator: Callable,
+    loss_function: Callable,
+    num_steps: int = 6_000,
+    learning_rate: float = 1e-3,
+    print_every: int = 200,
+    exhaustive_exponents: Optional[Sequence[float]] = None,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """
+    Single-phase training on ALL data.
+    Optionally do an exhaustive multi-start search over initial exponents:
+      - For each exponent 'e' in exhaustive_exponents, override params_init[:, 5] and [:, 10] = e
+      - Train all starts in parallel (vectorized)
+      - Pick, per cell, the start that gives the lowest loss
+
+    Returns:
+      - params: (n_cells, n_params) best params per cell
+      - loss: (n_cells,) final loss per cell for the chosen start
+      - all_losses: (n_starts, n_cells) losses per cell for every start
+      - chosen_start_idx: (n_cells,) argmin over starts for each cell
+      - chosen_exponent: (n_cells,) exponent chosen per cell
+      - params_per_start: (n_starts, n_cells, n_params) final params for each start (useful for diagnostics)
+    """
+    rng = np.random.default_rng(seed)
+
+    # ---------------------------
+    # Loss helpers (per cell + batched)
+    # ---------------------------
+    # loss for one cell & one param row
+    loss_single = lambda p, x, y: jnp.nanmean(loss_function(neuron_model(x, *p), y), axis=-1)
+    # vectorize over cells: (n_cells, params) x (n_cells, ...) -> (n_cells,)
+    loss_total = jax.vmap(loss_single, in_axes=(0, 0, 0), out_axes=0)
+    # mean over cells
+    def mean_loss(params, x, y):
+        return jnp.nanmean(loss_total(params, x, y))
+    mean_loss = jax.jit(mean_loss)
+
+    # ---------------------------
+    # Optimizer setup (vectorized over starts)
+    # ---------------------------
+    opt = optax.adam(learning_rate)
+
+    def make_train_fns(x, y):
+        # loss for a single start (averaged over cells)
+        def obj_single_start(params_single):
+            return mean_loss(params_single, x, y)
+
+        # vectorize value_and_grad over starts dimension
+        v_obj_and_grad = jax.vmap(jax.value_and_grad(obj_single_start), in_axes=0, out_axes=(0, 0))
+
+        def init_state(p0_starts):
+            # p0_starts: (n_starts, n_cells, n_params)
+            return jax.vmap(opt.init)(p0_starts)
+
+        @jax.jit
+        def step(p_starts, opt_state):
+            # losses per start, grads per start
+            losses, grads = v_obj_and_grad(p_starts)
+            updates, opt_state = jax.vmap(opt.update)(grads, opt_state, p_starts)
+            p_starts = jax.vmap(optax.apply_updates)(p_starts, updates)
+            return p_starts, opt_state, losses
+        return init_state, step
+
+    # ---------------------------
+    # Initialize params (base init once)
+    # ---------------------------
+    def init_params_all(x, y):
+        p0 = hypothesis_engine.compute_initial_params(
+            param_estimator=parameter_estimator,
+            neuron_model=neuron_model,
+            x=np.asarray(x),
+            y=np.asarray(y),
+        ).copy()
+        return p0  # (n_cells, n_params)
+
+    params_init = init_params_all(x_data, y_data)  # (n_cells, n_params)
+    n_cells, n_params = params_init.shape
+
+    # Build starts: either 1 start (no exhaustive) or one per exponent
+    if exhaustive_exponents is None or len(exhaustive_exponents) == 0:
+        starts = 1
+        p0_starts = params_init[None, ...]  # (1, n_cells, n_params)
+        exps_arr = jnp.array([jnp.nan])     # placeholder
+    else:
+        exps_arr = jnp.asarray(exhaustive_exponents, dtype=params_init.dtype)  # (n_starts,)
+        starts = int(exps_arr.shape[0])
+        # tile and set exponent columns 5 and 10
+        p0_starts = jnp.repeat(params_init[None, ...], repeats=starts, axis=0)  # (n_starts, n_cells, n_params)
+        p0_starts = p0_starts.at[:, :, 5].set(exps_arr[:, None])
+        p0_starts = p0_starts.at[:, :, 10].set(exps_arr[:, None])
+
+    # ---------------------------
+    # Train all starts in parallel on ALL data
+    # ---------------------------
+    init_opt, train_step = make_train_fns(x_data, y_data)
+    opt_state = init_opt(p0_starts)
+    params_starts = p0_starts
+
+    for step in range(1, num_steps + 1):
+        params_starts, opt_state, losses_per_start = train_step(params_starts, opt_state)
+        if (print_every is not None) and (print_every > 0) and (step % print_every == 0):
+            # report mean loss across starts for a quick sanity check
+            print(f"Step {step:5d} | mean(loss over starts) = {float(jnp.nanmean(losses_per_start)):.6f}")
+
+    # ---------------------------
+    # Evaluate per cell, per start & pick the best start for each cell
+    # ---------------------------
+    # losses per start per cell: (n_starts, n_cells)
+    loss_per_start_per_cell = jax.vmap(lambda p: loss_total(p, x_data, y_data))(params_starts)
+
+    # argmin over starts for each cell
+    best_start_idx = jnp.nanargmin(loss_per_start_per_cell, axis=0)  # (n_cells,)
+
+    # gather best params per cell from params_starts (n_starts, n_cells, n_params)
+    gather_idx = jnp.arange(n_cells)
+    best_params = params_starts[best_start_idx, gather_idx, :]  # (n_cells, n_params)
+
+    # final per-cell loss for chosen start
+    final_loss = loss_total(best_params, x_data, y_data)  # (n_cells,)
+
+    # chosen exponent per cell (nan if no exhaustive search)
+    chosen_exponent = jnp.where(
+        jnp.isnan(exps_arr[0]),
+        jnp.full((n_cells,), jnp.nan, dtype=best_params.dtype),
+        exps_arr[best_start_idx]
+    )
+
+    return {
+        "params": np.array(best_params),
+        "loss": np.array(final_loss),
+        "all_losses": np.array(loss_per_start_per_cell),    # (n_starts, n_cells)
+        "chosen_start_idx": np.array(best_start_idx),       # (n_cells,)
+        "chosen_exponent": np.array(chosen_exponent),       # (n_cells,)
+        "params_per_start": np.array(params_starts),        # (n_starts, n_cells, n_params)
+    }
+
+# response, angles = load_data(data_dir = ['/home/reilly/Desktop/ali data/stim_sequence.npy','/home/reilly/Desktop/ali data/stim_resps.npy'],
+#                                    data_type='ali',
+#                                    conc_thresh=0.4,
+#                                    activity_thresh=0.0,
+#                                    signal_fraction_thresh=0.8,
+#                                    n_bins=90, min_repeats=6)
 
 # async def main():
 #     # load api keys
