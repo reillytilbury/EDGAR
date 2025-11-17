@@ -521,7 +521,7 @@ Include your analysis of the image in the docstring of your new model. Point to 
 * Import any packages you use.
 * Do not include any text other than the code.
 * Ensure all free parameters are numeric, not strings.
-* At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * jnp.pi)`.
+* At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
 
 **Docstring Guidelines:**
 * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`, `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
