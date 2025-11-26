@@ -682,87 +682,6 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
         # combine results
         island_results = [[neuron_model_results[island_idx * batch_size + j] + param_est_results[island_idx * batch_size + j] for j in range(batch_size)] for island_idx in range(n_islands)]
 
-        # get images of param estimation if using image feedback
-        # if use_image_feedback:
-        #     for island_idx, j in np.ndindex(n_islands, batch_size):
-        #         logging.info(f"Iteration {i}, Island {island_idx}, Batch Index {j}")
-        #         neuron_model_code_string, prompt, neuron_model_code_string_jax, neuron_model_new, param_est_code_string, param_est_new = island_results[island_idx][j]
-        #         parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
-        #         if neuron_model_new is None or param_est_new is None:
-        #             logging.info(f"Skipping island {island_idx}, batch {j} due to LLM generation failure.")
-        #             logging.info('-' * 50)
-        #             continue
-
-        #         initial_loss, initial_params, _, _ = objective(neuron_model_new, param_est_new, loss_func=loss_functions.quadratic_loss,
-        #                                                        x=angles_train, y=response_train,param_penalty_weight=param_penalty_weight,
-        #                                                        fit_params=False, tol=tol, use_param_estimator=use_param_estimator)
-        #         if initial_loss == FAILED_PROGRAM_COST:
-        #             logging.info('-' * 50)
-        #             continue
-                
-        #         cells = np.random.choice(n_good_cells // 2, size=4, replace=False)
-        #         diagnostic.plot_model_fits(
-        #             programs_df=pd.DataFrame({'program': [neuron_model_new], 'params': [initial_params]}),
-        #             loss_function=loss_functions.quadratic_loss,
-        #             x=angles_train,
-        #             y=response_train,
-        #             cell_selection=cells,
-        #             colours=['tab:red'],
-        #             labels=['Neuron Model'],
-        #             line_alpha=1.0,
-        #             line_width=5.0,
-        #             point_alpha=0.2,
-        #             point_size=120,
-        #             legend_fontsize=20,
-        #             title=f"4 Example Fits for Neuron Model and Parameter Estimator. \n"
-        #                   f"Loss: {initial_loss:.2f}",
-        #             save_path=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est.png'),
-        #         )
-            
-        #     # now create a new prompt to update the parameter estimator
-        #     param_est_image_dirs = np.empty((n_islands, batch_size), dtype=object)
-        #     for island_idx, j in np.ndindex(n_islands, batch_size):
-        #         if use_image_feedback:
-        #             param_est_image_dirs[island_idx, j] = os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est.png')
-        #         else:
-        #             param_est_image_dirs[island_idx, j] = None
-
-        #     # collect the new neuron model and parameter estimator code strings
-        #     image_prompts = np.empty((n_islands, batch_size), dtype=object)
-        #     for island_idx, j in np.ndindex(n_islands, batch_size):
-        #         neuron_model_code_string = island_results[island_idx][j][0]
-        #         param_est_code_string = island_results[island_idx][j][4]
-        #         if neuron_model_code_string is None or param_est_code_string is None:
-        #             image_prompts[island_idx, j] = None
-        #         else:
-        #             image_prompts[island_idx, j] = utils.create_parameter_estimator_image_prompt(
-        #                 neuron_model_code_string=neuron_model_code_string,
-        #                 param_estimator_code_string=param_est_code_string)
-        
-        #     # generate new parameter estimators from image feedback
-        #     param_est_image_tasks = [generate_new_parameter_estimator_from_image_feedback(image_prompt=image_prompts[island_idx, j],
-        #                                                                                   image_dir=param_est_image_dirs[island_idx, j],
-        #                                                                                   model_name=llm_name,
-        #                                                                                   temp=temperature,
-        #                                                                                   max_lines=100,
-        #                                                                                   client=client)
-        #                             for island_idx in range(n_islands) for j in range(batch_size)]
-        #     logging.info(f"Generating {n_islands * batch_size} new parameter estimators from image feedback... Model: {llm_name}, temperature: {temperature:.2f}")
-        #     param_est_image_results = await asyncio.gather(*param_est_image_tasks)
-            
-        #     # update the island results with the new parameter estimators (if they are not None)
-        #     for island_idx, j in np.ndindex(n_islands, batch_size):
-        #         if param_est_image_results[island_idx * batch_size + j][0] is not None:
-        #             print(f"Island {island_idx}, batch {j} image feedback generation successful.")
-        #             print(f"Initial Parameter Estimator:\n{island_results[island_idx][j][4]}")
-        #             print(f"New Parameter Estimator:\n{param_est_image_results[island_idx * batch_size + j][0]}")
-        #             result_list = list(island_results[island_idx][j])
-        #             result_list[4] = param_est_image_results[island_idx * batch_size + j][0]
-        #             result_list[5] = param_est_image_results[island_idx * batch_size + j][1]
-        #             island_results[island_idx][j] = tuple(result_list)
-        #         else:
-        #             logging.info(f"Skipping island {island_idx}, batch {j} due to image feedback generation failure.")
-
         # now loop through the results and compute losses
         success_rate = 0.0
         for island_idx, j in np.ndindex(n_islands, batch_size):
@@ -997,12 +916,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
 
 if __name__ == "__main__":
     for i in range(4):
-        print("running without penalty")
-        asyncio.run(main(n_iterations=9, time_limit=100, use_image_feedback=False, use_large_every=-1,
-                         param_penalty_weight=0.0,
-                         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=1.0))
-    for i in range(4):
-        print("running with penalty")
-        asyncio.run(main(n_iterations=9, time_limit=40, 
-                         use_image_feedback=False, use_large_every=-1,
-                         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=1.0))
+        print("running with standard params")
+        asyncio.run(main(n_iterations=9, time_limit=60, use_image_feedback=True, use_large_every=3,
+                         param_penalty_weight=0.01,
+                         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.7))
