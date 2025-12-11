@@ -540,7 +540,7 @@ loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
 
     return prompt
 
-def create_parameter_estimator_prompt(random_programs: pd.DataFrame, neuron_model_code_string: str,
+def create_parameter_estimator_prompt(random_programs: pd.DataFrame, func_code_string: str,
                                       max_lines: int = 100,llm_type: str = 'g', use_image: bool = True) -> str:
     """
     Create a prompt to generate a new parameter estimator based on k existing models.
@@ -620,7 +620,7 @@ loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
 """
     # add the neuron model code string to the prompt
     prompt += f"""
-{neuron_model_code_string.replace('def neuron_model(', f'def neuron_model_v{k+1}(')}
+{func_code_string.replace('def neuron_model(', f'def neuron_model_v{k+1}(')}
 \n
 """
     return prompt

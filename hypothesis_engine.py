@@ -79,7 +79,7 @@ def compute_default_params(func) -> jnp.ndarray:
         logging.info(f"Error while generating default parameters: {e}")
         return None    
 
-def objective(func, param_estimator, loss_func, x, y, 
+def objective(func, param_estimator, loss_func, X, Y, 
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000,
               use_param_estimator=True) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -94,8 +94,8 @@ def objective(func, param_estimator, loss_func, x, y,
         param_estimator (function): Function to estimate initial parameters for the func.
                                 Signature: param_estimator(stimuli, response) -> params
         loss_func (function): The loss function to use for calculating the loss.
-        x (jnp.ndarray): Stimuli data, shape (n_cells, n_trials).
-        y (jnp.ndarray): Response data, shape (n_cells, n_trials).
+        X (jnp.ndarray): Stimuli data, shape (n_cells, n_trials).
+        Y (jnp.ndarray): Response data, shape (n_cells, n_trials).
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
         random_seed (int or None): Random seed for reproducibility. Default is 0. If None, will not split the data into training and test sets.
@@ -112,21 +112,21 @@ def objective(func, param_estimator, loss_func, x, y,
             - jnp.ndarray: The parameters for each cell (n_cells, n_params).
     """
     t_start = time.time()
-    n_cells, n_trials = y.shape
+    n_cells, n_trials = Y.shape
     # train/test split over trials
     key = jax.random.PRNGKey(random_seed)
     training_size = n_trials // 2
     shuffled_indices = jax.random.permutation(key, jnp.arange(n_trials))
     training_trials_idx = shuffled_indices[:training_size]
     test_trials_idx = shuffled_indices[training_size:]
-    x_train = x[:, training_trials_idx]
-    y_train = y[:, training_trials_idx]
-    x_test = x[:, test_trials_idx]
-    y_test = y[:, test_trials_idx]
+    X_train = X[:, training_trials_idx]
+    Y_train = Y[:, training_trials_idx]
+    X_test = X[:, test_trials_idx]
+    Y_test = Y[:, test_trials_idx]
 
-    # Perform initial param calc. x and y must be numpy arrays of shape (n_cells, n_trials)
+    # Perform initial param calc. X and Y must be numpy arrays of shape (n_cells, n_trials)
     if use_param_estimator:
-        initial_params = compute_initial_params(param_estimator, func, np.asarray(x_train), np.asarray(y_train))
+        initial_params = compute_initial_params(param_estimator, func, np.asarray(X_train), np.asarray(Y_train))
     else:
         initial_params = compute_default_params(func)
         # if initial_params not none, reshape from (1, n_params) to (n_cells, n_params)
@@ -156,17 +156,17 @@ def objective(func, param_estimator, loss_func, x, y,
         func_jit = jax.jit(func)
         for cell_idx in np.random.choice(n_cells, size=min(10, n_cells), replace=False):
             # Validate with concrete values
-            output = func_jit(x[cell_idx], *initial_params[cell_idx])
-            if output.ndim != 1 or output.shape[0] != x.shape[1]:
-                logging.info(f"Error: func output shape {output.shape[0]} does not match input shape {x.shape[1]}.")
+            output = func_jit(X[cell_idx], *initial_params[cell_idx])
+            if output.ndim != 1 or output.shape[0] != X.shape[1]:
+                logging.info(f"Error: func output shape {output.shape[0]} does not match input shape {X.shape[1]}.")
                 return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
             # Validate with abstract tracer values
-            jax.eval_shape(func_jit, x[cell_idx], *initial_params[cell_idx])
+            jax.eval_shape(func_jit, X[cell_idx], *initial_params[cell_idx])
     except Exception as e:
         logging.info(f"Func failed to run or is incompatible with JAX tracing: {e}")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
-    loss_single_cell = lambda params, x_data, y_data: jnp.mean(loss_func(func(x_data, *params), y_data), axis=-1)
+    loss_single_cell = lambda params, X_data, Y_data: jnp.mean(loss_func(func(X_data, *params), Y_data), axis=-1)
     # vectorize the loss function for all cells. The inputs will have shapes:
     # - params: (n_cells, n_params)
     # - x_data: (n_cells, n_trials)
@@ -176,7 +176,7 @@ def objective(func, param_estimator, loss_func, x, y,
 
     if fit_params:
         # define the loss function wrt params. This will have input shape n_cells * n_params (note that params is flattened) and output shape (1,)
-        loss_param = lambda params: jnp.mean(loss_total(params.reshape(-1, n_params), x_train, y_train))
+        loss_param = lambda params: jnp.mean(loss_total(params.reshape(-1, n_params), X_train, Y_train))
         loss_param_and_grad = jax.value_and_grad(loss_param)
 
         # 1.  build adam
@@ -212,19 +212,19 @@ def objective(func, param_estimator, loss_func, x, y,
         params = best_params.reshape(n_cells, n_params)
         print(f"params optimized. Loss: {best_loss:.4f}")
     else:
-        params = compute_initial_params(param_estimator, func, np.asarray(x_train), np.asarray(y_train))
+        params = compute_initial_params(param_estimator, func, np.asarray(X_train), np.asarray(Y_train))
         if params is None or not isinstance(params, jnp.ndarray):
             logging.info("Error: params should be a JAX array.")
             return FAILED_PROGRAM_COST, jnp.zeros((n_cells, n_params))
 
     # compute the final loss on the test set for the initial and optimized parameters
-    initial_loss = jnp.nanmean(loss_total(initial_params, x_test, y_test)) + param_penalty_weight * n_params
+    initial_loss = jnp.nanmean(loss_total(initial_params, X_test, Y_test)) + param_penalty_weight * n_params
     # print number of nans in initial_loss
     n_nans = jnp.sum(jnp.isnan(initial_loss))
     if n_nans > 0:
         print(f"Warning: initial loss contains {n_nans} NaNs. This may indicate a problem with the model or data.")
     initial_loss = jnp.nan_to_num(initial_loss, nan=FAILED_PROGRAM_COST, posinf=FAILED_PROGRAM_COST, neginf=FAILED_PROGRAM_COST)
-    final_loss = jnp.nanmean(loss_total(params, x_test, y_test)) + param_penalty_weight * n_params
+    final_loss = jnp.nanmean(loss_total(params, X_test, Y_test)) + param_penalty_weight * n_params
     # print number of nans in final_loss
     n_nans = jnp.sum(jnp.isnan(final_loss))
     if n_nans > 0:
@@ -236,7 +236,7 @@ def objective(func, param_estimator, loss_func, x, y,
     print(f"Time taken for optimization: {t_end - t_start:.4f} seconds")
     return float(initial_loss), initial_params, float(final_loss), params
 
-async def create_new_function(current_island, llm_name, client, spike_matrix, stimuli,
+async def create_new_function(current_island, llm_name, client, Y, X,
                               mode='explore', k_max=2, temp=1, 
                               thinking_budget=1, img_dir=None):
     k = min(k_max, len(current_island))
@@ -257,8 +257,8 @@ async def create_new_function(current_island, llm_name, client, spike_matrix, st
             sup_title = "".join([f"neuron_model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             diagnostic.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
-                                    x=stimuli, y=spike_matrix,
-                                    cell_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
+                                    x=X, y=Y,
+                                    cell_selection=np.random.choice(Y.shape[0], size=9, replace=False),
                                     save_path=img_dir,
                                     labels=['v_1', 'v_2'],
                                     colours=['tab:green', 'tab:red'],
@@ -287,15 +287,14 @@ async def create_new_function(current_island, llm_name, client, spike_matrix, st
     
     return code_string, program_prompt, (parent1_id, parent2_id)
 
-async def generate_new_parameter_estimator(current_island, 
-                                           neuron_model_code_string: str,
+async def create_new_parameter_estimator(current_island, func_code_string: str,
                                            llm_name, client, 
-                                           spike_matrix, stimuli,
+                                           Y, X,
                                            k_max=1, temp=1,
                                            param_estimator_max_lines=100, img_dir=None,
                                            swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']):
-    if neuron_model_code_string is None:
-        logging.info("No neuron model code string provided, skipping parameter estimator generation.")
+    if func_code_string is None:
+        logging.info("No function code string provided, skipping parameter estimator generation.")
         return None, None
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
@@ -303,7 +302,7 @@ async def generate_new_parameter_estimator(current_island,
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
     use_image = img_dir is not None
     prompt = utils.create_parameter_estimator_prompt(random_programs,
-                                                    neuron_model_code_string=neuron_model_code_string,
+                                                    func_code_string=func_code_string,
                                                     llm_type=llm_name[0], max_lines=param_estimator_max_lines,
                                                     use_image=use_image)
     
@@ -315,8 +314,8 @@ async def generate_new_parameter_estimator(current_island,
             sup_title = "".join([f"neuron_model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             diagnostic.plot_model_fits(programs_df=random_programs_crude,
                                     loss_function=loss_functions.quadratic_loss,
-                                    x=stimuli, y=spike_matrix,
-                                    cell_selection=np.random.choice(spike_matrix.shape[0], size=4, replace=False),
+                                    x=X, y=Y,
+                                    cell_selection=np.random.choice(Y.shape[0], size=4, replace=False),
                                     save_path=img_dir,
                                     labels=['v_1', 'v_2'],
                                     colours=['tab:green', 'tab:red'],
@@ -353,7 +352,7 @@ async def generate_new_parameter_estimator(current_island,
     func = utils.str_to_func(code_string, 'parameter_estimator')
     return code_string, func
 
-async def generate_new_parameter_estimator_from_image_feedback(image_prompt: str,
+async def create_new_parameter_estimator_from_image_feedback(image_prompt: str,
                                                                image_dir: str,
                                                                model_name='gemini-2.0-flash',
                                                                swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'],
@@ -418,19 +417,19 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-1.5-flash-
     func = utils.str_to_func(jax_code_string, 'neuron_model')
     return jax_code_string, func
 
-def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100) -> jnp.ndarray:
+def compute_evaluation_matrix(func: callable, params: jnp.ndarray, n_evaluation_points: int = 100) -> jnp.ndarray:
     """
-    Computes the evaluation matrix for a given program and parameters.
+    Computes the evaluation matrix for a given func and parameters.
     Args:
-        program (callable): The neuron model function.
+        func (callable): The neuron model function.
         params (jnp.ndarray): The parameters for the neuron model. (n_cells, n_params)
         n_evaluation_points (int): Number of points to evaluate the model at.
     Returns:
         jnp.ndarray: The evaluation matrix of shape (n_cells, n_evaluation_points).
     """
     angles = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
-    program_vmap = utils.vmap_over_cells(program)
-    y_eval = program_vmap(angles, params)
+    func_vmap = utils.vmap_over_cells(func)
+    y_eval = func_vmap(angles, params)
     return y_eval
 
 def load_data(data_path: str = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy', 
@@ -493,15 +492,19 @@ def create_output_directories():
     image_feedback_dir = os.path.join(full_dir, 'image_feedback')
     os.makedirs(image_feedback_dir, exist_ok=True)
     print("Created image feedback folder:", image_feedback_dir)
-    return full_dir, image_feedback_dir
+    return base_dir, date_stamp, time_stamp, full_dir, image_feedback_dir
 
 async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
                 critical_population_size=12, min_wise_population_size=0, 
-                n_migrants=2, fit_params=True, tol=1e-6, exploit_point=0.5,
+                n_migrants=2, fit_params=True, exploit_point=0.5,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
                 use_image_feedback=True, use_param_estimator=True,
                 exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
+                seed_functions_numpy = [seed_programs.neuron_model_1, seed_programs.neuron_model_2],
+                seed_functions_jax = [seed_programs.neuron_model_1_jax, seed_programs.neuron_model_2_jax],
+                seed_parameter_estimators = [seed_programs.parameter_estimator_1, seed_programs.parameter_estimator_2],
+                func_name = 'neuron_model',
                 tiny_lm_name = 'gemini-1.5-flash-8b',
                 little_lm_name = 'gemini-2.0-flash',
                 large_lm_name = 'gemini-2.5-flash',
@@ -527,42 +530,39 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
     initial_programs = pd.DataFrame([])
 
     # create output directories
-    full_dir, image_feedback_dir = create_output_directories()
+    base_dir, date_stamp, time_stamp, full_dir, image_feedback_dir = create_output_directories()
     census = []
     # store and compute loss of 2 initial programs
     t_start = time.time()
-    numpy_programs = [seed_programs.neuron_model_1, seed_programs.neuron_model_2]
-    jax_programs = [seed_programs.neuron_model_1_jax, seed_programs.neuron_model_2_jax]
-    param_estimators = [seed_programs.parameter_estimator_1, seed_programs.parameter_estimator_2]
     seed_losses = np.zeros(2)
     for i in range(2):
         # get the program, parameter estimator, and jax program
-        program_num = numpy_programs[i]
-        param_est = param_estimators[i]
-        program_jax = jax_programs[i]
+        func_numpy = seed_functions_numpy[i]
+        param_est = seed_parameter_estimators[i]
+        func_jax = seed_functions_jax[i]
         # score the initial program
-        loss_init, params_init, loss, params = objective(program_jax, param_est, 
+        loss_init, params_init, loss, params = objective(func_jax, param_est, 
                                         loss_func=loss_functions.quadratic_loss, 
-                                        x=X_loop, y=Y_loop, 
-                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol,
+                                        X=X_loop, Y=Y_loop, 
+                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight,
                                         use_param_estimator=use_param_estimator)
         seed_losses[i] = loss
         # format strings
         import_string = "import numpy as np \n"
         import_string_jax = "import jax.numpy as jnp \n"
-        program_name = program_num.__name__
-        param_est_name = param_est.__name__
-        program_jax_name = program_jax.__name__
-        function_code_string = inspect.getsource(program_num).replace(f'def {program_name}(', f'def neuron_model_v{i+1}(')
+        func_numpy_name_original = func_numpy.__name__
+        param_est_name_original = param_est.__name__
+        func_jax_name_original = func_jax.__name__
+        function_code_string = inspect.getsource(func_numpy).replace(f'def {func_numpy_name_original}(', f'def {func_name}_v{i+1}(')
         function_code_string = import_string + function_code_string
-        parameter_estimator_code_string = inspect.getsource(param_est).replace(f'def {param_est_name}(', f'def parameter_estimator_v{i+1}(')
+        parameter_estimator_code_string = inspect.getsource(param_est).replace(f'def {param_est_name_original}(', f'def parameter_estimator_v{i+1}(')
         parameter_estimator_code_string = import_string + parameter_estimator_code_string
-        program_jax_code_string = inspect.getsource(program_jax).replace(f'def {program_jax_name}(', f'def neuron_model_v{i+1}(')
-        program_jax_code_string = import_string_jax + program_jax_code_string
-        y_eval = compute_evaluation_matrix(program_jax, params, n_evaluation_points=100)
+        func_jax_code_string = inspect.getsource(func_jax).replace(f'def {func_jax_name_original}(', f'def {func_name}_v{i+1}(')
+        func_jax_code_string = import_string_jax + func_jax_code_string
+        y_eval = compute_evaluation_matrix(func_jax, params, n_evaluation_points=100)
 
         new_program_df = pd.DataFrame({'function_code_string': function_code_string,
-                                    'function': program_jax,
+                                    'function': func_jax,
                                     'parameter_estimator_code_string': parameter_estimator_code_string,
                                     'parameter_estimator': param_est,
                                     'generation': -1,
@@ -606,12 +606,12 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
     # -----------------------------
     # HYPOTHESIS ENGINE
     # -----------------------------
-    for i in tqdm(range(n_generations), desc="Hypothesis Engine Iterations"):
+    for i in tqdm(range(n_generations), desc="Hypothesis Engine generations"):
         # check if time limit is reached
         if time.time() - t_start > time_limit * 60:
-            logging.info(f"Time limit of {time_limit} minutes reached. Stopping iterations.")
+            logging.info(f"Time limit of {time_limit} minutes reached. Stopping generations.")
             break
-        logging.info(f"Iteration {i}")
+        logging.info(f"generation {i}")
         if use_large_every > 0 and i % use_large_every == 0:
             llm_name = large_lm_name
             logging.info(f"Using large LLM: {llm_name}")
@@ -631,37 +631,33 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                     model_image_dirs[island_idx, j] = None
                     # param_est_image_dirs[island_idx, j] = None
         # generate new programs
-        neuron_model_generation_tasks = [create_new_function(islands[island_idx], 
-                                                                   llm_name=llm_name, 
-                                                                   client=client, 
-                                                                   mode=mode, 
-                                                                   k_max=k_max, 
-                                                                   temp=temperature,
-                                                                   spike_matrix=Y_loop, 
-                                                                   stimuli=X_loop,
-                                                                   img_dir=model_image_dirs[island_idx, j]) 
+        function_creation_tasks = [create_new_function(islands[island_idx], llm_name=llm_name, 
+                                                        client=client, mode=mode, 
+                                                        k_max=k_max, temp=temperature,
+                                                        Y=Y_loop, X=X_loop,
+                                                        img_dir=model_image_dirs[island_idx, j]) 
                                          for island_idx in range(n_islands) for j in range(batch_size)]
-        logging.info(f"Generating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
-        print(f"Generating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
-        neuron_model_results = await asyncio.gather(*neuron_model_generation_tasks)
-        neuron_model_code_strings = [result[0] for result in neuron_model_results]
-        neuron_model_prompts = [result[1] for result in neuron_model_results]
-        parent_ids = [result[2] for result in neuron_model_results]
+        logging.info(f"Creating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
+        print(f"Creating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
+        llm_function_results = await asyncio.gather(*function_creation_tasks)
+        llm_function_code_strings = [result[0] for result in llm_function_results]
+        llm_function_prompts = [result[1] for result in llm_function_results]
+        parent_ids = [result[2] for result in llm_function_results]
         
         # convert to jax
-        neuron_model_function_translation_tasks = [translate_to_jax(code_string, client, tiny_lm_name) for code_string in neuron_model_code_strings]
-        jax_results = await asyncio.gather(*neuron_model_function_translation_tasks)
-        neuron_model_results = [(neuron_model_code_strings[j], neuron_model_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
+        llm_function_translation_tasks = [translate_to_jax(code_string, client, tiny_lm_name) for code_string in llm_function_code_strings]
+        jax_results = await asyncio.gather(*llm_function_translation_tasks)
+        llm_function_results = [(llm_function_code_strings[j], llm_function_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
         # build parameter‑estimator tasks
         param_estimation_tasks = [
-            generate_new_parameter_estimator(
+            create_new_parameter_estimator(
                 current_island=islands[island_idx],
-                neuron_model_code_string=neuron_model_code_strings[island_idx * batch_size + j],
+                func_code_string=llm_function_code_strings[island_idx * batch_size + j],
                 llm_name=little_lm_name,  # same model used for programs
                 client=client,
-                spike_matrix=Y_loop, # training data
-                stimuli=X_loop,
+                Y=Y_loop, # training data
+                X=X_loop,
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
@@ -672,47 +668,47 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
         ]
 
         logging.info(
-            f"Generating {n_islands * batch_size} parameter estimators "
+            f"Creating {n_islands * batch_size} parameter estimators "
             f"(LLM={llm_name}, mode={mode}, T={temperature:.2f})"
         )
-        logging.info(f"Generating {n_islands * batch_size} new parameter estimators... Model: {little_lm_name}, mode: {mode}, temperature: {temperature:.2f}")
+        logging.info(f"Creating {n_islands * batch_size} new parameter estimators... Model: {little_lm_name}, mode: {mode}, temperature: {temperature:.2f}")
         param_est_results = await asyncio.gather(*param_estimation_tasks)
         # combine results
-        island_results = [[neuron_model_results[island_idx * batch_size + j] + param_est_results[island_idx * batch_size + j] for j in range(batch_size)] for island_idx in range(n_islands)]
+        island_results = [[llm_function_results[island_idx * batch_size + j] + param_est_results[island_idx * batch_size + j] for j in range(batch_size)] for island_idx in range(n_islands)]
 
         # now loop through the results and compute losses
         success_rate = 0.0
         for island_idx, j in np.ndindex(n_islands, batch_size):
             logging.info(f"id={i},{island_idx},{j}")
-            neuron_model_code_string, prompt, neuron_model_code_string_jax, neuron_model_new, param_est_code_string, param_est_new = island_results[island_idx][j]
+            func_code_string, prompt, func_code_string_jax, func_new, param_est_code_string, param_est_new = island_results[island_idx][j]
             parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
-            if neuron_model_new is None or param_est_new is None:
+            if func_new is None or param_est_new is None:
                 logging.info(f"Skipping island {island_idx}, batch {j} due to LLM generation failure.")
                 logging.info('-' * 50)
                 continue
             
-            initial_loss, initial_params, loss, optimized_params = objective(neuron_model_new, param_est_new, 
+            initial_loss, initial_params, loss, optimized_params = objective(func_new, param_est_new, 
                                                                                 loss_func=loss_functions.quadratic_loss,
-                                                                                x=X_loop, y=Y_loop,
+                                                                                X=X_loop, Y=Y_loop,
                                                                                 param_penalty_weight=param_penalty_weight,
-                                                                                fit_params=fit_params, tol=tol, 
+                                                                                fit_params=fit_params, 
                                                                                 use_param_estimator=use_param_estimator)
             if loss == FAILED_PROGRAM_COST:
                 logging.info('-' * 50)
                 continue
 
-            y_eval = compute_evaluation_matrix(neuron_model_new, optimized_params, n_evaluation_points=100)
+            y_eval = compute_evaluation_matrix(func_new, optimized_params, n_evaluation_points=100)
             logging.info(f"Prompt: \n{prompt}\n")
             logging.info(f"Loss: {loss:.2f}\n")
-            logging.info(f"Neuron Model: \n{neuron_model_code_string}\n")
-            logging.info(f"Neuron Model (JAX): \n{neuron_model_code_string_jax}\n")
+            logging.info(f"Function: \n{func_code_string}\n")
+            logging.info(f"Function (JAX): \n{func_code_string_jax}\n")
             logging.info(f"Parameter Estimator: \n{param_est_code_string}\n")
 
 
-            # plot the fits of the neuron model and parameter estimator if using image feedback
+            # plot the fits of the function and parameter estimator if using image feedback
             if use_image_feedback:
                 diagnostic.plot_model_fits(
-                    programs_df=pd.DataFrame({'function': [neuron_model_new, neuron_model_new], 'params': [initial_params, optimized_params]}),
+                    programs_df=pd.DataFrame({'function': [func_new, func_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
                     x=X_loop,
                     y=Y_loop,
@@ -729,13 +725,13 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                     save_path=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_updated_param_est.png')
                 )
             
-            param_names = [n for n in inspect.signature(neuron_model_new).parameters if n != "theta"]
+            param_names = [n for n in inspect.signature(func_new).parameters if n != "theta"]
             if optimized_params.shape[1] == len(param_names):
                 df = pd.DataFrame(np.array(optimized_params)[:10], columns=param_names)
                 logging.info(f"Optimized Parameters for 10 cells:\n{df}\n")
             t_added = time.time() - t_start
-            new_program_df = pd.DataFrame({'function_code_string': neuron_model_code_string,
-                                        'function': neuron_model_new,
+            new_program_df = pd.DataFrame({'function_code_string': func_code_string,
+                                        'function': func_new,
                                         'parameter_estimator_code_string': param_est_code_string,
                                         'parameter_estimator': param_est_new,
                                         'generation': i,
@@ -755,7 +751,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
             census.append([i, island_idx, j, llm_name, loss, t_added, parent1_id, parent2_id, y_eval, optimized_params.shape[1]])
             success_rate += 1 / (n_islands * batch_size)
-            print(f"iteration {i}, island {island_idx}, batch {j}, loss: {loss:.2f}")
+            print(f"generation {i}, island {island_idx}, batch {j}, loss: {loss:.2f}")
             print('-' * 50)
             logging.info("-" * 50)
         print("Success rate:", success_rate)
@@ -763,7 +759,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
         # sort each island by loss
         for island_idx in range(n_islands):
             islands[island_idx] = islands[island_idx].sort_values(by='train_loss').reset_index(drop=True)
-        logging.info(f"Iteration {i} complete. The proportion of programs that successfully ran and received a loss is {success_rate:.2f}.")
+        logging.info(f"generation {i} complete. The proportion of programs that successfully ran and received a loss is {success_rate:.2f}.")
         logging.info('-' * 50)
         # migrate and prune programs (better here for temperature to be in [0, 1] range)
         islands = genetic_helpers.perform_island_deduplication(islands, overlap_threshold=int(0.75 * critical_population_size))
@@ -776,18 +772,18 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
 
                                                              
         # save diagnostics
-        iteration_dir = os.path.join(full_dir, 'iteration_updates', f'iteration_{i}')
-        os.makedirs(iteration_dir, exist_ok=True)
+        generation_dir = os.path.join(full_dir, 'generation_updates', f'generation_{i}')
+        os.makedirs(generation_dir, exist_ok=True)
         for island_idx in range(n_islands):
             pg_info = islands[island_idx][['generation', 'birth_island', 'batch_index', 'train_loss']].to_string(index=False, header=False)
-            print(f"Iter {i}, Island {island_idx} programs:\n{pg_info}\n")
-            logging.info(f"Iter {i}, Island {island_idx} programs:\n{pg_info}\n")
+            print(f"Gen {i}, Island {island_idx} programs:\n{pg_info}\n")
+            logging.info(f"Gen {i}, Island {island_idx} programs:\n{pg_info}\n")
         
             # Save plots of top programs
             top_df = islands[island_idx].sort_values(by='train_loss').head(3).reset_index(drop=True)
             top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-            sup_title = f"Iteration {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
-            sup_title += "\n".join([f"model {j+1}: iter {top_df['generation'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
+            sup_title = f"Generation {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
+            sup_title += "\n".join([f"model {j+1}: generation {top_df['generation'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
             diagnostic.plot_model_fits(
                 programs_df=top_df,
                 loss_function=loss_functions.quadratic_loss,
@@ -795,14 +791,14 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                 y=Y_loop,
                 cell_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
                 title=sup_title,
-                save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
+                save_path=os.path.join(generation_dir, f'island_{island_idx}_top_programs.png'),
                 dpi=300.0)
         
         all_programs = pd.concat([islands[idx] for idx in range(n_islands)], ignore_index=True)
         top_programs = all_programs.sort_values(by='train_loss').head(3).reset_index(drop=True)
         top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-        sup_title = f"Iteration {i}, Top 3 Programs Overall\n"
-        sup_title += "\n".join([f"model {j+1}: iter {top_programs['generation'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
+        sup_title = f"Generation {i}, Top 3 Programs Overall\n"
+        sup_title += "\n".join([f"model {j+1}: generation {top_programs['generation'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
         diagnostic.plot_model_fits(
             programs_df=top_programs,
             loss_function=loss_functions.quadratic_loss,
@@ -810,11 +806,11 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             y=Y_loop,
             cell_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
             title=sup_title,
-            save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
+            save_path=os.path.join(generation_dir, 'top_programs_overall.png'),
             dpi=300.0)
         
         # save census
-        census_path = os.path.join(iteration_dir, 'census.npy')
+        census_path = os.path.join(generation_dir, 'census.npy')
         census_np = np.array(census, dtype=object)
         np.save(census_path, census_np)
 
@@ -830,9 +826,9 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             # compute the test loss
             _, _, test_loss, optimized_params = objective(neuron_model, param_estimator,
                                                           loss_func=loss_functions.quadratic_loss,
-                                                          x=X_eval, y=Y_eval, fit_params=fit_params,
+                                                          X=X_eval, Y=Y_eval, fit_params=fit_params,
                                                           max_iter=2_000, 
-                                                          param_penalty_weight=param_penalty_weight, tol=tol,
+                                                          param_penalty_weight=param_penalty_weight,
                                                           use_param_estimator=use_param_estimator)
             islands[island_idx].at[j, 'test_loss'] = test_loss
             islands[island_idx].at[j, 'params'] = optimized_params
@@ -908,7 +904,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                 x=X_eval[cell_selection],
                 y=Y_eval[cell_selection],
                 params=df['params'][j][cell_selection],
-                title=f"Island {birth_island}, Iteration {generation}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
+                title=f"Island {birth_island}, Generation {generation}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
                 save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
             )
 
