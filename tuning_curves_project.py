@@ -296,7 +296,7 @@ def load_data(data_path: str = '/home/reilly/Downloads/8279387/gratings_drifting
         conc_thresh (float): Concentration threshold for filtering cells.
         activity_thresh (float): Activity threshold for filtering cells.
     Returns:
-        tuple: Processed response and angles as JAX arrays, split into training and testing sets.
+        tuple: Processed response and angles as JAX arrays
     """
     # load and preprocess data
     neural_data = np.load(data_path, allow_pickle=True)
@@ -311,8 +311,6 @@ def load_data(data_path: str = '/home/reilly/Downloads/8279387/gratings_drifting
     firing_probs = np.mean(active, axis=1)
     conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
     good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
-    n_good_cells = len(good_cells)
-
     # update angles and response to be (n_cells_small, n_trials_small) and (n_cells_small, n_trials_small)
     response_cropped, angles_cropped = np.zeros((len(good_cells), n_trials_small)), np.zeros((len(good_cells), n_trials_small))
     for i, cell in enumerate(good_cells):
@@ -324,15 +322,7 @@ def load_data(data_path: str = '/home/reilly/Downloads/8279387/gratings_drifting
     # update response and angles to be the cropped versions and convert to JAX arrays, normalize and split into train/test
     response, angles = jnp.asarray(response_cropped), jnp.asarray(angles_cropped)
     response = 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # normalize response
-    key = jax.random.PRNGKey(42)
-    training_size = n_good_cells // 2
-    shuffled_indices = jax.random.permutation(key, jnp.arange(n_good_cells))
-    training_cells, test_cells = shuffled_indices[:training_size], shuffled_indices[training_size:]
-    response_train, response_test = response[training_cells, :], response[test_cells, :]
-    angles_train, angles_test = angles[training_cells, :], angles[test_cells, :]
-    print(f"Selected {len(good_cells)} cells with activity > {activity_thresh} and concentration > {conc_thresh}.")
-    print(f"Using {len(training_cells)} cells for training and {len(test_cells)} cells for testing.")
-    return response_train, response_test, angles_train, angles_test
+    return angles, response
 
 # -------------
 # SEED PROGRAMS

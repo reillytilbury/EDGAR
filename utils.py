@@ -1,26 +1,8 @@
-import os
-import asyncio
-import diagnostic, hypothesis_engine
-import ast
 import jax
 import time
-import numpy as np
-import scipy as sc
-import asyncio
-import pickle
-import jax.numpy as jnp
 import pandas as pd
-import optax
 import prompt_templates as prompt_text
-from tuning_curves_project import (
-    circular_distance_rad_np,
-    circular_distance_rad_jax,
-    extract_stimulus_related_response,
-    load_data,
-    unbiased_signal_fraction,
-)
-from dotenv import load_dotenv
-from typing import Callable, Dict, Any, Optional, Sequence, Union, Tuple, List
+from typing import Callable, Union, Tuple
 # gemini client
 from google import genai
 from google.genai import types
@@ -30,14 +12,14 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("google.genai").setLevel(logging.ERROR)
-# load dotenv to load environment variables from .env file
-load_dotenv()
+# # load dotenv to load environment variables from .env file
+# load_dotenv()
 
-def vmap_over_cells(model_fn):
+def vmap_over_units(model_fn: Callable) -> Callable:
     """Return a version of `model_fn` that accepts
-       (theta, params_matrix) and runs one row per cell."""
+       (theta, params_matrix) and runs one row per unit."""
     def _wrapped(theta, params_row):
-        # params_row shape: (k,)  ← one cell’s parameters
+        # params_row shape: (k,)  ← one unit’s parameters
         return model_fn(theta, *params_row)   # unpack to scalars
     return jax.vmap(_wrapped, in_axes=(None, 0))   # x shared, params batched
 

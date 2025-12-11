@@ -22,7 +22,7 @@ warnings.filterwarnings(
 print(jax.default_backend())    # should print "gpu"
 print(jax.devices())
 
-def compute_initial_params(param_estimator, func, x, y) -> jnp.ndarray:
+def compute_initial_params(param_estimator, func, X, Y) -> jnp.ndarray:
     """
     Compute initial parameters for func using the provided parameter estimator. Confusingly, the parameter estimator will be written in numpy,
     but the func will be written in JAX. So the data x and y will be numpy arrays, but the output will be a JAX array.
@@ -31,10 +31,10 @@ def compute_initial_params(param_estimator, func, x, y) -> jnp.ndarray:
                                     Signature: param_estimator(stimuli, response) -> params
         func (function): The model which predicts neural activity from stimuli and free parameters.
                                  Signature: func(stimuli, *params) -> activity
-        x (np.ndarray): Stimuli data, shape (n_cells, n_trials).
-        y (np.ndarray): Response data, shape (n_cells, n_trials).
+        X (np.ndarray): Stimuli data, shape (n_units, n_points).
+        Y (np.ndarray): Response data, shape (n_units, n_points).
     Returns:
-        jnp.ndarray: The estimated parameters for each cell, shape (n_cells, n_params).
+        jnp.ndarray: The estimated parameters for each unit, shape (n_units, n_params).
                      If the parameter estimation fails, returns an array of default parameters based on the func's signature.
                      If this also fails, returns None.
     """
@@ -43,7 +43,7 @@ def compute_initial_params(param_estimator, func, x, y) -> jnp.ndarray:
         return pe(xi, yi)
     try:
         # any call taking >5s will raise timeout_decorator.TimeoutError
-        return jnp.array([_safe_estimate(param_estimator, x[i], y[i])for i in range(y.shape[0])])
+        return jnp.array([_safe_estimate(param_estimator, X[i], Y[i])for i in range(Y.shape[0])])
     except timeout_decorator.TimeoutError:
         logging.warning("param_estimator timed out, falling back to defaults")
     except Exception as e:
@@ -52,9 +52,9 @@ def compute_initial_params(param_estimator, func, x, y) -> jnp.ndarray:
     # If parameter estimation fails, compute default parameters based on the func's signature
     params = return_default_params(func)
     if params is not None:
-        # default params is a 2D array with shape (1, n_params), so we need to repeat it for each cell
-        n_cells = y.shape[0]
-        return jnp.repeat(params, n_cells, axis=0)
+        # default params is a 2D array with shape (1, n_params), so we need to repeat it for each unit
+        n_units = Y.shape[0]
+        return jnp.repeat(params, n_units, axis=0)
     else:
         logging.info("Error: Unable to compute default parameters for the func.")
         return None
@@ -79,23 +79,28 @@ def return_default_params(func) -> jnp.ndarray:
         logging.info(f"Error while generating default parameters: {e}")
         return None    
 
-def split_trials(X: jnp.ndarray, Y: jnp.ndarray, random_seed: int = 0) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+def split_arrays(X: jnp.ndarray, Y: jnp.ndarray, random_seed: int = 0, axis: int = 1) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """
-    Split stimuli and response matrices into train/test subsets along the trial axis.
+    Split 2D arrays along a given axis into training and testing sets (50% each).
     Args:
-        X (jnp.ndarray): Stimuli data of shape (n_cells, n_trials).
-        Y (jnp.ndarray): Response data of shape (n_cells, n_trials).
-        random_seed (int): Seed used to shuffle trials before splitting.
+        X (jnp.ndarray): input data (n_units, n_points).
+        Y (jnp.ndarray): Response data of shape (n_units, n_points).
+        random_seed (int): Seed used to shuffle points before splitting.
     Returns:
-        tuple: (X_train, Y_train, X_test, Y_test), each with shape (n_cells, n_trials/2).
+        tuple: (X_train, Y_train, X_test, Y_test), each with shape (n_units, n_points//2) if axis=1, else (n_units//2, n_points).
     """
-    n_trials = X.shape[1]
+    n_units, n_points = X.shape
     key = jax.random.PRNGKey(random_seed)
-    training_size = n_trials // 2
-    shuffled = jax.random.permutation(key, jnp.arange(n_trials))
-    train_idx = shuffled[:training_size]
-    test_idx = shuffled[training_size:]
-    return X[:, train_idx], Y[:, train_idx], X[:, test_idx], Y[:, test_idx]
+    shuffled_indices = jax.random.permutation(key, jnp.arange(n_points if axis == 1 else n_units))
+    if axis == 1:
+        train_indices, test_indices = shuffled_indices[:n_points // 2], shuffled_indices[n_points // 2:]
+        X_train, X_test = X[:, train_indices], X[:, test_indices]
+        Y_train, Y_test = Y[:, train_indices], Y[:, test_indices]
+    else:
+        train_indices, test_indices = shuffled_indices[:n_units // 2], shuffled_indices[n_units // 2:]
+        X_train, X_test = X[train_indices, :], X[test_indices, :]
+        Y_train, Y_test = Y[train_indices, :], Y[test_indices, :]
+    return X_train, Y_train, X_test, Y_test
 
 def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test, 
               param_penalty_weight=0.1, fit_params=True,
@@ -105,18 +110,18 @@ def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test
     """
     Calculate the loss of the model. 
     
-    The loss is calculated as the mean over cells and trials of the loss function provided.
+    The loss is calculated as the mean over units and points of the loss function provided.
     Args:
         func (function): The model which predicts neural activity from stimuli
-                                and free parameters (for a single cell).
+                                and free parameters (for a single unit).
                                 Signature: func(stimuli, *params) -> activity
         param_estimator (function): Function to estimate initial parameters for the func.
                                 Signature: param_estimator(stimuli, response) -> params
         loss_func (function): The loss function to use for calculating the loss.
-        X_train (jnp.ndarray): Stimuli data for training, shape (n_cells, n_train_trials).
-        Y_train (jnp.ndarray): Response data for training, shape (n_cells, n_train_trials).
-        X_test (jnp.ndarray): Stimuli data for evaluation, shape (n_cells, n_test_trials).
-        Y_test (jnp.ndarray): Response data for evaluation, shape (n_cells, n_test_trials).
+        X_train (jnp.ndarray): Stimuli data for training, shape (n_units, n_train_points).
+        Y_train (jnp.ndarray): Response data for training, shape (n_units, n_train_points).
+        X_test (jnp.ndarray): Stimuli data for evaluation, shape (n_units, n_test_points).
+        Y_test (jnp.ndarray): Response data for evaluation, shape (n_units, n_test_points).
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
         FAILED_PROGRAM_COST (float): Cost assigned to failed models. Default is np.inf.
@@ -131,30 +136,30 @@ def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test
         tuple[
             - float: The cross-validated loss of the model with data fit by the parameter estimator,
             - jnp.ndarray: The parameters fit by the parameter estimator.
-            - float: The average loss (MSE on test set) across all cells. 
-                     Returns FAILED_PROGRAM_COST if the model fails for ANY cell.
-            - jnp.ndarray: The parameters for each cell (n_cells, n_params).
+            - float: The average loss (MSE on test set) across all units. 
+                     Returns FAILED_PROGRAM_COST if the model fails for ANY unit.
+            - jnp.ndarray: The parameters for each unit (n_units, n_params).
     """
     t_start = time.time()
-    n_cells, n_trials = Y_train.shape
+    n_units, n_points = Y_train.shape
 
-    # Perform initial param calc. X and Y must be numpy arrays of shape (n_cells, n_trials)
+    # Perform initial param calc. X and Y must be numpy arrays of shape (n_units, n_points)
     if use_param_estimator:
         initial_params = compute_initial_params(param_estimator, func, np.asarray(X_train), np.asarray(Y_train))
     else:
         initial_params = return_default_params(func)
-        # if initial_params not none, reshape from (1, n_params) to (n_cells, n_params)
+        # if initial_params not none, reshape from (1, n_params) to (n_units, n_params)
         if initial_params is not None:
             n_params = initial_params.shape[1]
-            initial_params = jnp.repeat(initial_params, n_cells, axis=0)
+            initial_params = jnp.repeat(initial_params, n_units, axis=0)
     
     # Fail immediately if initial_params is None or not a JAX array
     if initial_params is None or not isinstance(initial_params, jnp.ndarray):
         logging.info("Error: initial_params should be a JAX array.")
-        return FAILED_PROGRAM_COST, jnp.zeros((n_cells, 0)), FAILED_PROGRAM_COST, jnp.zeros((n_cells, 0))
-    if initial_params.ndim != 2 or initial_params.shape[0] != n_cells:
-        logging.info(f"Error: initial_params should be a 2D array with shape ({n_cells}, n_params).")
-        return FAILED_PROGRAM_COST, jnp.zeros((n_cells, 0)), FAILED_PROGRAM_COST, jnp.zeros((n_cells, 0))
+        return FAILED_PROGRAM_COST, jnp.zeros((n_units, 0)), FAILED_PROGRAM_COST, jnp.zeros((n_units, 0))
+    if initial_params.ndim != 2 or initial_params.shape[0] != n_units:
+        logging.info(f"Error: initial_params should be a 2D array with shape ({n_units}, n_params).")
+        return FAILED_PROGRAM_COST, jnp.zeros((n_units, 0)), FAILED_PROGRAM_COST, jnp.zeros((n_units, 0))
 
     # Fail immediately if fit_params is True and non-numeric params
     n_params = initial_params.shape[1]
@@ -162,34 +167,34 @@ def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test
                   jnp.all(jnp.isfinite(initial_params)))
     if fit_params and not all_numeric:
         logging.info("Error: Cannot fit non-numeric parameters.")
-        return FAILED_PROGRAM_COST, jnp.zeros((n_cells, n_params)), FAILED_PROGRAM_COST, jnp.zeros((n_cells, n_params))
+        return FAILED_PROGRAM_COST, jnp.zeros((n_units, n_params)), FAILED_PROGRAM_COST, jnp.zeros((n_units, n_params))
 
     # Fail immediately if neuron_model doesn't run
     try:
         # Check compatibility with JAX's tracing mechanism
         func_jit = jax.jit(func)
-        for cell_idx in np.random.choice(n_cells, size=min(10, n_cells), replace=False):
+        for unit_idx in np.random.choice(n_units, size=min(10, n_units), replace=False):
             # Validate with concrete values
-            output = func_jit(X_train[cell_idx], *initial_params[cell_idx])
+            output = func_jit(X_train[unit_idx], *initial_params[unit_idx])
             if output.ndim != 1 or output.shape[0] != X_train.shape[1]:
                 logging.info(f"Error: func output shape {output.shape[0]} does not match input shape {X_train.shape[1]}.")
                 return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
             # Validate with abstract tracer values
-            jax.eval_shape(func_jit, X_train[cell_idx], *initial_params[cell_idx])
+            jax.eval_shape(func_jit, X_train[unit_idx], *initial_params[unit_idx])
     except Exception as e:
         logging.info(f"Func failed to run or is incompatible with JAX tracing: {e}")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
-    loss_single_cell = lambda params, X_data, Y_data: jnp.mean(loss_func(func(X_data, *params), Y_data), axis=-1)
-    # vectorize the loss function for all cells. The inputs will have shapes:
-    # - params: (n_cells, n_params)
-    # - x_data: (n_cells, n_trials)
-    # - y_data: (n_cells, n_trials)
-    # The output will have shape (n_cells,)
-    loss_total = jax.vmap(loss_single_cell, in_axes=(0, 0, 0), out_axes=0)
+    loss_single_unit = lambda params, X_data, Y_data: jnp.mean(loss_func(func(X_data, *params), Y_data), axis=-1)
+    # vectorize the loss function for all units. The inputs will have shapes:
+    # - params: (n_units, n_params)
+    # - x_data: (n_units, n_points)
+    # - y_data: (n_units, n_points)
+    # The output will have shape (n_units,)
+    loss_total = jax.vmap(loss_single_unit, in_axes=(0, 0, 0), out_axes=0)
 
     if fit_params:
-        # define the loss function wrt params. This will have input shape n_cells * n_params (note that params is flattened) and output shape (1,)
+        # define the loss function wrt params. This will have input shape n_units * n_params (note that params is flattened) and output shape (1,)
         loss_param = lambda params: jnp.mean(loss_total(params.reshape(-1, n_params), X_train, Y_train))
         loss_param_and_grad = jax.value_and_grad(loss_param)
 
@@ -221,13 +226,13 @@ def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test
                 best_params = params.copy()
             if step % print_every == 0:
                 print(f"step {step:4d}  loss {loss_val:.4f}")
-        params = best_params.reshape(n_cells, n_params)
+        params = best_params.reshape(n_units, n_params)
         print(f"params optimized. Loss: {best_loss:.4f}")
     else:
         params = compute_initial_params(param_estimator, func, np.asarray(X_train), np.asarray(Y_train))
         if params is None or not isinstance(params, jnp.ndarray):
             logging.info("Error: params should be a JAX array.")
-            return FAILED_PROGRAM_COST, jnp.zeros((n_cells, n_params))
+            return FAILED_PROGRAM_COST, jnp.zeros((n_units, n_params))
 
     # compute the final loss on the test set for the initial and optimized parameters
     initial_loss = jnp.nanmean(loss_total(initial_params, X_test, Y_test)) + param_penalty_weight * n_params
@@ -272,7 +277,7 @@ async def create_new_function(current_island, llm_name, client, Y, X,
             tuning_curves_project.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
                                     x=X, y=Y,
-                                    cell_selection=np.random.choice(Y.shape[0], size=9, replace=False),
+                                    unit_selection=np.random.choice(Y.shape[0], size=9, replace=False),
                                     save_path=img_dir,
                                     labels=['v_1', 'v_2'],
                                     colours=['tab:green', 'tab:red'],
@@ -359,19 +364,19 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-1.5-flash-
     func = utils.str_to_func(jax_code_string, function_name)
     return jax_code_string, func
 
-def compute_evaluation_matrix(func: callable, params: jnp.ndarray, n_evaluation_points: int = 100) -> jnp.ndarray:
+def sample_function(func: callable, params: jnp.ndarray, 
+                    sample_points: jnp.ndarray = jnp.linspace(0, 2 * jnp.pi, 100)) -> jnp.ndarray:
     """
-    Computes the evaluation matrix for a given func and parameters.
+    evaluates the func at the given evaluation points.
     Args:
         func (callable): The neuron model function.
-        params (jnp.ndarray): The parameters for the neuron model. (n_cells, n_params)
-        n_evaluation_points (int): Number of points to evaluate the model at.
+        params (jnp.ndarray): The parameters for the neuron model. (n_units, n_params)
+        sample_points (jnp.ndarray): Points to evaluate the model at.
     Returns:
-        jnp.ndarray: The evaluation matrix of shape (n_cells, n_evaluation_points).
+        jnp.ndarray: The evaluation matrix of shape (n_units, n_evaluation_points).
     """
-    angles = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
-    func_vmap = utils.vmap_over_cells(func)
-    y_eval = func_vmap(angles, params)
+    func_vmap = utils.vmap_over_units(func)
+    y_eval = func_vmap(sample_points, params)
     return y_eval
 
 def create_output_directories():
@@ -389,7 +394,7 @@ def create_output_directories():
     print("Created image feedback folder:", image_feedback_dir)
     return base_dir, date_stamp, time_stamp, full_dir, image_feedback_dir
 
-async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
+async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
                 critical_population_size=12, min_wise_population_size=0, 
                 n_migrants=2, fit_params=True, exploit_point=0.5,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
@@ -403,9 +408,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                 tiny_lm_name = 'gemini-1.5-flash-8b',
                 little_lm_name = 'gemini-2.0-flash',
                 large_lm_name = 'gemini-2.5-flash',
-                use_large_every = 3,
-                conc_thresh = 0.55, activity_thresh = 0.4,
-                data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy'):
+                use_large_every = 3):
     """ 
     Main function to run the hypothesis engine.
     """
@@ -414,9 +417,9 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
     # load and preprocess data
-    Y_loop, Y_eval, X_loop, X_eval = tuning_curves_project.load_data(data_path, conc_thresh, activity_thresh)
-    X_loop_train_trials, Y_loop_train_trials, X_loop_test_trials, Y_loop_test_trials = split_trials(X_loop, Y_loop)
-    X_eval_train_trials, Y_eval_train_trials, X_eval_test_trials, Y_eval_test_trials = split_trials(X_eval, Y_eval)
+    Y_loop, Y_eval, X_loop, X_eval = split_arrays(X, Y, axis=0)
+    X_loop_train_points, Y_loop_train_points, X_loop_test_points, Y_loop_test_points = split_arrays(X_loop, Y_loop, axis=1)
+    X_eval_train_points, Y_eval_train_points, X_eval_test_points, Y_eval_test_points = split_arrays(X_eval, Y_eval, axis=1)
 
     # create a dataframe to store the programs in each island
     islands = []
@@ -440,8 +443,8 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
         # score the initial program
         loss_init, params_init, loss, params = objective(func_jax, param_est, 
                                         loss_func=loss_functions.quadratic_loss, 
-                                        X_train=X_loop_train_trials, Y_train=Y_loop_train_trials,
-                                        X_test=X_loop_test_trials, Y_test=Y_loop_test_trials,
+                                        X_train=X_loop_train_points, Y_train=Y_loop_train_points,
+                                        X_test=X_loop_test_points, Y_test=Y_loop_test_points,
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight,
                                         use_param_estimator=use_param_estimator)
         seed_losses[i] = loss
@@ -457,7 +460,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
         parameter_estimator_code_string = import_string + parameter_estimator_code_string
         func_jax_code_string = inspect.getsource(func_jax).replace(f'def {func_jax_name_original}(', f'def {func_name}_v{i+1}(')
         func_jax_code_string = import_string_jax + func_jax_code_string
-        y_eval = compute_evaluation_matrix(func_jax, params, n_evaluation_points=100)
+        Y_SAMPLE = sample_function(func_jax, params, sample_points=jnp.linspace(0, 2 * jnp.pi, 100))
 
         new_program_df = pd.DataFrame({'function_code_string': function_code_string,
                                     'function': func_jax,
@@ -474,10 +477,10 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                                     'initial_params': [params_init],
                                     'parent1_id': None,
                                     'parent2_id': None,
-                                    'evaluation_matrix': [y_eval]})
+                                    'evaluation_matrix': [Y_SAMPLE]})
         initial_programs = pd.concat([initial_programs, new_program_df], ignore_index=True)
         print(f"Initial program {i + 1} loss: {loss:.2f}")
-        census.append([-1, -1, i, None, loss, time.time() - t_start, None, None, y_eval, params.shape[1]])
+        census.append([-1, -1, i, None, loss, time.time() - t_start, None, None, Y_SAMPLE, params.shape[1]])
 
     # seed each island with the initial programs
     for i in range(n_islands):
@@ -491,7 +494,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
     tuning_curves_project.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
                                x=X_loop, y=Y_loop,
-                               cell_selection=np.random.choice(len(X_loop), size=9, replace=False),
+                               unit_selection=np.random.choice(len(X_loop), size=9, replace=False),
                                save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
                                labels=['seed_1', 'seed_2'],
                                colours=['tab:green', 'tab:red'],
@@ -588,8 +591,8 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             
             initial_loss, initial_params, loss, optimized_params = objective(func_new, param_est_new, 
                                                                                 loss_func=loss_functions.quadratic_loss,
-                                                                                X_train=X_loop_train_trials, Y_train=Y_loop_train_trials,
-                                                                                X_test=X_loop_test_trials, Y_test=Y_loop_test_trials,
+                                                                                X_train=X_loop_train_points, Y_train=Y_loop_train_points,
+                                                                                X_test=X_loop_test_points, Y_test=Y_loop_test_points,
                                                                                 param_penalty_weight=param_penalty_weight,
                                                                                 fit_params=fit_params, 
                                                                                 use_param_estimator=use_param_estimator)
@@ -597,7 +600,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                 logging.info('-' * 50)
                 continue
 
-            y_eval = compute_evaluation_matrix(func_new, optimized_params, n_evaluation_points=100)
+            Y_SAMPLE = sample_function(func_new, optimized_params, sample_points=jnp.linspace(0, 2 * jnp.pi, 100))
             logging.info(f"Prompt: \n{prompt}\n")
             logging.info(f"Loss: {loss:.2f}\n")
             logging.info(f"Function: \n{func_code_string}\n")
@@ -612,7 +615,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                     loss_function=loss_functions.quadratic_loss,
                     x=X_loop,
                     y=Y_loop,
-                    cell_selection=np.random.choice(len(X_loop), size=4, replace=False),
+                    unit_selection=np.random.choice(len(X_loop), size=4, replace=False),
                     colours=['tab:green', 'tab:red'],
                     labels=['Param Estimator', 'Gradient Descent'],
                     line_alpha=1.0,
@@ -628,7 +631,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             param_names = [n for n in inspect.signature(func_new).parameters if n != "theta"]
             if optimized_params.shape[1] == len(param_names):
                 df = pd.DataFrame(np.array(optimized_params)[:10], columns=param_names)
-                logging.info(f"Optimized Parameters for 10 cells:\n{df}\n")
+                logging.info(f"Optimized Parameters for 10 units:\n{df}\n")
             t_added = time.time() - t_start
             new_program_df = pd.DataFrame({'function_code_string': func_code_string,
                                         'function': func_new,
@@ -645,11 +648,11 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                                         'initial_params': [initial_params],
                                         'parent1_id': [parent1_id],
                                         'parent2_id': [parent2_id],
-                                        'evaluation_matrix': [y_eval]
+                                        'evaluation_matrix': [Y_SAMPLE]
                                         })
             
             islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
-            census.append([i, island_idx, j, llm_name, loss, t_added, parent1_id, parent2_id, y_eval, optimized_params.shape[1]])
+            census.append([i, island_idx, j, llm_name, loss, t_added, parent1_id, parent2_id, Y_SAMPLE, optimized_params.shape[1]])
             success_rate += 1 / (n_islands * batch_size)
             print(f"generation {i}, island {island_idx}, batch {j}, loss: {loss:.2f}")
             print('-' * 50)
@@ -689,7 +692,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                 loss_function=loss_functions.quadratic_loss,
                 x=X_loop,
                 y=Y_loop,
-                cell_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
+                unit_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
                 title=sup_title,
                 save_path=os.path.join(generation_dir, f'island_{island_idx}_top_programs.png'),
                 dpi=300.0)
@@ -704,7 +707,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             loss_function=loss_functions.quadratic_loss,
             x=X_loop,
             y=Y_loop,
-            cell_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
+            unit_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
             title=sup_title,
             save_path=os.path.join(generation_dir, 'top_programs_overall.png'),
             dpi=300.0)
@@ -715,7 +718,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
         np.save(census_path, census_np)
 
     # -----------------------------
-    # now carry out the loss calculation on the test cells
+    # now carry out the loss calculation on the test units
     logging.info("Calculating loss on test set...")
     for island_idx in range(n_islands):
         logging.info(f"Island {island_idx} programs:")
@@ -726,8 +729,8 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             # compute the test loss
             _, _, test_loss, optimized_params = objective(neuron_model, param_estimator,
                                                           loss_func=loss_functions.quadratic_loss,
-                                                          X_train=X_eval_train_trials, Y_train=Y_eval_train_trials,
-                                                          X_test=X_eval_test_trials, Y_test=Y_eval_test_trials,
+                                                          X_train=X_eval_train_points, Y_train=Y_eval_train_points,
+                                                          X_test=X_eval_test_points, Y_test=Y_eval_test_points,
                                                           fit_params=fit_params,
                                                           max_iter=2_000, 
                                                           param_penalty_weight=param_penalty_weight,
@@ -790,7 +793,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             loss_function=loss_functions.quadratic_loss,
             x=X_eval,
             y=Y_eval,
-            cell_selection=np.random.choice(Y_eval.shape[0], size=9, replace=False),
+            unit_selection=np.random.choice(Y_eval.shape[0], size=9, replace=False),
             title=df_sup,
             save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
         )
@@ -799,13 +802,13 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             birth_island = df['birth_island'][j]
             generation = df['generation'][j]
             batch_index = df['batch_index'][j]
-            cell_selection = np.random.choice(Y_eval.shape[0], size=9, replace=False)
+            unit_selection = np.random.choice(Y_eval.shape[0], size=9, replace=False)
             tuning_curves_project.plot_single_model_fit(
                 model=df['function'][j],
                 loss_function=loss_functions.quadratic_loss,
-                x=X_eval[cell_selection],
-                y=Y_eval[cell_selection],
-                params=df['params'][j][cell_selection],
+                x=X_eval[unit_selection],
+                y=Y_eval[unit_selection],
+                params=df['params'][j][unit_selection],
                 title=f"Island {birth_island}, Generation {generation}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
                 save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
             )
@@ -813,6 +816,10 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
 if __name__ == "__main__":
     for i in range(4):
         print("running with standard params")
-        asyncio.run(main(n_generations=9, time_limit=60, use_image_feedback=True, use_large_every=3,
+        conc_thresh = 0.55
+        activity_thresh = 0.4
+        data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy' 
+        X, Y = tuning_curves_project.load_data(data_path, conc_thresh, activity_thresh)
+        asyncio.run(main(X, Y, n_generations=9, time_limit=60, use_image_feedback=True, use_large_every=3,
                          param_penalty_weight=0.01,
                          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.7))
