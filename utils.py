@@ -393,7 +393,7 @@ For this iteration, I need you to refine and optimize the existing approach:
     for i in range(k):
         program_prompt += f"""
 loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
-{random_programs.iloc[i]['program_code_string'].replace('def neuron_model(', f'def neuron_model_v{i+1}(')}
+{random_programs.iloc[i]['function_code_string'].replace('def neuron_model(', f'def neuron_model_v{i+1}(')}
 \n
 """
         # add parameter estimator
@@ -534,7 +534,7 @@ Include your analysis of the image in the docstring of your new model. Point to 
     for i in range(k):
         prompt += f"""
 loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
-{random_programs.iloc[i]['program_code_string'].replace('def neuron_model(', f'def neuron_model_v{i+1}(')}
+{random_programs.iloc[i]['function_code_string'].replace('def neuron_model(', f'def neuron_model_v{i+1}(')}
 \n
 """
 
@@ -611,7 +611,7 @@ Summarise this analysis **inside the docstring** of `parameter_estimator_v{k+1}`
     for i in range(k):
         prompt += f"""
 loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
-{random_programs.iloc[i]['program_code_string'].replace('def neuron_model(', f'def neuron_model_v{i+1}(')}
+{random_programs.iloc[i]['function_code_string'].replace('def neuron_model(', f'def neuron_model_v{i+1}(')}
 \n
 {random_programs.iloc[i]['parameter_estimator_code_string'].replace('def parameter_estimator(', f'def parameter_estimator_v{i+1}(')}
 \n
@@ -736,7 +736,7 @@ You are an AI scientist, working to improve a model based on its fit to data. Yo
 
 The current neuron model is defined as follows:
 
-{program_df_row['program_code_string'][0]}
+{program_df_row['function_code_string'][0]}
 
 Carefully analyze the provided image showing the neuron model's fit to experimental data across multiple cells.
 

@@ -22,9 +22,9 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     plot fits of all models in programs_df over a subset of cells in x and y, along with the running mean.
     Args:
         programs_df:
-            - must have columns 'program' and 'params'. 
+            - must have columns 'function' and 'params'. 
             - must have n_rows <= 3
-            - 'program': callable (written in JAX): (x: jnp.ndarray, *params) -> jnp.ndarray
+            - 'function': callable (written in JAX): (x: jnp.ndarray, *params) -> jnp.ndarray
             - 'params': jnp.ndarray (n_cells, n_params)
         loss_function: 
             - callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
@@ -37,7 +37,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         f"cell_selection must be a square number, but has {len(cell_selection)} elements."
 
     # define frequently used variables
-    models = programs_df['program'].tolist()
+    models = programs_df['function'].tolist()
     params = programs_df['params'].tolist()
     params = [p[cell_selection] for p in params]
     spike_matrix = y[cell_selection]
