@@ -79,29 +79,6 @@ def return_default_params(func) -> jnp.ndarray:
         logging.info(f"Error while generating default parameters: {e}")
         return None    
 
-def split_arrays(X: jnp.ndarray, Y: jnp.ndarray, random_seed: int = 0, axis: int = 1) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """
-    Split 2D arrays along a given axis into training and testing sets (50% each).
-    Args:
-        X (jnp.ndarray): input data (n_units, n_points).
-        Y (jnp.ndarray): Response data of shape (n_units, n_points).
-        random_seed (int): Seed used to shuffle points before splitting.
-    Returns:
-        tuple: (X_train, Y_train, X_test, Y_test), each with shape (n_units, n_points//2) if axis=1, else (n_units//2, n_points).
-    """
-    n_units, n_points = X.shape
-    key = jax.random.PRNGKey(random_seed)
-    shuffled_indices = jax.random.permutation(key, jnp.arange(n_points if axis == 1 else n_units))
-    if axis == 1:
-        train_indices, test_indices = shuffled_indices[:n_points // 2], shuffled_indices[n_points // 2:]
-        X_train, X_test = X[:, train_indices], X[:, test_indices]
-        Y_train, Y_test = Y[:, train_indices], Y[:, test_indices]
-    else:
-        train_indices, test_indices = shuffled_indices[:n_units // 2], shuffled_indices[n_units // 2:]
-        X_train, X_test = X[train_indices, :], X[test_indices, :]
-        Y_train, Y_test = Y[train_indices, :], Y[test_indices, :]
-    return X_train, Y_train, X_test, Y_test
-
 def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test, 
               param_penalty_weight=0.1, fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000,
@@ -379,21 +356,6 @@ def sample_function(func: callable, params: jnp.ndarray,
     y_eval = func_vmap(sample_points, params)
     return y_eval
 
-def create_output_directories():
-    base_dir = os.path.join(os.getcwd(), 'program_databases')
-    print("Base directory:", base_dir)
-    os.makedirs(base_dir, exist_ok=True)
-    date_stamp = pd.Timestamp.now().strftime("%m-%d")
-    time_stamp = pd.Timestamp.now().strftime("%H-%M-%S")
-    full_dir = os.path.join(base_dir, date_stamp, time_stamp)
-    os.makedirs(full_dir, exist_ok=True)
-    print("Created folder:", full_dir)
-    # create a directory for image diagnostics
-    image_feedback_dir = os.path.join(full_dir, 'image_feedback')
-    os.makedirs(image_feedback_dir, exist_ok=True)
-    print("Created image feedback folder:", image_feedback_dir)
-    return base_dir, date_stamp, time_stamp, full_dir, image_feedback_dir
-
 async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
                 critical_population_size=12, min_wise_population_size=0, 
                 n_migrants=2, fit_params=True, exploit_point=0.5,
@@ -417,9 +379,9 @@ async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
     # load and preprocess data
-    Y_loop, Y_eval, X_loop, X_eval = split_arrays(X, Y, axis=0)
-    X_loop_train_points, Y_loop_train_points, X_loop_test_points, Y_loop_test_points = split_arrays(X_loop, Y_loop, axis=1)
-    X_eval_train_points, Y_eval_train_points, X_eval_test_points, Y_eval_test_points = split_arrays(X_eval, Y_eval, axis=1)
+    Y_loop, Y_eval, X_loop, X_eval = utils.split_arrays(X, Y, axis=0)
+    X_loop_train_points, Y_loop_train_points, X_loop_test_points, Y_loop_test_points = utils.split_arrays(X_loop, Y_loop, axis=1)
+    X_eval_train_points, Y_eval_train_points, X_eval_test_points, Y_eval_test_points = utils.split_arrays(X_eval, Y_eval, axis=1)
 
     # create a dataframe to store the programs in each island
     islands = []
@@ -430,7 +392,7 @@ async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_
     initial_programs = pd.DataFrame([])
 
     # create output directories
-    base_dir, date_stamp, time_stamp, full_dir, image_feedback_dir = create_output_directories()
+    base_dir, date_stamp, time_stamp, full_dir, image_feedback_dir = utils.create_output_directories(use_image=use_image_feedback)
     census = []
     # store and compute loss of 2 initial programs
     t_start = time.time()

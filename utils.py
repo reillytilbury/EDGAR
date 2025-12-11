@@ -1,4 +1,6 @@
+import os
 import jax
+import jax.numpy as jnp
 import time
 import pandas as pd
 import prompt_templates as prompt_text
@@ -22,6 +24,45 @@ def vmap_over_units(model_fn: Callable) -> Callable:
         # params_row shape: (k,)  ← one unit’s parameters
         return model_fn(theta, *params_row)   # unpack to scalars
     return jax.vmap(_wrapped, in_axes=(None, 0))   # x shared, params batched
+
+def split_arrays(X: jnp.ndarray, Y: jnp.ndarray, random_seed: int = 0, axis: int = 1) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """
+    Split 2D arrays along a given axis into training and testing sets (50% each).
+    Args:
+        X (jnp.ndarray): input data (n_units, n_points).
+        Y (jnp.ndarray): Response data of shape (n_units, n_points).
+        random_seed (int): Seed used to shuffle points before splitting.
+    Returns:
+        tuple: (X_train, Y_train, X_test, Y_test), each with shape (n_units, n_points//2) if axis=1, else (n_units//2, n_points).
+    """
+    n_units, n_points = X.shape
+    key = jax.random.PRNGKey(random_seed)
+    shuffled_indices = jax.random.permutation(key, jnp.arange(n_points if axis == 1 else n_units))
+    if axis == 1:
+        train_indices, test_indices = shuffled_indices[:n_points // 2], shuffled_indices[n_points // 2:]
+        X_train, X_test = X[:, train_indices], X[:, test_indices]
+        Y_train, Y_test = Y[:, train_indices], Y[:, test_indices]
+    else:
+        train_indices, test_indices = shuffled_indices[:n_units // 2], shuffled_indices[n_units // 2:]
+        X_train, X_test = X[train_indices, :], X[test_indices, :]
+        Y_train, Y_test = Y[train_indices, :], Y[test_indices, :]
+    return X_train, Y_train, X_test, Y_test
+
+def create_output_directories(use_image: bool = True) -> Tuple[str, str, str, str, str]:
+    base_dir = os.path.join(os.getcwd(), 'program_databases')
+    print("Base directory:", base_dir)
+    os.makedirs(base_dir, exist_ok=True)
+    date_stamp = pd.Timestamp.now().strftime("%m-%d")
+    time_stamp = pd.Timestamp.now().strftime("%H-%M-%S")
+    full_dir = os.path.join(base_dir, date_stamp, time_stamp)
+    os.makedirs(full_dir, exist_ok=True)
+    print("Created folder:", full_dir)
+    # create a directory for image diagnostics
+    image_feedback_dir = os.path.join(full_dir, 'image_feedback') if use_image else None
+    if use_image:
+        os.makedirs(image_feedback_dir, exist_ok=True)
+    print("Created image feedback folder:", image_feedback_dir)
+    return base_dir, date_stamp, time_stamp, full_dir, image_feedback_dir
 
 def extract_code_block(text: Union[str, None], start_marker: str = "```python\n", end_marker: str = "```") -> Union[str, None]:
     """
