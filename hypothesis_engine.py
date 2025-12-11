@@ -5,7 +5,7 @@ import asyncio
 import numpy as np
 import jax, jax.numpy as jnp
 import timeout_decorator
-import jaxopt, optax
+import optax
 import pandas as pd
 from pathlib import Path
 import utils, diagnostic, tuning_curves_project, genetic_helpers, loss_functions
