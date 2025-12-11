@@ -2,7 +2,6 @@ import jax.numpy as jnp
 import numpy as np
 import logging
 import pandas as pd
-import utils
 import itertools
 
 def compare_programs(program_a, program_b, loss_tol=0.02, cosine_tol=0.95, mode='complicated'):
@@ -32,9 +31,9 @@ def compare_programs(program_a, program_b, loss_tol=0.02, cosine_tol=0.95, mode=
         return False
 
     id_match = (program_a['birth_island'] == program_b['birth_island'] and
-                program_a['iteration_number'] == program_b['iteration_number'] and
+                program_a['generation'] == program_b['generation'] and
                 program_a['batch_index'] == program_b['batch_index'])
-    code_string_match = program_a['program_code_string'] == program_b['program_code_string']
+    code_string_match = program_a['function_code_string'] == program_b['function_code_string']
     
     if mode == 'simple':
         return id_match or code_string_match
@@ -148,15 +147,6 @@ def perform_population_pruning(islands: list[pd.DataFrame], critical_population_
         top_overflow_programs = current_island.nsmallest(n_vacancies, 'train_loss').reset_index(drop=True)
         # concatenate top_wise and top_overflow_programs and reset index
         islands[j] = pd.concat([top_wise_programs, top_overflow_programs], ignore_index=True).reset_index(drop=True)
-    return islands
-
-def perform_population_pruning_old(islands: list[pd.DataFrame], critical_population_size=12):
-    for j, current_island in enumerate(islands):
-        if len(current_island) <= critical_population_size:
-            logging.info(f"Island {j} has fewer programs than the critical population size, skipping pruning.")
-            continue
-        current_island = current_island.nsmallest(critical_population_size, 'train_loss').reset_index(drop=True)
-        islands[j] = current_island
     return islands
 
 def perform_probabilistic_migration(islands, n_migrants, destination_islands:list[int], temperature=1.0):

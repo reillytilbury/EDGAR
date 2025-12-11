@@ -8,7 +8,7 @@ import timeout_decorator
 import jaxopt, optax
 import pandas as pd
 from pathlib import Path
-import utils, diagnostic, seed_programs, genetic_helpers, loss_functions
+import utils, diagnostic, tuning_curves_project, genetic_helpers, loss_functions
 from tqdm import tqdm
 from google import genai
 from dotenv import load_dotenv
@@ -238,7 +238,8 @@ def objective(func, param_estimator, loss_func, X, Y,
 
 async def create_new_function(current_island, llm_name, client, Y, X,
                               mode='explore', k_max=2, temp=1, 
-                              thinking_budget=1, img_dir=None):
+                              thinking_budget=1, img_dir=None,
+                              function_name='neuron_model'):
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
@@ -250,11 +251,12 @@ async def create_new_function(current_island, llm_name, client, Y, X,
                   random_programs['birth_island'][1], 
                   random_programs['batch_index'][1])
     use_image = img_dir is not None
-    program_prompt = utils.create_program_prompt(random_programs, mode=mode, llm_type=llm_name[0], use_image=use_image)
+    program_prompt = utils.create_program_prompt(random_programs, mode=mode,
+                                                 use_image=use_image, function_name=function_name)
 
     if use_image:
         try:
-            sup_title = "".join([f"neuron_model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
+            sup_title = "".join([f"{function_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             diagnostic.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
                                     x=X, y=Y,
@@ -283,7 +285,7 @@ async def create_new_function(current_island, llm_name, client, Y, X,
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
         return None, None, (parent1_id, parent2_id)
-    code_string = code_string.replace(f'def neuron_model_v{k+1}(', 'def neuron_model(')
+    code_string = code_string.replace(f'def {function_name}_v{k+1}(', f'def {function_name}(')
     
     return code_string, program_prompt, (parent1_id, parent2_id)
 
@@ -292,7 +294,8 @@ async def create_new_parameter_estimator(current_island, func_code_string: str,
                                            Y, X,
                                            k_max=1, temp=1,
                                            param_estimator_max_lines=100, img_dir=None,
-                                           swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']):
+                                           swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'],
+                                           function_name='neuron_model'):
     if func_code_string is None:
         logging.info("No function code string provided, skipping parameter estimator generation.")
         return None, None
@@ -302,16 +305,17 @@ async def create_new_parameter_estimator(current_island, func_code_string: str,
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
     use_image = img_dir is not None
     prompt = utils.create_parameter_estimator_prompt(random_programs,
-                                                    func_code_string=func_code_string,
-                                                    llm_type=llm_name[0], max_lines=param_estimator_max_lines,
-                                                    use_image=use_image)
+                                                     func_code_string=func_code_string,
+                                                     max_lines=param_estimator_max_lines,
+                                                     use_image=use_image,
+                                                     function_name=function_name)
     
     random_programs_crude = random_programs.copy()
     random_programs_crude['params'] = random_programs['initial_params']
     # now try generating an image from the random programs
     if use_image:
         try:
-            sup_title = "".join([f"neuron_model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
+            sup_title = "".join([f"{function_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             diagnostic.plot_model_fits(programs_df=random_programs_crude,
                                     loss_function=loss_functions.quadratic_loss,
                                     x=X, y=Y,
@@ -352,50 +356,8 @@ async def create_new_parameter_estimator(current_island, func_code_string: str,
     func = utils.str_to_func(code_string, 'parameter_estimator')
     return code_string, func
 
-async def create_new_parameter_estimator_from_image_feedback(image_prompt: str,
-                                                               image_dir: str,
-                                                               model_name='gemini-2.0-flash',
-                                                               swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'],
-                                                               max_lines=100,
-                                                               temp=1,
-                                                               client=None) -> tuple[str, callable]:
-    """ Generates a new parameter estimator from an image feedback prompt.
-    Args:
-        image_prompt (str): The prompt string for the AI to generate a new parameter estimator.
-        image_dir (str): Directory where the image is stored.
-        swear_words (list): List of words that should not be present in the generated code.
-        max_lines (int): Maximum number of lines for the generated code.
-        client: The genai client to use for LLM calls.
-    Returns:
-        tuple[str, callable]: The generated parameter estimator code string and the function object.
-    """
-    if image_prompt is None or image_dir is None:
-        logging.info("No image prompt or image directory provided for parameter estimator generation.")
-        return None, None
-    # load image as bytes
-    image_path = Path(image_dir)
-    if not image_path.exists():
-        logging.info(f"Image path {image_path} does not exist, skipping parameter estimator generation from image feedback.")
-        return None, None
-    with image_path.open("rb") as f:
-        img_bytes = f.read()
-    # call the LLM with the image prompt and image bytes
-    llm_output = await utils.call_llm_async(image_prompt, model_name=model_name, client=client, temperature=temp, img_bytes=img_bytes)
-    code_string = utils.extract_code_block(llm_output) # extract the code block from the LLM output
-    if code_string is None:
-        logging.info("No code block found in the LLM output for parameter estimator from image feedback, skipping.")
-        return None, None
-    # check for swear words
-    contains_swear_word = any(word in code_string for word in swear_words)
-    if contains_swear_word:
-        swear_word = next((word for word in swear_words if word in code_string), None)
-        logging.info(f"Parameter estimator code contains swear word: {swear_word}, skipping.")
-        return None, None
-    # extract the function from the code string
-    func = utils.str_to_func(code_string, 'parameter_estimator')
-    return code_string, func
-
-async def translate_to_jax(code_string: str, client, llm_name='gemini-1.5-flash-8b') -> tuple[str, callable]:
+async def translate_to_jax(code_string: str, client, llm_name='gemini-1.5-flash-8b',
+                           function_name: str = 'neuron_model') -> tuple[str, callable]:
     """
     Translates a neuron model code string to JAX format.
     Args:
@@ -404,17 +366,17 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-1.5-flash-
         callable: The translated JAX function.
     """
     if code_string is None:
-        logging.info("No neuron model code string provided for translation.")
+        logging.info(f"No {function_name} code string provided for translation.")
         return None, None
     
-    prompt = utils.create_jax_translater_prompt(code_string)
+    prompt = utils.create_jax_translater_prompt(code_string, function_name=function_name)
     # print(f"Translating neuron model to JAX with prompt:\n{prompt}")
     if prompt is None:
         return None, None
     
     jax_code_string = await utils.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
     jax_code_string = utils.extract_code_block(jax_code_string)
-    func = utils.str_to_func(jax_code_string, 'neuron_model')
+    func = utils.str_to_func(jax_code_string, function_name)
     return jax_code_string, func
 
 def compute_evaluation_matrix(func: callable, params: jnp.ndarray, n_evaluation_points: int = 100) -> jnp.ndarray:
@@ -431,53 +393,6 @@ def compute_evaluation_matrix(func: callable, params: jnp.ndarray, n_evaluation_
     func_vmap = utils.vmap_over_cells(func)
     y_eval = func_vmap(angles, params)
     return y_eval
-
-def load_data(data_path: str = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy', 
-              conc_thresh: float = 0.55, activity_thresh: float = 0.4):
-    """
-    Loads and preprocesses neural data from the specified file path.
-    Args:
-        data_path (str): Path to the neural data file.
-        conc_thresh (float): Concentration threshold for filtering cells.
-        activity_thresh (float): Activity threshold for filtering cells.
-    Returns:
-        tuple: Processed response and angles as JAX arrays, split into training and testing sets.
-    """
-    # load and preprocess data
-    neural_data = np.load(data_path, allow_pickle=True)
-    neural_data = neural_data.item()
-    response = utils.extract_stimulus_related_response(neural_data, n_pcs=0)
-    angles = neural_data['istim']
-    n_trials = response.shape[1]
-    n_trials_small = int(n_trials * activity_thresh)
-
-    # filter 
-    active = (response > 0).astype(np.float32)
-    firing_probs = np.mean(active, axis=1)
-    conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
-    good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
-    n_good_cells = len(good_cells)
-
-    # update angles and response to be (n_cells_small, n_trials_small) and (n_cells_small, n_trials_small)
-    response_cropped, angles_cropped = np.zeros((len(good_cells), n_trials_small)), np.zeros((len(good_cells), n_trials_small))
-    for i, cell in enumerate(good_cells):
-        active_trials = response[cell] > 0
-        active_trials_idx = np.where(active_trials)[0][:n_trials_small]
-        response_cropped[i] = response[cell, active_trials_idx]
-        angles_cropped[i] = angles[active_trials_idx]
-        
-    # update response and angles to be the cropped versions and convert to JAX arrays, normalize and split into train/test
-    response, angles = jnp.asarray(response_cropped), jnp.asarray(angles_cropped)
-    response = 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # normalize response
-    key = jax.random.PRNGKey(42)
-    training_size = n_good_cells // 2
-    shuffled_indices = jax.random.permutation(key, jnp.arange(n_good_cells))
-    training_cells, test_cells = shuffled_indices[:training_size], shuffled_indices[training_size:]
-    response_train, response_test = response[training_cells, :], response[test_cells, :]
-    angles_train, angles_test = angles[training_cells, :], angles[test_cells, :]
-    print(f"Selected {len(good_cells)} cells with activity > {activity_thresh} and concentration > {conc_thresh}.")
-    print(f"Using {len(training_cells)} cells for training and {len(test_cells)} cells for testing.")
-    return response_train, response_test, angles_train, angles_test
 
 def create_output_directories():
     base_dir = os.path.join(os.getcwd(), 'program_databases')
@@ -501,9 +416,9 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                 use_image_feedback=True, use_param_estimator=True,
                 exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
-                seed_functions_numpy = [seed_programs.neuron_model_1, seed_programs.neuron_model_2],
-                seed_functions_jax = [seed_programs.neuron_model_1_jax, seed_programs.neuron_model_2_jax],
-                seed_parameter_estimators = [seed_programs.parameter_estimator_1, seed_programs.parameter_estimator_2],
+                seed_functions_numpy = [tuning_curves_project.neuron_model_gauss, tuning_curves_project.neuron_model_double_gauss],
+                seed_functions_jax = [tuning_curves_project.neuron_model_gauss_jax, tuning_curves_project.neuron_model_double_gauss_jax],
+                seed_parameter_estimators = [tuning_curves_project.parameter_estimator_gauss, tuning_curves_project.parameter_estimator_double_gauss],
                 func_name = 'neuron_model',
                 tiny_lm_name = 'gemini-1.5-flash-8b',
                 little_lm_name = 'gemini-2.0-flash',
@@ -519,7 +434,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
     # load and preprocess data
-    Y_loop, Y_eval, X_loop, X_eval = load_data(data_path, conc_thresh, activity_thresh)
+    Y_loop, Y_eval, X_loop, X_eval = tuning_curves_project.load_data(data_path, conc_thresh, activity_thresh)
 
     # create a dataframe to store the programs in each island
     islands = []
@@ -635,7 +550,8 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                                                         client=client, mode=mode, 
                                                         k_max=k_max, temp=temperature,
                                                         Y=Y_loop, X=X_loop,
-                                                        img_dir=model_image_dirs[island_idx, j]) 
+                                                        img_dir=model_image_dirs[island_idx, j],
+                                                        function_name=func_name) 
                                          for island_idx in range(n_islands) for j in range(batch_size)]
         logging.info(f"Creating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
         print(f"Creating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
@@ -645,7 +561,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
         parent_ids = [result[2] for result in llm_function_results]
         
         # convert to jax
-        llm_function_translation_tasks = [translate_to_jax(code_string, client, tiny_lm_name) for code_string in llm_function_code_strings]
+        llm_function_translation_tasks = [translate_to_jax(code_string, client, tiny_lm_name, function_name=func_name) for code_string in llm_function_code_strings]
         jax_results = await asyncio.gather(*llm_function_translation_tasks)
         llm_function_results = [(llm_function_code_strings[j], llm_function_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
@@ -661,7 +577,8 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
-                img_dir=None # no image feedback for parameter estimator generation
+                img_dir=None, # no image feedback for parameter estimator generation
+                function_name=func_name
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)
