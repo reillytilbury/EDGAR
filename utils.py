@@ -31,7 +31,7 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("google.genai").setLevel(logging.ERROR)
 # load dotenv to load environment variables from .env file
-
+load_dotenv()
 
 def vmap_over_cells(model_fn):
     """Return a version of `model_fn` that accepts
@@ -40,7 +40,6 @@ def vmap_over_cells(model_fn):
         # params_row shape: (k,)  ← one cell’s parameters
         return model_fn(theta, *params_row)   # unpack to scalars
     return jax.vmap(_wrapped, in_axes=(None, 0))   # x shared, params batched
-
 
 def extract_code_block(text: Union[str, None], start_marker: str = "```python\n", end_marker: str = "```") -> Union[str, None]:
     """
@@ -72,58 +71,6 @@ def extract_code_block(text: Union[str, None], start_marker: str = "```python\n"
 
     # return just the code between the fences
     return text[start:end].rstrip()
-
-def split_via_ast(output: Union[str, None], function_name: str = 'neuron_model') -> Union[Tuple[str, str], Tuple[None, None]]:
-    """
-    Splits the output string into two parts: one containing the neuron_model function and the other containing the parameter_estimator function.
-    If the output string does not contain valid python code, or is missing either function, or if the output is None, this function returns None, None.
-    Args:
-        output (str or None): The output string containing the code to be split.
-    Returns:
-        Tuple[str, str]: A tuple containing the neuron_model and parameter_estimator code as strings.
-                         If either function is not found, returns None for that part.
-    """
-    if output is None:
-        return None, None
-    # Parse the output string into an AST
-    try:
-        module = ast.parse(output)
-    except SyntaxError as e:
-        print(f"SyntaxError while parsing LLM code: {e}")
-        return None, None
-
-    # Separate imports from function definitions
-    raw_imports = [n for n in module.body 
-                   if isinstance(n, (ast.Import, ast.ImportFrom))]
-
-    # Dedupe by their unparsed source text (preserves first occurrence order)
-    seen_src = set()
-    unique_imports = []
-    for node in raw_imports:
-        src = ast.unparse(node)
-        if src not in seen_src:
-            seen_src.add(src)
-            unique_imports.append(node)
-    
-    funcs = [n for n in module.body if isinstance(n, ast.FunctionDef)]
-
-    # Find exactly the function_name and parameter_estimator nodes. Return empty functions if not found.
-    try:
-        model_fn = next(f for f in funcs if f.name.startswith(function_name))
-        est_fn = next(f for f in funcs if f.name.startswith("parameter_estimator"))
-    except StopIteration:
-        return None, None
-    
-    # Rename the functions
-    model_fn.name = function_name
-    est_fn.name = "parameter_estimator"
-
-    # Reconstruct two mini‐modules
-    mod_tree = ast.Module(body=unique_imports + [model_fn], type_ignores=[])
-    est_tree = ast.Module(body=unique_imports + [est_fn],   type_ignores=[])
-
-    # Turn them back into source code
-    return ast.unparse(mod_tree), ast.unparse(est_tree)
 
 def call_llm(
     prompt_text: str,
@@ -226,7 +173,6 @@ def str_to_func(code_string: Tuple[str, None], needle: str = 'neuron_model') -> 
             print(f"Function {needle} not found in executed code.")
             return None
 
-
 def create_program_prompt(random_programs: pd.DataFrame, mode: str,
                           use_image: bool = True, function_name: str = 'neuron_model') -> str:
     """
@@ -247,13 +193,13 @@ def create_program_prompt(random_programs: pd.DataFrame, mode: str,
     # get the number k of parent programs
     k = len(random_programs)
 
-    prompt = prompt_text.program_prompt_preamble(k=k, mode=mode, function_name=function_name)
+    prompt = prompt_text.program_creation_instructions(k=k, mode=mode, function_name=function_name)
     #  prompt explaining the image
     if use_image:
-        prompt += prompt_text.program_prompt_image_guidance(k=k, function_name=function_name)
+        prompt += prompt_text.image_analysis_instructions(k=k, function_name=function_name)
 
     # docstring and coding guidelines
-    prompt += prompt_text.program_guidelines(k=k, function_name=function_name)
+    prompt += prompt_text.coding_instructions(k=k, function_name=function_name)
     
     # add programs to the prompt
     for i in range(k):
@@ -283,7 +229,7 @@ def create_parameter_estimator_prompt(random_programs: pd.DataFrame, func_code_s
     # get the number k of parent programs
     k = len(random_programs)
 
-    prompt = prompt_text.parameter_estimator_prompt_preamble(k=k, function_name=function_name, max_lines=max_lines)
+    prompt = prompt_text.parameter_estimator_creation_instructions(k=k, function_name=function_name, max_lines=max_lines)
 
     # loop through the models, and add the relevant code and metadata.
     for i in range(k):
@@ -305,7 +251,6 @@ loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
 """
     return prompt
 
-
 def create_jax_translater_prompt(program: str, function_name: str = 'neuron_model') -> str:
     """
     Create a prompt to translate a program to JAX compatible code.
@@ -316,4 +261,4 @@ def create_jax_translater_prompt(program: str, function_name: str = 'neuron_mode
     """
     # Ensure the program is a string
     assert isinstance(program, str), "The program must be a string."
-    return prompt_text.jax_translation_prompt(program, function_name)
+    return prompt_text.jax_translation_instructions(program, function_name)

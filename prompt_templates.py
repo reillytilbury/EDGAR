@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-
 def _validate_mode(mode: str) -> None:
     if mode not in {"explore", "exploit"}:
         raise ValueError(f"Unsupported mode '{mode}'. Expected 'explore' or 'exploit'.")
 
-
-def program_prompt_preamble(k: int, mode: str, function_name: str) -> str:
+def program_creation_instructions(k: int, mode: str, function_name: str) -> str:
     """Prompt creation preamble for program generation tasks.
     Args:
         k: number of parent programs
@@ -40,8 +38,7 @@ You will be *penalized* for complexity, so make the new model as *simple* as pos
 """
     return prompt
 
-
-def program_prompt_image_guidance(k: int, function_name: str) -> str:
+def image_analysis_instructions(k: int, function_name: str) -> str:
     """ Image analysis guidance for program generation tasks.
     Args:
         k: number of parent programs
@@ -63,8 +60,7 @@ Use this analysis to inform the design of a new {function_name}, `{function_name
 Include your analysis of the image in the docstring of your new model. Point to specific subplots in the image that illustrate the *strengths* and *weaknesses* of the parent models. Explain how you plan to **fix** the weaknesses of the parent models.
 """
 
-
-def program_guidelines(k: int, function_name: str) -> str:
+def coding_instructions(k: int, function_name: str) -> str:
     """ Docstring guidelines for program generation tasks.
     Args:
         k: number of parent programs
@@ -87,7 +83,7 @@ def program_guidelines(k: int, function_name: str) -> str:
 
 """
 
-def parameter_estimator_prompt_preamble(k: int, function_name: str, max_lines: int) -> str:
+def parameter_estimator_creation_instructions(k: int, function_name: str, max_lines: int) -> str:
     return f"""
 You are an AI scientist. Your task is to create a simple parameter estimator function, `parameter_estimator_v{k+1}`, to estimate the free parameters of the latest model, `{function_name}_v{k+1}`.
 
@@ -103,8 +99,7 @@ The parameters should be estimated directly, using statistical principles and kn
 * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point for the parameter estimation.
 """
 
-
-def jax_translation_prompt(program: str, function_name: str) -> str:
+def jax_translation_instructions(program: str, function_name: str) -> str:
     return f"""Convert the following function (`{function_name}`) to a JAX-compatible function.
 
 Include all necessary imports, and ensure that the function is compatible with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.

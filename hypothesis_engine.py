@@ -290,10 +290,9 @@ async def create_new_function(current_island, llm_name, client, Y, X,
     return code_string, program_prompt, (parent1_id, parent2_id)
 
 async def create_new_parameter_estimator(current_island, func_code_string: str,
-                                           llm_name, client, 
-                                           Y, X,
-                                           k_max=1, temp=1,
-                                           param_estimator_max_lines=100, img_dir=None,
+                                           llm_name, client,
+                                           k_max=1, temp=1, thinking_budget=0.25,
+                                           param_estimator_max_lines=100,
                                            swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'],
                                            function_name='neuron_model'):
     if func_code_string is None:
@@ -303,44 +302,13 @@ async def create_new_parameter_estimator(current_island, func_code_string: str,
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
     # sort from worst to best (loss descending)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-    use_image = img_dir is not None
+
     prompt = utils.create_parameter_estimator_prompt(random_programs,
                                                      func_code_string=func_code_string,
                                                      max_lines=param_estimator_max_lines,
-                                                     use_image=use_image,
                                                      function_name=function_name)
-    
-    random_programs_crude = random_programs.copy()
-    random_programs_crude['params'] = random_programs['initial_params']
-    # now try generating an image from the random programs
-    if use_image:
-        try:
-            sup_title = "".join([f"{function_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            diagnostic.plot_model_fits(programs_df=random_programs_crude,
-                                    loss_function=loss_functions.quadratic_loss,
-                                    x=X, y=Y,
-                                    cell_selection=np.random.choice(Y.shape[0], size=4, replace=False),
-                                    save_path=img_dir,
-                                    labels=['v_1', 'v_2'],
-                                    colours=['tab:green', 'tab:red'],
-                                    dpi=384*2/20,
-                                    title=sup_title,
-                                    legend_fontsize=20,
-                                    line_alpha=0.9,
-                                    line_width=4,)
-            img_path = Path(img_dir)
-            with img_path.open("rb") as f:
-                img_bytes = f.read()
-        except Exception as e:
-            logging.info(f"Error generating image for parameter estimator prompt: {e}")
-            img_bytes = None
-            # if we can't generate an image, we will just use the text prompt without image
-            use_image = False
-    else:
-        img_bytes = None
-    
     llm_output = await utils.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
-                                            thinking_budget=0.25, img_bytes=img_bytes)
+                                            thinking_budget=thinking_budget)
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -577,7 +545,6 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
-                img_dir=None, # no image feedback for parameter estimator generation
                 function_name=func_name
             )
             for island_idx in range(n_islands)
