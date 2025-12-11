@@ -8,7 +8,7 @@ import timeout_decorator
 import optax
 import pandas as pd
 from pathlib import Path
-import utils, diagnostic, tuning_curves_project, genetic_helpers, loss_functions
+import utils, tuning_curves_project, genetic_helpers, loss_functions
 from tqdm import tqdm
 from google import genai
 from dotenv import load_dotenv
@@ -50,7 +50,7 @@ def compute_initial_params(param_estimator, func, x, y) -> jnp.ndarray:
         logging.info(f"Error during parameter estimation: {e}")
 
     # If parameter estimation fails, compute default parameters based on the func's signature
-    params = compute_default_params(func)
+    params = return_default_params(func)
     if params is not None:
         # default params is a 2D array with shape (1, n_params), so we need to repeat it for each cell
         n_cells = y.shape[0]
@@ -59,7 +59,7 @@ def compute_initial_params(param_estimator, func, x, y) -> jnp.ndarray:
         logging.info("Error: Unable to compute default parameters for the func.")
         return None
 
-def compute_default_params(func) -> jnp.ndarray:
+def return_default_params(func) -> jnp.ndarray:
     """
     Compute default parameters for the func based on its signature.
     Args:
@@ -79,9 +79,28 @@ def compute_default_params(func) -> jnp.ndarray:
         logging.info(f"Error while generating default parameters: {e}")
         return None    
 
-def objective(func, param_estimator, loss_func, X, Y, 
-              param_penalty_weight=0.1, fit_params=True, random_seed=0,
+def split_trials(X: jnp.ndarray, Y: jnp.ndarray, random_seed: int = 0) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """
+    Split stimuli and response matrices into train/test subsets along the trial axis.
+    Args:
+        X (jnp.ndarray): Stimuli data of shape (n_cells, n_trials).
+        Y (jnp.ndarray): Response data of shape (n_cells, n_trials).
+        random_seed (int): Seed used to shuffle trials before splitting.
+    Returns:
+        tuple: (X_train, Y_train, X_test, Y_test), each with shape (n_cells, n_trials/2).
+    """
+    n_trials = X.shape[1]
+    key = jax.random.PRNGKey(random_seed)
+    training_size = n_trials // 2
+    shuffled = jax.random.permutation(key, jnp.arange(n_trials))
+    train_idx = shuffled[:training_size]
+    test_idx = shuffled[training_size:]
+    return X[:, train_idx], Y[:, train_idx], X[:, test_idx], Y[:, test_idx]
+
+def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test, 
+              param_penalty_weight=0.1, fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000,
+              beta1=0.9, beta2=0.999, learning_rate=3e-3, eps=1e-8,
               use_param_estimator=True) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate the loss of the model. 
@@ -94,13 +113,18 @@ def objective(func, param_estimator, loss_func, X, Y,
         param_estimator (function): Function to estimate initial parameters for the func.
                                 Signature: param_estimator(stimuli, response) -> params
         loss_func (function): The loss function to use for calculating the loss.
-        X (jnp.ndarray): Stimuli data, shape (n_cells, n_trials).
-        Y (jnp.ndarray): Response data, shape (n_cells, n_trials).
+        X_train (jnp.ndarray): Stimuli data for training, shape (n_cells, n_train_trials).
+        Y_train (jnp.ndarray): Response data for training, shape (n_cells, n_train_trials).
+        X_test (jnp.ndarray): Stimuli data for evaluation, shape (n_cells, n_test_trials).
+        Y_test (jnp.ndarray): Response data for evaluation, shape (n_cells, n_test_trials).
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
-        random_seed (int or None): Random seed for reproducibility. Default is 0. If None, will not split the data into training and test sets.
         FAILED_PROGRAM_COST (float): Cost assigned to failed models. Default is np.inf.
         max_iter (int): Maximum number of iterations for optimization. Default is 1_000.
+        beta1 (float): Beta1 parameter for the Adam optimizer. Default is 0.9.
+        beta2 (float): Beta2 parameter for the Adam optimizer. Default is 0.999.
+        learning_rate (float): Learning rate for the Adam optimizer. Default is 3e-3.
+        eps (float): Epsilon parameter for the Adam optimizer. Default is 1e-8.
         use_param_estimator (bool): Whether to use the parameter estimator to compute initial parameters. Default is True.
 
     Returns:
@@ -112,23 +136,13 @@ def objective(func, param_estimator, loss_func, X, Y,
             - jnp.ndarray: The parameters for each cell (n_cells, n_params).
     """
     t_start = time.time()
-    n_cells, n_trials = Y.shape
-    # train/test split over trials
-    key = jax.random.PRNGKey(random_seed)
-    training_size = n_trials // 2
-    shuffled_indices = jax.random.permutation(key, jnp.arange(n_trials))
-    training_trials_idx = shuffled_indices[:training_size]
-    test_trials_idx = shuffled_indices[training_size:]
-    X_train = X[:, training_trials_idx]
-    Y_train = Y[:, training_trials_idx]
-    X_test = X[:, test_trials_idx]
-    Y_test = Y[:, test_trials_idx]
+    n_cells, n_trials = Y_train.shape
 
     # Perform initial param calc. X and Y must be numpy arrays of shape (n_cells, n_trials)
     if use_param_estimator:
         initial_params = compute_initial_params(param_estimator, func, np.asarray(X_train), np.asarray(Y_train))
     else:
-        initial_params = compute_default_params(func)
+        initial_params = return_default_params(func)
         # if initial_params not none, reshape from (1, n_params) to (n_cells, n_params)
         if initial_params is not None:
             n_params = initial_params.shape[1]
@@ -156,12 +170,12 @@ def objective(func, param_estimator, loss_func, X, Y,
         func_jit = jax.jit(func)
         for cell_idx in np.random.choice(n_cells, size=min(10, n_cells), replace=False):
             # Validate with concrete values
-            output = func_jit(X[cell_idx], *initial_params[cell_idx])
-            if output.ndim != 1 or output.shape[0] != X.shape[1]:
-                logging.info(f"Error: func output shape {output.shape[0]} does not match input shape {X.shape[1]}.")
+            output = func_jit(X_train[cell_idx], *initial_params[cell_idx])
+            if output.ndim != 1 or output.shape[0] != X_train.shape[1]:
+                logging.info(f"Error: func output shape {output.shape[0]} does not match input shape {X_train.shape[1]}.")
                 return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
             # Validate with abstract tracer values
-            jax.eval_shape(func_jit, X[cell_idx], *initial_params[cell_idx])
+            jax.eval_shape(func_jit, X_train[cell_idx], *initial_params[cell_idx])
     except Exception as e:
         logging.info(f"Func failed to run or is incompatible with JAX tracing: {e}")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
@@ -180,9 +194,7 @@ def objective(func, param_estimator, loss_func, X, Y,
         loss_param_and_grad = jax.value_and_grad(loss_param)
 
         # 1.  build adam
-        learning_rate = 3e-3
-        beta1, beta2  = 0.9, 0.999
-        opt = optax.adam(learning_rate, b1=beta1, b2=beta2, eps=1e-8)
+        opt = optax.adam(learning_rate, b1=beta1, b2=beta2, eps=eps)
         opt_state = opt.init(initial_params.reshape(-1))
         
         # 2. jit single step
@@ -257,7 +269,7 @@ async def create_new_function(current_island, llm_name, client, Y, X,
     if use_image:
         try:
             sup_title = "".join([f"{function_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            diagnostic.plot_model_fits(programs_df=random_programs,
+            tuning_curves_project.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
                                     x=X, y=Y,
                                     cell_selection=np.random.choice(Y.shape[0], size=9, replace=False),
@@ -403,6 +415,8 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
 
     # load and preprocess data
     Y_loop, Y_eval, X_loop, X_eval = tuning_curves_project.load_data(data_path, conc_thresh, activity_thresh)
+    X_loop_train_trials, Y_loop_train_trials, X_loop_test_trials, Y_loop_test_trials = split_trials(X_loop, Y_loop)
+    X_eval_train_trials, Y_eval_train_trials, X_eval_test_trials, Y_eval_test_trials = split_trials(X_eval, Y_eval)
 
     # create a dataframe to store the programs in each island
     islands = []
@@ -426,7 +440,8 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
         # score the initial program
         loss_init, params_init, loss, params = objective(func_jax, param_est, 
                                         loss_func=loss_functions.quadratic_loss, 
-                                        X=X_loop, Y=Y_loop, 
+                                        X_train=X_loop_train_trials, Y_train=Y_loop_train_trials,
+                                        X_test=X_loop_test_trials, Y_test=Y_loop_test_trials,
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight,
                                         use_param_estimator=use_param_estimator)
         seed_losses[i] = loss
@@ -473,7 +488,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
     logging.basicConfig(filename=log_file, level=logging.INFO, format='%(message)s')
-    diagnostic.plot_model_fits(programs_df=initial_programs,
+    tuning_curves_project.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
                                x=X_loop, y=Y_loop,
                                cell_selection=np.random.choice(len(X_loop), size=9, replace=False),
@@ -573,7 +588,8 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             
             initial_loss, initial_params, loss, optimized_params = objective(func_new, param_est_new, 
                                                                                 loss_func=loss_functions.quadratic_loss,
-                                                                                X=X_loop, Y=Y_loop,
+                                                                                X_train=X_loop_train_trials, Y_train=Y_loop_train_trials,
+                                                                                X_test=X_loop_test_trials, Y_test=Y_loop_test_trials,
                                                                                 param_penalty_weight=param_penalty_weight,
                                                                                 fit_params=fit_params, 
                                                                                 use_param_estimator=use_param_estimator)
@@ -591,7 +607,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
 
             # plot the fits of the function and parameter estimator if using image feedback
             if use_image_feedback:
-                diagnostic.plot_model_fits(
+                tuning_curves_project.plot_model_fits(
                     programs_df=pd.DataFrame({'function': [func_new, func_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
                     x=X_loop,
@@ -668,7 +684,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
             sup_title = f"Generation {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
             sup_title += "\n".join([f"model {j+1}: generation {top_df['generation'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
-            diagnostic.plot_model_fits(
+            tuning_curves_project.plot_model_fits(
                 programs_df=top_df,
                 loss_function=loss_functions.quadratic_loss,
                 x=X_loop,
@@ -683,7 +699,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
         top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
         sup_title = f"Generation {i}, Top 3 Programs Overall\n"
         sup_title += "\n".join([f"model {j+1}: generation {top_programs['generation'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
-        diagnostic.plot_model_fits(
+        tuning_curves_project.plot_model_fits(
             programs_df=top_programs,
             loss_function=loss_functions.quadratic_loss,
             x=X_loop,
@@ -710,7 +726,9 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             # compute the test loss
             _, _, test_loss, optimized_params = objective(neuron_model, param_estimator,
                                                           loss_func=loss_functions.quadratic_loss,
-                                                          X=X_eval, Y=Y_eval, fit_params=fit_params,
+                                                          X_train=X_eval_train_trials, Y_train=Y_eval_train_trials,
+                                                          X_test=X_eval_test_trials, Y_test=Y_eval_test_trials,
+                                                          fit_params=fit_params,
                                                           max_iter=2_000, 
                                                           param_penalty_weight=param_penalty_weight,
                                                           use_param_estimator=use_param_estimator)
@@ -749,7 +767,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
 
     # ---------------------------
     # save losses plot    
-    diagnostic.plot_train_vs_test_loss(programs_df=combined_programs_dataframe,
+    tuning_curves_project.plot_train_vs_test_loss(programs_df=combined_programs_dataframe,
                                        island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
                                        save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'))
     
@@ -767,7 +785,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
         df = df.head(3)
         df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
         df_sup += "".join([f"model {len(df) - i}: iter {df['generation'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, total loss {0.5 * (df['test_loss'][i] + df['train_loss'][i]):.2f}\n" for i in range(min(3, len(df)))])
-        diagnostic.plot_model_fits(
+        tuning_curves_project.plot_model_fits(
             programs_df=df,
             loss_function=loss_functions.quadratic_loss,
             x=X_eval,
@@ -782,7 +800,7 @@ async def main(n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=
             generation = df['generation'][j]
             batch_index = df['batch_index'][j]
             cell_selection = np.random.choice(Y_eval.shape[0], size=9, replace=False)
-            diagnostic.plot_single_model_fit(
+            tuning_curves_project.plot_single_model_fit(
                 model=df['function'][j],
                 loss_function=loss_functions.quadratic_loss,
                 x=X_eval[cell_selection],
