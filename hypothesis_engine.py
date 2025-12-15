@@ -19,23 +19,6 @@ import time
 print(jax.default_backend())    # should print "gpu"
 print(jax.devices())
 
-PROGRAM_CSV_COLUMNS = [
-    "generation",
-    "birth_island",
-    "batch_index",
-    "train_loss",
-    "test_loss",
-    "mean_loss",
-    "function_code_string",
-    "parameter_estimator_code_string",
-    "function",
-    "parameter_estimator",
-    "params",
-    "parent1_id",
-    "parent2_id",
-    "llm_name",
-]
-
 CENSUS_CSV_COLUMNS = [
     "program_index",
     "generation",
@@ -50,6 +33,7 @@ CENSUS_CSV_COLUMNS = [
     "param_count",
     "function_code_string",
     "parameter_estimator_code_string",
+    "evaluation_matrix",
     "is_seed",
     "notes",
 ]
@@ -59,8 +43,6 @@ def _serialize_value(value):
         return json.dumps(np.asarray(value).tolist())
     if isinstance(value, (list, tuple)):
         return json.dumps(list(value))
-    if callable(value):
-        return getattr(value, "__name__", str(value))
     return value
 
 def save_records_csv(path: str, records: Sequence[dict], columns: Optional[Sequence[str]] = None) -> None:
@@ -80,9 +62,6 @@ def save_records_csv(path: str, records: Sequence[dict], columns: Optional[Seque
         for rec in records:
             row = {col: _serialize_value(rec.get(col)) for col in columns}
             writer.writerow(row)
-
-def programs_to_records(programs: Sequence[Program]) -> list[dict]:
-    return [p.as_dict() for p in programs]
 
 def load_program_snapshots(path: str) -> list[ProgramSnapshot]:
     if not os.path.exists(path):
@@ -127,6 +106,7 @@ def load_program_snapshots(path: str) -> list[ProgramSnapshot]:
                 param_count=int(row["param_count"]) if row.get("param_count") else 0,
                 function_code_string=row.get("function_code_string", ""),
                 parameter_estimator_code_string=row.get("parameter_estimator_code_string", ""),
+                evaluation_matrix=_parse_optional_json(row.get("evaluation_matrix")),
                 is_seed=row.get("is_seed", "False") in ("True", "true", "1"),
                 notes=row.get("notes"),
             )
@@ -884,24 +864,21 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
         combined_island.programs,
         key=lambda p: p.mean_loss if p.mean_loss is not None else float("inf")
     )
-    combined_records = programs_to_records(combined_programs)
-    save_records_csv(os.path.join(combined_dir, 'programs_db.csv'), combined_records, PROGRAM_CSV_COLUMNS)
-
     census_records = [snapshot.to_dict() for snapshot in program_snapshots]
     save_records_csv(os.path.join(combined_dir, 'census.csv'), census_records, CENSUS_CSV_COLUMNS)
 
-    for island_id, island_obj in enumerate(islands):
-        island_dir = os.path.join(
-            base_dir, date_stamp, time_stamp, f'island_{island_id}' if island_id < n_islands else 'meta_island'
-        )
-        os.makedirs(island_dir, exist_ok=True)
-        island_records = programs_to_records(island_obj.programs)
-        save_records_csv(os.path.join(island_dir, 'programs_db.csv'), island_records)
-
     # ---------------------------
     # save losses plot    
+    combined_plot_records = [
+        {
+            "train_loss": prog.train_loss,
+            "test_loss": prog.test_loss if prog.test_loss is not None else np.nan,
+            "birth_island": prog.birth_island,
+        }
+        for prog in combined_programs
+    ]
     tuning_curves_project.plot_train_vs_test_loss(
-        programs=combined_records,
+        programs=combined_plot_records,
         island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
         save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'),
     )
@@ -911,6 +888,8 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
     combined_dir_path = [os.path.join(base_dir, date_stamp, time_stamp, "combined")] 
     island_dirs = [os.path.join(base_dir, date_stamp, time_stamp, f'island_{i}') for i in range(n_islands)]
     df_dirs = combined_dir_path + island_dirs
+    for directory in df_dirs:
+        os.makedirs(directory, exist_ok=True)
     config_str = f"n_islands={n_islands}, batch_size={batch_size}, n_generations={n_generations},\n"
     config_str += f"llm_names={little_lm_name, large_lm_name}, fit_params={fit_params}, \n"
     config_str += f"critical_population_size={critical_population_size}.\n"

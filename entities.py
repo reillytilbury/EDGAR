@@ -163,6 +163,7 @@ class ProgramSnapshot:
     param_count: int
     function_code_string: str
     parameter_estimator_code_string: str
+    evaluation_matrix: Optional[ArrayLike]
     is_seed: bool = False
     notes: Optional[str] = None
 
@@ -181,6 +182,7 @@ class ProgramSnapshot:
             "param_count": self.param_count,
             "function_code_string": self.function_code_string,
             "parameter_estimator_code_string": self.parameter_estimator_code_string,
+            "evaluation_matrix": self.evaluation_matrix,
             "is_seed": self.is_seed,
             "notes": self.notes,
         }
@@ -208,6 +210,7 @@ class ProgramSnapshot:
             param_count=program.param_count,
             function_code_string=program.function_code_string,
             parameter_estimator_code_string=program.parameter_estimator_code_string,
+            evaluation_matrix=program.evaluation_matrix,
             is_seed=is_seed,
             notes=notes,
         )
