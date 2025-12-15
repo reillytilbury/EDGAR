@@ -13,7 +13,7 @@ from pathlib import Path
 import utils, tuning_curves_project, genetic_helpers, loss_functions
 from entities import Program, Island, ProgramSnapshot
 from tqdm import tqdm
-from google import genai
+import google.genai
 from dotenv import load_dotenv
 import time
 print(jax.default_backend())    # should print "gpu"
@@ -470,7 +470,7 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
     """
     # load api keys
     load_dotenv()
-    client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+    client = google.genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
     # load and preprocess data
     Y_loop, Y_eval, X_loop, X_eval = utils.split_arrays(X, Y, axis=0)

@@ -8,7 +8,6 @@ from typing import Callable, Sequence, Tuple, Union
 
 from entities import Program
 # gemini client
-from google import genai
 from google.genai import types
 # Set up logging to suppress warnings from httpx, urllib3, and google.genai
 import logging
@@ -101,7 +100,7 @@ def extract_code_block(text: Union[str, None], start_marker: str = "```python\n"
 def call_llm(
     prompt_text: str,
     model_name: str = "gemini-2.0-flash",
-    client: genai.Client = None,
+    client: google.genai.Client = None,
     temperature: float = 1.0,
     thinking_budget: float = 1.0) -> Union[str, None]:
     """
@@ -130,7 +129,7 @@ def call_llm(
     
 async def call_llm_async(
     prompt_text: Union[str, None],
-    client: genai.Client,
+    client: google.genai.Client,
     model_name: str = "gemini-2.0-flash",
     temperature: float = 1.0,
     thinking_budget: float = 1,
