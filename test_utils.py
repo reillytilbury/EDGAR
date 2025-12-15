@@ -16,12 +16,12 @@ class ExtractCodeBlockTest(unittest.TestCase):
         self.assertEqual(block, text)
 
 
-class VmapOverCellsTest(unittest.TestCase):
-    def test_runs_model_for_each_cell(self):
+class VmapOverUnitsTest(unittest.TestCase):
+    def test_runs_model_for_each_unit(self):
         def toy(theta, scale, offset):
             return theta * scale + offset
 
-        vmapped = utils.vmap_over_cells(toy)
+        vmapped = utils.vmap_over_units(toy)
         theta = jnp.array([0.0, 1.0, 2.0])
         params = jnp.array([[1.0, 0.0], [2.0, 1.0]])
         outputs = vmapped(theta, params)
