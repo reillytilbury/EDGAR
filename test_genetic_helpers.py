@@ -57,7 +57,7 @@ class RemoveDuplicatesTest(unittest.TestCase):
         dup_high_loss = _make_program(params, loss=0.4)
         dup_low_loss = _make_program(params, loss=0.1)
         island = Island(0, [dup_high_loss, dup_low_loss])
-        pruned = gh.remove_duplicates(island, mode="complicated")
+        pruned = gh.remove_duplicates(island, mode="simple")  # if mode is complicated, the two programs will be considered distinct
         self.assertEqual(len(pruned), 1)
         self.assertAlmostEqual(pruned.programs[0].train_loss, 0.1)
 
@@ -67,7 +67,7 @@ class ComputeIntersectionTest(unittest.TestCase):
         params = jnp.ones((2, 3))
         shared = _make_program(params)
         island_a = Island(0, [shared])
-        island_b = Island(1, [shared, _make_program(params, birth_island=1, generation=1)])
+        island_b = Island(1, [shared, _make_program(params, birth_island=1, generation=1, code_string="def neuron_model(theta): return -theta")])
         duplicates = gh.compute_intersection(island_a, island_b, mode="simple")
         self.assertEqual(duplicates, [0])
 
