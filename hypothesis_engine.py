@@ -54,7 +54,6 @@ CENSUS_CSV_COLUMNS = [
     "notes",
 ]
 
-
 def _serialize_value(value):
     if isinstance(value, (np.ndarray, jnp.ndarray)):
         return json.dumps(np.asarray(value).tolist())
@@ -63,7 +62,6 @@ def _serialize_value(value):
     if callable(value):
         return getattr(value, "__name__", str(value))
     return value
-
 
 def save_records_csv(path: str, records: Sequence[dict], columns: Optional[Sequence[str]] = None) -> None:
     directory = os.path.dirname(path)
@@ -83,10 +81,8 @@ def save_records_csv(path: str, records: Sequence[dict], columns: Optional[Seque
             row = {col: _serialize_value(rec.get(col)) for col in columns}
             writer.writerow(row)
 
-
 def programs_to_records(programs: Sequence[Program]) -> list[dict]:
     return [p.as_dict() for p in programs]
-
 
 def load_program_snapshots(path: str) -> list[ProgramSnapshot]:
     if not os.path.exists(path):
@@ -136,6 +132,7 @@ def load_program_snapshots(path: str) -> list[ProgramSnapshot]:
             )
             snapshots.append(snapshot)
     return snapshots
+
 def compute_initial_params(param_estimator, func, X, Y) -> jnp.ndarray:
     """
     Compute initial parameters for func using the provided parameter estimator. Confusingly, the parameter estimator will be written in numpy,
@@ -478,8 +475,8 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                 n_migrants=2, fit_params=True, exploit_point=0.5,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
                 use_image_feedback=True, use_param_estimator=True,
-                exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
-                exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
+                exploration_topology = None,
+                exploitation_topology = None,
                 seed_functions_numpy = [tuning_curves_project.neuron_model_gauss, tuning_curves_project.neuron_model_double_gauss],
                 seed_functions_jax = [tuning_curves_project.neuron_model_gauss_jax, tuning_curves_project.neuron_model_double_gauss_jax],
                 seed_parameter_estimators = [tuning_curves_project.parameter_estimator_gauss, tuning_curves_project.parameter_estimator_double_gauss],
@@ -487,7 +484,7 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                 tiny_lm_name = 'gemini-1.5-flash-8b',
                 little_lm_name = 'gemini-2.0-flash',
                 large_lm_name = 'gemini-2.5-flash',
-                use_large_every = 3):
+                use_large_every = None):
     """ 
     Main function to run the hypothesis engine.
     """
@@ -608,7 +605,8 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
             logging.info(f"Time limit of {time_limit} minutes reached. Stopping generations.")
             break
         logging.info(f"generation {i}")
-        if use_large_every > 0 and i % use_large_every == 0:
+        assert use_large_every > 0 or use_large_every is None, "use_large_every must be > 0 or None"
+        if use_large_every is not None and i % use_large_every == 0:
             llm_name = large_lm_name
             logging.info(f"Using large LLM: {llm_name}")
         else:
@@ -766,6 +764,10 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
         logging.info(f"generation {i} complete. The proportion of programs that successfully ran and received a loss is {success_rate:.2f}.")
         logging.info('-' * 50)
         # migrate and prune programs (better here for temperature to be in [0, 1] range)
+        if exploration_topology is None:
+            exploration_topology = [[(j + 1) % n_islands for j in range(n_islands)]]
+        if exploitation_topology is None:
+            exploitation_topology = exploration_topology
         islands = genetic_helpers.perform_island_deduplication(islands, overlap_threshold=int(0.75 * critical_population_size))
         islands = genetic_helpers.perform_population_pruning(islands, critical_population_size=critical_population_size - n_migrants,
                                                 min_wise_population_size=min_wise_population_size,)
@@ -1099,17 +1101,17 @@ class Edgar:
         ax.legend(handles=legend_handles, title="LLM source", bbox_to_anchor=(1.05, 1), loc="upper left")
         return ax
 
-if __name__ == "__main__":
-    conc_thresh = 0.55
-    activity_thresh = 0.4
-    data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy' 
-    X, Y = tuning_curves_project.load_data(data_path, conc_thresh, activity_thresh)
-    agent = Edgar(
-        n_generations=9,
-        time_limit=60,
-        use_image_feedback=True,
-        use_large_every=3,
-        param_penalty_weight=0.01,
-        exploit_point=0.7,
-    )
-    agent.run(X, Y)
+# if __name__ == "__main__":
+#     conc_thresh = 0.55
+#     activity_thresh = 0.4
+#     data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy' 
+#     X, Y = tuning_curves_project.load_data(data_path, conc_thresh, activity_thresh)
+#     agent = Edgar(
+#         n_generations=9,
+#         time_limit=60,
+#         use_image_feedback=True,
+#         use_large_every=3,
+#         param_penalty_weight=0.01,
+#         exploit_point=0.7,
+#     )
+#     agent.run(X, Y)
