@@ -5,10 +5,10 @@ import time
 from datetime import datetime
 import prompt_templates as prompt_text
 from typing import Callable, Sequence, Tuple, Union
-
 from entities import Program
 # gemini client
 import google.genai
+from google.genai import types
 # Set up logging to suppress warnings from httpx, urllib3, and google.genai
 import logging
 logging.getLogger("httpx").setLevel(logging.WARNING)
