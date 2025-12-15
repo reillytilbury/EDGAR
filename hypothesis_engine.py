@@ -2,26 +2,140 @@ import inspect
 import os
 import logging
 import asyncio
+import csv
+import json
+from typing import Sequence, Optional
 import numpy as np
 import jax, jax.numpy as jnp
 import timeout_decorator
 import optax
-import pandas as pd
 from pathlib import Path
 import utils, tuning_curves_project, genetic_helpers, loss_functions
+from entities import Program, Island, ProgramSnapshot
 from tqdm import tqdm
 from google import genai
 from dotenv import load_dotenv
-import warnings
 import time
-warnings.filterwarnings(
-    "ignore",
-    category=FutureWarning,
-    message="The behavior of DataFrame concatenation with empty or all-NA entries is deprecated.*"
-)
 print(jax.default_backend())    # should print "gpu"
 print(jax.devices())
 
+PROGRAM_CSV_COLUMNS = [
+    "generation",
+    "birth_island",
+    "batch_index",
+    "train_loss",
+    "test_loss",
+    "mean_loss",
+    "function_code_string",
+    "parameter_estimator_code_string",
+    "function",
+    "parameter_estimator",
+    "params",
+    "parent1_id",
+    "parent2_id",
+    "llm_name",
+]
+
+CENSUS_CSV_COLUMNS = [
+    "program_index",
+    "generation",
+    "birth_island",
+    "batch_index",
+    "train_loss",
+    "test_loss",
+    "llm_name",
+    "parent1_id",
+    "parent2_id",
+    "timestamp",
+    "param_count",
+    "function_code_string",
+    "parameter_estimator_code_string",
+    "is_seed",
+    "notes",
+]
+
+
+def _serialize_value(value):
+    if isinstance(value, (np.ndarray, jnp.ndarray)):
+        return json.dumps(np.asarray(value).tolist())
+    if isinstance(value, (list, tuple)):
+        return json.dumps(list(value))
+    if callable(value):
+        return getattr(value, "__name__", str(value))
+    return value
+
+
+def save_records_csv(path: str, records: Sequence[dict], columns: Optional[Sequence[str]] = None) -> None:
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    records = list(records)
+    if not records:
+        with open(path, "w", newline="") as f:
+            f.write("")
+        return
+    if columns is None:
+        columns = list(records[0].keys())
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        for rec in records:
+            row = {col: _serialize_value(rec.get(col)) for col in columns}
+            writer.writerow(row)
+
+
+def programs_to_records(programs: Sequence[Program]) -> list[dict]:
+    return [p.as_dict() for p in programs]
+
+
+def load_program_snapshots(path: str) -> list[ProgramSnapshot]:
+    if not os.path.exists(path):
+        return []
+    snapshots: list[ProgramSnapshot] = []
+
+    def _parse_optional_json(value: Optional[str]):
+        if value in (None, "", "None"):
+            return None
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            parent1_raw = _parse_optional_json(row.get("parent1_id"))
+            parent2_raw = _parse_optional_json(row.get("parent2_id"))
+
+            def _as_tuple(val):
+                if val is None:
+                    return None
+                if isinstance(val, list):
+                    try:
+                        return tuple(int(x) for x in val)
+                    except Exception:
+                        return None
+                return None
+
+            snapshot = ProgramSnapshot(
+                program_index=int(row["program_index"]),
+                generation=int(row["generation"]),
+                birth_island=int(row["birth_island"]),
+                batch_index=int(row["batch_index"]),
+                train_loss=float(row["train_loss"]),
+                test_loss=float(row["test_loss"]) if row.get("test_loss") not in (None, "", "None") else None,
+                llm_name=row.get("llm_name"),
+                parent1_id=_as_tuple(parent1_raw),
+                parent2_id=_as_tuple(parent2_raw),
+                timestamp=float(row["timestamp"]) if row.get("timestamp") else 0.0,
+                param_count=int(row["param_count"]) if row.get("param_count") else 0,
+                function_code_string=row.get("function_code_string", ""),
+                parameter_estimator_code_string=row.get("parameter_estimator_code_string", ""),
+                is_seed=row.get("is_seed", "False") in ("True", "true", "1"),
+                notes=row.get("notes"),
+            )
+            snapshots.append(snapshot)
+    return snapshots
 def compute_initial_params(param_estimator, func, X, Y) -> jnp.ndarray:
     """
     Compute initial parameters for func using the provided parameter estimator. Confusingly, the parameter estimator will be written in numpy,
@@ -230,39 +344,43 @@ def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test
     print(f"Time taken for optimization: {t_end - t_start:.4f} seconds")
     return float(initial_loss), initial_params, float(final_loss), params
 
-async def create_new_function(current_island, llm_name, client, Y, X,
+async def create_new_function(current_island: Island, llm_name, client, Y, X,
                               mode='explore', k_max=2, temp=1, 
                               thinking_budget=1, img_dir=None,
                               function_name='neuron_model'):
     k = min(k_max, len(current_island))
-    random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
-    random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-    # save parent1_id and parent2_id. These are strings of the form "(generation)_(birth_island)_(batch_index)"
-    parent1_id = (random_programs['generation'][0], 
-                  random_programs['birth_island'][0], 
-                  random_programs['batch_index'][0])
-    parent2_id = (random_programs['generation'][1],
-                  random_programs['birth_island'][1], 
-                  random_programs['batch_index'][1])
+    random_programs = current_island.sample(k)
+    random_programs.sort(key=lambda p: p.train_loss, reverse=True)
+    parent1_id = random_programs[0].identifier() if random_programs else None
+    parent2_id = random_programs[1].identifier() if len(random_programs) > 1 else None
     use_image = img_dir is not None
     program_prompt = utils.create_program_prompt(random_programs, mode=mode,
                                                  use_image=use_image, function_name=function_name)
 
-    if use_image:
+    if use_image and random_programs:
         try:
-            sup_title = "".join([f"{function_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            tuning_curves_project.plot_model_fits(programs_df=random_programs,
-                                    loss_function=loss_functions.quadratic_loss,
-                                    x=X, y=Y,
-                                    unit_selection=np.random.choice(Y.shape[0], size=9, replace=False),
-                                    save_path=img_dir,
-                                    labels=['v_1', 'v_2'],
-                                    colours=['tab:green', 'tab:red'],
-                                    dpi=384*3/20,
-                                    title=sup_title,
-                                    legend_fontsize=20,
-                                    line_alpha=0.9,
-                                    line_width=4,)
+            sup_title = "".join(
+                [
+                    f"{function_name}_v{i+1}: Loss = {random_programs[i].train_loss:.2f} \n"
+                    for i in range(min(3, len(random_programs)))
+                ]
+            )
+            plot_entries = [{"function": prog.function, "params": prog.params} for prog in random_programs]
+            tuning_curves_project.plot_model_fits(
+                programs=plot_entries,
+                loss_function=loss_functions.quadratic_loss,
+                x=X,
+                y=Y,
+                unit_selection=np.random.choice(Y.shape[0], size=9, replace=False),
+                save_path=img_dir,
+                labels=['v_1', 'v_2'],
+                colours=['tab:green', 'tab:red'],
+                dpi=384*3/20,
+                title=sup_title,
+                legend_fontsize=20,
+                line_alpha=0.9,
+                line_width=4,
+            )
             
             img_path = Path(img_dir)
             with img_path.open("rb") as f:
@@ -283,7 +401,7 @@ async def create_new_function(current_island, llm_name, client, Y, X,
     
     return code_string, program_prompt, (parent1_id, parent2_id)
 
-async def create_new_parameter_estimator(current_island, func_code_string: str,
+async def create_new_parameter_estimator(current_island: Island, func_code_string: str,
                                            llm_name, client,
                                            k_max=1, temp=1, thinking_budget=0.25,
                                            param_estimator_max_lines=100,
@@ -293,9 +411,8 @@ async def create_new_parameter_estimator(current_island, func_code_string: str,
         logging.info("No function code string provided, skipping parameter estimator generation.")
         return None, None
     k = min(k_max, len(current_island))
-    random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
-    # sort from worst to best (loss descending)
-    random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
+    random_programs = current_island.sample(k)
+    random_programs.sort(key=lambda p: p.train_loss, reverse=True)
 
     prompt = utils.create_parameter_estimator_prompt(random_programs,
                                                      func_code_string=func_code_string,
@@ -356,7 +473,7 @@ def sample_function(func: callable, params: jnp.ndarray,
     y_eval = func_vmap(sample_points, params)
     return y_eval
 
-async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
+async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
                 critical_population_size=12, min_wise_population_size=0, 
                 n_migrants=2, fit_params=True, exploit_point=0.5,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
@@ -383,17 +500,27 @@ async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_
     X_loop_train_points, Y_loop_train_points, X_loop_test_points, Y_loop_test_points = utils.split_arrays(X_loop, Y_loop, axis=1)
     X_eval_train_points, Y_eval_train_points, X_eval_test_points, Y_eval_test_points = utils.split_arrays(X_eval, Y_eval, axis=1)
 
-    # create a dataframe to store the programs in each island
-    islands = []
-    for _ in range(n_islands):
-        islands.append(pd.DataFrame(columns=['function_code_string', 'function', 'parameter_estimator_code_string', 'parameter_estimator',
-                                             'generation', 'birth_island', 'batch_index', 'train_loss', 'test_loss', 'params',
-                                             'initial_loss', 'initial_params', 'llm_name', 'parent1_id', 'parent2_id', 'evaluation_matrix']))
-    initial_programs = pd.DataFrame([])
+    islands = [Island(idx) for idx in range(n_islands)]
+    initial_programs: list[Program] = []
+    program_snapshots: list[ProgramSnapshot] = []
+    best_train_history: list[float] = []
+
+    def record_program(program: Program, timestamp: float, is_seed: bool = False, notes: Optional[str] = None) -> ProgramSnapshot:
+        snapshot = ProgramSnapshot.from_program(
+            program=program,
+            program_index=len(program_snapshots),
+            timestamp=timestamp,
+            is_seed=is_seed,
+            notes=notes,
+        )
+        program.record_index = snapshot.program_index
+        program_snapshots.append(snapshot)
+        running_best = min(best_train_history[-1], snapshot.train_loss) if best_train_history else snapshot.train_loss
+        best_train_history.append(running_best)
+        return snapshot
 
     # create output directories
     base_dir, date_stamp, time_stamp, full_dir, image_feedback_dir = utils.create_output_directories(use_image=use_image_feedback)
-    census = []
     # store and compute loss of 2 initial programs
     t_start = time.time()
     seed_losses = np.zeros(2)
@@ -424,47 +551,53 @@ async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_
         func_jax_code_string = import_string_jax + func_jax_code_string
         Y_SAMPLE = sample_function(func_jax, params, sample_points=jnp.linspace(0, 2 * jnp.pi, 100))
 
-        new_program_df = pd.DataFrame({'function_code_string': function_code_string,
-                                    'function': func_jax,
-                                    'parameter_estimator_code_string': parameter_estimator_code_string,
-                                    'parameter_estimator': param_est,
-                                    'generation': -1,
-                                    'birth_island': -1,  # Birth island is set to a special value for initial programs
-                                    'batch_index': i,
-                                    'train_loss': loss, 
-                                    'test_loss': None,  # all test losses will be computed at the end
-                                    'llm_name': None,
-                                    'params': [params],
-                                    'initial_loss': loss_init,
-                                    'initial_params': [params_init],
-                                    'parent1_id': None,
-                                    'parent2_id': None,
-                                    'evaluation_matrix': [Y_SAMPLE]})
-        initial_programs = pd.concat([initial_programs, new_program_df], ignore_index=True)
+        new_program = Program(
+            function_code_string=function_code_string,
+            function=func_jax,
+            parameter_estimator_code_string=parameter_estimator_code_string,
+            parameter_estimator=param_est,
+            generation=-1,
+            birth_island=-1,
+            batch_index=i,
+            train_loss=float(loss),
+            test_loss=None,
+            llm_name=None,
+            params=params,
+            initial_loss=float(loss_init),
+            initial_params=params_init,
+            parent1_id=None,
+            parent2_id=None,
+            evaluation_matrix=Y_SAMPLE,
+        )
+        initial_programs.append(new_program)
         print(f"Initial program {i + 1} loss: {loss:.2f}")
-        census.append([-1, -1, i, None, loss, time.time() - t_start, None, None, Y_SAMPLE, params.shape[1]])
+        record_program(new_program, time.time() - t_start, is_seed=True, notes="seed program")
 
     # seed each island with the initial programs
-    for i in range(n_islands):
-        islands[i] = pd.concat([islands[i], initial_programs], ignore_index=True)
+    for island in islands:
+        island.extend(initial_programs)
 
     # Reset logging configuration
     log_file = os.path.join(full_dir, 'hypothesis_engine.log')
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
     logging.basicConfig(filename=log_file, level=logging.INFO, format='%(message)s')
-    tuning_curves_project.plot_model_fits(programs_df=initial_programs,
-                               loss_function=loss_functions.quadratic_loss,
-                               x=X_loop, y=Y_loop,
-                               unit_selection=np.random.choice(len(X_loop), size=9, replace=False),
-                               save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
-                               labels=['seed_1', 'seed_2'],
-                               colours=['tab:green', 'tab:red'],
-                               dpi=100.0,
-                               title="Seed Programs",
-                               legend_fontsize=20,
-                               line_alpha=0.9,
-                               line_width=4,)
+    initial_plot_entries = [{"function": prog.function, "params": prog.params} for prog in initial_programs]
+    tuning_curves_project.plot_model_fits(
+        programs=initial_plot_entries,
+        loss_function=loss_functions.quadratic_loss,
+        x=X_loop,
+        y=Y_loop,
+        unit_selection=np.random.choice(len(X_loop), size=9, replace=False),
+        save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
+        labels=['seed_1', 'seed_2'],
+        colours=['tab:green', 'tab:red'],
+        dpi=100.0,
+        title="Seed Programs",
+        legend_fontsize=20,
+        line_alpha=0.9,
+        line_width=4,
+    )
 
     # -----------------------------
     # HYPOTHESIS ENGINE
@@ -518,10 +651,8 @@ async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_
             create_new_parameter_estimator(
                 current_island=islands[island_idx],
                 func_code_string=llm_function_code_strings[island_idx * batch_size + j],
-                llm_name=little_lm_name,  # same model used for programs
+                llm_name=little_lm_name,
                 client=client,
-                Y=Y_loop, # training data
-                X=X_loop,
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
@@ -572,8 +703,12 @@ async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_
 
             # plot the fits of the function and parameter estimator if using image feedback
             if use_image_feedback:
+                plot_entries = [
+                    {"function": func_new, "params": initial_params},
+                    {"function": func_new, "params": optimized_params},
+                ]
                 tuning_curves_project.plot_model_fits(
-                    programs_df=pd.DataFrame({'function': [func_new, func_new], 'params': [initial_params, optimized_params]}),
+                    programs=plot_entries,
                     loss_function=loss_functions.quadratic_loss,
                     x=X_loop,
                     y=Y_loop,
@@ -585,36 +720,40 @@ async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_
                     point_alpha=0.2,
                     point_size=120,
                     legend_fontsize=20,
-                    title=f"Updated Parameter Estimator and Gradient Descent Fit \n"
-                        f"Initial Loss: {initial_loss:.2f}, Final Loss: {loss:.2f}",
-                    save_path=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_updated_param_est.png')
+                    title=(
+                        "Updated Parameter Estimator and Gradient Descent Fit \n"
+                        f"Initial Loss: {initial_loss:.2f}, Final Loss: {loss:.2f}"
+                    ),
+                    save_path=os.path.join(
+                        image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_updated_param_est.png'
+                    ),
                 )
             
             param_names = [n for n in inspect.signature(func_new).parameters if n != "theta"]
             if optimized_params.shape[1] == len(param_names):
-                df = pd.DataFrame(np.array(optimized_params)[:10], columns=param_names)
-                logging.info(f"Optimized Parameters for 10 units:\n{df}\n")
+                sample_params = np.array(optimized_params)[:10]
+                logging.info(f"Optimized Parameters for 10 units:\n{sample_params}\n")
             t_added = time.time() - t_start
-            new_program_df = pd.DataFrame({'function_code_string': func_code_string,
-                                        'function': func_new,
-                                        'parameter_estimator_code_string': param_est_code_string,
-                                        'parameter_estimator': param_est_new,
-                                        'generation': i,
-                                        'birth_island': island_idx,
-                                        'batch_index': j,
-                                        'train_loss': loss,
-                                        'test_loss': None,  # will be filled later
-                                        'llm_name': llm_name,
-                                        'params': [optimized_params],
-                                        'initial_loss': initial_loss,
-                                        'initial_params': [initial_params],
-                                        'parent1_id': [parent1_id],
-                                        'parent2_id': [parent2_id],
-                                        'evaluation_matrix': [Y_SAMPLE]
-                                        })
-            
-            islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
-            census.append([i, island_idx, j, llm_name, loss, t_added, parent1_id, parent2_id, Y_SAMPLE, optimized_params.shape[1]])
+            new_program = Program(
+                function_code_string=func_code_string,
+                function=func_new,
+                parameter_estimator_code_string=param_est_code_string,
+                parameter_estimator=param_est_new,
+                generation=i,
+                birth_island=island_idx,
+                batch_index=j,
+                train_loss=float(loss),
+                test_loss=None,
+                llm_name=llm_name,
+                params=optimized_params,
+                initial_loss=float(initial_loss),
+                initial_params=initial_params,
+                parent1_id=parent1_id,
+                parent2_id=parent2_id,
+                evaluation_matrix=Y_SAMPLE,
+            )
+            islands[island_idx].add(new_program)
+            record_program(new_program, t_added)
             success_rate += 1 / (n_islands * batch_size)
             print(f"generation {i}, island {island_idx}, batch {j}, loss: {loss:.2f}")
             print('-' * 50)
@@ -622,8 +761,8 @@ async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_
         print("Success rate:", success_rate)
 
         # sort each island by loss
-        for island_idx in range(n_islands):
-            islands[island_idx] = islands[island_idx].sort_values(by='train_loss').reset_index(drop=True)
+        for island in islands:
+            island.sort_by('train_loss')
         logging.info(f"generation {i} complete. The proportion of programs that successfully ran and received a loss is {success_rate:.2f}.")
         logging.info('-' * 50)
         # migrate and prune programs (better here for temperature to be in [0, 1] range)
@@ -640,55 +779,75 @@ async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_
         generation_dir = os.path.join(full_dir, 'generation_updates', f'generation_{i}')
         os.makedirs(generation_dir, exist_ok=True)
         for island_idx in range(n_islands):
-            pg_info = islands[island_idx][['generation', 'birth_island', 'batch_index', 'train_loss']].to_string(index=False, header=False)
+            island_programs = list(islands[island_idx].programs)
+            if not island_programs:
+                continue
+            pg_info = "\n".join(
+                f"{prog.generation:>3} {prog.birth_island:>3} {prog.batch_index:>3} {prog.train_loss:6.2f}"
+                for prog in island_programs
+            )
             print(f"Gen {i}, Island {island_idx} programs:\n{pg_info}\n")
             logging.info(f"Gen {i}, Island {island_idx} programs:\n{pg_info}\n")
         
-            # Save plots of top programs
-            top_df = islands[island_idx].sort_values(by='train_loss').head(3).reset_index(drop=True)
-            top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-            sup_title = f"Generation {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
-            sup_title += "\n".join([f"model {j+1}: generation {top_df['generation'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
+            top_programs = sorted(island_programs, key=lambda p: p.train_loss)[:3]
+            if not top_programs:
+                continue
+            display_programs = list(reversed(top_programs))
+            sup_title = f"Generation {i}, Island {island_idx}, Top {len(display_programs)} Programs\n"
+            sup_title += "\n".join(
+                [
+                    f"model {j+1}: generation {prog.generation}, birth island {prog.birth_island}, batch {prog.batch_index}, loss: {prog.train_loss:.2f}"
+                    for j, prog in enumerate(display_programs)
+                ]
+            )
+            plot_entries = [{"function": prog.function, "params": prog.params} for prog in display_programs]
             tuning_curves_project.plot_model_fits(
-                programs_df=top_df,
+                programs=plot_entries,
                 loss_function=loss_functions.quadratic_loss,
                 x=X_loop,
                 y=Y_loop,
                 unit_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
                 title=sup_title,
                 save_path=os.path.join(generation_dir, f'island_{island_idx}_top_programs.png'),
-                dpi=300.0)
+                dpi=300.0,
+            )
         
-        all_programs = pd.concat([islands[idx] for idx in range(n_islands)], ignore_index=True)
-        top_programs = all_programs.sort_values(by='train_loss').head(3).reset_index(drop=True)
-        top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-        sup_title = f"Generation {i}, Top 3 Programs Overall\n"
-        sup_title += "\n".join([f"model {j+1}: generation {top_programs['generation'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
-        tuning_curves_project.plot_model_fits(
-            programs_df=top_programs,
-            loss_function=loss_functions.quadratic_loss,
-            x=X_loop,
-            y=Y_loop,
-            unit_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
-            title=sup_title,
-            save_path=os.path.join(generation_dir, 'top_programs_overall.png'),
-            dpi=300.0)
+        all_programs = [prog for island in islands for prog in island.programs]
+        if all_programs:
+            top_programs = sorted(all_programs, key=lambda p: p.train_loss)[:3]
+            display_programs = list(reversed(top_programs))
+            sup_title = f"Generation {i}, Top {len(display_programs)} Programs Overall\n"
+            sup_title += "\n".join(
+                [
+                    f"model {j+1}: generation {prog.generation}, birth island {prog.birth_island}, batch {prog.batch_index}, loss: {prog.train_loss:.2f}"
+                    for j, prog in enumerate(display_programs)
+                ]
+            )
+            plot_entries = [{"function": prog.function, "params": prog.params} for prog in display_programs]
+            tuning_curves_project.plot_model_fits(
+                programs=plot_entries,
+                loss_function=loss_functions.quadratic_loss,
+                x=X_loop,
+                y=Y_loop,
+                unit_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
+                title=sup_title,
+                save_path=os.path.join(generation_dir, 'top_programs_overall.png'),
+                dpi=300.0,
+            )
         
         # save census
-        census_path = os.path.join(generation_dir, 'census.npy')
-        census_np = np.array(census, dtype=object)
-        np.save(census_path, census_np)
+        census_path = os.path.join(generation_dir, 'census.csv')
+        census_records = [snapshot.to_dict() for snapshot in program_snapshots]
+        save_records_csv(census_path, census_records, columns=CENSUS_CSV_COLUMNS)
 
     # -----------------------------
     # now carry out the loss calculation on the test units
     logging.info("Calculating loss on test set...")
     for island_idx in range(n_islands):
         logging.info(f"Island {island_idx} programs:")
-        for j in range(len(islands[island_idx])):
-            program = islands[island_idx].iloc[j]
-            neuron_model = program['function']
-            param_estimator = program['parameter_estimator']
-            # compute the test loss
+        for program in islands[island_idx]:
+            neuron_model = program.function
+            param_estimator = program.parameter_estimator
             _, _, test_loss, optimized_params = objective(neuron_model, param_estimator,
                                                           loss_func=loss_functions.quadratic_loss,
                                                           X_train=X_eval_train_points, Y_train=Y_eval_train_points,
@@ -697,91 +856,260 @@ async def main(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8, batch_
                                                           max_iter=2_000, 
                                                           param_penalty_weight=param_penalty_weight,
                                                           use_param_estimator=use_param_estimator)
-            islands[island_idx].at[j, 'test_loss'] = test_loss
-            islands[island_idx].at[j, 'params'] = optimized_params
-            islands[island_idx].at[j, 'mean_loss'] = np.mean(test_loss)
+            program.test_loss = test_loss
+            program.params = optimized_params
+            program.mean_loss = np.mean(test_loss)
+            if program.record_index is not None and 0 <= program.record_index < len(program_snapshots):
+                program_snapshots[program.record_index].test_loss = float(test_loss)
             print(f"Test loss: {test_loss:.2f}")
+
+    # compute best test history after evaluating all programs
+    best_test_history: list[float] = []
+    running_best_test = float("inf")
+    for snapshot in program_snapshots:
+        if snapshot.test_loss is not None:
+            running_best_test = min(running_best_test, snapshot.test_loss)
+        best_test_history.append(running_best_test)
 
     # group all islands together and save
     combined_dir = os.path.join(base_dir, date_stamp, time_stamp, 'combined')
     os.makedirs(combined_dir, exist_ok=True)
-    combined_programs_dataframe = pd.concat(islands, ignore_index=True)
-    combined_programs_dataframe = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss')
-    # combined_programs_dataframe = combined_programs_dataframe.sort_values(by='test_loss').reset_index(drop=True)
-    # sort by mean loss
-    combined_programs_dataframe = combined_programs_dataframe.sort_values(by='mean_loss').reset_index(drop=True)
-    # save the combined programs dataframe, reordering columns to have order:
-    # generation, birth_island, batch_index, train_loss, test_loss, function_code_string, parameter_estimator_code_string, program, parameter_estimator, params, parent1_id, parent2_id
-    combined_programs_dataframe = combined_programs_dataframe[['generation', 'birth_island', 'batch_index',
-                                                                'train_loss', 'test_loss',
-                                                                'function_code_string', 'parameter_estimator_code_string',
-                                                                'function', 'parameter_estimator', 'params',
-                                                                'parent1_id', 'parent2_id', 'llm_name']]
-    combined_programs_dataframe.to_csv(os.path.join(combined_dir, 'programs_db.csv'), index=False)
+    combined_island = Island(-1, [prog for island in islands for prog in island.programs])
+    combined_island = genetic_helpers.remove_duplicates(
+        combined_island, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss'
+    )
+    combined_programs = sorted(
+        combined_island.programs,
+        key=lambda p: p.mean_loss if p.mean_loss is not None else float("inf")
+    )
+    combined_records = programs_to_records(combined_programs)
+    save_records_csv(os.path.join(combined_dir, 'programs_db.csv'), combined_records, PROGRAM_CSV_COLUMNS)
 
-    # save census npy array
-    census_path = os.path.join(combined_dir, 'census.npy')
-    census_np = np.array(census, dtype=object)
-    np.save(census_path, census_np)
+    census_records = [snapshot.to_dict() for snapshot in program_snapshots]
+    save_records_csv(os.path.join(combined_dir, 'census.csv'), census_records, CENSUS_CSV_COLUMNS)
 
-    # save island-specific results
-    for island_id, island_df in enumerate(islands):
-        island_dir = os.path.join(base_dir, date_stamp, time_stamp, f'island_{island_id}' if island_id < n_islands else 'meta_island')
+    for island_id, island_obj in enumerate(islands):
+        island_dir = os.path.join(
+            base_dir, date_stamp, time_stamp, f'island_{island_id}' if island_id < n_islands else 'meta_island'
+        )
         os.makedirs(island_dir, exist_ok=True)
-        island_df.to_csv(os.path.join(island_dir, 'programs_db.csv'), index=False)
+        island_records = programs_to_records(island_obj.programs)
+        save_records_csv(os.path.join(island_dir, 'programs_db.csv'), island_records)
 
     # ---------------------------
     # save losses plot    
-    tuning_curves_project.plot_train_vs_test_loss(programs_df=combined_programs_dataframe,
-                                       island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
-                                       save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'))
+    tuning_curves_project.plot_train_vs_test_loss(
+        programs=combined_records,
+        island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
+        save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'),
+    )
     
     # ---------------------------
-    df_list = [combined_programs_dataframe] + islands
-    combined_dir = [os.path.join(base_dir, date_stamp, time_stamp, "combined")] 
+    program_groups = [combined_programs] + [list(island.programs) for island in islands]
+    combined_dir_path = [os.path.join(base_dir, date_stamp, time_stamp, "combined")] 
     island_dirs = [os.path.join(base_dir, date_stamp, time_stamp, f'island_{i}') for i in range(n_islands)]
-    df_dirs = combined_dir + island_dirs
+    df_dirs = combined_dir_path + island_dirs
     config_str = f"n_islands={n_islands}, batch_size={batch_size}, n_generations={n_generations},\n"
     config_str += f"llm_names={little_lm_name, large_lm_name}, fit_params={fit_params}, \n"
     config_str += f"critical_population_size={critical_population_size}.\n"
 
-    for i, df in enumerate(df_list):
+    for idx, programs in enumerate(program_groups):
+        if not programs:
+            continue
         df_sup = config_str
-        df = df.head(3)
-        df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
-        df_sup += "".join([f"model {len(df) - i}: iter {df['generation'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, total loss {0.5 * (df['test_loss'][i] + df['train_loss'][i]):.2f}\n" for i in range(min(3, len(df)))])
-        tuning_curves_project.plot_model_fits(
-            programs_df=df,
-            loss_function=loss_functions.quadratic_loss,
-            x=X_eval,
-            y=Y_eval,
-            unit_selection=np.random.choice(Y_eval.shape[0], size=9, replace=False),
-            title=df_sup,
-            save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
+        subset = programs[:3]
+        display_programs = sorted(
+            subset,
+            key=lambda p: p.test_loss if p.test_loss is not None else float("inf"),
+            reverse=True,
         )
+        df_sup += "".join(
+            [
+                f"model {len(display_programs) - j}: iter {prog.generation}, birth_island {prog.birth_island}, batch {prog.batch_index}, total loss {0.5 * ((prog.test_loss or 0) + prog.train_loss):.2f}\n"
+                for j, prog in enumerate(display_programs[:3])
+            ]
+        )
+        plot_entries = [{"function": prog.function, "params": prog.params} for prog in display_programs if prog.params is not None]
+        if plot_entries:
+            tuning_curves_project.plot_model_fits(
+                programs=plot_entries,
+                loss_function=loss_functions.quadratic_loss,
+                x=X_eval,
+                y=Y_eval,
+                unit_selection=np.random.choice(Y_eval.shape[0], size=9, replace=False),
+                title=df_sup,
+                save_path=os.path.join(df_dirs[idx], 'top_model_fits.png'),
+            )
         # plot top 3 models separately
-        for j in range(min(3, len(df))):
-            birth_island = df['birth_island'][j]
-            generation = df['generation'][j]
-            batch_index = df['batch_index'][j]
+        for j, prog in enumerate(display_programs[:3]):
+            if prog.params is None:
+                continue
+            birth_island = prog.birth_island
+            generation = prog.generation
+            batch_index = prog.batch_index
             unit_selection = np.random.choice(Y_eval.shape[0], size=9, replace=False)
             tuning_curves_project.plot_single_model_fit(
-                model=df['function'][j],
+                model=prog.function,
                 loss_function=loss_functions.quadratic_loss,
                 x=X_eval[unit_selection],
                 y=Y_eval[unit_selection],
-                params=df['params'][j][unit_selection],
-                title=f"Island {birth_island}, Generation {generation}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
-                save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
+                params=prog.params[unit_selection],
+                title=f"Island {birth_island}, Generation {generation}, Batch {batch_index}, loss: {prog.test_loss:.2f}" if prog.test_loss is not None else f"Island {birth_island}, Generation {generation}, Batch {batch_index}",
+                save_path=os.path.join(df_dirs[idx], f'top_model_fit_{min(3, len(display_programs)) - j}.png'),
             )
 
+    return {
+        "islands": islands,
+        "combined_programs": combined_programs,
+        "snapshots": program_snapshots,
+        "best_train_history": best_train_history,
+        "best_test_history": best_test_history,
+        "output_dir": full_dir,
+    }
+
+
+class Edgar:
+    """High-level interface for running the hypothesis engine."""
+
+    def __init__(self, **config):
+        defaults = dict(
+            n_generations=9,
+            time_limit=60,
+            k_max=2,
+            n_islands=8,
+            batch_size=6,
+            critical_population_size=12,
+            min_wise_population_size=0,
+            n_migrants=2,
+            fit_params=True,
+            exploit_point=0.5,
+            param_penalty_weight=0.01,
+            FAILED_PROGRAM_COST=np.inf,
+            use_image_feedback=True,
+            use_param_estimator=True,
+            exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0],
+            exploitation_topology=[1, 2, 3, 4, 5, 6, 7, 0],
+            seed_functions_numpy=[tuning_curves_project.neuron_model_gauss, tuning_curves_project.neuron_model_double_gauss],
+            seed_functions_jax=[tuning_curves_project.neuron_model_gauss_jax, tuning_curves_project.neuron_model_double_gauss_jax],
+            seed_parameter_estimators=[tuning_curves_project.parameter_estimator_gauss, tuning_curves_project.parameter_estimator_double_gauss],
+            func_name='neuron_model',
+            tiny_lm_name='gemini-1.5-flash-8b',
+            little_lm_name='gemini-2.0-flash',
+            large_lm_name='gemini-2.5-flash',
+            use_large_every=3,
+        )
+        defaults.update(config)
+        self.config = defaults
+        self.islands_: Optional[list[Island]] = None
+        self.combined_programs_: Optional[list[Program]] = None
+        self.snapshots_: Optional[list[ProgramSnapshot]] = None
+        self.census_: Optional[list[ProgramSnapshot]] = None
+        self.best_train_history_: Optional[list[float]] = None
+        self.best_test_history_: Optional[list[float]] = None
+        self.output_dir_: Optional[str] = None
+
+    async def run_async(self, X, Y):
+        result = await _run_engine(X, Y, **self.config)
+        self.islands_ = result["islands"]
+        self.combined_programs_ = result["combined_programs"]
+        self.snapshots_ = result["snapshots"]
+        self.best_train_history_ = result["best_train_history"]
+        self.best_test_history_ = result["best_test_history"]
+        self.output_dir_ = result["output_dir"]
+        # backwards compatibility alias
+        self.census_ = self.snapshots_
+        self.output_dir_ = result["output_dir"]
+        return result
+
+    def run(self, X, Y):
+        return asyncio.run(self.run_async(X, Y))
+
+    def get_lineage_edges(self) -> list[tuple[int, int]]:
+        if not self.snapshots_:
+            return []
+        id_to_index = {
+            (snap.generation, snap.birth_island, snap.batch_index): snap.program_index
+            for snap in self.snapshots_
+        }
+        edges = []
+        for snap in self.snapshots_:
+            for parent in (snap.parent1_id, snap.parent2_id):
+                if parent is not None and parent in id_to_index:
+                    edges.append((id_to_index[parent], snap.program_index))
+        return edges
+
+    def plot_progress(self, metric: str = "train", ax=None):
+        """Plot running best loss over the course of the run."""
+        import matplotlib.pyplot as plt
+
+        if metric not in {"train", "test"}:
+            raise ValueError("metric must be 'train' or 'test'")
+        history = self.best_train_history_ if metric == "train" else self.best_test_history_
+        if not history:
+            raise ValueError("No run history is available. Call `run` first.")
+        xs = np.arange(len(history))
+        ys = np.array(history, dtype=float)
+        ys[~np.isfinite(ys)] = np.nan
+        if ax is None:
+            _, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(xs, ys, color="red", linewidth=2.5, label=f"Best {metric} loss")
+        ax.set_xlabel("Program index")
+        ax.set_ylabel(f"{metric.capitalize()} loss")
+        ax.set_title(f"Running best {metric} loss")
+        ax.legend()
+        return ax
+
+    def plot_lineage(self, ax=None):
+        """Visualize parent-child relationships and losses."""
+        import matplotlib.pyplot as plt
+
+        if not self.snapshots_:
+            raise ValueError("No snapshots available to plot.")
+        nodes_x = [snap.generation for snap in self.snapshots_]
+        nodes_y = [snap.train_loss for snap in self.snapshots_]
+        colors = []
+        colour_map = {}
+        palette = ["#ffb703", "#219ebc", "#8ecae6", "#023047", "#fb8500"]
+        for snap in self.snapshots_:
+            key = snap.llm_name or "seed"
+            if key not in colour_map:
+                colour_map[key] = palette[len(colour_map) % len(palette)]
+            colors.append(colour_map[key])
+        if ax is None:
+            _, ax = plt.subplots(figsize=(12, 6))
+        edges = self.get_lineage_edges()
+        for parent_idx, child_idx in edges:
+            parent = self.snapshots_[parent_idx]
+            child = self.snapshots_[child_idx]
+            ax.plot(
+                [parent.generation, child.generation],
+                [parent.train_loss, child.train_loss],
+                color="gray",
+                linewidth=0.75,
+                alpha=0.4,
+            )
+        ax.scatter(nodes_x, nodes_y, c=colors, s=60, edgecolor="k", alpha=0.8)
+        ax.set_xlabel("Generation")
+        ax.set_ylabel("Train loss")
+        ax.set_title("Program lineage graph")
+        legend_handles = [
+            plt.Line2D([0], [0], marker="o", color="w", label=name, markerfacecolor=colour_map[name], markersize=8, markeredgecolor="k")
+            for name in colour_map
+        ]
+        ax.legend(handles=legend_handles, title="LLM source", bbox_to_anchor=(1.05, 1), loc="upper left")
+        return ax
+
 if __name__ == "__main__":
-    for i in range(4):
-        print("running with standard params")
-        conc_thresh = 0.55
-        activity_thresh = 0.4
-        data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy' 
-        X, Y = tuning_curves_project.load_data(data_path, conc_thresh, activity_thresh)
-        asyncio.run(main(X, Y, n_generations=9, time_limit=60, use_image_feedback=True, use_large_every=3,
-                         param_penalty_weight=0.01,
-                         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.7))
+    conc_thresh = 0.55
+    activity_thresh = 0.4
+    data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy' 
+    X, Y = tuning_curves_project.load_data(data_path, conc_thresh, activity_thresh)
+    agent = Edgar(
+        n_generations=9,
+        time_limit=60,
+        use_image_feedback=True,
+        use_large_every=3,
+        param_penalty_weight=0.01,
+        exploit_point=0.7,
+    )
+    agent.run(X, Y)

@@ -2,9 +2,11 @@ import os
 import jax
 import jax.numpy as jnp
 import time
-import pandas as pd
+from datetime import datetime
 import prompt_templates as prompt_text
-from typing import Callable, Union, Tuple
+from typing import Callable, Sequence, Tuple, Union
+
+from entities import Program
 # gemini client
 from google import genai
 from google.genai import types
@@ -52,8 +54,9 @@ def create_output_directories(use_image: bool = True) -> Tuple[str, str, str, st
     base_dir = os.path.join(os.getcwd(), 'program_databases')
     print("Base directory:", base_dir)
     os.makedirs(base_dir, exist_ok=True)
-    date_stamp = pd.Timestamp.now().strftime("%m-%d")
-    time_stamp = pd.Timestamp.now().strftime("%H-%M-%S")
+    now = datetime.now()
+    date_stamp = now.strftime("%m-%d")
+    time_stamp = now.strftime("%H-%M-%S")
     full_dir = os.path.join(base_dir, date_stamp, time_stamp)
     os.makedirs(full_dir, exist_ok=True)
     print("Created folder:", full_dir)
@@ -196,25 +199,30 @@ def str_to_func(code_string: Tuple[str, None], needle: str = 'neuron_model') -> 
             print(f"Function {needle} not found in executed code.")
             return None
 
-def create_program_prompt(random_programs: pd.DataFrame, mode: str,
+def _ensure_program_sequence(programs: Sequence[Program]) -> list[Program]:
+    if programs is None:
+        return []
+    return list(programs)
+
+
+def create_program_prompt(random_programs: Sequence[Program], mode: str,
                           use_image: bool = True, function_name: str = 'neuron_model') -> str:
     """
     Create a prompt to generate a new function based on k existing models.
 
     Args:
-        random_programs (pd.DataFrame): A DataFrame containing the existing models, their losses, and their parameter estimators. (+ more)
-            (Assumes that df is sorted from highest loss to lowest loss)
+        random_programs (Sequence[Program]): Existing parent programs sorted from highest to lowest loss.
         mode (str): The mode of evolution - 'explore' or 'exploit'.
-        use_image (bool): Whether to include an image prompt in the generated prompt. Defaults to True.
-        function_name (str): The name of the function to be generated. Defaults to 'neuron_model'.
+        use_image (bool): Whether to include an image prompt in the generated prompt.
+        function_name (str): The name of the function to be generated.
     Returns:
         prompt (str): The prompt string for the AI to generate a new function.
     """
     # Ensure the mode is valid
     assert mode in ['explore', 'exploit'], "Invalid mode. Choose either 'explore' or 'exploit'."
 
-    # get the number k of parent programs
-    k = len(random_programs)
+    parent_programs = _ensure_program_sequence(random_programs)
+    k = len(parent_programs)
 
     prompt = prompt_text.program_creation_instructions(k=k, mode=mode, function_name=function_name)
     #  prompt explaining the image
@@ -225,44 +233,43 @@ def create_program_prompt(random_programs: pd.DataFrame, mode: str,
     prompt += prompt_text.coding_instructions(k=k, function_name=function_name)
     
     # add programs to the prompt
-    for i in range(k):
+    for i, program in enumerate(parent_programs):
         fn_def = f"def {function_name}("
         fn_version = f"def {function_name}_v{i+1}("
         prompt += f"""
-loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
-{random_programs.iloc[i]['function_code_string'].replace(fn_def, fn_version)}
+loss of model {i+1}: {program.train_loss: .2f}
+{program.function_code_string.replace(fn_def, fn_version)}
 \n
 """
 
     return prompt
 
-def create_parameter_estimator_prompt(random_programs: pd.DataFrame, func_code_string: str,
+def create_parameter_estimator_prompt(random_programs: Sequence[Program], func_code_string: str,
                                       max_lines: int = 100, function_name: str = 'neuron_model') -> str:
     """
     Create a prompt to generate a new parameter estimator based on k existing models.
     Args:
-        random_programs (pd.DataFrame): A DataFrame containing the existing models, their losses, and their parameter estimators. (+ more)
-            (Assumes that df is sorted from highest loss to lowest loss)
+        random_programs (Sequence[Program]): Existing parent programs sorted from highest to lowest loss.
         func_code_string (str): The code for the candidate function whose parameters need to be estimated.
         max_lines (int): Maximum number of lines allowed in the generated estimator code.
         function_name (str): The name of the function whose parameters will be estimated.
     Returns:
         prompt (str): The prompt string for the AI to generate a new parameter estimator.
     """
-    # get the number k of parent programs
-    k = len(random_programs)
+    parent_programs = _ensure_program_sequence(random_programs)
+    k = len(parent_programs)
 
     prompt = prompt_text.parameter_estimator_creation_instructions(k=k, function_name=function_name, max_lines=max_lines)
 
     # loop through the models, and add the relevant code and metadata.
-    for i in range(k):
+    for i, program in enumerate(parent_programs):
         fn_def = f"def {function_name}("
         fn_version = f"def {function_name}_v{i+1}("
         prompt += f"""
-loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
-{random_programs.iloc[i]['function_code_string'].replace(fn_def, fn_version)}
+loss of model {i+1}: {program.train_loss: .2f}
+{program.function_code_string.replace(fn_def, fn_version)}
 \n
-{random_programs.iloc[i]['parameter_estimator_code_string'].replace('def parameter_estimator(', f'def parameter_estimator_v{i+1}(')}
+{program.parameter_estimator_code_string.replace('def parameter_estimator(', f'def parameter_estimator_v{i+1}(')}
 \n
 ----------------------------
 \n

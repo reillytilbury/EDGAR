@@ -1,8 +1,8 @@
 import unittest
 import jax.numpy as jnp
-import pandas as pd
 
 import genetic_helpers as gh
+from entities import Island, Program
 
 
 def _make_program(
@@ -17,17 +17,18 @@ def _make_program(
 ):
     if eval_matrix is None:
         eval_matrix = jnp.ones((params.shape[0], 5))
-    return pd.Series(
-        {
-            "params": params,
-            "birth_island": birth_island,
-            "generation": generation,
-            "batch_index": batch_index,
-            "function_code_string": code_string,
-            "train_loss": loss,
-            "evaluation_matrix": eval_matrix,
-            "llm_name": llm_name,
-        }
+    return Program(
+        function_code_string=code_string,
+        function=lambda theta, *args: theta,
+        parameter_estimator_code_string="def parameter_estimator(x, y): return x",
+        parameter_estimator=lambda x, y: x,
+        generation=generation,
+        birth_island=birth_island,
+        batch_index=batch_index,
+        train_loss=loss,
+        params=params,
+        evaluation_matrix=eval_matrix,
+        llm_name=llm_name,
     )
 
 
@@ -55,18 +56,18 @@ class RemoveDuplicatesTest(unittest.TestCase):
         params = jnp.ones((2, 3))
         dup_high_loss = _make_program(params, loss=0.4)
         dup_low_loss = _make_program(params, loss=0.1)
-        island = pd.DataFrame([dup_high_loss, dup_low_loss])
+        island = Island(0, [dup_high_loss, dup_low_loss])
         pruned = gh.remove_duplicates(island, mode="complicated")
         self.assertEqual(len(pruned), 1)
-        self.assertAlmostEqual(pruned.iloc[0]["train_loss"], 0.1)
+        self.assertAlmostEqual(pruned.programs[0].train_loss, 0.1)
 
 
 class ComputeIntersectionTest(unittest.TestCase):
     def test_detects_overlap_between_islands(self):
         params = jnp.ones((2, 3))
         shared = _make_program(params)
-        island_a = pd.DataFrame([shared])
-        island_b = pd.DataFrame([shared, _make_program(params, birth_island=1, generation=1)])
+        island_a = Island(0, [shared])
+        island_b = Island(1, [shared, _make_program(params, birth_island=1, generation=1)])
         duplicates = gh.compute_intersection(island_a, island_b, mode="simple")
         self.assertEqual(duplicates, [0])
 
@@ -75,10 +76,10 @@ class ProbabilisticMigrationTest(unittest.TestCase):
     def test_migrants_appended_to_destination(self):
         params_a = jnp.ones((2, 2))
         params_b = jnp.ones((2, 2)) * 2
-        island_0 = pd.DataFrame([_make_program(params_a)])
-        island_1 = pd.DataFrame([_make_program(params_b, birth_island=1)])
+        island_0 = Island(0, [_make_program(params_a)])
+        island_1 = Island(1, [_make_program(params_b, birth_island=1)])
         migrated = gh.perform_probabilistic_migration(
-            [island_0.copy(), island_1.copy()], n_migrants=1, destination_islands=[1, 0], temperature=0.1
+            [island_0, island_1], n_migrants=1, destination_islands=[1, 0], temperature=0.1
         )
         self.assertEqual(len(migrated[1]), 2)
         self.assertEqual(len(migrated[0]), 2)

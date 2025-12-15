@@ -666,14 +666,13 @@ def parameter_estimator_delta(theta, spike_counts):
 
 # IMAGE FEEDBACK FUNCTIONS
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
 from typing import Optional, Callable, Sequence
 
-def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
+def plot_model_fits(programs: Sequence[dict], loss_function: Callable, 
                     x: jnp.ndarray, y: jnp.ndarray, 
-                    cell_selection: Sequence[int],
+                    unit_selection: Sequence[int],
                     n_eval: int = 100, n_mean: int = 50,
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
                     labels: Optional[list] = None, 
@@ -686,11 +685,11 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                     dpi: float = 100.0, 
                     save_path: Optional[str] = None):
     """
-    plot fits of all models in programs_df over a subset of cells in x and y, along with the running mean.
+    plot fits of all models in the provided sequence over a subset of cells in x and y, along with the running mean.
     Args:
-        programs_df:
-            - must have columns 'function' and 'params'. 
-            - must have n_rows <= 3
+        programs:
+            - sequence of dict-like objects with keys 'function' and 'params'. 
+            - length <= 3
             - 'function': callable (written in JAX): (x: jnp.ndarray, *params) -> jnp.ndarray
             - 'params': jnp.ndarray (n_cells, n_params)
         loss_function: 
@@ -698,17 +697,19 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         x: (n_cells x n_trials) - jnp.ndarray
         y: (n_cells x n_trials) - jnp.ndarray
     """
-    assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, but has {len(programs_df)} rows."
-    assert len(cell_selection) > 0, "cell_selection must not be empty."
-    assert len(cell_selection) == int(np.sqrt(len(cell_selection)))**2, \
-        f"cell_selection must be a square number, but has {len(cell_selection)} elements."
+    if not programs:
+        return
+    assert len(programs) <= 3, f"programs must have at most 3 entries, but has {len(programs)}."
+    assert len(unit_selection) > 0, "unit_selection must not be empty."
+    assert len(unit_selection) == int(np.sqrt(len(unit_selection)))**2, \
+        f"unit_selection must be a square number, but has {len(unit_selection)} elements."
 
     # define frequently used variables
-    models = programs_df['function'].tolist()
-    params = programs_df['params'].tolist()
-    params = [p[cell_selection] for p in params]
-    spike_matrix = y[cell_selection]
-    stimuli = x[cell_selection]
+    models = [entry['function'] for entry in programs]
+    selection = np.array(unit_selection, dtype=int)
+    params = [entry['params'][selection] for entry in programs]
+    spike_matrix = y[selection]
+    stimuli = x[selection]
     n_cells, n_trials = spike_matrix.shape
     n_models = len(models)
     if labels is None:
@@ -766,7 +767,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
 
         # Set axis properties
         ax[row, col].set_ylim(0, max(model_max, mean_max) * 2)
-        ax[row, col].set_title(f'Cell {cell_selection[c]}', fontsize=16)
+        ax[row, col].set_title(f'Cell {selection[c]}', fontsize=16)
         ax[row, col].legend(loc='upper right', fontsize=legend_fontsize)
         if row == n_row_cols - 1:
             ax[row, col].set_xlabel('Theta (radians)', fontsize=20)
@@ -927,23 +928,21 @@ def plot_losses(loss: np.ndarray, true_model_loss: Optional[float] = None,
         plt.show()
     plt.close()
 
-def plot_train_vs_test_loss(programs_df: pd.DataFrame, 
+def plot_train_vs_test_loss(programs: Sequence[dict], 
                             island_labels: list,
                             save_path: Optional[str] = None):
     """
-    Plot train vs test loss for each program in the DataFrame.
+    Plot train vs test loss for each program in the provided sequence.
     Args:
-        programs_df: DataFrame containing the programs and their losses. 
-            It should have columns 'train_loss' and 'test_loss'.
+        programs: Sequence of dict-like objects containing 'train_loss', 'test_loss', and 'birth_island'.
         save_path: Path to save the plot. If None, will show the plot instead.
     """
-    if 'train_loss' not in programs_df.columns or 'test_loss' not in programs_df.columns:
-        raise ValueError("DataFrame must contain 'train_loss' and 'test_loss' columns.")
+    if not programs:
+        return
     
-    # define variables
-    train_loss = programs_df['train_loss'].to_numpy()
-    test_loss = programs_df['test_loss'].to_numpy()
-    birth_island = programs_df['birth_island'].to_numpy()
+    train_loss = np.array([entry['train_loss'] for entry in programs], dtype=float)
+    test_loss = np.array([entry.get('test_loss') if entry.get('test_loss') is not None else np.nan for entry in programs], dtype=float)
+    birth_island = np.array([entry.get('birth_island', -1) for entry in programs], dtype=int)
 
     # turn nan to num
     train_loss = np.nan_to_num(train_loss, nan=np.inf)
@@ -954,6 +953,8 @@ def plot_train_vs_test_loss(programs_df: pd.DataFrame,
     train_loss = train_loss[mask]
     test_loss = test_loss[mask]
     birth_island = birth_island[mask]
+    if train_loss.size == 0 or test_loss.size == 0:
+        return
     cmap = plt.get_cmap('tab10')
 
     # plot the train vs test loss
