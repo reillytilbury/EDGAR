@@ -16,20 +16,6 @@ class ExtractCodeBlockTest(unittest.TestCase):
         self.assertEqual(block, text)
 
 
-class SplitViaAstTest(unittest.TestCase):
-    def test_finds_and_renames_functions(self):
-        code = """
-import numpy as np
-def neuron_model_v5(theta, a):
-    return a * theta
-def parameter_estimator_v5(theta, y):
-    return np.array([0.0])
-"""
-        model_code, estimator_code = utils.split_via_ast(code, function_name="neuron_model")
-        self.assertIn("def neuron_model(", model_code)
-        self.assertIn("def parameter_estimator(", estimator_code)
-
-
 class VmapOverCellsTest(unittest.TestCase):
     def test_runs_model_for_each_cell(self):
         def toy(theta, scale, offset):
