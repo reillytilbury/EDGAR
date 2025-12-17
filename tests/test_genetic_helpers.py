@@ -1,8 +1,8 @@
 import unittest
 import jax.numpy as jnp
 
-import genetic_helpers as gh
-from entities import Island, Program
+from edgar import genetic_helpers as gh
+from edgar.entities import Island, Program
 
 
 def _make_program(

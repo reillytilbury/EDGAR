@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover
 from dotenv import load_dotenv
 from google.genai import types
 
-from entities import Program
+from .entities import Program
 
 # Set up logging to suppress warnings from httpx, urllib3, and google.genai
 import logging

@@ -10,8 +10,8 @@ import jax, jax.numpy as jnp
 import timeout_decorator
 import optax
 from pathlib import Path
-import utils, genetic_helpers, loss_functions
-from entities import Program, Island, ProgramSnapshot
+from . import utils, genetic_helpers, loss_functions
+from .entities import Program, Island, ProgramSnapshot
 from tqdm import tqdm
 import google.genai
 from dotenv import load_dotenv
@@ -564,7 +564,7 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
         island.extend(initial_programs)
 
     # Reset logging configuration
-    log_file = os.path.join(full_dir, 'hypothesis_engine.log')
+    log_file = os.path.join(full_dir, 'engine.log')
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
     logging.basicConfig(filename=log_file, level=logging.INFO, format='%(message)s')

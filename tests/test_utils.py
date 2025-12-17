@@ -10,7 +10,7 @@ try:
 except ImportError:  # pragma: no cover
     np = None
 
-import utils
+from edgar import utils
 
 
 class ExtractCodeBlockTest(unittest.TestCase):
