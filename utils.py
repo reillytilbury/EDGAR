@@ -11,12 +11,13 @@ import google.genai
 from google.genai import types
 # Set up logging to suppress warnings from httpx, urllib3, and google.genai
 import logging
+from dotenv import load_dotenv
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("google.genai").setLevel(logging.ERROR)
 # # load dotenv to load environment variables from .env file
-# load_dotenv()
+load_dotenv()
 
 def vmap_over_units(model_fn: Callable) -> Callable:
     """Return a version of `model_fn` that accepts
@@ -291,3 +292,19 @@ def create_jax_translater_prompt(program: str, function_name: str = 'neuron_mode
     # Ensure the program is a string
     assert isinstance(program, str), "The program must be a string."
     return prompt_text.jax_translation_instructions(program, function_name)
+
+# call llm example
+# client = google.genai.Client()
+# response = call_llm("What is the capital of France?", model_name="gemini-2.0-flash", client=client)
+# print("LLM Response:", response)
+
+# async call llm example
+# import asyncio 
+# async def main():
+#     client = google.genai.Client()
+#     tasks = [call_llm_async(prompt, model_name="gemini-2.0-flash", client=client) for prompt in ["what is the capital of france"] * 100]
+#     responses = await asyncio.gather(*tasks)
+#     for i, resp in enumerate(responses):
+#         print(f"Response {i+1}: {resp}")
+
+# asyncio.run(main())

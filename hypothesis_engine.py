@@ -412,7 +412,7 @@ async def create_new_parameter_estimator(current_island: Island, func_code_strin
     func = utils.str_to_func(code_string, 'parameter_estimator')
     return code_string, func
 
-async def translate_to_jax(code_string: str, client, llm_name='gemini-1.5-flash-8b',
+async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash',
                            function_name: str = 'neuron_model') -> tuple[str, callable]:
     """
     Translates a neuron model code string to JAX format.
@@ -461,7 +461,7 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                 seed_functions_jax = [tuning_curves_project.neuron_model_gauss_jax, tuning_curves_project.neuron_model_double_gauss_jax],
                 seed_parameter_estimators = [tuning_curves_project.parameter_estimator_gauss, tuning_curves_project.parameter_estimator_double_gauss],
                 func_name = 'neuron_model',
-                tiny_lm_name = 'gemini-1.5-flash-8b',
+                tiny_lm_name = 'gemini-2.0-flash',
                 little_lm_name = 'gemini-2.0-flash',
                 large_lm_name = 'gemini-2.5-flash',
                 use_large_every = None):
@@ -559,22 +559,22 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
     logging.basicConfig(filename=log_file, level=logging.INFO, format='%(message)s')
-    initial_plot_entries = [{"function": prog.function, "params": prog.params} for prog in initial_programs]
-    tuning_curves_project.plot_model_fits(
-        programs=initial_plot_entries,
-        loss_function=loss_functions.quadratic_loss,
-        x=X_loop,
-        y=Y_loop,
-        unit_selection=np.random.choice(len(X_loop), size=9, replace=False),
-        save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
-        labels=['seed_1', 'seed_2'],
-        colours=['tab:green', 'tab:red'],
-        dpi=100.0,
-        title="Seed Programs",
-        legend_fontsize=20,
-        line_alpha=0.9,
-        line_width=4,
-    )
+    # initial_plot_entries = [{"function": prog.function, "params": prog.params} for prog in initial_programs]
+    # tuning_curves_project.plot_model_fits(
+    #     programs=initial_plot_entries,
+    #     loss_function=loss_functions.quadratic_loss,
+    #     x=X_loop,
+    #     y=Y_loop,
+    #     unit_selection=np.random.choice(len(X_loop), size=9, replace=False),
+    #     save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
+    #     labels=['seed_1', 'seed_2'],
+    #     colours=['tab:green', 'tab:red'],
+    #     dpi=100.0,
+    #     title="Seed Programs",
+    #     legend_fontsize=20,
+    #     line_alpha=0.9,
+    #     line_width=4,
+    # )
 
     # -----------------------------
     # HYPOTHESIS ENGINE
@@ -585,7 +585,7 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
             logging.info(f"Time limit of {time_limit} minutes reached. Stopping generations.")
             break
         logging.info(f"generation {i}")
-        assert use_large_every > 0 or use_large_every is None, "use_large_every must be > 0 or None"
+        assert use_large_every is None or use_large_every > 0, "use_large_every must be > 0 or None"
         if use_large_every is not None and i % use_large_every == 0:
             llm_name = large_lm_name
             logging.info(f"Using large LLM: {llm_name}")
@@ -974,7 +974,7 @@ class Edgar:
             seed_functions_jax=[tuning_curves_project.neuron_model_gauss_jax, tuning_curves_project.neuron_model_double_gauss_jax],
             seed_parameter_estimators=[tuning_curves_project.parameter_estimator_gauss, tuning_curves_project.parameter_estimator_double_gauss],
             func_name='neuron_model',
-            tiny_lm_name='gemini-1.5-flash-8b',
+            tiny_lm_name='gemini-2.0-flash',
             little_lm_name='gemini-2.0-flash',
             large_lm_name='gemini-2.5-flash',
             use_large_every=3,

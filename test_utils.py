@@ -29,6 +29,14 @@ class VmapOverUnitsTest(unittest.TestCase):
         self.assertTrue(jnp.allclose(outputs[0], theta))
         self.assertTrue(jnp.allclose(outputs[1], theta * 2 + 1))
 
+# class TestLLMCalls(unittest.TestCase):
+#     def test_llm_call(self):
+#         prompt = "What is the capital of France?"
+#         for llm in ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash']:
+#             response = utils.call_llm(prompt, model_name=llm)
+#             self.assertIsInstance(response, str)
+#             # assert paris in response and if not raise AssertionError with llm name
+#             self.assertIn("Paris", response, f"LLM {llm} did not return expected answer.")
 
 if __name__ == "__main__":
     unittest.main()
