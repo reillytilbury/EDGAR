@@ -86,8 +86,7 @@ class ConfigLoaderTest(unittest.TestCase):
               def parameter_estimator(theta, spikes):
                   return np.array([1.0, 0.0])
         prompt:
-          program_creation:
-            base: "OVERRIDE {function_name}"
+          program_creation_context: "OVERRIDE {function_name}"
         diagnostic_function: |
           def diagnostic_image(programs, X, Y, save_path, metadata=None):
               return b"image-bytes"

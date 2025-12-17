@@ -1,23 +1,21 @@
-[program_creation]
-base =
+[program_creation_context]
     You are an AI scientist. The programs below are sorted from worst to best.
 
     Your task is to create a new {function_name}, {function_name}_v{version_index}, that has a lower loss than the models below.
 
     *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
 
-explore =
+[explore_instructions]
     Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
 
-exploit =
+[exploit_instruction]
     Use the models below as a *template* to create a new model.
     Which features in the models below correlate with lower loss? Find these features and *extrapolate* them.
     Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
     Are the parameter ranges correct? If not, adjust them to be more appropriate.
     You will be *penalized* for complexity, so make the new model as *simple* as possible while still being better than the previous models.
 
-[image_analysis]
-template =
+[image_analysis_instructions]
     **Image Analysis Instructions:**
 
     When an image diagnostic is provided, treat it as a summary of how current models compare to the empirical data. Study the figure carefully before proposing your new `{function_name}`.
@@ -31,8 +29,7 @@ template =
 
     Reference key takeaways from the diagnostic in your docstring and explain how the proposed `{function_name}_v{version_index}` addresses the observed weaknesses.
 
-[coding]
-template =
+[coding_instructions]
     **Code Generation Guidelines:**
 
     * Import any packages you use.
@@ -47,8 +44,7 @@ template =
     * Provide a simple equation for the model, including all free parameters.
     * Explain how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
 
-[parameter_estimator]
-template =
+[parameter_estimator_context]
     You are an AI scientist. Your task is to create a simple parameter estimator function, `parameter_estimator_v{version_index}`, to estimate the free parameters of the latest model, `{function_name}_v{version_index}`.
 
     The parameters should be estimated directly, using statistical principles and knowledge of what the parameters represent in context.
@@ -63,8 +59,7 @@ template =
     * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
     * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point for the parameter estimation.
 
-[jax_translation]
-template =
+[jax_translation_instructions]
     Convert the following function (`{function_name}`) to a JAX-compatible function.
 
     Include all necessary imports, and ensure that the function is compatible with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import configparser
 import inspect
 import os
 import time
@@ -31,33 +30,48 @@ logging.getLogger("google.genai").setLevel(logging.ERROR)
 load_dotenv()
 
 _TEMPLATE_PATH = Path(__file__).with_name("prompt_templates.txt")
-_PROMPT_OVERRIDES: dict[tuple[str, str], str] = {}
+_PROMPT_OVERRIDES: dict[str, str] = {}
 
 
-def _read_prompt_templates() -> configparser.RawConfigParser:
-    parser = configparser.RawConfigParser()
-    parser.optionxform = str
+def _read_prompt_templates() -> dict[str, str]:
+    """Load flat prompt templates from disk (one section per template)."""
+    if not _TEMPLATE_PATH.exists():
+        raise FileNotFoundError(f"Prompt template file not found: {_TEMPLATE_PATH}")
+
+    templates: dict[str, str] = {}
+    current_section: str | None = None
+    lines: list[str] = []
     with _TEMPLATE_PATH.open("r", encoding="utf-8") as handle:
-        parser.read_file(handle)
-    return parser
+        for raw_line in handle:
+            stripped = raw_line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                if current_section:
+                    templates[current_section] = "".join(lines).lstrip("\n")
+                current_section = stripped[1:-1]
+                lines = []
+            else:
+                lines.append(raw_line)
+    if current_section:
+        templates[current_section] = "".join(lines).lstrip("\n")
+    if not templates:
+        raise ValueError("No prompt templates could be parsed.")
+    return templates
 
 
 @lru_cache(maxsize=1)
-def _prompt_templates() -> configparser.RawConfigParser:
-    if not _TEMPLATE_PATH.exists():
-        raise FileNotFoundError(f"Prompt template file not found: {_TEMPLATE_PATH}")
+def _prompt_templates() -> dict[str, str]:
     return _read_prompt_templates()
 
 
-def _format_template(section: str, key: str, **context) -> str:
-    override = _PROMPT_OVERRIDES.get((section, key))
-    if override is not None:
-        template = override
+def _format_template(section: str, **context) -> str:
+    """Retrieve and format a prompt template by section name."""
+    if section in _PROMPT_OVERRIDES:
+        template = _PROMPT_OVERRIDES[section]
     else:
         templates = _prompt_templates()
-        if not templates.has_section(section) or key not in templates[section]:
-            raise KeyError(f"Missing prompt template [{section}] {key}")
-        template = templates.get(section, key)
+        if section not in templates:
+            raise KeyError(f"Missing prompt template for section {section!r}")
+        template = templates[section]
     return template.format(**context)
 
 
@@ -97,11 +111,10 @@ def reset_prompt_overrides() -> None:
     _PROMPT_OVERRIDES.clear()
 
 
-def set_prompt_overrides(overrides: Mapping[str, Mapping[str, str]]) -> None:
-    """Apply user-provided prompt overrides."""
-    for section, section_overrides in overrides.items():
-        for key, text in section_overrides.items():
-            _PROMPT_OVERRIDES[(section, key)] = text
+def set_prompt_overrides(overrides: Mapping[str, str]) -> None:
+    """Apply user-provided prompt overrides (flat section -> text)."""
+    for section, text in overrides.items():
+        _PROMPT_OVERRIDES[section] = str(text)
 
 
 def vmap_over_units(model_fn: Callable) -> Callable:
@@ -357,8 +370,10 @@ def load_edgar_config(path: str) -> dict:
 
     overrides = raw.get("prompt_overrides") or raw.get("prompt")
     reset_prompt_overrides()
-    if overrides:
-        set_prompt_overrides(overrides)
+    if isinstance(overrides, Mapping):
+        string_overrides = {k: v for k, v in overrides.items() if isinstance(v, str)}
+        if string_overrides:
+            set_prompt_overrides(string_overrides)
 
     return config
 def _ensure_program_sequence(programs: Sequence[Program]) -> list[Program]:
@@ -387,11 +402,11 @@ def create_program_prompt(random_programs: Sequence[Program], mode: str,
     k = len(parent_programs)
 
     context = {"function_name": function_name, "version_index": k + 1}
-    prompt = _format_template("program_creation", "base", **context)
-    prompt += _format_template("program_creation", mode, **context)
+    prompt = _format_template("program_creation_context", **context)
+    prompt += _format_template("explore_instructions" if mode == "explore" else "exploit_instruction", **context)
     if use_image:
-        prompt += _format_template("image_analysis", "template", **context)
-    prompt += _format_template("coding", "template", **context)
+        prompt += _format_template("image_analysis_instructions", **context)
+    prompt += _format_template("coding_instructions", **context)
     
     # add programs to the prompt
     for i, program in enumerate(parent_programs):
@@ -421,7 +436,7 @@ def create_parameter_estimator_prompt(random_programs: Sequence[Program], func_c
     k = len(parent_programs)
 
     context = {"function_name": function_name, "version_index": k + 1, "max_lines": max_lines}
-    prompt = _format_template("parameter_estimator", "template", **context)
+    prompt = _format_template("parameter_estimator_context", **context)
 
     # loop through the models, and add the relevant code and metadata.
     for i, program in enumerate(parent_programs):
@@ -453,7 +468,7 @@ def create_jax_translater_prompt(program: str, function_name: str = 'neuron_mode
     """
     # Ensure the program is a string
     assert isinstance(program, str), "The program must be a string."
-    return _format_template("jax_translation", "template", program=program, function_name=function_name)
+    return _format_template("jax_translation_instructions", program=program, function_name=function_name)
 
 # call llm example
 # client = google.genai.Client()

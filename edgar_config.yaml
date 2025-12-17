@@ -36,13 +36,12 @@ seed_programs:
           return np.array([A1, A2, B, phase])
 
 prompt:
-  program_creation:
-    base: |
-      You are an AI scientist. The programs below are sorted from worst to best.
+  program_creation_context: |
+    You are an AI scientist. The programs below are sorted from worst to best.
 
-      Your task is to create a new {function_name}, {function_name}_v{version_index}, that has a lower loss than the models below.
+    Your task is to create a new {function_name}, {function_name}_v{version_index}, that has a lower loss than the models below.
 
-      *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
+    *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
 
 diagnostic_function: |
   import matplotlib.pyplot as plt
