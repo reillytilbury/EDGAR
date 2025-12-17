@@ -1,23 +1,80 @@
+from __future__ import annotations
+
+import configparser
+import inspect
 import os
-import jax
-import jax.numpy as jnp
 import time
 from datetime import datetime
-import prompt_templates as prompt_text
+from functools import lru_cache
+from pathlib import Path
 from typing import Callable, Sequence, Tuple, Union
-from entities import Program
-# gemini client
+
 import google.genai
+import jax
+import jax.numpy as jnp
+try:  # pragma: no cover
+    import numpy as np  # type: ignore
+except ImportError:  # pragma: no cover
+    np = jnp  # fall back to JAX arrays for validation
+from dotenv import load_dotenv
 from google.genai import types
+
+from entities import Program
+
 # Set up logging to suppress warnings from httpx, urllib3, and google.genai
 import logging
-from dotenv import load_dotenv
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("google.genai").setLevel(logging.ERROR)
-# # load dotenv to load environment variables from .env file
 load_dotenv()
+
+_TEMPLATE_PATH = Path(__file__).with_name("prompt_templates.txt")
+
+
+def _read_prompt_templates() -> configparser.RawConfigParser:
+    parser = configparser.RawConfigParser()
+    parser.optionxform = str
+    with _TEMPLATE_PATH.open("r", encoding="utf-8") as handle:
+        parser.read_file(handle)
+    return parser
+
+
+@lru_cache(maxsize=1)
+def _prompt_templates() -> configparser.RawConfigParser:
+    if not _TEMPLATE_PATH.exists():
+        raise FileNotFoundError(f"Prompt template file not found: {_TEMPLATE_PATH}")
+    return _read_prompt_templates()
+
+
+def _format_template(section: str, key: str, **context) -> str:
+    templates = _prompt_templates()
+    if not templates.has_section(section) or key not in templates[section]:
+        raise KeyError(f"Missing prompt template [{section}] {key}")
+    return templates.get(section, key).format(**context)
+
+
+def validate_jax_translation(
+    numpy_function: Callable,
+    jax_function: Callable,
+    X_samples: Union[jnp.ndarray, None] = None,
+    atol: float = 1e-3,
+    rtol: float = 1e-3,
+) -> bool:
+    """Check whether a translated JAX function matches its NumPy source on sample inputs."""
+    if X_samples is None:
+        X_samples = jnp.linspace(0, 2 * jnp.pi, 64, dtype=jnp.float32)
+
+    X_np = np.asarray(X_samples, dtype=np.float32)
+    X_jax = jnp.asarray(X_np)
+    try:
+        numpy_output = np.asarray(numpy_function(X_np), dtype=np.float32)
+        jax_output = np.asarray(jax_function(X_jax), dtype=np.float32)
+    except Exception:
+        return False
+
+    return np.allclose(numpy_output, jax_output, atol=atol, rtol=rtol)
+
 
 def vmap_over_units(model_fn: Callable) -> Callable:
     """Return a version of `model_fn` that accepts
@@ -100,7 +157,7 @@ def extract_code_block(text: Union[str, None], start_marker: str = "```python\n"
 
 def call_llm(
     prompt_text: str,
-    model_name: str = "gemini-2.0-flash",
+    llm_name: str = "gemini-2.0-flash",
     client: google.genai.Client = None,
     temperature: float = 1.0,
     thinking_budget: float = 1.0) -> Union[str, None]:
@@ -109,7 +166,7 @@ def call_llm(
     """
     try:
         # create the config for the request (thinking budget for 2.5 flash model)
-        if '2.5-flash' in model_name:
+        if '2.5-flash' in llm_name:
             thinking_budget = int(thinking_budget * 24_576)
             config = types.GenerateContentConfig(
                 temperature=temperature,
@@ -120,7 +177,7 @@ def call_llm(
             config = types.GenerateContentConfig(temperature=temperature, max_output_tokens=5_000)
         
         # send the request to the GenAI client
-        resp = client.models.generate_content(model=model_name, contents=[prompt_text], config=config)
+        resp = client.models.generate_content(model=llm_name, contents=[prompt_text], config=config)
         return resp.text
     except Exception as e:
         print(f"ERROR (Gemini): {e}")
@@ -131,7 +188,7 @@ def call_llm(
 async def call_llm_async(
     prompt_text: Union[str, None],
     client: google.genai.Client,
-    model_name: str = "gemini-2.0-flash",
+    llm_name: str = "gemini-2.0-flash",
     temperature: float = 1.0,
     thinking_budget: float = 1,
     img_bytes: Union[bytes, None] = None
@@ -143,7 +200,7 @@ async def call_llm_async(
         return None
     try:
         # Create the config for the request (thinking budget for 2.5 flash model)
-        if '2.5' in model_name:
+        if '2.5' in llm_name:
             thinking_budget = int(thinking_budget * 24_576) if thinking_budget >= 0 else -1
             config = types.GenerateContentConfig(
                 temperature=temperature,
@@ -155,12 +212,12 @@ async def call_llm_async(
         # Send the request to the GenAI client
         if img_bytes is not None:
             resp = await client.aio.models.generate_content(
-                model=model_name,
+                model=llm_name,
                 contents=[prompt_text, types.Part.from_bytes(data=img_bytes, mime_type="image/png")],
                 config=config
             )
         else:
-            resp = await client.aio.models.generate_content(model=model_name, contents=[prompt_text], config=config)
+            resp = await client.aio.models.generate_content(model=llm_name, contents=[prompt_text], config=config)
         
         return resp.text
     except Exception as e:
@@ -224,13 +281,12 @@ def create_program_prompt(random_programs: Sequence[Program], mode: str,
     parent_programs = _ensure_program_sequence(random_programs)
     k = len(parent_programs)
 
-    prompt = prompt_text.program_creation_instructions(k=k, mode=mode, function_name=function_name)
-    #  prompt explaining the image
+    context = {"function_name": function_name, "version_index": k + 1}
+    prompt = _format_template("program_creation", "base", **context)
+    prompt += _format_template("program_creation", mode, **context)
     if use_image:
-        prompt += prompt_text.image_analysis_instructions(k=k, function_name=function_name)
-
-    # docstring and coding guidelines
-    prompt += prompt_text.coding_instructions(k=k, function_name=function_name)
+        prompt += _format_template("image_analysis", "template", **context)
+    prompt += _format_template("coding", "template", **context)
     
     # add programs to the prompt
     for i, program in enumerate(parent_programs):
@@ -259,7 +315,8 @@ def create_parameter_estimator_prompt(random_programs: Sequence[Program], func_c
     parent_programs = _ensure_program_sequence(random_programs)
     k = len(parent_programs)
 
-    prompt = prompt_text.parameter_estimator_creation_instructions(k=k, function_name=function_name, max_lines=max_lines)
+    context = {"function_name": function_name, "version_index": k + 1, "max_lines": max_lines}
+    prompt = _format_template("parameter_estimator", "template", **context)
 
     # loop through the models, and add the relevant code and metadata.
     for i, program in enumerate(parent_programs):
@@ -291,7 +348,7 @@ def create_jax_translater_prompt(program: str, function_name: str = 'neuron_mode
     """
     # Ensure the program is a string
     assert isinstance(program, str), "The program must be a string."
-    return prompt_text.jax_translation_instructions(program, function_name)
+    return _format_template("jax_translation", "template", program=program, function_name=function_name)
 
 # call llm example
 # client = google.genai.Client()

@@ -113,6 +113,25 @@ def load_program_snapshots(path: str) -> list[ProgramSnapshot]:
             snapshots.append(snapshot)
     return snapshots
 
+
+def _default_sine_numpy(theta, A=1.0, B=0.2, phase=0.0):
+    theta = np.asarray(theta)
+    return B + A * np.sin(theta - phase)
+
+
+def _default_cosine_numpy(theta, A=1.0, B=0.2, phase=0.0):
+    theta = np.asarray(theta)
+    return B + A * np.cos(theta - phase)
+
+
+def _default_parameter_estimator(theta, spikes):
+    theta = np.asarray(theta)
+    spikes = np.asarray(spikes)
+    amplitude = float(np.max(spikes) - np.min(spikes))
+    bias = float(np.median(spikes))
+    phase = float(theta[np.argmax(spikes)])
+    return np.array([amplitude, bias, phase])
+
 def compute_initial_params(param_estimator, func, X, Y) -> jnp.ndarray:
     """
     Compute initial parameters for func using the provided parameter estimator. Confusingly, the parameter estimator will be written in numpy,
@@ -457,9 +476,8 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                 use_image_feedback=True, use_param_estimator=True,
                 exploration_topology = None,
                 exploitation_topology = None,
-                seed_functions_numpy = [tuning_curves_project.neuron_model_gauss, tuning_curves_project.neuron_model_double_gauss],
-                seed_functions_jax = [tuning_curves_project.neuron_model_gauss_jax, tuning_curves_project.neuron_model_double_gauss_jax],
-                seed_parameter_estimators = [tuning_curves_project.parameter_estimator_gauss, tuning_curves_project.parameter_estimator_double_gauss],
+                seed_functions_numpy = None,
+                seed_parameter_estimators = None,
                 func_name = 'neuron_model',
                 tiny_lm_name = 'gemini-2.0-flash',
                 little_lm_name = 'gemini-2.0-flash',
@@ -476,6 +494,11 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
     Y_loop, Y_eval, X_loop, X_eval = utils.split_arrays(X, Y, axis=0)
     X_loop_train_points, Y_loop_train_points, X_loop_test_points, Y_loop_test_points = utils.split_arrays(X_loop, Y_loop, axis=1)
     X_eval_train_points, Y_eval_train_points, X_eval_test_points, Y_eval_test_points = utils.split_arrays(X_eval, Y_eval, axis=1)
+
+    if seed_functions_numpy is None:
+        seed_functions_numpy = [_default_sine_numpy, _default_cosine_numpy]
+    if seed_parameter_estimators is None:
+        seed_parameter_estimators = [_default_parameter_estimator, _default_parameter_estimator]
 
     islands = [Island(idx) for idx in range(n_islands)]
     initial_programs: list[Program] = []
@@ -498,38 +521,40 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
 
     # create output directories
     base_dir, date_stamp, time_stamp, full_dir, image_feedback_dir = utils.create_output_directories(use_image=use_image_feedback)
-    # store and compute loss of 2 initial programs
+    # store and compute loss of initial programs
     t_start = time.time()
-    seed_losses = np.zeros(2)
-    for i in range(2):
-        # get the program, parameter estimator, and jax program
+    n_seeds = min(2, len(seed_functions_numpy), len(seed_parameter_estimators))
+    for i in range(n_seeds):
         func_numpy = seed_functions_numpy[i]
         param_est = seed_parameter_estimators[i]
-        func_jax = seed_functions_jax[i]
-        # score the initial program
+        func_numpy_name = func_numpy.__name__
+        param_est_name = param_est.__name__
+
+        import_string = "import numpy as np \n"
+        numpy_source = inspect.getsource(func_numpy).replace(f'def {func_numpy_name}(', f'def {func_name}(')
+        function_code_string = import_string + numpy_source
+        jax_code_string, func_jax = await translate_to_jax(function_code_string, client, tiny_lm_name, function_name=func_name)
+        if func_jax is None:
+            logging.info(f"Skipping seed {i} because translation failed.")
+            continue
+        if not utils.validate_jax_translation(func_numpy, func_jax):
+            logging.info(f"Skipping seed {i} because translation validation failed.")
+            continue
+
         loss_init, params_init, loss, params = objective(func_jax, param_est, 
                                         loss_func=loss_functions.quadratic_loss, 
                                         X_train=X_loop_train_points, Y_train=Y_loop_train_points,
                                         X_test=X_loop_test_points, Y_test=Y_loop_test_points,
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight,
                                         use_param_estimator=use_param_estimator)
-        seed_losses[i] = loss
-        # format strings
-        import_string = "import numpy as np \n"
-        import_string_jax = "import jax.numpy as jnp \n"
-        func_numpy_name_original = func_numpy.__name__
-        param_est_name_original = param_est.__name__
-        func_jax_name_original = func_jax.__name__
-        function_code_string = inspect.getsource(func_numpy).replace(f'def {func_numpy_name_original}(', f'def {func_name}_v{i+1}(')
-        function_code_string = import_string + function_code_string
-        parameter_estimator_code_string = inspect.getsource(param_est).replace(f'def {param_est_name_original}(', f'def parameter_estimator_v{i+1}(')
+
+        parameter_estimator_code_string = inspect.getsource(param_est).replace(f'def {param_est_name}(', f'def parameter_estimator_v{i+1}(')
         parameter_estimator_code_string = import_string + parameter_estimator_code_string
-        func_jax_code_string = inspect.getsource(func_jax).replace(f'def {func_jax_name_original}(', f'def {func_name}_v{i+1}(')
-        func_jax_code_string = import_string_jax + func_jax_code_string
+        display_function_code_string = function_code_string.replace(f'def {func_name}(', f'def {func_name}_v{i+1}(')
         Y_SAMPLE = sample_function(func_jax, params, sample_points=jnp.linspace(0, 2 * jnp.pi, 100))
 
         new_program = Program(
-            function_code_string=function_code_string,
+            function_code_string=display_function_code_string,
             function=func_jax,
             parameter_estimator_code_string=parameter_estimator_code_string,
             parameter_estimator=param_est,
@@ -622,7 +647,19 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
         # convert to jax
         llm_function_translation_tasks = [translate_to_jax(code_string, client, tiny_lm_name, function_name=func_name) for code_string in llm_function_code_strings]
         jax_results = await asyncio.gather(*llm_function_translation_tasks)
-        llm_function_results = [(llm_function_code_strings[j], llm_function_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
+        validated_results = []
+        for idx in range(n_islands * batch_size):
+            code_str = llm_function_code_strings[idx]
+            prompt_str = llm_function_prompts[idx]
+            jax_code_str, jax_func = jax_results[idx]
+            numpy_func = utils.str_to_func(code_str, func_name) if code_str else None
+            if numpy_func and jax_func and utils.validate_jax_translation(numpy_func, jax_func):
+                validated_results.append((code_str, prompt_str, jax_code_str, jax_func))
+            else:
+                validated_results.append((None, None, None, None))
+                llm_function_code_strings[idx] = None
+                logging.info(f"Skipping program {idx} due to failed translation validation.")
+        llm_function_results = validated_results
         
         # build parameter‑estimator tasks
         param_estimation_tasks = [
@@ -970,9 +1007,8 @@ class Edgar:
             use_param_estimator=True,
             exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0],
             exploitation_topology=[1, 2, 3, 4, 5, 6, 7, 0],
-            seed_functions_numpy=[tuning_curves_project.neuron_model_gauss, tuning_curves_project.neuron_model_double_gauss],
-            seed_functions_jax=[tuning_curves_project.neuron_model_gauss_jax, tuning_curves_project.neuron_model_double_gauss_jax],
-            seed_parameter_estimators=[tuning_curves_project.parameter_estimator_gauss, tuning_curves_project.parameter_estimator_double_gauss],
+            seed_functions_numpy=None,
+            seed_parameter_estimators=None,
             func_name='neuron_model',
             tiny_lm_name='gemini-2.0-flash',
             little_lm_name='gemini-2.0-flash',

@@ -1,5 +1,11 @@
 import unittest
+
 import jax.numpy as jnp
+
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover
+    np = None
 
 import utils
 
@@ -28,6 +34,31 @@ class VmapOverUnitsTest(unittest.TestCase):
         self.assertEqual(outputs.shape, (2, 3))
         self.assertTrue(jnp.allclose(outputs[0], theta))
         self.assertTrue(jnp.allclose(outputs[1], theta * 2 + 1))
+
+
+@unittest.skipIf(np is None, "NumPy is required for translation validation tests")
+class ValidateTranslationTest(unittest.TestCase):
+    def test_translation_matches_numpy(self):
+        def numpy_model(theta, A=1.5, B=0.3, phase=0.1):
+            theta = np.asarray(theta)
+            return B + A * np.sin(theta - phase)
+
+        def jax_model(theta, A=1.5, B=0.3, phase=0.1):
+            theta = jnp.asarray(theta)
+            return B + A * jnp.sin(theta - phase)
+
+        self.assertTrue(utils.validate_jax_translation(numpy_model, jax_model))
+
+    def test_translation_detects_mismatch(self):
+        def numpy_model(theta, A=1.0, B=0.5):
+            theta = np.asarray(theta)
+            return B + A * theta
+
+        def jax_model(theta, A=1.0, B=0.5):
+            theta = jnp.asarray(theta)
+            return B - A * theta
+
+        self.assertFalse(utils.validate_jax_translation(numpy_model, jax_model))
 
 # class TestLLMCalls(unittest.TestCase):
 #     def test_llm_call(self):
