@@ -71,10 +71,12 @@ class ConfigLoaderTest(unittest.TestCase):
     def test_load_edgar_config_and_overrides(self):
         yaml_text = textwrap.dedent("""
         engine:
-          func_name: neuron_model
+          function_name: neuron_model
           n_generations: 1
+          unused_key: should_be_ignored
         seed_programs:
-          - function: |
+          - seed_1:
+            function: |
               import numpy as np
               def neuron_model(theta, A=1.0, B=0.0):
                   theta = np.asarray(theta)
@@ -83,13 +85,13 @@ class ConfigLoaderTest(unittest.TestCase):
               import numpy as np
               def parameter_estimator(theta, spikes):
                   return np.array([1.0, 0.0])
-        prompt_overrides:
+        prompt:
           program_creation:
             base: "OVERRIDE {function_name}"
-        diagnostic_image_fn: |
-          def diagnostic_image(programs, X, Y, metadata=None):
+        diagnostic_function: |
+          def diagnostic_image(programs, X, Y, save_path, metadata=None):
               return b"image-bytes"
-        diagnostic_image_fn_name: diagnostic_image
+        diagnostic_function_name: diagnostic_image
         """)
         with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tmp:
             tmp.write(yaml_text)
@@ -101,6 +103,8 @@ class ConfigLoaderTest(unittest.TestCase):
 
         self.assertIn("seed_functions_numpy", config)
         self.assertEqual(len(config["seed_functions_numpy"]), 1)
+        self.assertIn("func_name", config)
+        self.assertNotIn("function_name", config)
         prompt = utils.create_program_prompt([], mode="explore", use_image=False, function_name="neuron_model")
         self.assertIn("OVERRIDE neuron_model", prompt)
         self.assertIn("diagnostic_image_fn", config)

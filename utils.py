@@ -290,8 +290,40 @@ def load_edgar_config(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
 
-    config = dict(raw.get("engine") or {})
-    func_name = config.get("func_name", "neuron_model")
+    engine_config = raw.get("engine") or {}
+    # Normalize engine keys to match Edgar/_run_engine kwargs
+    key_aliases = {"function_name": "func_name"}
+    allowed_keys = {
+        "n_generations",
+        "time_limit",
+        "k_max",
+        "n_islands",
+        "batch_size",
+        "critical_population_size",
+        "min_wise_population_size",
+        "n_migrants",
+        "fit_params",
+        "exploit_point",
+        "param_penalty_weight",
+        "FAILED_PROGRAM_COST",
+        "exploration_topology",
+        "exploitation_topology",
+        "seed_functions_numpy",
+        "seed_parameter_estimators",
+        "func_name",
+        "tiny_lm_name",
+        "little_lm_name",
+        "large_lm_name",
+        "use_large_every",
+        "diagnostic_image_fn",
+    }
+    config: dict = {}
+    for key, value in engine_config.items():
+        normalized = key_aliases.get(key, key)
+        if normalized in allowed_keys:
+            config[normalized] = value
+    func_name = config.get("func_name") or "neuron_model"
+    config["func_name"] = func_name
 
     seed_functions: list[Callable] = []
     seed_estimators: list[Callable | None] = []
@@ -316,14 +348,14 @@ def load_edgar_config(path: str) -> dict:
         config["seed_functions_numpy"] = seed_functions
         config["seed_parameter_estimators"] = seed_estimators
 
-    diag_code = raw.get("diagnostic_image_fn")
+    diag_code = raw.get("diagnostic_image_fn") or raw.get("diagnostic_function")
     if diag_code:
-        diag_name = raw.get("diagnostic_image_fn_name", "diagnostic_image")
+        diag_name = raw.get("diagnostic_image_fn_name") or raw.get("diagnostic_function_name") or "diagnostic_image"
         diag_fn = str_to_func(diag_code, diag_name)
         if diag_fn:
             config["diagnostic_image_fn"] = diag_fn
 
-    overrides = raw.get("prompt_overrides")
+    overrides = raw.get("prompt_overrides") or raw.get("prompt")
     reset_prompt_overrides()
     if overrides:
         set_prompt_overrides(overrides)

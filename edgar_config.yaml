@@ -1,12 +1,5 @@
-engine:
-  n_generations: 1
-  n_islands: 1
-  batch_size: 1
-  time_limit: 0.1
-  func_name: neuron_model
-
 seed_programs:
-  - function_name: neuron_model
+  - seed_1:
     function: |
       import numpy as np
 
@@ -23,7 +16,7 @@ seed_programs:
           peak = float(theta[np.argmax(spikes)])
           return np.array([A, B, peak])
 
-  - function_name: neuron_model
+  - seed_2:
     function: |
       import numpy as np
 
@@ -42,32 +35,35 @@ seed_programs:
           A2 = float(np.percentile(centered, 90) - np.percentile(centered, 50))
           return np.array([A1, A2, B, phase])
 
-prompt_overrides:
+prompt:
   program_creation:
     base: |
-      Custom dataset preamble: focus on periodic responses tied to head direction.
+      You are an AI scientist. The programs below are sorted from worst to best.
 
-diagnostic_image_fn_name: diagnostic_image
-diagnostic_image_fn: |
-  import io
+      Your task is to create a new {function_name}, {function_name}_v{version_index}, that has a lower loss than the models below.
+
+      *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
+
+diagnostic_function: |
   import matplotlib.pyplot as plt
+  import numpy as np
+  import io
 
-  def diagnostic_image(programs, X, Y, metadata=None):
+  def diagnostic_image(programs, X, Y, save_path, metadata=None):
       metadata = metadata or {}
-      fig, ax = plt.subplots(figsize=(6, 4))
-      sample_units = range(min(3, len(Y)))
-      for unit in sample_units:
+      fig, axes = plt.subplots(3, 3, figsize=(9, 9))
+      random_units = np.random.choice(len(Y), size=9, replace=False)
+      for i, unit in enumerate(random_units):
+          ax = axes[i // 3, i % 3]
           ax.plot(X[unit], Y[unit], alpha=0.5)
-      ax.set_title("Sample responses for diagnostic context")
-      ax.set_xlabel("theta")
-      ax.set_ylabel("response")
+          ax.set_title(f"Unit {unit}")
+      fig.suptitle("Random sample responses for diagnostic context")
       fig.tight_layout()
       buf = io.BytesIO()
       fig.savefig(buf, format="png", dpi=150)
       plt.close(fig)
       buf.seek(0)
-      if metadata.get("save_path"):
-          with open(metadata["save_path"], "wb") as handle:
-              handle.write(buf.getvalue())
-          buf.seek(0)
+      with open(save_path, "wb") as handle:
+          handle.write(buf.getvalue())
+      buf.seek(0)
       return buf.getvalue()
