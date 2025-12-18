@@ -1,3 +1,6 @@
+import os
+import tempfile
+import textwrap
 import unittest
 
 import jax.numpy as jnp
@@ -59,6 +62,48 @@ class ValidateTranslationTest(unittest.TestCase):
             return B - A * theta
 
         self.assertFalse(utils.validate_jax_translation(numpy_model, jax_model))
+
+
+class ConfigLoaderTest(unittest.TestCase):
+    def tearDown(self):
+        utils.reset_prompt_overrides()
+
+    def test_load_edgar_config_and_overrides(self):
+        yaml_text = textwrap.dedent("""
+        engine:
+          func_name: neuron_model
+          n_generations: 1
+        seed_programs:
+          - function: |
+              import numpy as np
+              def neuron_model(theta, A=1.0, B=0.0):
+                  theta = np.asarray(theta)
+                  return B + A * theta
+            parameter_estimator: |
+              import numpy as np
+              def parameter_estimator(theta, spikes):
+                  return np.array([1.0, 0.0])
+        prompt_overrides:
+          program_creation:
+            base: "OVERRIDE {function_name}"
+        diagnostic_image_fn: |
+          def diagnostic_image(programs, X, Y, metadata=None):
+              return b"image-bytes"
+        diagnostic_image_fn_name: diagnostic_image
+        """)
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tmp:
+            tmp.write(yaml_text)
+            tmp_path = tmp.name
+        try:
+            config = utils.load_edgar_config(tmp_path)
+        finally:
+            os.remove(tmp_path)
+
+        self.assertIn("seed_functions_numpy", config)
+        self.assertEqual(len(config["seed_functions_numpy"]), 1)
+        prompt = utils.create_program_prompt([], mode="explore", use_image=False, function_name="neuron_model")
+        self.assertIn("OVERRIDE neuron_model", prompt)
+        self.assertIn("diagnostic_image_fn", config)
 
 # class TestLLMCalls(unittest.TestCase):
 #     def test_llm_call(self):

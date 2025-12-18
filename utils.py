@@ -7,11 +7,12 @@ import time
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Sequence, Tuple, Union
+from typing import Callable, Mapping, Sequence, Tuple, Union
 
 import google.genai
 import jax
 import jax.numpy as jnp
+import yaml
 try:  # pragma: no cover
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover
@@ -30,6 +31,7 @@ logging.getLogger("google.genai").setLevel(logging.ERROR)
 load_dotenv()
 
 _TEMPLATE_PATH = Path(__file__).with_name("prompt_templates.txt")
+_PROMPT_OVERRIDES: dict[tuple[str, str], str] = {}
 
 
 def _read_prompt_templates() -> configparser.RawConfigParser:
@@ -48,16 +50,22 @@ def _prompt_templates() -> configparser.RawConfigParser:
 
 
 def _format_template(section: str, key: str, **context) -> str:
-    templates = _prompt_templates()
-    if not templates.has_section(section) or key not in templates[section]:
-        raise KeyError(f"Missing prompt template [{section}] {key}")
-    return templates.get(section, key).format(**context)
+    override = _PROMPT_OVERRIDES.get((section, key))
+    if override is not None:
+        template = override
+    else:
+        templates = _prompt_templates()
+        if not templates.has_section(section) or key not in templates[section]:
+            raise KeyError(f"Missing prompt template [{section}] {key}")
+        template = templates.get(section, key)
+    return template.format(**context)
 
 
 def validate_jax_translation(
     numpy_function: Callable,
     jax_function: Callable,
     X_samples: Union[jnp.ndarray, None] = None,
+    params: Union[dict, None] = None,
     atol: float = 1e-3,
     rtol: float = 1e-3,
 ) -> bool:
@@ -65,15 +73,35 @@ def validate_jax_translation(
     if X_samples is None:
         X_samples = jnp.linspace(0, 2 * jnp.pi, 64, dtype=jnp.float32)
 
-    X_np = np.asarray(X_samples, dtype=np.float32)
-    X_jax = jnp.asarray(X_np)
+    if params is None:
+        # Use default values of the functions if params is not provided
+        params = {}
+        if hasattr(numpy_function, "__defaults__") and numpy_function.__defaults__:
+            param_names = inspect.signature(numpy_function).parameters
+            params = {
+                name: default
+                for name, default in zip(param_names, numpy_function.__defaults__)
+            }
+
     try:
-        numpy_output = np.asarray(numpy_function(X_np), dtype=np.float32)
-        jax_output = np.asarray(jax_function(X_jax), dtype=np.float32)
+        numpy_output = numpy_function(X_samples, **params)
+        jax_output = jax_function(X_samples, **params)
     except Exception:
         return False
 
-    return np.allclose(numpy_output, jax_output, atol=atol, rtol=rtol)
+    return bool(jnp.allclose(numpy_output, jax_output, atol=atol, rtol=rtol))
+
+
+def reset_prompt_overrides() -> None:
+    """Clear any user-provided prompt overrides."""
+    _PROMPT_OVERRIDES.clear()
+
+
+def set_prompt_overrides(overrides: Mapping[str, Mapping[str, str]]) -> None:
+    """Apply user-provided prompt overrides."""
+    for section, section_overrides in overrides.items():
+        for key, text in section_overrides.items():
+            _PROMPT_OVERRIDES[(section, key)] = text
 
 
 def vmap_over_units(model_fn: Callable) -> Callable:
@@ -256,6 +284,51 @@ def str_to_func(code_string: Tuple[str, None], needle: str = 'neuron_model') -> 
             print(f"Function {needle} not found in executed code.")
             return None
 
+
+def load_edgar_config(path: str) -> dict:
+    """Load an Edgar configuration from a YAML file."""
+    with open(path, "r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+
+    config = dict(raw.get("engine") or {})
+    func_name = config.get("func_name", "neuron_model")
+
+    seed_functions: list[Callable] = []
+    seed_estimators: list[Callable | None] = []
+    for idx, entry in enumerate(raw.get("seed_programs", [])):
+        func_code = entry.get("function")
+        if not func_code:
+            continue
+        target_name = entry.get("function_name", func_name)
+        func = str_to_func(func_code, target_name)
+        if func is None:
+            continue
+        seed_functions.append(func)
+        est_code = entry.get("parameter_estimator")
+        if est_code:
+            est_name = entry.get("parameter_estimator_name", "parameter_estimator")
+            est = str_to_func(est_code, est_name)
+        else:
+            est = None
+        seed_estimators.append(est)
+
+    if seed_functions:
+        config["seed_functions_numpy"] = seed_functions
+        config["seed_parameter_estimators"] = seed_estimators
+
+    diag_code = raw.get("diagnostic_image_fn")
+    if diag_code:
+        diag_name = raw.get("diagnostic_image_fn_name", "diagnostic_image")
+        diag_fn = str_to_func(diag_code, diag_name)
+        if diag_fn:
+            config["diagnostic_image_fn"] = diag_fn
+
+    overrides = raw.get("prompt_overrides")
+    reset_prompt_overrides()
+    if overrides:
+        set_prompt_overrides(overrides)
+
+    return config
 def _ensure_program_sequence(programs: Sequence[Program]) -> list[Program]:
     if programs is None:
         return []

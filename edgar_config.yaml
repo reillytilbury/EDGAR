@@ -1,0 +1,73 @@
+engine:
+  n_generations: 1
+  n_islands: 1
+  batch_size: 1
+  time_limit: 0.1
+  func_name: neuron_model
+
+seed_programs:
+  - function_name: neuron_model
+    function: |
+      import numpy as np
+
+      def neuron_model(theta, A=1.0, B=0.2, phase=0.0):
+          theta = np.asarray(theta)
+          return B + A * np.cos(theta - phase)
+
+    parameter_estimator: |
+      import numpy as np
+
+      def parameter_estimator(theta, spikes):
+          B = float(np.percentile(spikes, 5))
+          A = float(np.max(spikes) - B)
+          peak = float(theta[np.argmax(spikes)])
+          return np.array([A, B, peak])
+
+  - function_name: neuron_model
+    function: |
+      import numpy as np
+
+      def neuron_model(theta, A1=1.0, A2=0.5, B=0.2, phase=0.0):
+          theta = np.asarray(theta)
+          return B + A1 * np.cos(theta - phase) + A2 * np.cos(2 * (theta - phase))
+
+    parameter_estimator: |
+      import numpy as np
+
+      def parameter_estimator(theta, spikes):
+          B = float(np.percentile(spikes, 10))
+          centered = spikes - B
+          phase = float(theta[np.argmax(centered)])
+          A1 = float(np.max(centered))
+          A2 = float(np.percentile(centered, 90) - np.percentile(centered, 50))
+          return np.array([A1, A2, B, phase])
+
+prompt_overrides:
+  program_creation:
+    base: |
+      Custom dataset preamble: focus on periodic responses tied to head direction.
+
+diagnostic_image_fn_name: diagnostic_image
+diagnostic_image_fn: |
+  import io
+  import matplotlib.pyplot as plt
+
+  def diagnostic_image(programs, X, Y, metadata=None):
+      metadata = metadata or {}
+      fig, ax = plt.subplots(figsize=(6, 4))
+      sample_units = range(min(3, len(Y)))
+      for unit in sample_units:
+          ax.plot(X[unit], Y[unit], alpha=0.5)
+      ax.set_title("Sample responses for diagnostic context")
+      ax.set_xlabel("theta")
+      ax.set_ylabel("response")
+      fig.tight_layout()
+      buf = io.BytesIO()
+      fig.savefig(buf, format="png", dpi=150)
+      plt.close(fig)
+      buf.seek(0)
+      if metadata.get("save_path"):
+          with open(metadata["save_path"], "wb") as handle:
+              handle.write(buf.getvalue())
+          buf.seek(0)
+      return buf.getvalue()

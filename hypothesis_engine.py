@@ -10,7 +10,7 @@ import jax, jax.numpy as jnp
 import timeout_decorator
 import optax
 from pathlib import Path
-import utils, tuning_curves_project, genetic_helpers, loss_functions
+import utils, genetic_helpers, loss_functions
 from entities import Program, Island, ProgramSnapshot
 from tqdm import tqdm
 import google.genai
@@ -148,18 +148,19 @@ def compute_initial_params(param_estimator, func, X, Y) -> jnp.ndarray:
                      If the parameter estimation fails, returns an array of default parameters based on the func's signature.
                      If this also fails, returns None.
     """
-    @timeout_decorator.timeout(5, use_signals=True)
-    def _safe_estimate(pe, xi, yi):
-        return pe(xi, yi)
-    try:
-        # any call taking >5s will raise timeout_decorator.TimeoutError
-        return jnp.array([_safe_estimate(param_estimator, X[i], Y[i])for i in range(Y.shape[0])])
-    except timeout_decorator.TimeoutError:
-        logging.warning("param_estimator timed out, falling back to defaults")
-    except Exception as e:
-        logging.info(f"Error during parameter estimation: {e}")
+    if param_estimator is not None:
+        @timeout_decorator.timeout(5, use_signals=True)
+        def _safe_estimate(pe, xi, yi):
+            return pe(xi, yi)
+        try:
+            # any call taking >5s will raise timeout_decorator.TimeoutError
+            return jnp.array([_safe_estimate(param_estimator, X[i], Y[i])for i in range(Y.shape[0])])
+        except timeout_decorator.TimeoutError:
+            logging.warning("param_estimator timed out, falling back to defaults")
+        except Exception as e:
+            logging.info(f"Error during parameter estimation: {e}")
 
-    # If parameter estimation fails, compute default parameters based on the func's signature
+    # If parameter estimation fails or not provided, compute default parameters based on the func's signature
     params = return_default_params(func)
     if params is not None:
         # default params is a 2D array with shape (1, n_params), so we need to repeat it for each unit
@@ -192,8 +193,7 @@ def return_default_params(func) -> jnp.ndarray:
 def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test, 
               param_penalty_weight=0.1, fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000,
-              beta1=0.9, beta2=0.999, learning_rate=3e-3, eps=1e-8,
-              use_param_estimator=True) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+              beta1=0.9, beta2=0.999, learning_rate=3e-3, eps=1e-8) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate the loss of the model. 
     
@@ -202,7 +202,7 @@ def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test
         func (function): The model which predicts neural activity from stimuli
                                 and free parameters (for a single unit).
                                 Signature: func(stimuli, *params) -> activity
-        param_estimator (function): Function to estimate initial parameters for the func.
+        param_estimator (function or None): Optional estimator for initial parameters.
                                 Signature: param_estimator(stimuli, response) -> params
         loss_func (function): The loss function to use for calculating the loss.
         X_train (jnp.ndarray): Stimuli data for training, shape (n_units, n_train_points).
@@ -217,7 +217,6 @@ def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test
         beta2 (float): Beta2 parameter for the Adam optimizer. Default is 0.999.
         learning_rate (float): Learning rate for the Adam optimizer. Default is 3e-3.
         eps (float): Epsilon parameter for the Adam optimizer. Default is 1e-8.
-        use_param_estimator (bool): Whether to use the parameter estimator to compute initial parameters. Default is True.
 
     Returns:
         tuple[
@@ -231,14 +230,7 @@ def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test
     n_units, n_points = Y_train.shape
 
     # Perform initial param calc. X and Y must be numpy arrays of shape (n_units, n_points)
-    if use_param_estimator:
-        initial_params = compute_initial_params(param_estimator, func, np.asarray(X_train), np.asarray(Y_train))
-    else:
-        initial_params = return_default_params(func)
-        # if initial_params not none, reshape from (1, n_params) to (n_units, n_params)
-        if initial_params is not None:
-            n_params = initial_params.shape[1]
-            initial_params = jnp.repeat(initial_params, n_units, axis=0)
+    initial_params = compute_initial_params(param_estimator, func, np.asarray(X_train), np.asarray(Y_train))
     
     # Fail immediately if initial_params is None or not a JAX array
     if initial_params is None or not isinstance(initial_params, jnp.ndarray):
@@ -343,52 +335,32 @@ def objective(func, param_estimator, loss_func, X_train, Y_train, X_test, Y_test
 async def create_new_function(current_island: Island, llm_name, client, Y, X,
                               mode='explore', k_max=2, temp=1, 
                               thinking_budget=1, img_dir=None,
-                              function_name='neuron_model'):
+                              function_name='neuron_model',
+                              diagnostic_image_fn=None,
+                              diagnostic_metadata=None):
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k)
     random_programs.sort(key=lambda p: p.train_loss, reverse=True)
     parent1_id = random_programs[0].identifier() if random_programs else None
     parent2_id = random_programs[1].identifier() if len(random_programs) > 1 else None
-    use_image = img_dir is not None
+    use_image = diagnostic_image_fn is not None
     program_prompt = utils.create_program_prompt(random_programs, mode=mode,
                                                  use_image=use_image, function_name=function_name)
 
-    if use_image and random_programs:
+    img_bytes = None
+    if use_image and random_programs and diagnostic_image_fn:
+        metadata = diagnostic_metadata or {}
+        if img_dir:
+            metadata.setdefault("save_path", img_dir)
         try:
-            sup_title = "".join(
-                [
-                    f"{function_name}_v{i+1}: Loss = {random_programs[i].train_loss:.2f} \n"
-                    for i in range(min(3, len(random_programs)))
-                ]
-            )
-            plot_entries = [{"function": prog.function, "params": prog.params} for prog in random_programs]
-            tuning_curves_project.plot_model_fits(
-                programs=plot_entries,
-                loss_function=loss_functions.quadratic_loss,
-                x=X,
-                y=Y,
-                unit_selection=np.random.choice(Y.shape[0], size=9, replace=False),
-                save_path=img_dir,
-                labels=['v_1', 'v_2'],
-                colours=['tab:green', 'tab:red'],
-                dpi=384*3/20,
-                title=sup_title,
-                legend_fontsize=20,
-                line_alpha=0.9,
-                line_width=4,
-            )
-            
-            img_path = Path(img_dir)
-            with img_path.open("rb") as f:
-                img_bytes = f.read()
+            img_bytes = diagnostic_image_fn(programs=random_programs, X=X, Y=Y, metadata=metadata)
+            if img_dir and img_bytes:
+                Path(img_dir).write_bytes(img_bytes)
         except Exception as e:
-            logging.info(f"Error generating image for neuron model prompt: {e}")
+            logging.info(f"Diagnostic image generation failed: {e}")
             img_bytes = None
-            # if we can't generate an image, we will just use the text prompt without image
-            use_image = False
-    else:
-        img_bytes = None
-    llm_output = await utils.call_llm_async(program_prompt, model_name=llm_name, client=client, temperature=temp, 
+
+    llm_output = await utils.call_llm_async(program_prompt, llm_name=llm_name, client=client, temperature=temp, 
                                             thinking_budget=thinking_budget, img_bytes=img_bytes)
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -473,7 +445,6 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                 critical_population_size=12, min_wise_population_size=0, 
                 n_migrants=2, fit_params=True, exploit_point=0.5,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
-                use_image_feedback=True, use_param_estimator=True,
                 exploration_topology = None,
                 exploitation_topology = None,
                 seed_functions_numpy = None,
@@ -482,7 +453,8 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                 tiny_lm_name = 'gemini-2.0-flash',
                 little_lm_name = 'gemini-2.0-flash',
                 large_lm_name = 'gemini-2.5-flash',
-                use_large_every = None):
+                use_large_every = None,
+                diagnostic_image_fn = None):
     """ 
     Main function to run the hypothesis engine.
     """
@@ -497,8 +469,18 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
 
     if seed_functions_numpy is None:
         seed_functions_numpy = [_default_sine_numpy, _default_cosine_numpy]
+    else:
+        seed_functions_numpy = list(seed_functions_numpy)
+    if not seed_functions_numpy:
+        raise ValueError("At least one seed function must be provided.")
     if seed_parameter_estimators is None:
-        seed_parameter_estimators = [_default_parameter_estimator, _default_parameter_estimator]
+        seed_parameter_estimators = [None] * len(seed_functions_numpy)
+    else:
+        seed_parameter_estimators = list(seed_parameter_estimators)
+        if len(seed_parameter_estimators) < len(seed_functions_numpy):
+            seed_parameter_estimators.extend([None] * (len(seed_functions_numpy) - len(seed_parameter_estimators)))
+
+    use_image_feedback = diagnostic_image_fn is not None
 
     islands = [Island(idx) for idx in range(n_islands)]
     initial_programs: list[Program] = []
@@ -528,7 +510,7 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
         func_numpy = seed_functions_numpy[i]
         param_est = seed_parameter_estimators[i]
         func_numpy_name = func_numpy.__name__
-        param_est_name = param_est.__name__
+        param_est_name = param_est.__name__ if param_est else None
 
         import_string = "import numpy as np \n"
         numpy_source = inspect.getsource(func_numpy).replace(f'def {func_numpy_name}(', f'def {func_name}(')
@@ -545,11 +527,13 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                                         loss_func=loss_functions.quadratic_loss, 
                                         X_train=X_loop_train_points, Y_train=Y_loop_train_points,
                                         X_test=X_loop_test_points, Y_test=Y_loop_test_points,
-                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight,
-                                        use_param_estimator=use_param_estimator)
+                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight)
 
-        parameter_estimator_code_string = inspect.getsource(param_est).replace(f'def {param_est_name}(', f'def parameter_estimator_v{i+1}(')
-        parameter_estimator_code_string = import_string + parameter_estimator_code_string
+        if param_est is not None:
+            parameter_estimator_code_string = inspect.getsource(param_est).replace(f'def {param_est_name}(', f'def parameter_estimator_v{i+1}(')
+            parameter_estimator_code_string = import_string + parameter_estimator_code_string
+        else:
+            parameter_estimator_code_string = ""
         display_function_code_string = function_code_string.replace(f'def {func_name}(', f'def {func_name}_v{i+1}(')
         Y_SAMPLE = sample_function(func_jax, params, sample_points=jnp.linspace(0, 2 * jnp.pi, 100))
 
@@ -584,23 +568,6 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
     logging.basicConfig(filename=log_file, level=logging.INFO, format='%(message)s')
-    # initial_plot_entries = [{"function": prog.function, "params": prog.params} for prog in initial_programs]
-    # tuning_curves_project.plot_model_fits(
-    #     programs=initial_plot_entries,
-    #     loss_function=loss_functions.quadratic_loss,
-    #     x=X_loop,
-    #     y=Y_loop,
-    #     unit_selection=np.random.choice(len(X_loop), size=9, replace=False),
-    #     save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
-    #     labels=['seed_1', 'seed_2'],
-    #     colours=['tab:green', 'tab:red'],
-    #     dpi=100.0,
-    #     title="Seed Programs",
-    #     legend_fontsize=20,
-    #     line_alpha=0.9,
-    #     line_width=4,
-    # )
-
     # -----------------------------
     # HYPOTHESIS ENGINE
     # -----------------------------
@@ -619,24 +586,34 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
             logging.info(f"Using little LLM: {llm_name}")
         mode = 'explore' if i < n_generations * exploit_point else 'exploit'
         temperature = 1 + np.exp(-i / n_generations)
-        model_image_dirs = np.empty((n_islands, batch_size), dtype=object)
-        # param_est_image_dirs = np.empty((n_islands, batch_size), dtype=object)
+        if use_image_feedback:
+            model_image_dirs = np.empty((n_islands, batch_size), dtype=object)
+            for island_idx in range(n_islands):
+                for j in range(batch_size):
+                    model_image_dirs[island_idx, j] = os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}.png')
+        else:
+            model_image_dirs = None
+        # generate new programs
+        function_creation_tasks = []
         for island_idx in range(n_islands):
             for j in range(batch_size):
-                if use_image_feedback:
-                    model_image_dirs[island_idx, j] = os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}.png')
-                    # param_est_image_dirs[island_idx, j] = os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est.png')
-                else:
-                    model_image_dirs[island_idx, j] = None
-                    # param_est_image_dirs[island_idx, j] = None
-        # generate new programs
-        function_creation_tasks = [create_new_function(islands[island_idx], llm_name=llm_name, 
-                                                        client=client, mode=mode, 
-                                                        k_max=k_max, temp=temperature,
-                                                        Y=Y_loop, X=X_loop,
-                                                        img_dir=model_image_dirs[island_idx, j],
-                                                        function_name=func_name) 
-                                         for island_idx in range(n_islands) for j in range(batch_size)]
+                img_path = model_image_dirs[island_idx, j] if model_image_dirs is not None else None
+                diag_meta = {
+                    "generation": i,
+                    "island": island_idx,
+                    "batch": j,
+                    "save_path": img_path,
+                }
+                function_creation_tasks.append(
+                    create_new_function(islands[island_idx], llm_name=llm_name, 
+                                        client=client, mode=mode, 
+                                        k_max=k_max, temp=temperature,
+                                        Y=Y_loop, X=X_loop,
+                                        img_dir=img_path,
+                                        function_name=func_name,
+                                        diagnostic_image_fn=diagnostic_image_fn,
+                                        diagnostic_metadata=diag_meta)
+                )
         logging.info(f"Creating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
         print(f"Creating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
         llm_function_results = await asyncio.gather(*function_creation_tasks)
@@ -691,8 +668,9 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
         for island_idx, j in np.ndindex(n_islands, batch_size):
             logging.info(f"id={i},{island_idx},{j}")
             func_code_string, prompt, func_code_string_jax, func_new, param_est_code_string, param_est_new = island_results[island_idx][j]
+            param_est_code_string = param_est_code_string or ""
             parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
-            if func_new is None or param_est_new is None:
+            if func_new is None:
                 logging.info(f"Skipping island {island_idx}, batch {j} due to LLM generation failure.")
                 logging.info('-' * 50)
                 continue
@@ -702,8 +680,7 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                                                                                 X_train=X_loop_train_points, Y_train=Y_loop_train_points,
                                                                                 X_test=X_loop_test_points, Y_test=Y_loop_test_points,
                                                                                 param_penalty_weight=param_penalty_weight,
-                                                                                fit_params=fit_params, 
-                                                                                use_param_estimator=use_param_estimator)
+                                                                                fit_params=fit_params)
             if loss == FAILED_PROGRAM_COST:
                 logging.info('-' * 50)
                 continue
@@ -714,35 +691,6 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
             logging.info(f"Function: \n{func_code_string}\n")
             logging.info(f"Function (JAX): \n{func_code_string_jax}\n")
             logging.info(f"Parameter Estimator: \n{param_est_code_string}\n")
-
-
-            # plot the fits of the function and parameter estimator if using image feedback
-            if use_image_feedback:
-                plot_entries = [
-                    {"function": func_new, "params": initial_params},
-                    {"function": func_new, "params": optimized_params},
-                ]
-                tuning_curves_project.plot_model_fits(
-                    programs=plot_entries,
-                    loss_function=loss_functions.quadratic_loss,
-                    x=X_loop,
-                    y=Y_loop,
-                    unit_selection=np.random.choice(len(X_loop), size=4, replace=False),
-                    colours=['tab:green', 'tab:red'],
-                    labels=['Param Estimator', 'Gradient Descent'],
-                    line_alpha=1.0,
-                    line_width=5.0,
-                    point_alpha=0.2,
-                    point_size=120,
-                    legend_fontsize=20,
-                    title=(
-                        "Updated Parameter Estimator and Gradient Descent Fit \n"
-                        f"Initial Loss: {initial_loss:.2f}, Final Loss: {loss:.2f}"
-                    ),
-                    save_path=os.path.join(
-                        image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_updated_param_est.png'
-                    ),
-                )
             
             param_names = [n for n in inspect.signature(func_new).parameters if n != "theta"]
             if optimized_params.shape[1] == len(param_names):
@@ -794,7 +742,6 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                                                                   temperature=(temperature - 1.0)**4)
 
                                                              
-        # save diagnostics
         generation_dir = os.path.join(full_dir, 'generation_updates', f'generation_{i}')
         os.makedirs(generation_dir, exist_ok=True)
         for island_idx in range(n_islands):
@@ -807,54 +754,6 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
             )
             print(f"Gen {i}, Island {island_idx} programs:\n{pg_info}\n")
             logging.info(f"Gen {i}, Island {island_idx} programs:\n{pg_info}\n")
-        
-            top_programs = sorted(island_programs, key=lambda p: p.train_loss)[:3]
-            if not top_programs:
-                continue
-            display_programs = list(reversed(top_programs))
-            sup_title = f"Generation {i}, Island {island_idx}, Top {len(display_programs)} Programs\n"
-            sup_title += "\n".join(
-                [
-                    f"model {j+1}: generation {prog.generation}, birth island {prog.birth_island}, batch {prog.batch_index}, loss: {prog.train_loss:.2f}"
-                    for j, prog in enumerate(display_programs)
-                ]
-            )
-            plot_entries = [{"function": prog.function, "params": prog.params} for prog in display_programs]
-            tuning_curves_project.plot_model_fits(
-                programs=plot_entries,
-                loss_function=loss_functions.quadratic_loss,
-                x=X_loop,
-                y=Y_loop,
-                unit_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
-                title=sup_title,
-                save_path=os.path.join(generation_dir, f'island_{island_idx}_top_programs.png'),
-                dpi=300.0,
-            )
-        
-        all_programs = [prog for island in islands for prog in island.programs]
-        if all_programs:
-            top_programs = sorted(all_programs, key=lambda p: p.train_loss)[:3]
-            display_programs = list(reversed(top_programs))
-            sup_title = f"Generation {i}, Top {len(display_programs)} Programs Overall\n"
-            sup_title += "\n".join(
-                [
-                    f"model {j+1}: generation {prog.generation}, birth island {prog.birth_island}, batch {prog.batch_index}, loss: {prog.train_loss:.2f}"
-                    for j, prog in enumerate(display_programs)
-                ]
-            )
-            plot_entries = [{"function": prog.function, "params": prog.params} for prog in display_programs]
-            tuning_curves_project.plot_model_fits(
-                programs=plot_entries,
-                loss_function=loss_functions.quadratic_loss,
-                x=X_loop,
-                y=Y_loop,
-                unit_selection=np.random.choice(Y_loop.shape[0], size=9, replace=False),
-                title=sup_title,
-                save_path=os.path.join(generation_dir, 'top_programs_overall.png'),
-                dpi=300.0,
-            )
-        
-        # save census
         census_path = os.path.join(generation_dir, 'census.csv')
         census_records = [snapshot.to_dict() for snapshot in program_snapshots]
         save_records_csv(census_path, census_records, columns=CENSUS_CSV_COLUMNS)
@@ -873,8 +772,7 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                                                           X_test=X_eval_test_points, Y_test=Y_eval_test_points,
                                                           fit_params=fit_params,
                                                           max_iter=2_000, 
-                                                          param_penalty_weight=param_penalty_weight,
-                                                          use_param_estimator=use_param_estimator)
+                                                          param_penalty_weight=param_penalty_weight)
             program.test_loss = test_loss
             program.params = optimized_params
             program.mean_loss = np.mean(test_loss)
@@ -904,78 +802,6 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
     census_records = [snapshot.to_dict() for snapshot in program_snapshots]
     save_records_csv(os.path.join(combined_dir, 'census.csv'), census_records, CENSUS_CSV_COLUMNS)
 
-    # ---------------------------
-    # save losses plot    
-    combined_plot_records = [
-        {
-            "train_loss": prog.train_loss,
-            "test_loss": prog.test_loss if prog.test_loss is not None else np.nan,
-            "birth_island": prog.birth_island,
-        }
-        for prog in combined_programs
-    ]
-    tuning_curves_project.plot_train_vs_test_loss(
-        programs=combined_plot_records,
-        island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
-        save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'),
-    )
-    
-    # ---------------------------
-    program_groups = [combined_programs] + [list(island.programs) for island in islands]
-    combined_dir_path = [os.path.join(base_dir, date_stamp, time_stamp, "combined")] 
-    island_dirs = [os.path.join(base_dir, date_stamp, time_stamp, f'island_{i}') for i in range(n_islands)]
-    df_dirs = combined_dir_path + island_dirs
-    for directory in df_dirs:
-        os.makedirs(directory, exist_ok=True)
-    config_str = f"n_islands={n_islands}, batch_size={batch_size}, n_generations={n_generations},\n"
-    config_str += f"llm_names={little_lm_name, large_lm_name}, fit_params={fit_params}, \n"
-    config_str += f"critical_population_size={critical_population_size}.\n"
-
-    for idx, programs in enumerate(program_groups):
-        if not programs:
-            continue
-        df_sup = config_str
-        subset = programs[:3]
-        display_programs = sorted(
-            subset,
-            key=lambda p: p.test_loss if p.test_loss is not None else float("inf"),
-            reverse=True,
-        )
-        df_sup += "".join(
-            [
-                f"model {len(display_programs) - j}: iter {prog.generation}, birth_island {prog.birth_island}, batch {prog.batch_index}, total loss {0.5 * ((prog.test_loss or 0) + prog.train_loss):.2f}\n"
-                for j, prog in enumerate(display_programs[:3])
-            ]
-        )
-        plot_entries = [{"function": prog.function, "params": prog.params} for prog in display_programs if prog.params is not None]
-        if plot_entries:
-            tuning_curves_project.plot_model_fits(
-                programs=plot_entries,
-                loss_function=loss_functions.quadratic_loss,
-                x=X_eval,
-                y=Y_eval,
-                unit_selection=np.random.choice(Y_eval.shape[0], size=9, replace=False),
-                title=df_sup,
-                save_path=os.path.join(df_dirs[idx], 'top_model_fits.png'),
-            )
-        # plot top 3 models separately
-        for j, prog in enumerate(display_programs[:3]):
-            if prog.params is None:
-                continue
-            birth_island = prog.birth_island
-            generation = prog.generation
-            batch_index = prog.batch_index
-            unit_selection = np.random.choice(Y_eval.shape[0], size=9, replace=False)
-            tuning_curves_project.plot_single_model_fit(
-                model=prog.function,
-                loss_function=loss_functions.quadratic_loss,
-                x=X_eval[unit_selection],
-                y=Y_eval[unit_selection],
-                params=prog.params[unit_selection],
-                title=f"Island {birth_island}, Generation {generation}, Batch {batch_index}, loss: {prog.test_loss:.2f}" if prog.test_loss is not None else f"Island {birth_island}, Generation {generation}, Batch {batch_index}",
-                save_path=os.path.join(df_dirs[idx], f'top_model_fit_{min(3, len(display_programs)) - j}.png'),
-            )
-
     return {
         "islands": islands,
         "combined_programs": combined_programs,
@@ -1003,8 +829,6 @@ class Edgar:
             exploit_point=0.5,
             param_penalty_weight=0.01,
             FAILED_PROGRAM_COST=np.inf,
-            use_image_feedback=True,
-            use_param_estimator=True,
             exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0],
             exploitation_topology=[1, 2, 3, 4, 5, 6, 7, 0],
             seed_functions_numpy=None,
@@ -1014,6 +838,7 @@ class Edgar:
             little_lm_name='gemini-2.0-flash',
             large_lm_name='gemini-2.5-flash',
             use_large_every=3,
+            diagnostic_image_fn=None,
         )
         defaults.update(config)
         self.config = defaults
@@ -1040,6 +865,11 @@ class Edgar:
 
     def run(self, X, Y):
         return asyncio.run(self.run_async(X, Y))
+
+    @classmethod
+    def from_config(cls, path: str) -> "Edgar":
+        config = utils.load_edgar_config(path)
+        return cls(**config)
 
     def get_lineage_edges(self) -> list[tuple[int, int]]:
         if not self.snapshots_:
@@ -1115,18 +945,3 @@ class Edgar:
         ]
         ax.legend(handles=legend_handles, title="LLM source", bbox_to_anchor=(1.05, 1), loc="upper left")
         return ax
-
-# if __name__ == "__main__":
-#     conc_thresh = 0.55
-#     activity_thresh = 0.4
-#     data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy' 
-#     X, Y = tuning_curves_project.load_data(data_path, conc_thresh, activity_thresh)
-#     agent = Edgar(
-#         n_generations=9,
-#         time_limit=60,
-#         use_image_feedback=True,
-#         use_large_every=3,
-#         param_penalty_weight=0.01,
-#         exploit_point=0.7,
-#     )
-#     agent.run(X, Y)
