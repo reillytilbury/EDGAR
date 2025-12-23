@@ -10,8 +10,8 @@ import jax, jax.numpy as jnp
 import timeout_decorator
 import optax
 from pathlib import Path
-from . import utils, genetic_helpers, loss_functions
-from .entities import Program, Island, ProgramSnapshot
+import utils, genetic_helpers, loss_functions
+from entities import Program, Island, ProgramSnapshot
 from tqdm import tqdm
 import google.genai
 from dotenv import load_dotenv

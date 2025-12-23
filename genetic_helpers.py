@@ -2,7 +2,7 @@ import itertools
 import logging
 import numpy as np
 import jax.numpy as jnp
-from .entities import Island, Program
+from entities import Island, Program
 
 
 def _get_attr(program, attr):
