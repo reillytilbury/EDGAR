@@ -476,114 +476,114 @@ def create_jax_translater_prompt(program: str, function_name: str = 'neuron_mode
     assert isinstance(program, str), "The program must be a string."
     return _format_template("jax_translation_instructions", program=program, function_name=function_name)
 
-text = """
+# text = """
 
-You are an AI scientist. The programs below are biological models of neurons. The models are sorted from highest to lowest loss.
+# You are an AI scientist. The programs below are biological models of neurons. The models are sorted from highest to lowest loss.
 
-Your task is to create a new neuron model, neuron_model_v3, that has a lower loss than the models below.
+# Your task is to create a new neuron model, neuron_model_v3, that has a lower loss than the models below.
 
-*Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
-
-
-Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
-
-**Image Analysis Instructions:**
-
-Attached is a scatter plot of the neuron models' performance on top of raw neural data. The binned mean is plotted in **sky-blue**, `neuron_model_v1` is plotted in **green**, and `neuron_model_v2` is plotted in **red**. 
-
-Analyse the models' fits to the data in the image below. Identify systematic weaknesses of the models by observing patterns across multiple cell plots. For instance, consider:
-*   **Model Comparisons:** Which models are better for each cell? That is to say, which models track the blue curve better? Which features of the models are responsible for improving the fit?
-*   **Model Fit:** How well do the models fit the binned data mean? Look for places where even the models (**red** curve for best model, **green** for second best model) deviate most from the binned data mean (**blue** curve). This is where the models are weakest, and where you should focus your improvements.
-*   **Model Shape:** Do the models' shapes (e.g., peak sharpness, width, skewness, amplitude, etc.) align with the binned data mean (**blue**) and raw data scatter points (**black**)? If not, how do they differ? How can you change the model to better match the data shape?
-*   **Parameter Flexibility:** Are there free parameters that could be introduced or modified to better capture the observed response profiles? Utilize your analysis of the shortcomings of the current models' shapes and add free parameters or modify existing ones to address these issues.
-
-Use this analysis to inform the design of a new neuron model, `neuron_model_v3`, that improves upon the previous models. 
-
-Include your analysis of the image in the docstring of your new model. Point to specific subplots in the image that illustrate the *strengths* and *weaknesses* of the parent models. Explain how you plan to **fix** the weaknesses of the parent models.
-
-**Code Generation Guidelines:**
-
-* Import any packages you use.
-* Do not include any text other than the code.
-* Ensure all free parameters are numeric, not strings.
-* At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
-
-**Docstring Guidelines:**
-* Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`, `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
-* Do not refer to the current model as `neuron_model_v3`. Instead, refer to it as "this model".
-* Provide a simple equation for the model, including all free parameters.
-* Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+# *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
 
 
-loss of model 1:  30.02
-import numpy as np 
-def neuron_model_v1(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=1.0):
-    # A simple neuron model that computes the response based on a Gaussian tuning curve.
-    # Args:
-    #     theta (np.ndarray): The angle in radians.
-    #     theta_pref (float): Preferred direction of the neuron.
-    #     baseline (float): Baseline firing rate.
-    #     amplitude (float): Maximum firing rate above baseline.
-    #     tuning_width (float): Width of the tuning curve.
-    # Returns:
-    #     np.ndarray: The firing rate of the neuron at angle theta.
+# Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
 
-    theta_pref = np.clip(theta_pref, 0, 2 * np.pi)
-    baseline = np.clip(baseline, 0, None)
-    amplitude = np.clip(amplitude, 0, None)
-    tuning_width = np.clip(tuning_width, 0.01, None)
+# **Image Analysis Instructions:**
 
-    circ_dist_rad = lambda theta1, theta2: np.abs(np.arctan2(np.sin(theta1 - theta2), np.cos(theta1 - theta2)))
-    dist = circ_dist_rad(theta, theta_pref)
-    return baseline + amplitude * np.exp(-0.5 * (dist / tuning_width) ** 2)
+# Attached is a scatter plot of the neuron models' performance on top of raw neural data. The binned mean is plotted in **sky-blue**, `neuron_model_v1` is plotted in **green**, and `neuron_model_v2` is plotted in **red**. 
+
+# Analyse the models' fits to the data in the image below. Identify systematic weaknesses of the models by observing patterns across multiple cell plots. For instance, consider:
+# *   **Model Comparisons:** Which models are better for each cell? That is to say, which models track the blue curve better? Which features of the models are responsible for improving the fit?
+# *   **Model Fit:** How well do the models fit the binned data mean? Look for places where even the models (**red** curve for best model, **green** for second best model) deviate most from the binned data mean (**blue** curve). This is where the models are weakest, and where you should focus your improvements.
+# *   **Model Shape:** Do the models' shapes (e.g., peak sharpness, width, skewness, amplitude, etc.) align with the binned data mean (**blue**) and raw data scatter points (**black**)? If not, how do they differ? How can you change the model to better match the data shape?
+# *   **Parameter Flexibility:** Are there free parameters that could be introduced or modified to better capture the observed response profiles? Utilize your analysis of the shortcomings of the current models' shapes and add free parameters or modify existing ones to address these issues.
+
+# Use this analysis to inform the design of a new neuron model, `neuron_model_v3`, that improves upon the previous models. 
+
+# Include your analysis of the image in the docstring of your new model. Point to specific subplots in the image that illustrate the *strengths* and *weaknesses* of the parent models. Explain how you plan to **fix** the weaknesses of the parent models.
+
+# **Code Generation Guidelines:**
+
+# * Import any packages you use.
+# * Do not include any text other than the code.
+# * Ensure all free parameters are numeric, not strings.
+# * At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
+
+# **Docstring Guidelines:**
+# * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`, `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
+# * Do not refer to the current model as `neuron_model_v3`. Instead, refer to it as "this model".
+# * Provide a simple equation for the model, including all free parameters.
+# * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+
+
+# loss of model 1:  30.02
+# import numpy as np 
+# def neuron_model_v1(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=1.0):
+#     # A simple neuron model that computes the response based on a Gaussian tuning curve.
+#     # Args:
+#     #     theta (np.ndarray): The angle in radians.
+#     #     theta_pref (float): Preferred direction of the neuron.
+#     #     baseline (float): Baseline firing rate.
+#     #     amplitude (float): Maximum firing rate above baseline.
+#     #     tuning_width (float): Width of the tuning curve.
+#     # Returns:
+#     #     np.ndarray: The firing rate of the neuron at angle theta.
+
+#     theta_pref = np.clip(theta_pref, 0, 2 * np.pi)
+#     baseline = np.clip(baseline, 0, None)
+#     amplitude = np.clip(amplitude, 0, None)
+#     tuning_width = np.clip(tuning_width, 0.01, None)
+
+#     circ_dist_rad = lambda theta1, theta2: np.abs(np.arctan2(np.sin(theta1 - theta2), np.cos(theta1 - theta2)))
+#     dist = circ_dist_rad(theta, theta_pref)
+#     return baseline + amplitude * np.exp(-0.5 * (dist / tuning_width) ** 2)
 
 
 
 
-loss of model 2:  28.85
-import numpy as np 
-def neuron_model_v2(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2=0.0, tuning_width=1.0):
+# loss of model 2:  28.85
+# import numpy as np 
+# def neuron_model_v2(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2=0.0, tuning_width=1.0):
     
-    # A neuron model that computes the response based on a double peaked gaussian tuning curve, with peaks at theta_pref and (theta_pref + pi) % 2pi.
-    # Args:
-    #     theta (np.ndarray): Input angles in radians.
-    #     theta_pref (float): Preferred angle in radians.
-    #     baseline (float): Baseline firing rate.
-    #     amplitude_1 (float): Amplitude of the first peak.
-    #     amplitude_2_ratio (float): Ratio of the second peak's amplitude to the first peak's amplitude.
-    #     tuning_width (float): Width of the tuning curves around preferred angles.
-    # Returns:
-    #     np.ndarray: The response of the neuron model.
+#     # A neuron model that computes the response based on a double peaked gaussian tuning curve, with peaks at theta_pref and (theta_pref + pi) % 2pi.
+#     # Args:
+#     #     theta (np.ndarray): Input angles in radians.
+#     #     theta_pref (float): Preferred angle in radians.
+#     #     baseline (float): Baseline firing rate.
+#     #     amplitude_1 (float): Amplitude of the first peak.
+#     #     amplitude_2_ratio (float): Ratio of the second peak's amplitude to the first peak's amplitude.
+#     #     tuning_width (float): Width of the tuning curves around preferred angles.
+#     # Returns:
+#     #     np.ndarray: The response of the neuron model.
 
-    theta_pref = np.clip(theta_pref, 0, 2 * np.pi)
-    baseline = np.clip(baseline, 0, None)
-    amplitude_1 = np.clip(amplitude_1, 0, None)
-    amplitude_2 = np.clip(amplitude_2, 0, None)
-    tuning_width = np.clip(tuning_width, 0.01, None)
+#     theta_pref = np.clip(theta_pref, 0, 2 * np.pi)
+#     baseline = np.clip(baseline, 0, None)
+#     amplitude_1 = np.clip(amplitude_1, 0, None)
+#     amplitude_2 = np.clip(amplitude_2, 0, None)
+#     tuning_width = np.clip(tuning_width, 0.01, None)
     
-    circ_dist_rad = lambda theta1, theta2: np.abs(np.arctan2(np.sin(theta1 - theta2), np.cos(theta1 - theta2)))
-    dist_1 = circ_dist_rad(theta, theta_pref)
-    dist_2 = circ_dist_rad(theta, (theta_pref + np.pi) % (2 * np.pi))
-    return baseline + amplitude_1 * np.exp(-0.5 * (dist_1 / tuning_width) ** 2) + amplitude_2 * np.exp(-0.5 * (dist_2 / tuning_width) ** 2)
-"""
-# async call llm example
-import asyncio 
-import time
-async def main():
-    client = google.genai.Client()
-    # Create the controller (allow fixed number of concurrent requests)
-    sem = asyncio.Semaphore(10) 
-    tasks = [call_llm_async(prompt, llm_name="gemini-2.5-pro", client=client, semaphore=sem) for prompt in [text]*50]
-    t_start = time.time()
-    responses = await asyncio.gather(*tasks)
-    t_end = time.time()
-    n_failed = sum(1 for resp in responses if resp is None)
-    # print time taken
-    print(f"Time taken: {t_end - t_start} seconds")
-    print(f"Number of failed responses: {n_failed} out of {len(responses)}")
-    # for i, resp in enumerate(responses):
-    #     if resp is None:
-    #         print(f"Response {i}: Error or no response")
-    #         continue
-    #     print(f"Response {i}: {resp[:100]}...")
-asyncio.run(main())
+#     circ_dist_rad = lambda theta1, theta2: np.abs(np.arctan2(np.sin(theta1 - theta2), np.cos(theta1 - theta2)))
+#     dist_1 = circ_dist_rad(theta, theta_pref)
+#     dist_2 = circ_dist_rad(theta, (theta_pref + np.pi) % (2 * np.pi))
+#     return baseline + amplitude_1 * np.exp(-0.5 * (dist_1 / tuning_width) ** 2) + amplitude_2 * np.exp(-0.5 * (dist_2 / tuning_width) ** 2)
+# """
+# # async call llm example
+# import asyncio 
+# import time
+# async def main():
+#     client = google.genai.Client()
+#     # Create the controller (allow fixed number of concurrent requests)
+#     sem = asyncio.Semaphore(10) 
+#     tasks = [call_llm_async(prompt, llm_name="gemini-2.5-pro", client=client, semaphore=sem) for prompt in [text]*50]
+#     t_start = time.time()
+#     responses = await asyncio.gather(*tasks)
+#     t_end = time.time()
+#     n_failed = sum(1 for resp in responses if resp is None)
+#     # print time taken
+#     print(f"Time taken: {t_end - t_start} seconds")
+#     print(f"Number of failed responses: {n_failed} out of {len(responses)}")
+#     # for i, resp in enumerate(responses):
+#     #     if resp is None:
+#     #         print(f"Response {i}: Error or no response")
+#     #         continue
+#     #     print(f"Response {i}: {resp[:100]}...")
+# asyncio.run(main())

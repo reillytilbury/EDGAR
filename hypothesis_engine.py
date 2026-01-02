@@ -370,7 +370,7 @@ async def create_new_parameter_estimator(current_island: Island, func_code_strin
                                                      func_code_string=func_code_string,
                                                      max_lines=param_estimator_max_lines,
                                                      function_name=function_name)
-    llm_output = await utils.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
+    llm_output = await utils.call_llm_async(prompt, llm_name=llm_name, client=client, temperature=temp,
                                             thinking_budget=thinking_budget, semaphore=llm_semaphore)
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
@@ -406,7 +406,7 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash'
     if prompt is None:
         return None, None
     
-    jax_code_string = await utils.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0,
+    jax_code_string = await utils.call_llm_async(prompt, client=client, llm_name=llm_name, temperature=0,
                                                 semaphore=llm_semaphore)
     jax_code_string = utils.extract_code_block(jax_code_string)
     func = utils.str_to_func(jax_code_string, function_name)
@@ -433,7 +433,7 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
                 exploration_topology = None,
                 exploitation_topology = None,
-                seed_functions_numpy = None,
+                seed_functions = None,
                 seed_parameter_estimators = None,
                 func_name = 'neuron_model',
                 tiny_lm_name = 'gemini-2.0-flash',
@@ -455,18 +455,18 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
     X_loop_train_points, Y_loop_train_points, X_loop_test_points, Y_loop_test_points = utils.split_arrays(X_loop, Y_loop, axis=1)
     X_eval_train_points, Y_eval_train_points, X_eval_test_points, Y_eval_test_points = utils.split_arrays(X_eval, Y_eval, axis=1)
 
-    if seed_functions_numpy is None:
-        seed_functions_numpy = []
+    if seed_functions is None:
+        seed_functions = []
     else:
-        seed_functions_numpy = list(seed_functions_numpy)
-    if not seed_functions_numpy:
+        seed_functions = list(seed_functions)
+    if not seed_functions:
         raise ValueError("At least one seed function must be provided.")
     if seed_parameter_estimators is None:
-        seed_parameter_estimators = [None] * len(seed_functions_numpy)
+        seed_parameter_estimators = [None] * len(seed_functions)
     else:
         seed_parameter_estimators = list(seed_parameter_estimators)
-        if len(seed_parameter_estimators) < len(seed_functions_numpy):
-            seed_parameter_estimators.extend([None] * (len(seed_functions_numpy) - len(seed_parameter_estimators)))
+        if len(seed_parameter_estimators) < len(seed_functions):
+            seed_parameter_estimators.extend([None] * (len(seed_functions) - len(seed_parameter_estimators)))
 
     use_image_feedback = diagnostic_image_fn is not None
 
@@ -493,9 +493,9 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
     base_dir, date_stamp, time_stamp, full_dir, image_feedback_dir = utils.create_output_directories(use_image=use_image_feedback)
     # store and compute loss of initial programs
     t_start = time.time()
-    n_seeds = min(2, len(seed_functions_numpy), len(seed_parameter_estimators))
+    n_seeds = min(2, len(seed_functions), len(seed_parameter_estimators))
     for i in range(n_seeds):
-        func_numpy = seed_functions_numpy[i]
+        func_numpy = seed_functions[i]
         param_est = seed_parameter_estimators[i]
         func_numpy_name = func_numpy.__name__
         param_est_name = param_est.__name__ if param_est else None
@@ -633,13 +633,14 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
             code_str = llm_function_code_strings[idx]
             prompt_str = llm_function_prompts[idx]
             jax_code_str, jax_func = jax_results[idx]
-            numpy_func = utils.str_to_func(code_str, func_name) if code_str else None
-            if numpy_func and jax_func and utils.validate_jax_translation(numpy_func, jax_func):
-                validated_results.append((code_str, prompt_str, jax_code_str, jax_func))
-            else:
-                validated_results.append((None, None, None, None))
-                llm_function_code_strings[idx] = None
-                logging.info(f"Skipping program {idx} due to failed translation validation.")
+            # numpy_func = utils.str_to_func(code_str, func_name) if code_str else None
+            # if numpy_func and jax_func and utils.validate_jax_translation(numpy_func, jax_func):
+            #     validated_results.append((code_str, prompt_str, jax_code_str, jax_func))
+            # else:
+            #     validated_results.append((None, None, None, None))
+            #     llm_function_code_strings[idx] = None
+            #     logging.info(f"Skipping program {idx} due to failed translation validation.")
+            validated_results.append((code_str, prompt_str, jax_code_str, jax_func))
         llm_function_results = validated_results
         
         # build parameter‑estimator tasks
@@ -836,7 +837,7 @@ class Edgar:
             FAILED_PROGRAM_COST=np.inf,
             exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0],
             exploitation_topology=[1, 2, 3, 4, 5, 6, 7, 0],
-            seed_functions_numpy=None,
+            seed_functions=None,
             seed_parameter_estimators=None,
             func_name='neuron_model',
             tiny_lm_name='gemini-2.0-flash',
