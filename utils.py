@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 import time
+from contextlib import nullcontext
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -229,35 +231,41 @@ async def call_llm_async(
     llm_name: str = "gemini-2.0-flash",
     temperature: float = 1.0,
     thinking_budget: float = 1,
-    img_bytes: Union[bytes, None] = None
+    img_bytes: Union[bytes, None] = None,
+    semaphore: asyncio.Semaphore = None  # <--- NEW ARGUMENT
     ) -> Union[str, None]:
     """
     Send one prompt to the GenAI client and return the text result.
     """
     if prompt_text is None:
         return None
-    try:
-        # Create the config for the request (thinking budget for 2.5 flash model)
-        if '2.5' in llm_name:
-            thinking_budget = int(thinking_budget * 24_576) if thinking_budget >= 0 else -1
-            config = types.GenerateContentConfig(
-                temperature=temperature,
-                thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget)
-            )
-        else:
-            config = types.GenerateContentConfig(temperature=temperature)
 
-        # Send the request to the GenAI client
-        if img_bytes is not None:
-            resp = await client.aio.models.generate_content(
-                model=llm_name,
-                contents=[prompt_text, types.Part.from_bytes(data=img_bytes, mime_type="image/png")],
-                config=config
-            )
-        else:
-            resp = await client.aio.models.generate_content(model=llm_name, contents=[prompt_text], config=config)
-        
-        return resp.text
+    try:
+        # Use the semaphore if provided, otherwise use a dummy context that does nothing
+        ctx = semaphore if semaphore else nullcontext()
+
+        async with ctx:  # <--- NEW CONTEXT MANAGER WRAPPER
+            # Create the config for the request (thinking budget for 2.5 flash model)
+            if '2.5' in llm_name:
+                thinking_budget = int(thinking_budget * 24_576) if thinking_budget >= 0 else -1
+                config = types.GenerateContentConfig(
+                    temperature=temperature,
+                    thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget)
+                )
+            else:
+                config = types.GenerateContentConfig(temperature=temperature)
+
+            # Send the request to the GenAI client
+            if img_bytes is not None:
+                resp = await client.aio.models.generate_content(
+                    model=llm_name,
+                    contents=[prompt_text, types.Part.from_bytes(data=img_bytes, mime_type="image/png")],
+                    config=config
+                )
+            else:
+                resp = await client.aio.models.generate_content(model=llm_name, contents=[prompt_text], config=config)
+
+            return resp.text
     except Exception as e:
         print(f"Error in GenAI async call: {e}")
         return None
@@ -326,6 +334,7 @@ def load_edgar_config(path: str) -> dict:
         "large_lm_name",
         "use_large_every",
         "diagnostic_image_fn",
+        "llm_concurrency",
     }
     config: dict = {}
     for key, value in engine_config.items():
@@ -497,7 +506,7 @@ Include your analysis of the image in the docstring of your new model. Point to 
 * Import any packages you use.
 * Do not include any text other than the code.
 * Ensure all free parameters are numeric, not strings.
-* At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * jnp.pi)`.
+* At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
 
 **Docstring Guidelines:**
 * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`, `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
@@ -559,11 +568,22 @@ def neuron_model_v2(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplit
 """
 # async call llm example
 import asyncio 
+import time
 async def main():
     client = google.genai.Client()
-    tasks = [call_llm_async(prompt, llm_name="gemini-2.0-flash", client=client) for prompt in [text]*5]
+    # Create the controller (allow fixed number of concurrent requests)
+    sem = asyncio.Semaphore(10) 
+    tasks = [call_llm_async(prompt, llm_name="gemini-2.5-pro", client=client, semaphore=sem) for prompt in [text]*50]
+    t_start = time.time()
     responses = await asyncio.gather(*tasks)
-    for i, resp in enumerate(responses):
-        print(f"Response {i+1}: {resp}")
-
+    t_end = time.time()
+    n_failed = sum(1 for resp in responses if resp is None)
+    # print time taken
+    print(f"Time taken: {t_end - t_start} seconds")
+    print(f"Number of failed responses: {n_failed} out of {len(responses)}")
+    # for i, resp in enumerate(responses):
+    #     if resp is None:
+    #         print(f"Response {i}: Error or no response")
+    #         continue
+    #     print(f"Response {i}: {resp[:100]}...")
 asyncio.run(main())

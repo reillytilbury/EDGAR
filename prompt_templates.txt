@@ -1,30 +1,30 @@
 [program_creation_context]
     You are an AI scientist. The programs below are sorted from worst to best.
 
-    Your task is to create a new {function_name}, {function_name}_v{version_index}, that has a lower loss than the models below.
+    Your task is to create a new {function_name}, {function_name}_v{version_index}, that has a lower loss than the programs below.
 
-    *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
+    *Analyze* the progression of the programs, *generalize* the improvements, and *create* a new program that is better than *all* previous programs.
 
 [explore_instructions]
-    Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
+    Use the programs below as inspiration, but be *creative* and *invent* something new. Which features in the programs below correlate with lower loss? Find these features and *extrapolate* them. You should also *combine* features from several programs, and *experiment* with new ideas.
 
 [exploit_instruction]
-    Use the models below as a *template* to create a new model.
-    Which features in the models below correlate with lower loss? Find these features and *extrapolate* them.
-    Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
+    Use the programs below as a *template* to create a new program.
+    Which features in the programs below correlate with lower loss? Find these features and *extrapolate* them.
+    Focus on *exploiting* the strengths of the existing programs and *eliminating* their weaknesses or *redundancies*.
     Are the parameter ranges correct? If not, adjust them to be more appropriate.
-    You will be *penalized* for complexity, so make the new model as *simple* as possible while still being better than the previous models.
+    You will be *penalized* for complexity, so make the new program as *simple* as possible while still being better than the previous programs.
 
 [image_analysis_instructions]
     **Image Analysis Instructions:**
 
-    When an image diagnostic is provided, treat it as a summary of how current models compare to the empirical data. Study the figure carefully before proposing your new `{function_name}`.
+    When an image diagnostic is provided, treat it as a summary of how current programs compare to the empirical data. Study the figure carefully before proposing your new `{function_name}`.
 
     Focus on:
 
     * **Global trends:** Where do the current fits over- or under-shoot the observations? Are there regimes of the input space that are consistently mis-modelled?
-    * **Comparative strengths:** Which parent models perform best on different slices of the data? Identify structural features that appear helpful.
-    * **Model flexibility:** Are there patterns (e.g., multiple peaks, asymmetries, offsets) that none of the parents capture? Note gaps that require new parameters or functional forms.
+    * **Comparative strengths:** Which parent programs perform best on different slices of the data? Identify structural features that appear helpful.
+    * **Program flexibility:** Are there patterns (e.g., multiple peaks, asymmetries, offsets) that none of the parents capture? Note gaps that require new parameters or functional forms.
     * **Noise vs. signal:** Distinguish true systematic errors from random noise so that your proposed improvements stay focused on meaningful structure.
 
     Reference key takeaways from the diagnostic in your docstring and explain how the proposed `{function_name}_v{version_index}` addresses the observed weaknesses.
@@ -39,13 +39,13 @@
 
     **Docstring Guidelines:**
 
-    * Begin by listing the parent models and give them descriptive names rather than `{function_name}_v*`.
-    * Do not refer to the current model as `{function_name}_v{version_index}`. Instead, call it "this model" or provide a short descriptive name.
-    * Provide a simple equation for the model, including all free parameters.
-    * Explain how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+    * Begin by listing the parent programs and give them descriptive names rather than `{function_name}_v*`.
+    * Do not refer to the current program as `{function_name}_v{version_index}`. Instead, call it "this program" or provide a short descriptive name.
+    * Provide a simple equation for the program, including all free parameters.
+    * Explain how the program improves upon the previous programs, citing specific features or changes that lead to lower loss.
 
 [parameter_estimator_context]
-    You are an AI scientist. Your task is to create a simple parameter estimator function, `parameter_estimator_v{version_index}`, to estimate the free parameters of the latest model, `{function_name}_v{version_index}`.
+    You are an AI scientist. Your task is to create a simple parameter estimator function, `parameter_estimator_v{version_index}`, to estimate the free parameters of the latest program, `{function_name}_v{version_index}`.
 
     The parameters should be estimated directly, using statistical principles and knowledge of what the parameters represent in context.
 

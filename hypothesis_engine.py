@@ -114,24 +114,6 @@ def load_program_snapshots(path: str) -> list[ProgramSnapshot]:
     return snapshots
 
 
-def _default_sine_numpy(theta, A=1.0, B=0.2, phase=0.0):
-    theta = np.asarray(theta)
-    return B + A * np.sin(theta - phase)
-
-
-def _default_cosine_numpy(theta, A=1.0, B=0.2, phase=0.0):
-    theta = np.asarray(theta)
-    return B + A * np.cos(theta - phase)
-
-
-def _default_parameter_estimator(theta, spikes):
-    theta = np.asarray(theta)
-    spikes = np.asarray(spikes)
-    amplitude = float(np.max(spikes) - np.min(spikes))
-    bias = float(np.median(spikes))
-    phase = float(theta[np.argmax(spikes)])
-    return np.array([amplitude, bias, phase])
-
 def compute_initial_params(param_estimator, func, X, Y) -> jnp.ndarray:
     """
     Compute initial parameters for func using the provided parameter estimator. Confusingly, the parameter estimator will be written in numpy,
@@ -337,7 +319,8 @@ async def create_new_function(current_island: Island, llm_name, client, Y, X,
                               thinking_budget=1, img_dir=None,
                               function_name='neuron_model',
                               diagnostic_image_fn=None,
-                              diagnostic_metadata=None):
+                              diagnostic_metadata=None,
+                              llm_semaphore: asyncio.Semaphore | None = None):
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k)
     random_programs.sort(key=lambda p: p.train_loss, reverse=True)
@@ -361,7 +344,7 @@ async def create_new_function(current_island: Island, llm_name, client, Y, X,
             img_bytes = None
 
     llm_output = await utils.call_llm_async(program_prompt, llm_name=llm_name, client=client, temperature=temp, 
-                                            thinking_budget=thinking_budget, img_bytes=img_bytes)
+                                            thinking_budget=thinking_budget, img_bytes=img_bytes, semaphore=llm_semaphore)
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
         return None, None, (parent1_id, parent2_id)
@@ -374,7 +357,8 @@ async def create_new_parameter_estimator(current_island: Island, func_code_strin
                                            k_max=1, temp=1, thinking_budget=0.25,
                                            param_estimator_max_lines=100,
                                            swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'],
-                                           function_name='neuron_model'):
+                                           function_name='neuron_model',
+                                           llm_semaphore: asyncio.Semaphore | None = None):
     if func_code_string is None:
         logging.info("No function code string provided, skipping parameter estimator generation.")
         return None, None
@@ -387,7 +371,7 @@ async def create_new_parameter_estimator(current_island: Island, func_code_strin
                                                      max_lines=param_estimator_max_lines,
                                                      function_name=function_name)
     llm_output = await utils.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
-                                            thinking_budget=thinking_budget)
+                                            thinking_budget=thinking_budget, semaphore=llm_semaphore)
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -404,7 +388,8 @@ async def create_new_parameter_estimator(current_island: Island, func_code_strin
     return code_string, func
 
 async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash',
-                           function_name: str = 'neuron_model') -> tuple[str, callable]:
+                           function_name: str = 'neuron_model',
+                           llm_semaphore: asyncio.Semaphore | None = None) -> tuple[str, callable]:
     """
     Translates a neuron model code string to JAX format.
     Args:
@@ -421,7 +406,8 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash'
     if prompt is None:
         return None, None
     
-    jax_code_string = await utils.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
+    jax_code_string = await utils.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0,
+                                                semaphore=llm_semaphore)
     jax_code_string = utils.extract_code_block(jax_code_string)
     func = utils.str_to_func(jax_code_string, function_name)
     return jax_code_string, func
@@ -454,13 +440,15 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                 little_lm_name = 'gemini-2.0-flash',
                 large_lm_name = 'gemini-2.5-flash',
                 use_large_every = None,
-                diagnostic_image_fn = None):
+                diagnostic_image_fn = None,
+                llm_concurrency: int | None = 8):
     """ 
     Main function to run the hypothesis engine.
     """
     # load api keys
     load_dotenv()
     client = google.genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+    llm_semaphore = asyncio.Semaphore(llm_concurrency) if llm_concurrency and llm_concurrency > 0 else None
 
     # load and preprocess data
     Y_loop, Y_eval, X_loop, X_eval = utils.split_arrays(X, Y, axis=0)
@@ -468,7 +456,7 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
     X_eval_train_points, Y_eval_train_points, X_eval_test_points, Y_eval_test_points = utils.split_arrays(X_eval, Y_eval, axis=1)
 
     if seed_functions_numpy is None:
-        seed_functions_numpy = [_default_sine_numpy, _default_cosine_numpy]
+        seed_functions_numpy = []
     else:
         seed_functions_numpy = list(seed_functions_numpy)
     if not seed_functions_numpy:
@@ -515,7 +503,13 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
         import_string = "import numpy as np \n"
         numpy_source = inspect.getsource(func_numpy).replace(f'def {func_numpy_name}(', f'def {func_name}(')
         function_code_string = import_string + numpy_source
-        jax_code_string, func_jax = await translate_to_jax(function_code_string, client, tiny_lm_name, function_name=func_name)
+        jax_code_string, func_jax = await translate_to_jax(
+            function_code_string,
+            client,
+            tiny_lm_name,
+            function_name=func_name,
+            llm_semaphore=llm_semaphore,
+        )
         if func_jax is None:
             logging.info(f"Skipping seed {i} because translation failed.")
             continue
@@ -612,7 +606,8 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                                         img_dir=img_path,
                                         function_name=func_name,
                                         diagnostic_image_fn=diagnostic_image_fn,
-                                        diagnostic_metadata=diag_meta)
+                                        diagnostic_metadata=diag_meta,
+                                        llm_semaphore=llm_semaphore)
                 )
         logging.info(f"Creating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
         print(f"Creating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
@@ -622,7 +617,16 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
         parent_ids = [result[2] for result in llm_function_results]
         
         # convert to jax
-        llm_function_translation_tasks = [translate_to_jax(code_string, client, tiny_lm_name, function_name=func_name) for code_string in llm_function_code_strings]
+        llm_function_translation_tasks = [
+            translate_to_jax(
+                code_string,
+                client,
+                tiny_lm_name,
+                function_name=func_name,
+                llm_semaphore=llm_semaphore,
+            )
+            for code_string in llm_function_code_strings
+        ]
         jax_results = await asyncio.gather(*llm_function_translation_tasks)
         validated_results = []
         for idx in range(n_islands * batch_size):
@@ -648,7 +652,8 @@ async def _run_engine(X, Y,n_generations=9, time_limit=60, k_max=2, n_islands=8,
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
-                function_name=func_name
+                function_name=func_name,
+                llm_semaphore=llm_semaphore,
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)
@@ -839,6 +844,7 @@ class Edgar:
             large_lm_name='gemini-2.5-flash',
             use_large_every=3,
             diagnostic_image_fn=None,
+            llm_concurrency=8,
         )
         defaults.update(config)
         self.config = defaults
