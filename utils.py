@@ -828,6 +828,7 @@ def load_data(data_dir: Union[str, List[List[str]]],
               conc_thresh: float = 0.4, 
               activity_thresh: float = 0.0, 
               signal_fraction_thresh: float = 0.0,
+              n_pcs: int = 0,
               n_bins: int = 256, 
               min_repeats: int = 6) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
@@ -847,6 +848,8 @@ def load_data(data_dir: Union[str, List[List[str]]],
         Activity threshold for filtering neurons.
     signal_fraction_thresh : float
         Signal fraction threshold for filtering neurons.
+    n_pcs : int
+        Number of spontaneous principal components to use for spontaneous activity subtraction. (only for 'stringer' data)
     n_bins : int
         Number of bins for response averaging.
     min_repeats : int
@@ -860,11 +863,13 @@ def load_data(data_dir: Union[str, List[List[str]]],
         Preprocessed stimulus angles. (n_bins,)
     """
     assert data_type in ['stringer', 'jacob', 'ali'], "data_type must be either 'stringer', 'jacob', or 'ali'"
+    if n_pcs > 0:
+        assert data_type == 'stringer', "n_pcs can only be used with 'stringer' data_type"
 
     # load data matrix (n_cells, n_trials) and angles (n_trials,)
     if data_type == 'stringer':
         neural_data = np.load(data_dir, allow_pickle=True).item()
-        response = extract_stimulus_related_response(neural_data, n_pcs=0)
+        response = extract_stimulus_related_response(neural_data, n_pcs=n_pcs)
         angles = neural_data['istim']
         if shuffle:
             # shuffle responses for each trial
