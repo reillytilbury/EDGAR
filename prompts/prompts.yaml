@@ -1,0 +1,144 @@
+# Metadata section for validation
+_metadata:
+  required_prompts:
+    - prompts.program_prompt.base
+    - prompts.program_prompt.exploit
+    - prompts.program_prompt.exploit
+    - prompts.program_prompt.code_guidelines
+    - prompts.program_prompt.docstring_guidelines
+    - prompts.program_prompt.per_model_detail
+    - prompts.parameter_estimator.base
+    - prompts.parameter_estimator.code_guidelines
+    - prompts.parameter_estimator.per_model_detail
+    - prompts.jax_translator_prompt
+  
+  optional_prompts:
+    - prompts.program_prompt.image_analysis
+    - prompts.parameter_estimator.image_analysis
+  
+  # Define allowed variables for each prompt type. If you update the allowed variables, please also update prompt_manager.py accordingly
+  allowed_variables:
+    program_prompt:
+      # Shared across all program_prompts (inherited by children)
+      _default:
+        - k
+        - next_version
+      code_guidelines:
+        - max_lines
+      per_model_detail:
+        - model_idx
+        - train_loss
+        - program_code_string
+    parameter_estimator:
+      _default:
+        - k
+        - next_version
+        - max_lines
+      code_guidelines:
+        - max_lines
+      per_model_detail:
+        - model_idx 
+        - train_loss
+        - program_code_string
+        - parameter_estimator_code_string
+    jax_translator_prompt: 
+      - function_code
+
+prompts:
+  program_prompt:
+    base: | 
+      You are an AI scientist. The programs below are biological models of neurons. The models are sorted from highest to lowest loss.
+      Your task is to create a new neuron model, neuron_model_v{next_version}, that has a lower loss than the models below.
+      *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
+
+    explore: |
+      Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? 
+      Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
+      
+    exploit: |
+      Use the models below as a *template* to create a new model. 
+      Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. 
+      Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
+      Are the parameter ranges correct? If not, adjust them to be more appropriate.
+      You will be *penalized* for complexity, so make the new model as *simple* as possible while still being better than the previous models.
+
+    image_analysis: |
+      **Image Analysis Instructions:**
+
+      Attached is a scatter plot of the neuron models' performance on top of raw neural data. The binned mean is plotted in **sky-blue**, `neuron_model_v1` is plotted in **green**, and `neuron_model_v2` is plotted in **red**. 
+
+      Analyse the models' fits to the data in the image below. Identify systematic weaknesses of the models by observing patterns across multiple cell plots. For instance, consider:
+      *   **Model Comparisons:** Which models are better for each cell? That is to say, which models track the blue curve better? Which features of the models are responsible for improving the fit?
+      *   **Model Fit:** How well do the models fit the binned data mean? Look for places where even the models (**red** curve for best model, **green** for second best model) deviate most from the binned data mean (**blue** curve). This is where the models are weakest, and where you should focus your improvements.
+      *   **Model Shape:** Do the models' shapes (e.g., peak sharpness, width, skewness, amplitude, etc.) align with the binned data mean (**blue**) and raw data scatter points (**black**)? If not, how do they differ? How can you change the model to better match the data shape?
+      *   **Parameter Flexibility:** Are there free parameters that could be introduced or modified to better capture the observed response profiles? Utilize your analysis of the shortcomings of the current models' shapes and add free parameters or modify existing ones to address these issues.
+
+      Use this analysis to inform the design of a new neuron model, `neuron_model_v{next_version}`, that improves upon the previous models. 
+
+      Include your analysis of the image in the docstring of your new model. Point to specific subplots in the image that illustrate the *strengths* and *weaknesses* of the parent models. Explain how you plan to **fix** the weaknesses of the parent models.
+
+    code_guidelines: |
+      **Code Generation Guidelines:**
+
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * Ensure all free parameters are numeric, not strings.
+      * At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
+
+    docstring_guidelines: |
+      **Docstring Guidelines:**
+      * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`, `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
+      * Do not refer to the current model as `neuron_model_v{next_version}`. Instead, refer to it as "this model".
+      * Provide a simple equation for the model, including all free parameters.
+      * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+
+    per_model_detail: |
+      loss of model {model_idx}: {train_loss}
+      {program_code_string}
+      \n
+      ----------------------------
+      \n
+
+  parameter_estimator:
+    base: |
+      You are an AI scientist. Your task is to create a simple parameter estimator function, parameter_estimator_v{next_version}, to estimate the free parameters of the latest neuron model, neuron_model_v{next_version}.
+      The parameter should be estimated directly, using statistical principles and knowledge of what the parameters represent biologically. 
+      *Analyze* the progression of the parameter estimators, *generalize* the improvements, and *create* a new parameter estimator that is better than *all* previous estimators.
+
+
+    image_analysis: |
+      **Image Analysis Instructions:**
+
+      Attached is a scatter plot where each neuron model curve is drawn **using the parameters produced by its corresponding parameter estimator function**. The binned mean is **sky blue**, `neuron_model_v1` is **green**, and `neuron_model_v2` is **red**.
+
+      Focus on how *parameter values* affect model fit:
+      * **Mismatch Regions:** Where do the best (red) and worst (green) curves deviate most from the blue mean? Which parameters control those regions?
+      * **Sensitivity:** Determine which parameters the output is most sensitive to in poorly fitting zones.
+      * **Biological Plausibility:** Keep estimates within realistic biological ranges.
+
+      Summarise this analysis **inside the docstring** of `parameter_estimator_v{next_version}` and explain how your estimator addresses identified weaknesses.
+
+    code_guidelines: |
+      **Code Generation Guidelines:**
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * The only arguments to the function should be the stimuli and the spike count.
+      * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected. 
+      * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point for the parameter estimation.
+
+    per_model_detail: |
+      loss of model {model_idx}: {train_loss}
+      {program_code_string}
+      \n
+      {parameter_estimator_code_string}
+      \n
+      ----------------------------
+      \n
+
+  jax_translator_prompt: | 
+    Convert the following function to a JAX-compatible function.
+
+      Include all necessary imports, and ensure that the function is compatible with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.
+      Do not include any text other than the code. 
+      Here is the code to translate:
+      {function_code}

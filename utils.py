@@ -290,6 +290,7 @@ def str_to_func(code_string: Tuple[str, None], needle: str = 'neuron_model') -> 
             print(f"Function {needle} not found in executed code.")
             return None
 
+# UNUSED
 def create_linked_prompt(random_programs: pd.DataFrame, mode: str, llm_type: str = 'g') -> str:
     """
     Create a prompt to generate a new neuron model and parameter estimator based on k existing models.
@@ -625,6 +626,7 @@ loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
 """
     return prompt
 
+# UNUSED
 def create_parameter_estimator_image_prompt(neuron_model_code_string: str,
                                             param_estimator_code_string: str,
                                             max_lines: int = 100) -> str:
@@ -693,6 +695,7 @@ def create_jax_translater_prompt(program: str) -> str:
     """
     return prompt
 
+# UNUSED
 def create_meta_learning_prompt(logged_output: str):
     """
     Create a prompt to generate a new neuron_model based on a history of old models and their scores.
@@ -719,6 +722,7 @@ Here is the output from the genetic algorithm so far:
 {logged_output}
 """
 
+# UNUSED
 def create_image_prompt(program_df_row: Union[pd.DataFrame, None]) -> Union[str, None]:
     """
     Creates a text prompt which will be adjoined to an image to prompt an LLM to create a new and improved model.
