@@ -198,6 +198,181 @@ class PromptValidator:
         return "\n".join(results), all_passed
 
 
+class ExperimentValidator:
+    def __init__(self, config_path="experiment.yaml"):
+        self.config_path = Path(config_path)
+        with open(self.config_path) as f:
+            self.config = yaml.safe_load(f)
+    
+    def test_yaml_is_valid(self):
+        """Basic YAML syntax validation."""
+        assert self.config is not None
+        assert isinstance(self.config, dict)
+        return True
+    
+    def test_required_fields(self):
+        """Test that all required fields are present."""
+        required_fields = ['task', 'seed_programs', 'experiment_params']
+        missing = []
+        
+        for field in required_fields:
+            if field not in self.config:
+                missing.append(field)
+        
+        if missing:
+            raise AssertionError(
+                f"Missing required fields in experiment.yaml:\n" + 
+                "\n".join(f"  - {f}" for f in missing)
+            )
+        
+        return True
+    
+    def test_seed_programs_structure(self):
+        """Test that seed_programs has the correct structure."""
+        seed_programs = self.config.get('seed_programs', {})
+        
+        required = ['module', 'function_seeds', 'parameter_estimator_seeds']
+        missing = []
+        
+        for field in required:
+            if field not in seed_programs:
+                missing.append(f"seed_programs.{field}")
+        
+        if missing:
+            raise AssertionError(
+                f"Missing required fields:\n" + 
+                "\n".join(f"  - {f}" for f in missing)
+            )
+        
+        # Check that seeds are lists
+        if not isinstance(seed_programs.get('function_seeds', []), list):
+            raise AssertionError("seed_programs.function_seeds must be a list")
+        
+        if not isinstance(seed_programs.get('parameter_estimator_seeds', []), list):
+            raise AssertionError("seed_programs.parameter_estimator_seeds must be a list")
+        
+        return True
+    
+    def test_experiment_params_structure(self):
+        """Test that experiment_params has the essential fields."""
+        exp_params = self.config.get('experiment_params', {})
+        
+        essential_fields = [
+            'n_iterations', 'time_limit', 'k_max', 'n_islands', 
+            'batch_size', 'critical_population_size'
+        ]
+        missing = []
+        
+        for field in essential_fields:
+            if field not in exp_params:
+                missing.append(f"experiment_params.{field}")
+        
+        if missing:
+            raise AssertionError(
+                f"Missing essential fields:\n" + 
+                "\n".join(f"  - {f}" for f in missing)
+            )
+        
+        return True
+    
+    def get_validation_report(self):
+        """Run all tests and return a report."""
+        tests = [
+            ("YAML syntax", self.test_yaml_is_valid),
+            ("Required fields", self.test_required_fields),
+            ("Seed programs structure", self.test_seed_programs_structure),
+            ("Experiment params structure", self.test_experiment_params_structure),
+        ]
+        
+        results = []
+        all_passed = True
+        
+        for test_name, test_func in tests:
+            try:
+                test_func()
+                results.append(f"✓ {test_name}: PASSED")
+            except AssertionError as e:
+                results.append(f"✗ {test_name}: FAILED\n  {str(e)}")
+                all_passed = False
+            except Exception as e:
+                results.append(f"✗ {test_name}: ERROR\n  {str(e)}")
+                all_passed = False
+        
+        return "\n".join(results), all_passed
+
+
+class DataValidator:
+    def __init__(self, config_path="data.yaml"):
+        self.config_path = Path(config_path)
+        with open(self.config_path) as f:
+            self.config = yaml.safe_load(f)
+    
+    def test_yaml_is_valid(self):
+        """Basic YAML syntax validation."""
+        assert self.config is not None
+        assert isinstance(self.config, dict)
+        return True
+    
+    def test_required_fields(self):
+        """Test that all required fields are present."""
+        required_fields = ['task', 'load_data']
+        missing = []
+        
+        for field in required_fields:
+            if field not in self.config:
+                missing.append(field)
+        
+        if missing:
+            raise AssertionError(
+                f"Missing required fields in data.yaml:\n" + 
+                "\n".join(f"  - {f}" for f in missing)
+            )
+        
+        return True
+    
+    def test_load_data_format(self):
+        """Test that load_data is in the correct format (module.function)."""
+        load_data = self.config.get('load_data', '')
+        
+        if not isinstance(load_data, str):
+            raise AssertionError("load_data must be a string")
+        
+        if not load_data:
+            raise AssertionError("load_data cannot be empty")
+        
+        # Check that it looks like a module path
+        if '.' not in load_data:
+            raise AssertionError(
+                f"load_data should be in format 'module.path.function', got: {load_data}"
+            )
+        
+        return True
+    
+    def get_validation_report(self):
+        """Run all tests and return a report."""
+        tests = [
+            ("YAML syntax", self.test_yaml_is_valid),
+            ("Required fields", self.test_required_fields),
+            ("Load data format", self.test_load_data_format),
+        ]
+        
+        results = []
+        all_passed = True
+        
+        for test_name, test_func in tests:
+            try:
+                test_func()
+                results.append(f"✓ {test_name}: PASSED")
+            except AssertionError as e:
+                results.append(f"✗ {test_name}: FAILED\n  {str(e)}")
+                all_passed = False
+            except Exception as e:
+                results.append(f"✗ {test_name}: ERROR\n  {str(e)}")
+                all_passed = False
+        
+        return "\n".join(results), all_passed
+
+
 # Pytest integration
 def test_prompts_yaml():
     """Main test function for pytest."""
@@ -209,36 +384,98 @@ def test_prompts_yaml():
     validator.test_optional_prompts_documented()
 
 
+def test_experiment_yaml():
+    """Test function for experiment.yaml."""
+    validator = ExperimentValidator("experiment.yaml")
+    validator.test_yaml_is_valid()
+    validator.test_required_fields()
+    validator.test_seed_programs_structure()
+    validator.test_experiment_params_structure()
+
+
+def test_data_yaml():
+    """Test function for data.yaml."""
+    validator = DataValidator("data.yaml")
+    validator.test_yaml_is_valid()
+    validator.test_required_fields()
+    validator.test_load_data_format()
+
+
 # Standalone script
 if __name__ == "__main__":
     print("=" * 60)
-    print("PROMPT CONFIGURATION VALIDATOR")
+    print("CONFIGURATION VALIDATOR")
     print("=" * 60)
     print()
     
-    try:
-        validator = PromptValidator("prompts.yaml")
-        report, passed = validator.get_validation_report()
-        
-        print(report)
-        print()
-        print("=" * 60)
-        
-        if passed:
-            print("✓ ALL TESTS PASSED")
-            exit(0)
-        else:
-            print("✗ SOME TESTS FAILED")
-            print("\nPlease fix the issues above and run again.")
-            exit(1)
+    all_configs_passed = True
     
+    # Test prompts.yaml
+    print("Testing prompts.yaml...")
+    print("-" * 60)
+    try:
+        config_dir = Path(__file__).parent
+        validator = PromptValidator(config_dir / "prompts.yaml")
+        report, passed = validator.get_validation_report()
+        print(report)
+        all_configs_passed = all_configs_passed and passed
     except FileNotFoundError:
         print("✗ ERROR: prompts.yaml not found")
-        print("\nPlease ensure prompts.yaml exists in the current directory.")
-        exit(1)
+        all_configs_passed = False
     except yaml.YAMLError as e:
         print(f"✗ ERROR: Invalid YAML syntax\n\n{e}")
-        exit(1)
+        all_configs_passed = False
     except Exception as e:
         print(f"✗ UNEXPECTED ERROR: {e}")
+        all_configs_passed = False
+    
+    print()
+    
+    # Test experiment.yaml
+    print("Testing experiment.yaml...")
+    print("-" * 60)
+    try:
+        validator = ExperimentValidator(config_dir / "experiment.yaml")
+        report, passed = validator.get_validation_report()
+        print(report)
+        all_configs_passed = all_configs_passed and passed
+    except FileNotFoundError:
+        print("✗ ERROR: experiment.yaml not found")
+        all_configs_passed = False
+    except yaml.YAMLError as e:
+        print(f"✗ ERROR: Invalid YAML syntax\n\n{e}")
+        all_configs_passed = False
+    except Exception as e:
+        print(f"✗ UNEXPECTED ERROR: {e}")
+        all_configs_passed = False
+    
+    print()
+    
+    # Test data.yaml
+    print("Testing data.yaml...")
+    print("-" * 60)
+    try:
+        validator = DataValidator(config_dir / "data.yaml")
+        report, passed = validator.get_validation_report()
+        print(report)
+        all_configs_passed = all_configs_passed and passed
+    except FileNotFoundError:
+        print("✗ ERROR: data.yaml not found")
+        all_configs_passed = False
+    except yaml.YAMLError as e:
+        print(f"✗ ERROR: Invalid YAML syntax\n\n{e}")
+        all_configs_passed = False
+    except Exception as e:
+        print(f"✗ UNEXPECTED ERROR: {e}")
+        all_configs_passed = False
+    
+    print()
+    print("=" * 60)
+    
+    if all_configs_passed:
+        print("✓ ALL TESTS PASSED")
+        exit(0)
+    else:
+        print("✗ SOME TESTS FAILED")
+        print("\nPlease fix the issues above and run again.")
         exit(1)
