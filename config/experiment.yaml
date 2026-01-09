@@ -1,6 +1,6 @@
-task: neuron_tuning
+task: orientation_tuning
 seed_programs:
-  module: experiments.neuron_tuning.seed_programs
+  module: experiments.orientation_tuning.seed_programs
   function_seeds:
     - neuron_model_1
     - neuron_model_2
