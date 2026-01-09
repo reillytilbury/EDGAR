@@ -1,17 +1,27 @@
 import asyncio
+import yaml
+from pathlib import Path
 import hypothesis_engine 
 
 async def _run_many():
+    # Load experiment configuration
+    config_path = Path(__file__).parent / "config" / "experiment.yaml"
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    
+    # Extract experiment parameters
+    params = config.get('experiment_params', {})
+    
     for i in range(4):
         print("running with standard params")
         await hypothesis_engine.main(
-            n_iterations=9,
-            time_limit=60,
-            use_image_feedback=True,
-            use_large_every=0,
-            param_penalty_weight=0.01,
-            exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0],
-            exploit_point=0.7,
+            n_iterations=params['n_iterations'],
+            time_limit=params['time_limit'],
+            use_image_feedback=params['use_image_feedback'],
+            use_large_every=params['use_large_every'],
+            param_penalty_weight=params['param_penalty_weight'],
+            exploration_topology=params['exploration_topology'],
+            exploit_point=params['exploit_point'],
         )
 
 if __name__ == "__main__":
