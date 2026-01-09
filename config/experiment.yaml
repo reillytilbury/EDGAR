@@ -1,0 +1,9 @@
+task: neuron_tuning
+seed_programs:
+  module: experiments.neuron_tuning.seed_programs
+  function_seeds:
+    - neuron_model_1
+    - neuron_model_2
+  parameter_estimator_seeds:
+    - parameter_estimator_1
+    - parameter_estimator_2
