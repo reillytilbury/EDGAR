@@ -1,2 +1,3 @@
 task: orientation_tuning
 load_data: experiments.orientation_tuning.data_loader.load_data
+data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
