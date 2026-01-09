@@ -7,3 +7,26 @@ seed_programs:
   parameter_estimator_seeds:
     - parameter_estimator_1
     - parameter_estimator_2
+
+experiment_params:
+  n_iterations : 9
+  time_limit : 60  # in minutes
+  k_max : 2
+  n_islands : 8
+  batch_size : 6
+  critical_population_size : 12
+  min_wise_population_size : 0
+  n_migrants : 2
+  fit_params : true
+  tol : 1e-6
+  exploit_point : 0.5
+  param_penalty_weight : 0.01
+  FAILED_PROGRAM_COST : inf
+  use_image_feedback : true
+  use_param_estimator : true
+  exploration_topology : [1, 2, 3, 4, 5, 6, 7, 0]
+  exploitation_topology : [1, 2, 3, 4, 5, 6, 7, 0]
+  tiny_lm_name : gemini-2.0-flash-lite
+  little_lm_name : gemini-2.0-flash
+  large_lm_name : gemini-2.5-flash
+  use_large_every : 3
