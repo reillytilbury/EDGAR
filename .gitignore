@@ -3,6 +3,7 @@
 
 # programs database
 git rm --cached -r program_databases
+program_databases/
 
 # Python cache
 __pycache__/
