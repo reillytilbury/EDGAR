@@ -85,6 +85,7 @@ prompts:
       * Do not include any text other than the code.
       * Ensure all free parameters are numeric, not strings.
       * At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
+      * IMPORTANT: Your code will be translated to JAX. Avoid boolean indexing (e.g., `array[condition]`), dynamic shapes, and control flow based on array values. Use `jnp.where()` instead of boolean indexing.
 
     docstring_guidelines: |
       **Docstring Guidelines:**
@@ -147,6 +148,14 @@ prompts:
     Convert the following function to a JAX-compatible function.
 
       Include all necessary imports, and ensure that the function is compatible with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.
+      
+      CRITICAL JAX compatibility requirements:
+      * Replace all boolean indexing (e.g., `array[condition]`) with `jnp.where(condition, true_value, false_value)`
+      * Replace NumPy functions with JAX equivalents (np.array → jnp.array, np.sin → jnp.sin, etc.)
+      * Avoid Python control flow (if/for) that depends on array values - use `jnp.where`, `jax.lax.cond`, `jax.lax.scan` instead
+      * Do not use dynamic array shapes or indexing with non-constant indices
+      * Use `jnp.clip()` instead of boolean masking for bounds
+      
       Do not include any text other than the code. 
       Here is the code to translate:
       {function_code}

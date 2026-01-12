@@ -66,12 +66,14 @@ async def _run_many(test_mode: bool = False):
         normalize_response_fn = None
 
     if test_mode:
-        params['n_iterations'] = 2
+        params['n_iterations'] = 1
         params['time_limit'] = 10  # seconds
         params['n_islands'] = 2
         params['k_max'] = 2
         params['batch_size'] = 2
         params['max_iter'] = 100
+        params['exploration_topology'] = [1, 0]
+        params['exploitation_topology'] = [1, 0]
 
     num_runs = 4 if not test_mode else 1
 
