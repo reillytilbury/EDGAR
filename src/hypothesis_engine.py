@@ -8,7 +8,7 @@ import timeout_decorator
 import jaxopt, optax
 import pandas as pd
 from pathlib import Path
-from . import utils, diagnostic, genetic_helpers, loss_functions
+from . import utils, diagnostic, genetic_helpers, loss_functions, llm_helper
 import experiments.orientation_tuning.seed_programs # delete this once we read seed_programs from experiment.yaml
 from tqdm import tqdm
 from google import genai
@@ -297,7 +297,7 @@ async def generate_new_neuron_model(current_island, llm_name, client,
             use_image = False
     else:
         img_bytes = None
-    llm_output = await utils.call_llm_async(program_prompt, model_name=llm_name, client=client, temperature=temp, 
+    llm_output = await llm_helper.call_llm_async(program_prompt, model_name=llm_name, client=client, temperature=temp, 
                                             thinking_budget=thinking_budget, img_bytes=img_bytes)
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -355,7 +355,7 @@ async def generate_new_parameter_estimator(current_island,
     else:
         img_bytes = None
     
-    llm_output = await utils.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
+    llm_output = await llm_helper.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
                                             thinking_budget=0.25, img_bytes=img_bytes)
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
@@ -400,7 +400,7 @@ async def generate_new_parameter_estimator_from_image_feedback(image_prompt: str
     with image_path.open("rb") as f:
         img_bytes = f.read()
     # call the LLM with the image prompt and image bytes
-    llm_output = await utils.call_llm_async(image_prompt, model_name=model_name, client=client, temperature=temp, img_bytes=img_bytes)
+    llm_output = await llm_helper.call_llm_async(image_prompt, model_name=model_name, client=client, temperature=temp, img_bytes=img_bytes)
     code_string = utils.extract_code_block(llm_output) # extract the code block from the LLM output
     if code_string is None:
         logging.info("No code block found in the LLM output for parameter estimator from image feedback, skipping.")
@@ -432,7 +432,7 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash-
     if prompt is None:
         return None, None
     
-    jax_code_string = await utils.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
+    jax_code_string = await llm_helper.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
     jax_code_string = utils.extract_code_block(jax_code_string)
     func = utils.str_to_func(jax_code_string, 'neuron_model')
     return jax_code_string, func

@@ -169,7 +169,7 @@ def split_via_ast(output: Union[str, None]) -> Union[Tuple[str, str], Tuple[None
     # Turn them back into source code
     return ast.unparse(mod_tree), ast.unparse(est_tree)
 
-def call_llm(
+def deprecated_call_llm(
     prompt_text: str,
     model_name: str = "gemini-2.0-flash",
     client: Union[genai.Client, anthropic.Client] = None,
@@ -210,7 +210,7 @@ def call_llm(
             print(f"ERROR (Anthropic): {e}")
             return None
     
-async def call_llm_async(
+async def deprecated_call_llm_async(
     prompt_text: Union[str, None],
     client: Union[genai.Client, anthropic.Client],
     model_name: str = "gemini-2.0-flash",
