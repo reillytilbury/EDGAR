@@ -63,6 +63,17 @@ class PromptManager:
         return prompt
     
     def get_parameter_estimator_prompt(self, programs_df : pd.DataFrame, neuron_model_code_string : str, max_lines : int = 100, use_image : bool = True) -> str:
+        """ Build parameter estimator generation prompt from config (prompts.yaml)
+
+        Args :
+            programs_df (pd.DataFrame): DataFrame of existing parameter estimators.
+            neuron_model_code_string (str): The code string of the neuron model to be used.
+            max_lines (int): Maximum number of lines for the generated code.
+            use_image (bool): Whether to include image analysis section.
+            
+        Returns:
+            prompt (str): The prompt string for the AI to generate a new parameter estimator.
+        """
         k = len(programs_df)
         templates = self.config['prompts']['parameter_estimator']
         prompt = templates[llm_type].format(k=k, next_version=k+1)

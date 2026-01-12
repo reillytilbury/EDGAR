@@ -269,7 +269,7 @@ async def generate_new_neuron_model(current_island, llm_name, client,
                   random_programs['birth_island'][1], 
                   random_programs['batch_index'][1])
     use_image = img_dir is not None
-    program_prompt = utils.create_program_prompt(random_programs, mode=mode, llm_type=llm_name[0], use_image=use_image)
+    program_prompt = prompt_manager.get_program_prompt(random_programs, mode=mode, llm_type=llm_name[0], use_image=use_image)
 
     if use_image:
         try:
@@ -321,7 +321,7 @@ async def generate_new_parameter_estimator(current_island,
     # sort from worst to best (loss descending)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
     use_image = img_dir is not None
-    prompt = utils.create_parameter_estimator_prompt(random_programs,
+    prompt = prompt_manager.get_parameter_estimator_prompt(random_programs,
                                                     neuron_model_code_string=neuron_model_code_string,
                                                     llm_type=llm_name[0], max_lines=param_estimator_max_lines,
                                                     use_image=use_image)
@@ -427,7 +427,7 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash-
         logging.info("No neuron model code string provided for translation.")
         return None, None
     
-    prompt = utils.create_jax_translater_prompt(code_string)
+    prompt = prompt_manager.get_jax_translator_prompt(code_string)
     # print(f"Translating neuron model to JAX with prompt:\n{prompt}")
     if prompt is None:
         return None, None
