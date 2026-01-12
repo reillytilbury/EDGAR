@@ -66,6 +66,53 @@ def extract_stimulus_related_response(data: dict, n_pcs: int = 8, z_score: bool 
 
     return sresp
 
+def normalize_response(response: jnp.ndarray) -> jnp.ndarray:
+    """
+    Normalizes the response matrix
+    
+    Args:
+        response (jnp.ndarray): The neural response matrix of shape (n_cells, n_trials).
+    Returns:
+        normalized_response (jnp.ndarray): The normalized response matrix.
+    """
+    normalized_response = 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # multiply the response by 100 and normalize
+    return normalized_response
+
+def load_and_process_data(data_path: str, activity_thresh: float = 0.1, conc_thresh: float = 0.1) -> dict:
+    # load and preprocess data
+    neural_data = np.load(data_path, allow_pickle=True)
+    neural_data = neural_data.item()
+    # Use passed data extraction function or fall back to default
+    response = extract_stimulus_related_response(neural_data, n_pcs=0)
+
+    angles = neural_data['istim']
+    n_trials = response.shape[1]
+    n_trials_small = int(n_trials * activity_thresh)
+
+    # filter 
+    active = (response > 0).astype(np.float32)
+    firing_probs = np.mean(active, axis=1)
+    conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
+    good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
+    n_good_cells = len(good_cells)
+
+    # update angles and response to be (n_cells_small, n_trials_small) and (n_cells_small, n_trials_small)
+    response_cropped, angles_cropped = np.zeros((len(good_cells), n_trials_small)), np.zeros((len(good_cells), n_trials_small))
+    for i, cell in enumerate(good_cells):
+        active_trials = response[cell] > 0
+        active_trials_idx = np.where(active_trials)[0][:n_trials_small]
+        response_cropped[i] = response[cell, active_trials_idx]
+        angles_cropped[i] = angles[active_trials_idx]
+
+    response_cropped = normalize_response(response_cropped)
+
+    return {
+        "response": response_cropped,
+        "angles": angles_cropped,
+        "good_cells": good_cells,
+        "n_good_cells": n_good_cells, 
+    }
+
 def unbiased_signal_fraction(R, min_repeats=2):
     """
     Compute unbiased fraction of stimulus-related variance (Sahani & Linden, 2003)

@@ -36,6 +36,7 @@ _metadata:
         - max_lines
       code_guidelines:
         - max_lines
+        - next_version
       per_model_detail:
         - model_idx 
         - train_loss
@@ -125,6 +126,13 @@ prompts:
       * The only arguments to the function should be the stimuli and the spike count.
       * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected. 
       * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point for the parameter estimation.
+
+    docstring_guidelines: |
+      **Docstring Guidelines:**
+      * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`, `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
+      * Do not refer to the current model as `neuron_model_v{next_version}`. Instead, refer to it as "this model".
+      * Provide a simple equation for the model, including all free parameters.
+      * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
 
     per_model_detail: |
       loss of model {model_idx}: {train_loss}

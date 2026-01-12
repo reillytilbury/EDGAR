@@ -2,9 +2,10 @@ import asyncio
 import yaml
 from pathlib import Path
 import importlib
+import os, argparse
 from src import hypothesis_engine 
 
-async def _run_many():
+async def _run_many(test_mode: bool = False):
     # Load experiment configuration
     experiment_config_path = Path(__file__).parent / "config" / "experiment.yaml"
     with open(experiment_config_path) as f:
@@ -47,16 +48,34 @@ async def _run_many():
     params['data_path'] = data_config.get('data_path', '')
     
     # Dynamically load data extraction function
-    extract_stimulus_related_response_path = data_config.get('extract_stimulus_related_response')
-    if extract_stimulus_related_response_path:
-        # Parse module path and function name (e.g., 'experiments.orientation_tuning.data_parser.extract_stimulus_related_response')
-        module_path, function_name = extract_stimulus_related_response_path.rsplit('.', 1)
+    load_and_process_data_fn_path = data_config.get('load_and_process_data_fn')
+    if load_and_process_data_fn_path:
+        # Parse module path and function name (e.g., 'experiments.orientation_tuning.data_parser.load_and_process_data')
+        module_path, function_name = load_and_process_data_fn_path.rsplit('.', 1)
         data_module = importlib.import_module(module_path)
-        data_extraction_fn = getattr(data_module, function_name)
+        load_and_process_data_fn = getattr(data_module, function_name)
     else:
-        data_extraction_fn = None
+        load_and_process_data_fn = None
 
-    for i in range(4):
+    normalize_response_fn_path = data_config.get('normalize_response')
+    if normalize_response_fn_path:
+        module_path, function_name = normalize_response_fn_path.rsplit('.', 1)
+        data_module = importlib.import_module(module_path)
+        normalize_response_fn = getattr(data_module, function_name)
+    else:
+        normalize_response_fn = None
+
+    if test_mode:
+        params['n_iterations'] = 2
+        params['time_limit'] = 10  # seconds
+        params['n_islands'] = 2
+        params['k_max'] = 2
+        params['batch_size'] = 2
+        params['max_iter'] = 100
+
+    num_runs = 4 if not test_mode else 1
+
+    for i in range(num_runs):
         print("running with standard params")
         await hypothesis_engine.hypothesis_engine(
             n_iterations=params['n_iterations'],
@@ -70,6 +89,7 @@ async def _run_many():
             k_max=params['k_max'],
             n_islands=params['n_islands'],
             batch_size=params['batch_size'],
+            max_iter=params['max_iter'],
             critical_population_size=params['critical_population_size'],
             min_wise_population_size=params['min_wise_population_size'],
             n_migrants=params['n_migrants'],
@@ -82,8 +102,12 @@ async def _run_many():
             numpy_programs=numpy_programs,
             jax_programs=jax_programs,
             param_estimators=param_estimators,
-            data_extraction_fn=data_extraction_fn
+            load_and_process_data_fn=load_and_process_data_fn,
+            normalize_response=normalize_response_fn
         )
 
 if __name__ == "__main__":
-    asyncio.run(_run_many())
+    parser = argparse.ArgumentParser(description="Run Hypothesis Engine")
+    parser.add_argument('--test_mode', action='store_true', help='Run in test mode with reduced iterations and time limit')
+    args = parser.parse_args()
+    asyncio.run(_run_many(test_mode=args.test_mode))

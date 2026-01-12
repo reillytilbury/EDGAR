@@ -1,3 +1,4 @@
 task: orientation_tuning
-extract_stimulus_related_response: experiments.orientation_tuning.data_parser.extract_stimulus_related_response
+load_and_process_data_fn: experiments.orientation_tuning.data_parser.load_and_process_data
+normalize_response: experiments.orientation_tuning.data_parser.normalize_response
 data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy

@@ -9,6 +9,7 @@ import jaxopt, optax
 import pandas as pd
 from pathlib import Path
 from . import utils, diagnostic, genetic_helpers, loss_functions, llm_helper
+from .prompt_manager import PromptManager
 import experiments.orientation_tuning.seed_programs # delete this once we read seed_programs from experiment.yaml
 from tqdm import tqdm
 from google import genai
@@ -20,6 +21,10 @@ warnings.filterwarnings(
     category=FutureWarning,
     message="The behavior of DataFrame concatenation with empty or all-NA entries is deprecated.*"
 )
+
+# Initialize prompt manager
+prompt_manager = PromptManager(config_path=Path(__file__).parent.parent / "config" / "prompts.yaml")
+
 print(jax.default_backend())    # should print "gpu"
 print(jax.devices())
 
@@ -269,7 +274,7 @@ async def generate_new_neuron_model(current_island, llm_name, client,
                   random_programs['birth_island'][1], 
                   random_programs['batch_index'][1])
     use_image = img_dir is not None
-    program_prompt = prompt_manager.get_program_prompt(random_programs, mode=mode, llm_type=llm_name[0], use_image=use_image)
+    program_prompt = prompt_manager.get_program_prompt(random_programs, mode=mode, use_image=use_image)
 
     if use_image:
         try:
@@ -323,7 +328,7 @@ async def generate_new_parameter_estimator(current_island,
     use_image = img_dir is not None
     prompt = prompt_manager.get_parameter_estimator_prompt(random_programs,
                                                     neuron_model_code_string=neuron_model_code_string,
-                                                    llm_type=llm_name[0], max_lines=param_estimator_max_lines,
+                                                    max_lines=param_estimator_max_lines,
                                                     use_image=use_image)
     
     random_programs_crude = random_programs.copy()
@@ -929,10 +934,13 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 use_large_every = 3,
                 conc_thresh = 0.55, activity_thresh = 0.4,
                 data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy',
+                training_ratio = 0.5, 
+                max_iter = 1_000,
                 numpy_programs = None,
                 jax_programs = None,
                 param_estimators = None,
-                data_extraction_fn = None):
+                load_and_process_data_fn = None,
+                normalize_response = None):
     """ 
     Main function to run the hypothesis engine.
     """
@@ -948,38 +956,14 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     if param_estimators is None or len(param_estimators) != 2:
         raise ValueError("param_estimators must be a list of 2 functions.")
 
-    # load and preprocess data
-    neural_data = np.load(data_path, allow_pickle=True)
-    neural_data = neural_data.item()
-    # Use passed data extraction function or fall back to default
-    if data_extraction_fn is None:
-        raise ValueError("data_extraction_fn must be provided.") # 2026-01-12 dkwon : Set up a better default beahviour and fail more gracefuly in the future 
-    else:
-        response = data_extraction_fn(neural_data, n_pcs=0)
-    angles = neural_data['istim']
-    n_trials = response.shape[1]
-    n_trials_small = int(n_trials * activity_thresh)
-
-    # filter 
-    active = (response > 0).astype(np.float32)
-    firing_probs = np.mean(active, axis=1)
-    conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
-    good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
-    n_good_cells = len(good_cells)
-
-    # update angles and response to be (n_cells_small, n_trials_small) and (n_cells_small, n_trials_small)
-    response_cropped, angles_cropped = np.zeros((len(good_cells), n_trials_small)), np.zeros((len(good_cells), n_trials_small))
-    for i, cell in enumerate(good_cells):
-        active_trials = response[cell] > 0
-        active_trials_idx = np.where(active_trials)[0][:n_trials_small]
-        response_cropped[i] = response[cell, active_trials_idx]
-        angles_cropped[i] = angles[active_trials_idx]
+    data_dict = load_and_process_data_fn(data_path, conc_thresh, activity_thresh)
+    response = data_dict['response']
+    angles = data_dict['angles']
+    good_cells = data_dict['good_cells']
+    n_good_cells = data_dict['n_good_cells']
         
-    # update response and angles to be the cropped versions and convert to JAX arrays, normalize and split into train/test
-    response, angles = jnp.asarray(response_cropped), jnp.asarray(angles_cropped)
-    response = 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # normalize response
     key = jax.random.PRNGKey(42)
-    training_size = n_good_cells // 2
+    training_size = int(n_good_cells * training_ratio)
     shuffled_indices = jax.random.permutation(key, jnp.arange(n_good_cells))
     training_cells, test_cells = shuffled_indices[:training_size], shuffled_indices[training_size:]
     response_train, response_test = response[training_cells, :], response[test_cells, :]
@@ -1025,20 +1009,18 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                         loss_func=loss_functions.quadratic_loss, 
                                         x=angles_train, y=response_train, 
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol,
-                                        use_param_estimator=use_param_estimator)
+                                        use_param_estimator=use_param_estimator, max_iter=max_iter)
         seed_losses[i] = loss
         # format strings
-        import_string = "import numpy as np \n"
-        import_string_jax = "import jax.numpy as jnp \n"
-        program_name = program_num.__name__
-        param_est_name = param_est.__name__
-        program_jax_name = program_jax.__name__
-        program_code_string = inspect.getsource(program_num).replace(f'def {program_name}(', f'def neuron_model_v{i+1}(')
-        program_code_string = import_string + program_code_string
-        parameter_estimator_code_string = inspect.getsource(param_est).replace(f'def {param_est_name}(', f'def parameter_estimator_v{i+1}(')
-        parameter_estimator_code_string = import_string + parameter_estimator_code_string
-        program_jax_code_string = inspect.getsource(program_jax).replace(f'def {program_jax_name}(', f'def neuron_model_v{i+1}(')
-        program_jax_code_string = import_string_jax + program_jax_code_string
+        program_code_string = utils.format_function_source(
+            program_num, f'neuron_model_v{i+1}', 'import numpy as np'
+        )
+        parameter_estimator_code_string = utils.format_function_source(
+            param_est, f'parameter_estimator_v{i+1}', 'import numpy as np'
+        )
+        program_jax_code_string = utils.format_function_source(
+            program_jax, f'neuron_model_v{i+1}', 'import jax.numpy as jnp'
+        )
         y_eval = compute_evaluation_matrix(program_jax, params, n_evaluation_points=100)
 
         new_program_df = pd.DataFrame({'program_code_string': program_code_string,
@@ -1176,7 +1158,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                                 x=angles_train, y=response_train,
                                                                                 param_penalty_weight=param_penalty_weight,
                                                                                 fit_params=fit_params, tol=tol, 
-                                                                                use_param_estimator=use_param_estimator)
+                                                                                use_param_estimator=use_param_estimator, 
+                                                                                max_iter=max_iter)
             if loss == FAILED_PROGRAM_COST:
                 logging.info('-' * 50)
                 continue
@@ -1311,9 +1294,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             _, _, test_loss, optimized_params = objective(neuron_model, param_estimator,
                                                           loss_func=loss_functions.quadratic_loss,
                                                           x=angles_test, y=response_test, fit_params=fit_params,
-                                                          max_iter=2_000, 
+                                                          max_iter=max_iter, 
                                                           param_penalty_weight=param_penalty_weight, tol=tol,
-                                                          use_param_estimator=use_param_estimator)
+                                                          use_param_estimator=use_param_estimator, 
+                                                          )
             islands[island_idx].at[j, 'test_loss'] = test_loss
             islands[island_idx].at[j, 'params'] = optimized_params
             islands[island_idx].at[j, 'mean_loss'] = np.mean(test_loss)

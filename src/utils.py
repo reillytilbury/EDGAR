@@ -2,6 +2,7 @@ import os
 import asyncio
 from . import diagnostic, hypothesis_engine
 import ast
+import inspect
 import jax
 import time
 import numpy as np
@@ -26,6 +27,27 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("google.genai").setLevel(logging.ERROR)
 # load dotenv to load environment variables from .env file
 
+
+def format_function_source(func: Callable, new_name: str, import_statement: str = "") -> str:
+    """
+    Format a function's source code with a new name and import statement.
+    
+    Args:
+        func: The function to extract source code from
+        new_name: The new name for the function
+        import_statement: Import statement to prepend to the source code
+        
+    Returns:
+        Formatted source code string
+    """
+    source = inspect.getsource(func)
+    original_name = func.__name__
+    formatted_source = source.replace(f'def {original_name}(', f'def {new_name}(')
+    
+    if import_statement and not import_statement.endswith('\n'):
+        import_statement += '\n'
+    
+    return import_statement + formatted_source
 
 
 def vmap_over_cells(model_fn):
