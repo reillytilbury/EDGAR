@@ -475,7 +475,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     # load and preprocess data
     neural_data = np.load(data_path, allow_pickle=True)
     neural_data = neural_data.item()
-    response = utils.extract_stimulus_related_response(neural_data, n_pcs=0)
+    response = utils.deprecated_extract_stimulus_related_response(neural_data, n_pcs=0)
     angles = neural_data['istim']
     n_trials = response.shape[1]
     n_trials_small = int(n_trials * activity_thresh)
@@ -931,7 +931,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy',
                 numpy_programs = None,
                 jax_programs = None,
-                param_estimators = None):
+                param_estimators = None,
+                data_extraction_fn = None):
     """ 
     Main function to run the hypothesis engine.
     """
@@ -950,7 +951,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     # load and preprocess data
     neural_data = np.load(data_path, allow_pickle=True)
     neural_data = neural_data.item()
-    response = utils.extract_stimulus_related_response(neural_data, n_pcs=0)
+    # Use passed data extraction function or fall back to default
+    if data_extraction_fn is None:
+        raise ValueError("data_extraction_fn must be provided.") # 2026-01-12 dkwon : Set up a better default beahviour and fail more gracefuly in the future 
+    else:
+        response = data_extraction_fn(neural_data, n_pcs=0)
     angles = neural_data['istim']
     n_trials = response.shape[1]
     n_trials_small = int(n_trials * activity_thresh)

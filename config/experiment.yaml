@@ -1,4 +1,4 @@
-task: orientation_tuning
+task: orientation_tuning # this should be the name of the directory under experiments
 seed_programs:
   module: experiments.orientation_tuning.seed_programs
   function_seeds:

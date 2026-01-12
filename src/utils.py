@@ -28,7 +28,7 @@ logging.getLogger("google.genai").setLevel(logging.ERROR)
 
 
 
-def vmap_over_cells(model_fn):
+def deprecated_vmap_over_cells(model_fn):
     """Return a version of `model_fn` that accepts
        (theta, params_matrix) and runs one row per cell."""
     def _wrapped(theta, params_row):
@@ -36,7 +36,7 @@ def vmap_over_cells(model_fn):
         return model_fn(theta, *params_row)   # unpack to scalars
     return jax.vmap(_wrapped, in_axes=(None, 0))   # x shared, params batched
 
-def circular_distance_rad_np(angle1, angle2) -> np.ndarray:
+def deprecated_circular_distance_rad_np(angle1, angle2) -> np.ndarray:
     """Shortest distance between two angles (radians) on a circle.
     Args:
         angle1: First angle (radians). (float or np.ndarray)
@@ -48,7 +48,7 @@ def circular_distance_rad_np(angle1, angle2) -> np.ndarray:
     diff = np.mod(diff + np.pi, 2 * np.pi) - np.pi  # Normalize to [-pi, pi]
     return np.abs(diff)
 
-def circular_distance_rad_jax(angle1, angle2) -> jnp.ndarray:
+def deprecated_circular_distance_rad_jax(angle1, angle2) -> jnp.ndarray:
     """Shortest distance between two angles (radians) on a circle.
     Args:
         angle1: First angle (radians). (float or jnp.ndarray)
@@ -60,7 +60,7 @@ def circular_distance_rad_jax(angle1, angle2) -> jnp.ndarray:
     diff = jnp.mod(diff + jnp.pi, 2 * jnp.pi) - jnp.pi  # Normalize to [-pi, pi] # Changed np to jnp
     return jnp.abs(diff) # Changed np to jnp
 
-def extract_stimulus_related_response(data: dict, n_pcs: int = 8, z_score: bool = False, spont_mean_removal: bool = False) -> np.ndarray:
+def deprecated_extract_stimulus_related_response(data: dict, n_pcs: int = 8, z_score: bool = False, spont_mean_removal: bool = False) -> np.ndarray:
     """
     Extracts the stimulus-related response from the data. Copy pasted with small modifications from https://github.com/MouseLand/stringer-et-al-2019/blob/master/utils.py#L98
     Args:
@@ -759,7 +759,7 @@ Critically, detail all your improvements within the function's docstring. For ea
     
     return text_prompt
 
-def unbiased_signal_fraction(R, min_repeats=2):
+def deprecated_unbiased_signal_fraction(R, min_repeats=2):
     """
     Compute unbiased fraction of stimulus-related variance (Sahani & Linden, 2003)
     using explicit repeats per angle (no binning).
@@ -822,7 +822,7 @@ def unbiased_signal_fraction(R, min_repeats=2):
         "var_angles": var_angles,
     }
 
-def load_data(data_dir: Union[str, List[List[str]]],
+def deprecated_load_data(data_dir: Union[str, List[List[str]]],
               data_type: str = 'stringer',
               shuffle: bool = False,
               conc_thresh: float = 0.4, 

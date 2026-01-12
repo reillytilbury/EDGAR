@@ -45,6 +45,16 @@ async def _run_many():
         data_config = yaml.safe_load(f)
 
     params['data_path'] = data_config.get('data_path', '')
+    
+    # Dynamically load data extraction function
+    extract_stimulus_related_response_path = data_config.get('extract_stimulus_related_response')
+    if extract_stimulus_related_response_path:
+        # Parse module path and function name (e.g., 'experiments.orientation_tuning.data_parser.extract_stimulus_related_response')
+        module_path, function_name = extract_stimulus_related_response_path.rsplit('.', 1)
+        data_module = importlib.import_module(module_path)
+        data_extraction_fn = getattr(data_module, function_name)
+    else:
+        data_extraction_fn = None
 
     for i in range(4):
         print("running with standard params")
@@ -71,7 +81,8 @@ async def _run_many():
             large_lm_name=params['large_lm_name'],
             numpy_programs=numpy_programs,
             jax_programs=jax_programs,
-            param_estimators=param_estimators
+            param_estimators=param_estimators,
+            data_extraction_fn=data_extraction_fn
         )
 
 if __name__ == "__main__":
