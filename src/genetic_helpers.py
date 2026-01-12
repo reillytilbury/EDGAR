@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import numpy as np
 import logging
 import pandas as pd
-import utils
+from . import utils
 import itertools
 
 def compare_programs(program_a, program_b, loss_tol=0.02, cosine_tol=0.95, mode='complicated'):

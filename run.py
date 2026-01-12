@@ -1,7 +1,7 @@
 import asyncio
 import yaml
 from pathlib import Path
-import hypothesis_engine 
+from src import hypothesis_engine 
 
 async def _run_many():
     # Load experiment configuration

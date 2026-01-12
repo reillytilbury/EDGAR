@@ -8,7 +8,7 @@ import timeout_decorator
 import jaxopt, optax
 import pandas as pd
 from pathlib import Path
-import utils, diagnostic, genetic_helpers, loss_functions
+from . import utils, diagnostic, genetic_helpers, loss_functions
 import experiments.orientation_tuning.seed_programs
 from tqdm import tqdm
 from google import genai

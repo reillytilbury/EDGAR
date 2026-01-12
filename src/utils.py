@@ -1,6 +1,6 @@
 import os
 import asyncio
-import diagnostic, hypothesis_engine
+from . import diagnostic, hypothesis_engine
 import ast
 import jax
 import time
