@@ -16,14 +16,6 @@ from google import genai
 from google.genai import types
 
 
-def vmap_over_cells(model_fn):
-    """Return a version of `model_fn` that accepts
-       (theta, params_matrix) and runs one row per cell."""
-    def _wrapped(theta, params_row):
-        # params_row shape: (k,)  ← one cell’s parameters
-        return model_fn(theta, *params_row)   # unpack to scalars
-    return jax.vmap(_wrapped, in_axes=(None, 0))   # x shared, params batched
-
 def circular_distance_rad_np(angle1, angle2) -> np.ndarray:
     """Shortest distance between two angles (radians) on a circle.
     Args:

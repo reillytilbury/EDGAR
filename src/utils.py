@@ -28,7 +28,7 @@ logging.getLogger("google.genai").setLevel(logging.ERROR)
 
 
 
-def deprecated_vmap_over_cells(model_fn):
+def vmap_over_cells(model_fn):
     """Return a version of `model_fn` that accepts
        (theta, params_matrix) and runs one row per cell."""
     def _wrapped(theta, params_row):
