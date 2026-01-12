@@ -290,8 +290,7 @@ def str_to_func(code_string: Tuple[str, None], needle: str = 'neuron_model') -> 
             print(f"Function {needle} not found in executed code.")
             return None
 
-# UNUSED
-def create_linked_prompt(random_programs: pd.DataFrame, mode: str, llm_type: str = 'g') -> str:
+def deprecated_create_linked_prompt(random_programs: pd.DataFrame, mode: str, llm_type: str = 'g') -> str:
     """
     Create a prompt to generate a new neuron model and parameter estimator based on k existing models.
 
@@ -407,7 +406,7 @@ loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
 
     return program_prompt
 
-def create_program_prompt(random_programs: pd.DataFrame, mode: str, llm_type: str = 'g', use_image: bool = True) -> str:
+def deprecated_create_program_prompt(random_programs: pd.DataFrame, mode: str, llm_type: str = 'g', use_image: bool = True) -> str:
     """
     Create a prompt to generate a new neuron model based on k existing models.
 
@@ -541,7 +540,7 @@ loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
 
     return prompt
 
-def create_parameter_estimator_prompt(random_programs: pd.DataFrame, neuron_model_code_string: str,
+def deprecated_create_parameter_estimator_prompt(random_programs: pd.DataFrame, neuron_model_code_string: str,
                                       max_lines: int = 100,llm_type: str = 'g', use_image: bool = True) -> str:
     """
     Create a prompt to generate a new parameter estimator based on k existing models.
@@ -626,8 +625,7 @@ loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
 """
     return prompt
 
-# UNUSED
-def create_parameter_estimator_image_prompt(neuron_model_code_string: str,
+def deprecated_create_parameter_estimator_image_prompt(neuron_model_code_string: str,
                                             param_estimator_code_string: str,
                                             max_lines: int = 100) -> str:
     """
@@ -672,7 +670,7 @@ Here is the code for the neuron model and parameter estimator:
 """
     return prompt
 
-def create_jax_translater_prompt(program: str) -> str:
+def deprecated_create_jax_translater_prompt(program: str) -> str:
     """
     Create a prompt to translate a program to JAX compatible code.
     Args:
@@ -695,8 +693,7 @@ def create_jax_translater_prompt(program: str) -> str:
     """
     return prompt
 
-# UNUSED
-def create_meta_learning_prompt(logged_output: str):
+def deprecated_create_meta_learning_prompt(logged_output: str):
     """
     Create a prompt to generate a new neuron_model based on a history of old models and their scores.
     Args:
@@ -722,8 +719,7 @@ Here is the output from the genetic algorithm so far:
 {logged_output}
 """
 
-# UNUSED
-def create_image_prompt(program_df_row: Union[pd.DataFrame, None]) -> Union[str, None]:
+def deprecated_create_image_prompt(program_df_row: Union[pd.DataFrame, None]) -> Union[str, None]:
     """
     Creates a text prompt which will be adjoined to an image to prompt an LLM to create a new and improved model.
     Args:
