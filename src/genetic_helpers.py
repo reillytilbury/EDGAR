@@ -104,6 +104,12 @@ def compute_intersection(island_a, island_b, mode='complicated'):
 def perform_island_deduplication(islands, overlap_threshold=6, mode='complicated'):
     """
     Perform deduplication of programs 1. within each island and 2. between islands
+    Args:
+        islands (list[pd.DataFrame]): List of DataFrames, each representing an island's programs.
+        overlap_threshold (int): Minimum number of overlapping programs to trigger deduplication between islands.
+        mode (str): Mode of comparison, can be 'simple' or 'complicated'.
+    Returns:
+        islands (list[pd.DataFrame]): List of DataFrames with duplicates removed.
     """
 
     # 1. within island deduplication

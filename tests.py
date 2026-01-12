@@ -1,6 +1,6 @@
 import pandas as pd
 import jax.numpy as jnp
-from hypothesis_engine import compare_programs, compute_intersection, perform_island_deduplication
+from src.genetic_helpers import compare_programs, compute_intersection, perform_island_deduplication
 
 
 # Define a set of test programs to compare
@@ -13,7 +13,9 @@ ref_program = pd.Series({
     'program_code_string': 'def neuron_model(x, a, b): return a * x + b',
     'params': params_true,
     'cost': 0.1,
-    'program': lambda x, a, b: a * x + b
+    'program': lambda x, a, b: a * x + b,
+    'train_loss': 0.05,
+    'evaluation_matrix': jnp.array([[i * a + b for a, b in params_true] for i in range(10)], dtype=jnp.float32)
 })
 # program 1 is just ref program with a different birth_island
 program_1 = ref_program.copy()
@@ -36,21 +38,23 @@ program_5 = program_4.copy()
 program_5['birth_island'] = 2  # different birth island
 program_5['program_code_string'] = 'def neuron_model(x, a, b): return -a * x + b'  # not equivalent code
 program_5['program'] = lambda x, a, b: -a * x + b  # not equivalent program
+program_5['evaluation_matrix'] = jnp.array([[-(i * a) + b for a, b in program_5['params']] for i in range(10)], dtype=jnp.float32)
 
 # program_6 has a different number of params and should fail early on
 program_6 = program_4.copy()
 program_6['birth_island'] = 3  # different birth island
 program_6['program_code_string'] = 'def neuron_model(x, b, a): return b * x + a'  # different (but equivalent) code string
 program_6['params'] = jnp.arange(30, dtype=jnp.float32).reshape((n_cells, 3)) + 1  # 10 cells, 3 parameters each
+program_6['evaluation_matrix'] = jnp.array([[i * b + a + 0.0 for b, a, c in program_6['params']] for i in range(10)], dtype=jnp.float32)
 
 
 def test_compare_programs():
-    assert compare_programs(ref_program, program_1, mode='complex') == True, "Test failed: ref_program and program 1 should be equivalent modulo birth_island."
-    assert compare_programs(ref_program, program_2, mode='complex') == True, f"Test failed: ref_program and program 2 should be equivalent modulo cost. diff ={abs(program_1['cost'] - program_2['cost'])}"
-    assert compare_programs(ref_program, program_3, mode='complex') == True, "Test failed: ref_program and program 3 should be equivalent modulo code string."
-    assert compare_programs(ref_program, program_4, mode='complex') == True, "Test failed: ref_program and program 4 should be equivalent modulo parameters."
-    assert compare_programs(ref_program, program_5, mode='complex') == False, "Test failed: ref_program and program 5 should not be equivalent due to different code and program."
-    assert compare_programs(ref_program, program_6, mode='complex') == False, "Test failed: ref_program and program 6 should not be equivalent due to different number of parameters."
+    assert compare_programs(ref_program, program_1, mode='complicated') == True, "Test failed: ref_program and program 1 should be equivalent modulo birth_island."
+    assert compare_programs(ref_program, program_2, mode='complicated') == True, f"Test failed: ref_program and program 2 should be equivalent modulo cost. diff ={abs(program_1['cost'] - program_2['cost'])}"
+    assert compare_programs(ref_program, program_3, mode='complicated') == True, "Test failed: ref_program and program 3 should be equivalent modulo code string."
+    assert compare_programs(ref_program, program_4, mode='complicated') == True, "Test failed: ref_program and program 4 should be equivalent modulo parameters."
+    assert compare_programs(ref_program, program_5, mode='complicated') == False, "Test failed: ref_program and program 5 should not be equivalent due to different code and program."
+    assert compare_programs(ref_program, program_6, mode='complicated') == False, "Test failed: ref_program and program 6 should not be equivalent due to different number of parameters."
     assert compare_programs(ref_program, program_1, mode='simple') == True, "Test failed: simple mode should consider ref_program and program_1 equivalent as they have the same code but diff unique identifiers."
     assert compare_programs(program_1, program_2, mode='simple') == True, "Test failed: simple mode should consider program_1 and program_2 equivalent as they have the same code and unique identifiers."
     assert compare_programs(program_2, program_3, mode='simple') == True, "Test failed: simple mode should consider program_2 and program_3 equivalent as they have the same unique identifiers."
@@ -101,11 +105,15 @@ def test_perform_island_deduplication():
     assert deduplicated_islands[1].equals(pd.Series([program_3, program_6])), "Test failed: Island 2 did not deduplicate correctly."
 
     # now test with overlap_threshold = 1
-    # this removes duplicates from the island with the higher index, so island_1 will stay the same, and island_2 will be reduced to [program_6]
+    # this removes duplicates from the island with the higher index, so island_1 will stay the same, and island_2 will be reduced to [program_6]    
+    # Recreate islands for the second test
+    island_1 = pd.Series([program_1, program_2, program_5])
+    island_2 = pd.Series([program_3, program_4, program_6])
+    islands = [island_1, island_2]
     deduplicated_islands = perform_island_deduplication(islands, overlap_threshold=1)
     assert len(deduplicated_islands) == 2, "Test failed: Expected 2 islands after deduplication with overlap_threshold=1."
     assert deduplicated_islands[0].equals(pd.Series([program_1, program_5])), "Test failed: Island 1 did not deduplicate correctly with overlap_threshold=1."
-    assert deduplicated_islands[1].equals(pd.Series([program_6])), "Test failed: Island 2 did not deduplicate correctly with overlap_threshold=1."
+    assert deduplicated_islands[1].equals(pd.Series([program_3, program_6])), "Test failed: Island 2 did not deduplicate correctly with overlap_threshold=1."
 
 if __name__ == "__main__":
     test_compare_programs()
