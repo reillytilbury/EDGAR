@@ -939,7 +939,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 numpy_programs = None,
                 jax_programs = None,
                 param_estimators = None,
-                load_and_process_data_fn = None):
+                load_and_process_data_fn = None,
+                activity_threshold = None,
+                conc_threshold = None,
+                random_seed = 42):
     """ 
     Main function to run the hypothesis engine.
     """
@@ -955,19 +958,18 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     if param_estimators is None or len(param_estimators) != 2:
         raise ValueError("param_estimators must be a list of 2 functions.")
 
-    data_dict = load_and_process_data_fn(data_path, conc_thresh, activity_thresh)
+    data_dict = load_and_process_data_fn(data_path, activity_threshold=activity_threshold, conc_threshold=conc_threshold)
     response = data_dict['response']
     angles = data_dict['angles']
-    good_cells = data_dict['good_cells']
-    n_good_cells = data_dict['n_good_cells']
+    n_good_cells, n_angles = response.shape
         
-    key = jax.random.PRNGKey(42)
+    key = jax.random.PRNGKey(random_seed)
     training_size = int(n_good_cells * training_ratio)
     shuffled_indices = jax.random.permutation(key, jnp.arange(n_good_cells))
     training_cells, test_cells = shuffled_indices[:training_size], shuffled_indices[training_size:]
     response_train, response_test = response[training_cells, :], response[test_cells, :]
     angles_train, angles_test = angles[training_cells, :], angles[test_cells, :]
-    print(f"Selected {len(good_cells)} cells with activity > {activity_thresh} and concentration > {conc_thresh}.")
+    print(f"Selected {n_good_cells} cells with activity > {activity_threshold} and concentration > {conc_threshold}.")
     print(f"Using {len(training_cells)} cells for training and {len(test_cells)} cells for testing.")
 
     # create a dataframe to store the programs in each island

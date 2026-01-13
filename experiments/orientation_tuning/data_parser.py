@@ -78,7 +78,25 @@ def normalize_response(response: jnp.ndarray) -> jnp.ndarray:
     normalized_response = 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # multiply the response by 100 and normalize
     return normalized_response
 
-def load_and_process_data(data_path: str, activity_thresh: float = 0.1, conc_thresh: float = 0.1) -> dict:
+def load_and_process_data(data_path: str, activity_threshold: float = 0.1, conc_threshold: float = 0.1) -> dict:
+    """
+    Load and preprocess neural data from a specified .npy file.
+    Parameters
+    ----------
+    data_path : str
+        Path to the .npy file containing neural data.
+    activity_threshold : float
+        Threshold for activity to select good cells.
+    conc_threshold : float
+        Threshold for concentration to select good cells.
+
+    Returns
+    -------
+    data_dict : dict
+        Dictionary containing:
+          - 'response': Preprocessed neural response. (n_cells_small, n_trials_small)
+          - 'angles': Preprocessed stimulus angles. (n_cells_small, n_trials_small)
+    """
     # load and preprocess data
     neural_data = np.load(data_path, allow_pickle=True)
     neural_data = neural_data.item()
@@ -87,13 +105,13 @@ def load_and_process_data(data_path: str, activity_thresh: float = 0.1, conc_thr
 
     angles = neural_data['istim']
     n_trials = response.shape[1]
-    n_trials_small = int(n_trials * activity_thresh)
+    n_trials_small = int(n_trials * activity_threshold)
 
     # filter 
     active = (response > 0).astype(np.float32)
     firing_probs = np.mean(active, axis=1)
     conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
-    good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
+    good_cells = np.where((firing_probs > activity_threshold) & (conc > conc_threshold))[0]
     n_good_cells = len(good_cells)
 
     # update angles and response to be (n_cells_small, n_trials_small) and (n_cells_small, n_trials_small)
@@ -109,8 +127,6 @@ def load_and_process_data(data_path: str, activity_thresh: float = 0.1, conc_thr
     return {
         "response": response_cropped,
         "angles": angles_cropped,
-        "good_cells": good_cells,
-        "n_good_cells": n_good_cells, 
     }
 
 def unbiased_signal_fraction(R, min_repeats=2):
