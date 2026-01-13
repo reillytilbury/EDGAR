@@ -1,4 +1,4 @@
-task: orientation_tuning
+task: orientation_tuning # name of the sub directory under experiments
 load_and_process_data_fn: experiments.orientation_tuning.data_parser.load_and_process_data
-normalize_response: experiments.orientation_tuning.data_parser.normalize_response
 data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
+# save some data parsing parameters (thresholds) so that we can save down a yaml copy each time we run an experiment

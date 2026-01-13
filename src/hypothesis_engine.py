@@ -939,8 +939,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 numpy_programs = None,
                 jax_programs = None,
                 param_estimators = None,
-                load_and_process_data_fn = None,
-                normalize_response = None):
+                load_and_process_data_fn = None):
     """ 
     Main function to run the hypothesis engine.
     """

@@ -57,14 +57,6 @@ async def _run_many(test_mode: bool = False):
     else:
         load_and_process_data_fn = None
 
-    normalize_response_fn_path = data_config.get('normalize_response')
-    if normalize_response_fn_path:
-        module_path, function_name = normalize_response_fn_path.rsplit('.', 1)
-        data_module = importlib.import_module(module_path)
-        normalize_response_fn = getattr(data_module, function_name)
-    else:
-        normalize_response_fn = None
-
     if test_mode:
         params['n_iterations'] = 1
         params['time_limit'] = 10  # seconds
@@ -105,7 +97,6 @@ async def _run_many(test_mode: bool = False):
             jax_programs=jax_programs,
             param_estimators=param_estimators,
             load_and_process_data_fn=load_and_process_data_fn,
-            normalize_response=normalize_response_fn
         )
 
 if __name__ == "__main__":

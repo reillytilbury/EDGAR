@@ -157,10 +157,6 @@ def load_and_process_data(data_path, conc_thresh=0.55, activity_thresh=0.4):
         'n_good_cells': len(good_cells)
     }
 
-def normalize_response(response):
-    """Optional: normalize response data."""
-    return response / jnp.linalg.norm(response, axis=1, keepdims=True)
-```
 
 ### 4. Configure `config/experiment.yaml`
 
@@ -218,7 +214,6 @@ experiment_params:
 ```yaml
 task: your_task_name
 load_and_process_data_fn: experiments.your_task_name.data_parser.load_and_process_data
-normalize_response: experiments.your_task_name.data_parser.normalize_response
 data_path: /path/to/your/data.npy
 ```
 
