@@ -50,11 +50,11 @@ async def _run_many(test_mode: bool = False):
     # Required parameters - error if not supplied
     if 'activity_threshold' not in data_config:
         raise ValueError("activity_threshold must be specified in config/data.yaml")
-    if 'concentration_threshold' not in data_config:
-        raise ValueError("concentration_threshold must be specified in config/data.yaml")
+    if 'conc_threshold' not in data_config:
+        raise ValueError("conc_threshold must be specified in config/data.yaml")
     
     params['activity_threshold'] = data_config['activity_threshold']
-    params['concentration_threshold'] = data_config['concentration_threshold']
+    params['conc_threshold'] = data_config['conc_threshold']
     
     # Dynamically load data extraction function
     load_and_process_data_fn_path = data_config.get('load_and_process_data_fn')
@@ -107,7 +107,7 @@ async def _run_many(test_mode: bool = False):
             param_estimators=param_estimators,
             load_and_process_data_fn=load_and_process_data_fn,
             activity_threshold=params['activity_threshold'],
-            concentration_threshold=params['concentration_threshold'],
+            conc_threshold=params['conc_threshold'],
         )
 
 if __name__ == "__main__":

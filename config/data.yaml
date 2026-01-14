@@ -3,4 +3,4 @@ load_and_process_data_fn: experiments.orientation_tuning.data_parser.load_and_pr
 data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
 # save some data parsing parameters (thresholds) so that we can save down a yaml copy each time we run an experiment
 activity_threshold: 0.4
-concentration_threshold: 0.55
+conc_threshold: 0.55
