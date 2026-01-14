@@ -25,7 +25,7 @@ experiment_params:
   tol : 1e-6
   exploit_point : 0.5
   param_penalty_weight : 0.01
-  FAILED_PROGRAM_COST : inf
+  FAILED_PROGRAM_COST : .inf
   use_image_feedback : true
   use_param_estimator : true
   exploration_topology : [1, 2, 3, 4, 5, 6, 7, 0]
@@ -34,3 +34,14 @@ experiment_params:
   little_lm_name : gemini-2.0-flash
   large_lm_name : gemini-2.5-flash
   use_large_every : 3
+
+# Evolution algorithm parameters (used by EvolutionConfig)
+evolution:
+  capacity_per_island: 12        # Max programs per island (same as critical_population_size)
+  n_migrants: 2                  # Programs to migrate each round
+  overlap_threshold: 6           # Threshold for cross-island deduplication
+  loss_tolerance: 0.01           # Loss difference for similarity detection
+  cosine_tolerance: 0.99         # Behavioral similarity threshold
+  min_wise_programs: 0           # Minimum "wise" (large LLM) programs to preserve
+  large_lm_name: gemini-2.5-flash
+  loss_type: train_loss          # 'train_loss' or 'test_loss'

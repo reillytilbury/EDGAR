@@ -275,6 +275,47 @@ class ExperimentValidator:
         
         return True
     
+    def test_experiment_params_types(self):
+        """Test that experiment_params values have correct types."""
+        exp_params = self.config.get('experiment_params', {})
+        
+        type_checks = {
+            'n_iterations': int,
+            'time_limit': (int, float),
+            'k_max': int,
+            'n_islands': int,
+            'batch_size': int,
+            'critical_population_size': int,
+            'n_migrants': int,
+            'fit_params': bool,
+            'tol': float,
+            'exploit_point': float,
+            'param_penalty_weight': float,
+            'FAILED_PROGRAM_COST': float,  # Must be float, not string!
+            'use_image_feedback': bool,
+            'use_param_estimator': bool,
+        }
+        
+        errors = []
+        for field, expected_type in type_checks.items():
+            if field not in exp_params:
+                continue  # Skip missing fields (handled by other test)
+            
+            value = exp_params[field]
+            if not isinstance(value, expected_type):
+                errors.append(
+                    f"experiment_params.{field}: expected {expected_type.__name__ if isinstance(expected_type, type) else expected_type}, "
+                    f"got {type(value).__name__} (value: {value!r})"
+                )
+        
+        if errors:
+            raise AssertionError(
+                f"Type errors in experiment_params:\n" + 
+                "\n".join(f"  - {e}" for e in errors)
+            )
+        
+        return True
+    
     def get_validation_report(self):
         """Run all tests and return a report."""
         tests = [
@@ -282,6 +323,7 @@ class ExperimentValidator:
             ("Required fields", self.test_required_fields),
             ("Seed programs structure", self.test_seed_programs_structure),
             ("Experiment params structure", self.test_experiment_params_structure),
+            ("Experiment params types", self.test_experiment_params_types),
         ]
         
         results = []
