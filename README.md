@@ -48,6 +48,7 @@ EDGAR-gamma/
 ├── src/                      # Core framework code
 │   ├── hypothesis_engine.py  # Main evolution loop
 │   ├── genetic_helpers.py    # Island operations (migration, pruning)
+│   ├── data_structures.py    # Predictors class for multi-predictor support
 │   ├── prompt_manager.py     # LLM prompt generation
 │   ├── llm_helper.py         # LLM API interactions
 │   ├── diagnostic.py         # Visualization tools
@@ -72,46 +73,53 @@ import numpy as np
 import jax.numpy as jnp
 
 # NumPy version (used for parameter estimation)
-def neuron_model_1(theta, amplitude=1.0, baseline=0.0):
+def neuron_model_1(X, amplitude=1.0, baseline=0.0):
     """
     Simple model description.
     
     Args:
-        theta: Input stimulus (e.g., orientation angles)
+        X: Predictor array with shape (n_predictors, n_trials).
+           X[0] is the primary stimulus (e.g., orientation angles).
         amplitude: Response amplitude
         baseline: Baseline firing rate
     
     Returns:
-        Predicted firing rate
+        Predicted firing rate, shape (n_trials,)
     """
+    theta = X[0]  # Extract first predictor
     return amplitude * np.cos(theta) + baseline
 
 # JAX version (used for gradient-based optimization)
-def neuron_model_1_jax(theta, amplitude=1.0, baseline=0.0):
+def neuron_model_1_jax(X, amplitude=1.0, baseline=0.0):
     """Same as neuron_model_1 but using JAX."""
+    theta = X[0]  # Extract first predictor
     return amplitude * jnp.cos(theta) + baseline
 
 # Parameter estimator
-def parameter_estimator_1(theta, response):
+def parameter_estimator_1(X, response):
     """
     Estimate parameters from data.
     
     Args:
-        theta: Stimulus values for a single cell
-        response: Observed responses for a single cell
+        X: Predictor array with shape (n_predictors, n_trials).
+           X[0] is the primary stimulus.
+        response: Observed responses for a single cell, shape (n_trials,)
     
     Returns:
-        tuple: (amplitude, baseline)
+        np.ndarray: Estimated parameters [amplitude, baseline]
     """
+    theta = X[0]  # Extract first predictor
     baseline = np.mean(response)
     amplitude = np.std(response)
-    return amplitude, baseline
+    return np.array([amplitude, baseline])
 
 # Implement neuron_model_2, neuron_model_2_jax, parameter_estimator_2
 # ...
 ```
 
 **Important constraints:**
+- **Function signature**: Models must accept `X` as first argument with shape `(n_predictors, n_trials)`
+- **Predictor access**: Use index-based access like `theta = X[0]`, `contrast = X[1]`
 - Parameter estimators must be simple heuristics (no scipy.optimize, curve_fit, etc.)
 - JAX versions cannot use boolean indexing, dynamic shapes, or value-dependent control flow
 - Use `jnp.where()` instead of boolean indexing
@@ -149,13 +157,61 @@ def load_and_process_data(data_path, conc_thresh=0.55, activity_thresh=0.4):
     # Filter cells based on your criteria
     good_cells = np.where((response.mean(axis=1) > activity_thresh))[0]
     
-    # Return as JAX arrays
+    # Create Predictors object (supports multiple predictors)
+    n_good_cells = len(good_cells)
+    n_trials = response.shape[1]
+    
+    # Single predictor example: expand stimuli to (n_cells, 1, n_trials)
+    if stimuli.ndim == 1:
+        stimuli_expanded = np.tile(stimuli.reshape(1, 1, -1), (n_good_cells, 1, 1))
+    else:
+        stimuli_expanded = stimuli[good_cells][:, np.newaxis, :]
+    
+    predictors = Predictors.from_array(
+        stimuli_expanded,
+        names=predictor_names or ['theta']
+    )
+    
+    # Return with both new and legacy formats
     return {
         'response': jnp.array(response[good_cells]),
-        'angles': jnp.array(stimuli),
+        'predictors': predictors,  # New format
+        'angles': jnp.array(stimuli_expanded[:, 0, :]),  # Deprecated, for backward compat
         'good_cells': good_cells,
-        'n_good_cells': len(good_cells)
+        'n_good_cells': n_good_cells
     }
+```
+
+#### Multi-Predictor Support
+
+The framework supports models with multiple predictor variables (e.g., orientation + contrast):
+
+```python
+# In data_parser.py - create multi-predictor data
+theta = data['orientation']  # (n_trials,)
+contrast = data['contrast']  # (n_trials,)
+
+# Stack into (n_cells, n_predictors, n_trials)
+predictors_array = np.stack([
+    np.tile(theta, (n_cells, 1)),
+    np.tile(contrast, (n_cells, 1))
+], axis=1)
+
+predictors = Predictors.from_array(
+    predictors_array,
+    names=['theta', 'contrast']
+)
+```
+
+```python
+# In seed_programs.py - access multiple predictors
+def neuron_model_multi(X, theta_pref=0.0, contrast_gain=1.0, baseline=0.0):
+    theta = X[0]     # First predictor: orientation
+    contrast = X[1]  # Second predictor: contrast
+    
+    tuning = np.cos(theta - theta_pref)
+    return baseline + contrast_gain * contrast * tuning
+```
 
 
 ### 4. Configure `config/experiment.yaml`
@@ -215,6 +271,18 @@ experiment_params:
 task: your_task_name
 load_and_process_data_fn: experiments.your_task_name.data_parser.load_and_process_data
 data_path: /path/to/your/data.npy
+
+# Cell selection thresholds
+activity_threshold: 0.4
+conc_threshold: 0.55
+
+# Define predictors (names used in models)
+predictors:
+  - name: theta
+    description: "Stimulus orientation angle in radians"
+  # Add more predictors as needed:
+  # - name: contrast
+  #   description: "Stimulus contrast level"
 ```
 
 ### 6. (Optional) Customize Prompts in `config/prompts.yaml`
@@ -227,9 +295,11 @@ The prompts control how LLMs generate code. Key sections:
   - `exploit`: Refinement mode
   - `image_analysis`: Instructions for interpreting diagnostic plots
   - `code_guidelines`: Code constraints and JAX compatibility rules
+  - `function_signature`: Required function signature format (X with shape `(n_predictors, n_trials)`)
   - `docstring_guidelines`: Documentation format
 
 - `parameter_estimator`: Instructions for parameter estimation functions
+  - Includes `function_signature` for the `(X, spike_counts)` format
 - `jax_translator_prompt`: Instructions for NumPy → JAX conversion
 
 **Important**: Maintain the variable placeholders like `{k}`, `{next_version}`, `{max_lines}`, etc.
