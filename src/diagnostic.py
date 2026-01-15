@@ -6,6 +6,14 @@ import matplotlib.pyplot as plt
 import jax.numpy as jnp
 from typing import Optional, Callable, Sequence
 
+
+def _ensure_predictor_format(x_cell: jnp.ndarray) -> jnp.ndarray:
+    """Convert 1D stimulus array to 2D predictor format (n_predictors, n_trials)."""
+    if x_cell.ndim == 1:
+        return x_cell.reshape(1, -1)  # (n_trials,) -> (1, n_trials)
+    return x_cell  # already (n_predictors, n_trials)
+
+
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
                     x: jnp.ndarray, y: jnp.ndarray, 
                     cell_selection: Sequence[int],
@@ -26,11 +34,14 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         programs_df:
             - must have columns 'program' and 'params'. 
             - must have n_rows <= 3
-            - 'program': callable (written in JAX): (x: jnp.ndarray, *params) -> jnp.ndarray
+            - 'program': callable (written in JAX): (X: jnp.ndarray, *params) -> jnp.ndarray
+                         where X has shape (n_predictors, n_trials)
             - 'params': jnp.ndarray (n_cells, n_params)
         loss_function: 
             - callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
-        x: (n_cells x n_trials) - jnp.ndarray
+        x: Predictor data. Can be:
+           - 2D array (n_cells, n_trials) - will use first axis as theta
+           - 3D array (n_cells, n_predictors, n_trials)
         y: (n_cells x n_trials) - jnp.ndarray
     """
     assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, but has {len(programs_df)} rows."
@@ -41,10 +52,22 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     # define frequently used variables
     models = programs_df['program'].tolist()
     params = programs_df['params'].tolist()
-    params = [p[cell_selection] for p in params]
-    spike_matrix = y[cell_selection]
-    stimuli = x[cell_selection]
-    n_cells, n_trials = spike_matrix.shape
+    cell_idx = jnp.array(cell_selection)
+    params = [p[cell_idx] for p in params]
+    spike_matrix = y[cell_idx]
+    
+    # Handle both 2D (n_cells, n_trials) and 3D (n_cells, n_predictors, n_trials) input
+    x_arr = jnp.asarray(x)
+    if x_arr.ndim == 2:
+        # 2D input: (n_cells, n_trials) - expand to (n_cells, 1, n_trials)
+        stimuli_3d = x_arr[cell_idx][:, jnp.newaxis, :]
+        stimuli_1d = x_arr[cell_idx]  # for plotting (use first predictor)
+    else:
+        # 3D input: (n_cells, n_predictors, n_trials)
+        stimuli_3d = x_arr[cell_idx]
+        stimuli_1d = x_arr[cell_idx][:, 0, :]  # use first predictor for plotting
+    
+    n_cells, n_predictors, n_trials = stimuli_3d.shape
     n_models = len(models)
     if labels is None:
         labels = [f'model {i + 1}' for i in range(n_models)]
@@ -60,30 +83,32 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     for i, model in enumerate(models):
         for c in range(n_cells):
             params_ic = params[i][c]
-            predicted_response = model(stimuli[c], *params_ic)
+            X_cell = stimuli_3d[c]  # (n_predictors, n_trials)
+            predicted_response = model(X_cell, *params_ic)
             point_losses = point_losses.at[i, c].set(loss_function(predicted_response, spike_matrix[c]))
     
-    # compute running mean
+    # compute running mean (using first predictor for binning)
     x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False) + 0.5 * (2 * jnp.pi / n_mean)  # Shift to center bins
     binned_mean = jnp.zeros((n_cells, n_mean))
     for c in range(n_cells):
-        bin_idx = jnp.clip(((stimuli[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
+        bin_idx = jnp.clip(((stimuli_1d[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
         sums = jnp.bincount(bin_idx, weights=spike_matrix[c], minlength=n_mean)
         counts = jnp.bincount(bin_idx, minlength=n_mean)
         binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))  # Avoid division by zero
 
     # compute cell outputs at evaluation points
     x_values_eval = jnp.linspace(0, 2 * jnp.pi, n_eval, endpoint=False)
+    X_eval = x_values_eval.reshape(1, -1)  # (1, n_eval) - single predictor format
     model_outputs = jnp.zeros((n_models, n_cells, n_eval))
     for i, model in enumerate(models):
         for c in range(n_cells):
             params_ic = params[i][c]
-            model_outputs = model_outputs.at[i, c].set(model(x_values_eval, *params_ic))
+            model_outputs = model_outputs.at[i, c].set(model(X_eval, *params_ic))
 
     for c in range(n_cells):
         row, col = divmod(c, n_row_cols)
         # Scatter plot of data points (x=stimulus, y=response) for cell c
-        ax[row, col].scatter(stimuli[c], spike_matrix[c], c='black', alpha=point_alpha, s=point_size)
+        ax[row, col].scatter(stimuli_1d[c], spike_matrix[c], c='black', alpha=point_alpha, s=point_size)
 
         # Plot running mean for cell c
         ax[row, col].plot(x_values_mean, binned_mean[c], 
@@ -121,38 +146,55 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
     """
     Plots the fit of a single model to a selection of cells in x and y, along with the running mean.
     Args:
-        model: callable (written in JAX): (x: jnp.ndarray, *params) -> jnp.ndarray
+        model: callable (written in JAX): (X: jnp.ndarray, *params) -> jnp.ndarray
+               where X has shape (n_predictors, n_trials)
         loss_function: callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
-        x: (n_cells x n_trials) - jnp.ndarray
+        x: Predictor data. Can be:
+           - 2D array (n_cells, n_trials) - will use as single predictor
+           - 3D array (n_cells, n_predictors, n_trials)
         y: (n_cells x n_trials) - jnp.ndarray
         params: (n_cells x n_params) - jnp.ndarray
     """
-    assert y.shape[0] == int(np.sqrt(y.shape[0]))**2, f"n_cells must be a square number, but got {y.shape[0]} cells."
-    assert x.shape == y.shape, f"x and y must have the same shape, but got {x.shape} and {y.shape}."
-    n_cells, n_trials = y.shape
+    n_cells = y.shape[0]
+    assert n_cells == int(np.sqrt(n_cells))**2, f"n_cells must be a square number, but got {n_cells} cells."
+    
+    # Handle both 2D and 3D input
+    x_arr = jnp.asarray(x)
+    if x_arr.ndim == 2:
+        # 2D input: (n_cells, n_trials) - expand to (n_cells, 1, n_trials)
+        x_3d = x_arr[:, jnp.newaxis, :]
+        x_1d = x_arr  # for plotting
+    else:
+        # 3D input: (n_cells, n_predictors, n_trials)
+        x_3d = x_arr
+        x_1d = x_arr[:, 0, :]  # use first predictor for plotting
+    
+    n_cells, n_predictors, n_trials = x_3d.shape
 
     # Calculate loss for each cell and trial
     point_losses = jnp.zeros((n_cells, n_trials))
     for c in range(n_cells):
         params_c = params[c]
-        predicted_response = model(x[c], *params_c)
+        X_cell = x_3d[c]  # (n_predictors, n_trials)
+        predicted_response = model(X_cell, *params_c)
         point_losses = point_losses.at[c].set(loss_function(predicted_response, y[c]))
 
-    # compute running mean
+    # compute running mean (using first predictor for binning)
     x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False) + 0.5 * (2 * jnp.pi / n_mean)  # Shift to center bins
     binned_mean = jnp.zeros((n_cells, n_mean))
     for c in range(n_cells):
-        bin_idx = jnp.clip(((x[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
+        bin_idx = jnp.clip(((x_1d[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
         sums = jnp.bincount(bin_idx, weights=y[c], minlength=n_mean)
         counts = jnp.bincount(bin_idx, minlength=n_mean)
         binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))  # Avoid division by zero
 
     # compute cell outputs at evaluation points
     x_values_eval = jnp.linspace(0, 2 * jnp.pi, n_eval, endpoint=False)
+    X_eval = x_values_eval.reshape(1, -1)  # (1, n_eval) - single predictor format
     model_output = jnp.zeros((n_cells, n_eval))
     for c in range(n_cells):
         params_c = params[c]
-        model_output = model_output.at[c].set(model(x_values_eval, *params_c))
+        model_output = model_output.at[c].set(model(X_eval, *params_c))
 
     n_row_cols = int(np.sqrt(n_cells))
     fig, ax = plt.subplots(n_row_cols, n_row_cols, figsize=(20, 20))
@@ -164,7 +206,7 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
 
         # data scatter
         vmin, vmax = np.percentile(point_losses[c], [1,99])
-        sc = ax[row, col].scatter(x[c], y[c], c=point_losses[c], cmap='viridis', vmin=vmin, vmax=vmax, alpha=0.5)
+        sc = ax[row, col].scatter(x_1d[c], y[c], c=point_losses[c], cmap='viridis', vmin=vmin, vmax=vmax, alpha=0.5)
         plt.colorbar(sc, ax=ax[row, col], label='Loss')
 
         # running mean
