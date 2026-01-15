@@ -471,12 +471,13 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash-
     func = utils.str_to_func(jax_code_string, 'neuron_model')
     return jax_code_string, func
 
-def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100) -> jnp.ndarray:
+def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100,
+                               predictor_idx: int = 0, n_predictors: int = 1) -> jnp.ndarray:
     """
     Computes the evaluation matrix for a given program and parameters.
     
     Creates a uniform grid of angles [0, 2π] and evaluates the model at those points
-    for all cells.
+    for all cells. The evaluation grid is placed at `predictor_idx` in the predictor array.
     
     Args:
         program (callable): The neuron model function with signature:
@@ -484,14 +485,27 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
                            where X has shape (n_predictors, n_trials).
         params (jnp.ndarray): The parameters for the neuron model. Shape: (n_cells, n_params)
         n_evaluation_points (int): Number of points to evaluate the model at.
+        predictor_idx (int): Index of the predictor to vary for evaluation. Default is 0.
+        n_predictors (int): Total number of predictors in the model. Default is 1.
     Returns:
         jnp.ndarray: The evaluation matrix of shape (n_cells, n_evaluation_points).
+    
+    Raises:
+        ValueError: If predictor_idx >= n_predictors or predictor_idx < 0.
     """
+    # Early validation
+    if predictor_idx < 0 or predictor_idx >= n_predictors:
+        raise ValueError(
+            f"predictor_idx ({predictor_idx}) must be in range [0, {n_predictors}). "
+            f"Got n_predictors={n_predictors}."
+        )
+    
     n_cells = params.shape[0]
     # Create evaluation angles
     angles = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
-    # Create X in new format: (n_cells, n_predictors=1, n_trials)
-    X_eval = jnp.tile(angles.reshape(1, 1, -1), (n_cells, 1, 1))
+    # Create X with zeros for all predictors, then set the evaluation predictor
+    X_eval = jnp.zeros((n_cells, n_predictors, n_evaluation_points))
+    X_eval = X_eval.at[:, predictor_idx, :].set(angles)
     # vmap over cells
     program_vmap = utils.vmap_over_cells(program)
     y_eval = program_vmap(X_eval, params)

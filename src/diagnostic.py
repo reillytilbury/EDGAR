@@ -27,7 +27,8 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                     point_size: int = 80,
                     legend_fontsize: int = 12,
                     dpi: float = 100.0, 
-                    save_path: Optional[str] = None):
+                    save_path: Optional[str] = None,
+                    predictor_idx: int = 0):
     """
     plot fits of all models in programs_df over a subset of cells in x and y, along with the running mean.
     Args:
@@ -43,11 +44,31 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
            - 2D array (n_cells, n_trials) - will use first axis as theta
            - 3D array (n_cells, n_predictors, n_trials)
         y: (n_cells x n_trials) - jnp.ndarray
+        predictor_idx (int): Index of the predictor to use for plotting (x-axis). Default is 0.
+                             Must be 0 if x is 2D.
+    
+    Raises:
+        ValueError: If predictor_idx != 0 when x is 2D, or if predictor_idx is out of range.
     """
     assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, but has {len(programs_df)} rows."
     assert len(cell_selection) > 0, "cell_selection must not be empty."
     assert len(cell_selection) == int(np.sqrt(len(cell_selection)))**2, \
         f"cell_selection must be a square number, but has {len(cell_selection)} elements."
+
+    # Early validation of predictor_idx
+    x_arr = jnp.asarray(x)
+    if x_arr.ndim == 2:
+        if predictor_idx != 0:
+            raise ValueError(
+                f"predictor_idx must be 0 for 2D input (single predictor), got {predictor_idx}."
+            )
+    else:
+        n_predictors = x_arr.shape[1]
+        if predictor_idx < 0 or predictor_idx >= n_predictors:
+            raise ValueError(
+                f"predictor_idx ({predictor_idx}) must be in range [0, {n_predictors}). "
+                f"Got n_predictors={n_predictors}."
+            )
 
     # define frequently used variables
     models = programs_df['program'].tolist()
@@ -57,15 +78,14 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     spike_matrix = y[cell_idx]
     
     # Handle both 2D (n_cells, n_trials) and 3D (n_cells, n_predictors, n_trials) input
-    x_arr = jnp.asarray(x)
     if x_arr.ndim == 2:
         # 2D input: (n_cells, n_trials) - expand to (n_cells, 1, n_trials)
         stimuli_3d = x_arr[cell_idx][:, jnp.newaxis, :]
-        stimuli_1d = x_arr[cell_idx]  # for plotting (use first predictor)
+        stimuli_1d = x_arr[cell_idx]  # for plotting (single predictor)
     else:
         # 3D input: (n_cells, n_predictors, n_trials)
         stimuli_3d = x_arr[cell_idx]
-        stimuli_1d = x_arr[cell_idx][:, 0, :]  # use first predictor for plotting
+        stimuli_1d = x_arr[cell_idx][:, predictor_idx, :]  # use specified predictor for plotting
     
     n_cells, n_predictors, n_trials = stimuli_3d.shape
     n_models = len(models)
@@ -142,7 +162,8 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
                           x: jnp.ndarray, y: jnp.ndarray, params: jnp.ndarray, 
                           n_eval: int = 100, n_mean: int = 50,
                           dpi: float = 100.0, title: str = '', 
-                          save_path: Optional[str] = None):
+                          save_path: Optional[str] = None,
+                          predictor_idx: int = 0):
     """
     Plots the fit of a single model to a selection of cells in x and y, along with the running mean.
     Args:
@@ -154,20 +175,39 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
            - 3D array (n_cells, n_predictors, n_trials)
         y: (n_cells x n_trials) - jnp.ndarray
         params: (n_cells x n_params) - jnp.ndarray
+        predictor_idx (int): Index of the predictor to use for plotting (x-axis). Default is 0.
+                             Must be 0 if x is 2D.
+    
+    Raises:
+        ValueError: If predictor_idx != 0 when x is 2D, or if predictor_idx is out of range.
     """
     n_cells = y.shape[0]
     assert n_cells == int(np.sqrt(n_cells))**2, f"n_cells must be a square number, but got {n_cells} cells."
     
-    # Handle both 2D and 3D input
+    # Early validation of predictor_idx
     x_arr = jnp.asarray(x)
+    if x_arr.ndim == 2:
+        if predictor_idx != 0:
+            raise ValueError(
+                f"predictor_idx must be 0 for 2D input (single predictor), got {predictor_idx}."
+            )
+    else:
+        n_preds = x_arr.shape[1]
+        if predictor_idx < 0 or predictor_idx >= n_preds:
+            raise ValueError(
+                f"predictor_idx ({predictor_idx}) must be in range [0, {n_preds}). "
+                f"Got n_predictors={n_preds}."
+            )
+    
+    # Handle both 2D and 3D input
     if x_arr.ndim == 2:
         # 2D input: (n_cells, n_trials) - expand to (n_cells, 1, n_trials)
         x_3d = x_arr[:, jnp.newaxis, :]
-        x_1d = x_arr  # for plotting
+        x_1d = x_arr  # for plotting (single predictor)
     else:
         # 3D input: (n_cells, n_predictors, n_trials)
         x_3d = x_arr
-        x_1d = x_arr[:, 0, :]  # use first predictor for plotting
+        x_1d = x_arr[:, predictor_idx, :]  # use specified predictor for plotting
     
     n_cells, n_predictors, n_trials = x_3d.shape
 
