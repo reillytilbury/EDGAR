@@ -53,6 +53,7 @@ class PromptManager:
             prompt += templates['image_analysis'].format(k=f"{k}", next_version=f"{k+1}")
         
         prompt += templates['code_guidelines'].format(max_lines=f"{max_lines}")
+        prompt += templates['function_signature'].format(next_version=f"{k+1}")
         prompt += templates['docstring_guidelines'].format(next_version=f"{k+1}")
         
         for i in range(k):
@@ -84,6 +85,7 @@ class PromptManager:
             prompt += templates['image_analysis'].format(k=f"{k}", next_version=f"{k+1}")
         
         prompt += templates['code_guidelines'].format(max_lines=f"{max_lines}")
+        prompt += templates['function_signature'].format(next_version=f"{k+1}")
         prompt += templates['docstring_guidelines'].format(next_version=f"{k+1}")
 
         for i in range(k):

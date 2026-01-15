@@ -5,10 +5,12 @@ _metadata:
     - prompts.program_prompt.exploit
     - prompts.program_prompt.exploit
     - prompts.program_prompt.code_guidelines
+    - prompts.program_prompt.function_signature
     - prompts.program_prompt.docstring_guidelines
     - prompts.program_prompt.per_model_detail
     - prompts.parameter_estimator.base
     - prompts.parameter_estimator.code_guidelines
+    - prompts.parameter_estimator.function_signature
     - prompts.parameter_estimator.per_model_detail
     - prompts.jax_translator_prompt
   
@@ -87,6 +89,20 @@ prompts:
       * At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
       * IMPORTANT: Your code will be translated to JAX. Avoid boolean indexing (e.g., `array[condition]`), dynamic shapes, and control flow based on array values. Use `jnp.where()` instead of boolean indexing.
 
+    function_signature: |
+      **Function Signature:**
+
+      Your neuron model must have this signature:
+      ```
+      def neuron_model_v{next_version}(X, param1=default1, param2=default2, ...):
+      ```
+      where:
+      * `X` is a 2D array with shape `(n_predictors, n_trials)`. Each row `X[i]` is a different predictor variable.
+      * For orientation tuning, `X[0]` is the stimulus angle (theta) in radians.
+      * Access predictors by index: `theta = X[0]`, `contrast = X[1]`, etc.
+      * The remaining arguments are free parameters with default values.
+      * Return shape: `(n_trials,)` — the predicted response for each trial.
+
     docstring_guidelines: |
       **Docstring Guidelines:**
       * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`, `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
@@ -124,9 +140,23 @@ prompts:
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
-      * The only arguments to the function should be the stimuli and the spike count.
+      * The only arguments to the function should be the predictors (X) and the spike count.
       * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected. 
       * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point for the parameter estimation.
+
+    function_signature: |
+      **Function Signature:**
+
+      Your parameter estimator must have this signature:
+      ```
+      def parameter_estimator_v{next_version}(X, spike_counts):
+      ```
+      where:
+      * `X` is a 2D array with shape `(n_predictors, n_trials)`. Each row `X[i]` is a different predictor variable.
+      * For orientation tuning, `X[0]` is the stimulus angle (theta) in radians.
+      * Access predictors by index: `theta = X[0]`, `contrast = X[1]`, etc.
+      * `spike_counts` has shape `(n_trials,)`.
+      * Return: a 1D array of estimated parameter values matching the neuron model's free parameters.
 
     docstring_guidelines: |
       **Docstring Guidelines:**
