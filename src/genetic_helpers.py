@@ -171,6 +171,19 @@ def perform_probabilistic_migration(islands, n_migrants, destination_islands:lis
         logging.info("No destination islands provided, using default migration strategy.")
         destination_islands = [(i + 1) % n_islands for i in range(n_islands)]
 
+    # DEBUG: Check for NaN or inf in train_loss before computing probabilities
+    for i, island in enumerate(islands):
+        train_losses = island['train_loss'].values
+        n_nan = np.sum(np.isnan(train_losses))
+        n_inf = np.sum(np.isinf(train_losses))
+        if n_nan > 0 or n_inf > 0:
+            raise ValueError(
+                f"Island {i} has {n_nan} NaN and {n_inf} inf values in train_loss.\n"
+                f"train_loss values: {train_losses}\n"
+                f"Island columns: {island.columns.tolist()}\n"
+                f"Island shape: {island.shape}"
+            )
+
     # calculate migration probabilities based on relative losses
     temp = max(temperature, 1e-3)
     relative_losses = [np.array(island['train_loss'] - island['train_loss'].min()) for island in islands]
