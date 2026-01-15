@@ -15,6 +15,9 @@ from typing import Callable, Dict, Any, Optional, Sequence, Union, Tuple, List
 from google import genai
 from google.genai import types
 
+# Import Predictors for multi-predictor support
+from src.data_structures import Predictors
+
 
 def circular_distance_rad_np(angle1, angle2) -> np.ndarray:
     """Shortest distance between two angles (radians) on a circle.
@@ -78,9 +81,15 @@ def normalize_response(response: jnp.ndarray) -> jnp.ndarray:
     normalized_response = 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # multiply the response by 100 and normalize
     return normalized_response
 
-def load_and_process_data(data_path: str, activity_threshold: float = 0.1, conc_threshold: float = 0.1) -> dict:
+def load_and_process_data(
+    data_path: str, 
+    activity_threshold: float = 0.1, 
+    conc_threshold: float = 0.1,
+    predictor_names: Optional[List[str]] = None
+) -> dict:
     """
     Load and preprocess neural data from a specified .npy file.
+    
     Parameters
     ----------
     data_path : str
@@ -89,14 +98,21 @@ def load_and_process_data(data_path: str, activity_threshold: float = 0.1, conc_
         Threshold for activity to select good cells.
     conc_threshold : float
         Threshold for concentration to select good cells.
+    predictor_names : list of str, optional
+        Names for the predictor variables. If None, defaults to ['theta'].
 
     Returns
     -------
     data_dict : dict
         Dictionary containing:
-          - 'response': Preprocessed neural response. (n_cells_small, n_trials_small)
-          - 'angles': Preprocessed stimulus angles. (n_cells_small, n_trials_small)
+          - 'response': Preprocessed neural response. (n_cells, n_trials)
+          - 'predictors': Predictors object with shape (n_cells, n_predictors, n_trials)
+          - 'angles': (DEPRECATED) Alias for predictors['theta'], for backward compatibility.
+                      Will be removed in a future version.
     """
+    if predictor_names is None:
+        predictor_names = ['theta']
+    
     # load and preprocess data
     neural_data = np.load(data_path, allow_pickle=True)
     neural_data = neural_data.item()
@@ -123,9 +139,15 @@ def load_and_process_data(data_path: str, activity_threshold: float = 0.1, conc_
         angles_cropped[i] = angles[active_trials_idx]
 
     response_cropped = normalize_response(response_cropped)
+    
+    # Create Predictors object with the angles as the first (and currently only) predictor
+    # Shape: (n_cells, 1, n_trials) with predictor name 'theta'
+    predictors = Predictors.from_array(angles_cropped, names=predictor_names)
 
     return {
         "response": response_cropped,
+        "predictors": predictors,
+        # Backward compatibility: keep 'angles' as alias (DEPRECATED)
         "angles": angles_cropped,
     }
 

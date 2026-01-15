@@ -65,6 +65,10 @@ async def _run_many(test_mode: bool = False):
         load_and_process_data_fn = getattr(data_module, function_name)
     else:
         load_and_process_data_fn = None
+    
+    # Extract predictor names from config (for multi-predictor support)
+    predictors_config = data_config.get('predictors', [])
+    predictor_names = [p['name'] for p in predictors_config] if predictors_config else None
 
     if test_mode:
         params['n_iterations'] = 1
@@ -108,6 +112,7 @@ async def _run_many(test_mode: bool = False):
             load_and_process_data_fn=load_and_process_data_fn,
             activity_threshold=params['activity_threshold'],
             conc_threshold=params['conc_threshold'],
+            predictor_names=predictor_names,
         )
 
 if __name__ == "__main__":
