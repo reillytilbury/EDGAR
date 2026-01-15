@@ -52,9 +52,33 @@ def format_function_source(func: Callable, new_name: str, import_statement: str 
 
 def vmap_over_cells(model_fn):
     """Return a version of `model_fn` that accepts
-       (theta, params_matrix) and runs one row per cell."""
+       (X, params_matrix) and runs one row per cell.
+       
+    Args:
+        model_fn: A neuron model function with signature:
+                  model_fn(X, *params) -> (n_trials,)
+                  where X has shape (n_predictors, n_trials).
+    
+    Returns:
+        A vmapped function that accepts:
+        - X: shape (n_cells, n_predictors, n_trials)
+        - params_matrix: shape (n_cells, n_params)
+        Returns shape (n_cells, n_trials).
+    """
+    def _wrapped(X_cell, params_row):
+        # X_cell shape: (n_predictors, n_trials) for one cell
+        # params_row shape: (k,) - one cell's parameters
+        return model_fn(X_cell, *params_row)   # unpack to scalars
+    return jax.vmap(_wrapped, in_axes=(0, 0))   # both X and params batched over cells
+
+
+def deprecated_vmap_over_cells(model_fn):
+    """DEPRECATED: Use vmap_over_cells instead.
+    Return a version of `model_fn` that accepts
+    (theta, params_matrix) where theta is shared across all cells.
+    """
     def _wrapped(theta, params_row):
-        # params_row shape: (k,)  ← one cell’s parameters
+        # params_row shape: (k,) - one cell's parameters
         return model_fn(theta, *params_row)   # unpack to scalars
     return jax.vmap(_wrapped, in_axes=(None, 0))   # x shared, params batched
 

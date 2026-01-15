@@ -474,16 +474,27 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash-
 def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100) -> jnp.ndarray:
     """
     Computes the evaluation matrix for a given program and parameters.
+    
+    Creates a uniform grid of angles [0, 2π] and evaluates the model at those points
+    for all cells.
+    
     Args:
-        program (callable): The neuron model function.
-        params (jnp.ndarray): The parameters for the neuron model. (n_cells, n_params)
+        program (callable): The neuron model function with signature:
+                           program(X, *params) -> (n_trials,)
+                           where X has shape (n_predictors, n_trials).
+        params (jnp.ndarray): The parameters for the neuron model. Shape: (n_cells, n_params)
         n_evaluation_points (int): Number of points to evaluate the model at.
     Returns:
         jnp.ndarray: The evaluation matrix of shape (n_cells, n_evaluation_points).
     """
+    n_cells = params.shape[0]
+    # Create evaluation angles
     angles = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
+    # Create X in new format: (n_cells, n_predictors=1, n_trials)
+    X_eval = jnp.tile(angles.reshape(1, 1, -1), (n_cells, 1, 1))
+    # vmap over cells
     program_vmap = utils.vmap_over_cells(program)
-    y_eval = program_vmap(angles, params)
+    y_eval = program_vmap(X_eval, params)
     return y_eval
 
 async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
