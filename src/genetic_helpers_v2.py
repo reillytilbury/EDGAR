@@ -156,44 +156,64 @@ class Program:
         quantized = np.round(np.array(self.evaluation_matrix) * 100).astype(np.int32)
         return hashlib.md5(quantized.tobytes()).hexdigest()
     
-    def is_similar_to(self, other: 'Program', loss_tol: float = 0.02, cosine_tol: float = 0.95) -> bool:
+    def is_similar_to(self, other: 'Program', loss_tol: float = 0.01, cosine_tol: float = 0.95) -> bool:
         """
-        Check if this program is similar to another.
+        Check if this program is behaviorally similar to another.
+        
+        Two programs are considered similar if they produce similar outputs
+        (high cosine similarity on evaluation matrices). This is the principled
+        approach: we care about what the programs DO, not how they're written.
         
         Args:
             other: Program to compare against.
-            loss_tol: Tolerance for loss difference.
+            loss_tol: Maximum relative loss difference (fast-path filter).
             cosine_tol: Minimum cosine similarity of evaluation matrices.
             
         Returns:
-            True if programs are considered equivalent.
+            True if programs are behaviorally equivalent.
         """
-        # Different parameter shapes = different programs
-        if self.params is None or other.params is None:
-            return False
-        if self.params.shape != other.params.shape:
-            return False
-        
-        # Exact match by identity
-        if self.uid == other.uid:
-            return True
-        
-        # Exact match by code
+        # Fast path 1: Same code hash → definitely duplicate
         if self.code_string == other.code_string:
             return True
         
-        # Check loss difference
-        if abs(self.train_loss - other.train_loss) >= loss_tol:
-            return False
+        # Fast path 2: Different parameter count → structurally different programs
+        # (e.g., linear vs quadratic model can't be the same)
+        if self.params is not None and other.params is not None:
+            if self.params.shape != other.params.shape:
+                return False
         
-        # Check behavioral similarity via evaluation matrix
+        # Fast path 3: Losses too different → likely different programs
+        # This is a practical speedup - skip expensive cosine computation
+        if self.train_loss is not None and other.train_loss is not None:
+            max_loss = max(abs(self.train_loss), abs(other.train_loss), 1e-6)
+            if abs(self.train_loss - other.train_loss) / max_loss > loss_tol:
+                return False
+        
+        # Behavioral comparison: do they produce the same outputs?
+        # This is the gold standard - two programs with identical predictions
+        # are functionally duplicates regardless of their code.
         if self.evaluation_matrix is None or other.evaluation_matrix is None:
+            # Without evaluation matrices, we can only compare structurally
             return False
         
-        y_a = self.evaluation_matrix
-        y_b = other.evaluation_matrix
-        y_a_normed = y_a / jnp.linalg.norm(y_a, axis=1, keepdims=True)
-        y_b_normed = y_b / jnp.linalg.norm(y_b, axis=1, keepdims=True)
+        y_a = jnp.array(self.evaluation_matrix)
+        y_b = jnp.array(other.evaluation_matrix)
+        
+        # Different output shapes = different behavior
+        if y_a.shape != y_b.shape:
+            return False
+        
+        # Compute cosine similarity per cell and average
+        # Handle potential zero-norm rows gracefully
+        norm_a = jnp.linalg.norm(y_a, axis=1, keepdims=True)
+        norm_b = jnp.linalg.norm(y_b, axis=1, keepdims=True)
+        
+        # Avoid division by zero
+        norm_a = jnp.where(norm_a == 0, 1.0, norm_a)
+        norm_b = jnp.where(norm_b == 0, 1.0, norm_b)
+        
+        y_a_normed = y_a / norm_a
+        y_b_normed = y_b / norm_b
         cosine_similarity = jnp.sum(y_a_normed * y_b_normed, axis=1)
         
         return float(jnp.mean(cosine_similarity)) >= cosine_tol
@@ -931,3 +951,347 @@ class Archipelago:
     def __repr__(self) -> str:
         populations = [len(island) for island in self.islands]
         return f"Archipelago(n_islands={self.n_islands}, populations={populations})"
+
+
+# =============================================================================
+# COMPATIBILITY WRAPPER FUNCTIONS
+# These functions provide backward compatibility with the genetic_helpers.py API
+# so that hypothesis_engine.py can use v2 with minimal changes.
+# =============================================================================
+
+def compare_programs(program1: pd.Series, program2: pd.Series, 
+                     mode: str = 'simple', loss_tol: float = 0.01,
+                     cosine_tol: float = 0.99, loss_type: str = 'train_loss') -> bool:
+    """
+    Compare two programs for behavioral similarity (v1 API compatibility wrapper).
+    
+    The principled approach: two programs are duplicates if they produce the same
+    outputs (behavioral equivalence). Code string comparison is only a fast path.
+    
+    Args:
+        program1, program2: DataFrame rows representing programs
+        mode: 'simple' (structural only) or 'complicated' (behavioral comparison)
+        loss_tol: Maximum relative loss difference (fast-path filter for speed)
+        cosine_tol: Minimum cosine similarity for evaluation matrices
+        loss_type: Which loss column to use for fast-path comparison
+    
+    Returns:
+        True if programs are considered duplicates
+    """
+    # Fast path 1: Same code → definitely duplicate
+    code1 = program1.get('program_code_string', '')
+    code2 = program2.get('program_code_string', '')
+    if code1 == code2:
+        return True
+    
+    # Fast path 2: Different param count → structurally different
+    params1 = program1.get('params')
+    params2 = program2.get('params')
+    if params1 is not None and params2 is not None:
+        params1 = jnp.array(params1)
+        params2 = jnp.array(params2)
+        if params1.shape != params2.shape:
+            return False
+    
+    # Fast path 3: Losses too different → likely different programs
+    # This speeds up comparison by skipping expensive cosine computation
+    loss1 = program1.get(loss_type)
+    loss2 = program2.get(loss_type)
+    if loss1 is not None and loss2 is not None:
+        max_loss = max(abs(loss1), abs(loss2), 1e-6)
+        if abs(loss1 - loss2) / max_loss > loss_tol:
+            return False
+    
+    # Simple mode: only structural comparison (code string)
+    # This is a weak check - programs with different code can be behaviorally identical
+    if mode == 'simple':
+        return False  # Different code strings already checked above
+    
+    # Complicated mode: behavioral comparison via evaluation matrix
+    # This is the principled approach - compare what programs DO, not how they're written
+    eval1 = program1.get('evaluation_matrix')
+    eval2 = program2.get('evaluation_matrix')
+    
+    if eval1 is None or eval2 is None:
+        return False
+    
+    eval1 = jnp.array(eval1)
+    eval2 = jnp.array(eval2)
+    
+    # Different output shapes = different behavior
+    if eval1.shape != eval2.shape:
+        return False
+    
+    # Compute cosine similarity per cell and average
+    norm1 = jnp.linalg.norm(eval1, axis=1, keepdims=True)
+    norm2 = jnp.linalg.norm(eval2, axis=1, keepdims=True)
+    
+    # Avoid division by zero
+    norm1 = jnp.where(norm1 == 0, 1.0, norm1)
+    norm2 = jnp.where(norm2 == 0, 1.0, norm2)
+    
+    eval1_normed = eval1 / norm1
+    eval2_normed = eval2 / norm2
+    cosine_sim = jnp.sum(eval1_normed * eval2_normed, axis=1)
+    
+    return float(jnp.mean(cosine_sim)) >= cosine_tol
+
+
+def remove_duplicates(programs_dataframe: pd.DataFrame, mode: str = 'simple',
+                      loss_tol: float = 0.01, cosine_tol: float = 0.99,
+                      loss_type: str = 'train_loss') -> pd.DataFrame:
+    """
+    Remove duplicate programs from a DataFrame (v1 API compatibility wrapper).
+    
+    Args:
+        programs_dataframe: DataFrame with program data
+        mode: 'simple' or 'complicated' comparison mode
+        loss_tol: Loss tolerance for complicated mode
+        cosine_tol: Cosine similarity threshold for complicated mode
+        loss_type: Which loss column to use
+    
+    Returns:
+        DataFrame with duplicates removed
+    """
+    # Handle empty input
+    if len(programs_dataframe) == 0:
+        return programs_dataframe.copy() if isinstance(programs_dataframe, pd.DataFrame) else pd.Series(dtype=object)
+    
+    n_programs = len(programs_dataframe)
+    indices_to_remove = set()
+    
+    for i in range(n_programs):
+        p_i = programs_dataframe.iloc[i]
+        for j in range(i + 1, n_programs):
+            p_j = programs_dataframe.iloc[j]
+            if not compare_programs(p_i, p_j, mode=mode, loss_tol=loss_tol, cosine_tol=cosine_tol):
+                continue
+            # If programs are equivalent, mark the one with higher loss for removal
+            loss_i = p_i.get(loss_type, float('inf')) if hasattr(p_i, 'get') else p_i[loss_type]
+            loss_j = p_j.get(loss_type, float('inf')) if hasattr(p_j, 'get') else p_j[loss_type]
+            if loss_i < loss_j:
+                indices_to_remove.add(j)
+            elif loss_i > loss_j:
+                indices_to_remove.add(i)
+            else:
+                indices_to_remove.add(j)
+    
+    # Get indices to keep
+    keep_indices = [i for i in range(n_programs) if i not in indices_to_remove]
+    
+    if isinstance(programs_dataframe, pd.DataFrame):
+        return programs_dataframe.iloc[keep_indices].reset_index(drop=True)
+    else:
+        # Handle pd.Series case
+        return pd.Series([programs_dataframe.iloc[i] for i in keep_indices])
+
+
+def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'simple',
+                                  loss_tol: float = 0.01, cosine_tol: float = 0.99,
+                                  loss_type: str = 'train_loss',
+                                  overlap_threshold: int = 6) -> List[pd.DataFrame]:
+    """
+    Perform deduplication on each island (v1 API compatibility wrapper).
+    
+    Args:
+        islands: List of DataFrames (or Series), each representing an island's programs.
+        mode: Deduplication mode ('simple' or 'complicated')
+        loss_tol: Loss tolerance for complicated mode
+        cosine_tol: Cosine similarity threshold for complicated mode
+        loss_type: Which loss to use for comparison
+        overlap_threshold: Minimum overlap to trigger cross-island deduplication
+    
+    Returns:
+        List of deduplicated DataFrames/Series
+    """
+    # 1. Within-island deduplication
+    deduplicated = []
+    for island_data in islands:
+        deduped = remove_duplicates(island_data, mode=mode, loss_tol=loss_tol,
+                                   cosine_tol=cosine_tol, loss_type=loss_type)
+        deduplicated.append(deduped)
+    
+    # 2. Cross-island deduplication (remove duplicates from higher-indexed islands)
+    n_islands = len(deduplicated)
+    for i in range(n_islands):
+        for j in range(i + 1, n_islands):
+            if len(deduplicated[i]) < overlap_threshold or len(deduplicated[j]) < overlap_threshold:
+                continue
+            # Find duplicates in island j that exist in island i
+            duplicate_indices = compute_intersection(deduplicated[i], deduplicated[j], 
+                                                     mode=mode, loss_tol=loss_tol,
+                                                     cosine_tol=cosine_tol, loss_type=loss_type)
+            # Remove duplicates from island j
+            if duplicate_indices:
+                keep_indices = [k for k in range(len(deduplicated[j])) if k not in duplicate_indices]
+                if isinstance(deduplicated[j], pd.DataFrame):
+                    deduplicated[j] = deduplicated[j].iloc[keep_indices].reset_index(drop=True)
+                else:
+                    deduplicated[j] = pd.Series([deduplicated[j].iloc[k] for k in keep_indices])
+    
+    return deduplicated
+
+
+def perform_population_pruning(islands: List[pd.DataFrame], 
+                                critical_population_size: int = 12,
+                                large_lm_name: str = "",
+                                min_wise_population_size: int = 0,
+                                # Legacy aliases for API compatibility
+                                max_population: int = None,
+                                loss_type: str = 'train_loss') -> List[pd.DataFrame]:
+    """
+    Prune each island to critical population size (v1 API compatibility wrapper).
+    
+    Ensures each island keeps a reserve of "wise" programs (trained with large model).
+    
+    Args:
+        islands: List of DataFrames, each representing an island
+        critical_population_size: Maximum number of programs per island
+        large_lm_name: Name of large LM to identify "wise" programs
+        min_wise_population_size: Minimum number of wise programs to keep
+        max_population: (deprecated alias for critical_population_size)
+        loss_type: Which loss to sort by when pruning
+    
+    Returns:
+        List of pruned DataFrames
+    """
+    # Handle legacy alias
+    if max_population is not None:
+        critical_population_size = max_population
+    
+    assert min_wise_population_size <= critical_population_size, \
+        f"min_wise_population_size ({min_wise_population_size}) must be <= critical_population_size ({critical_population_size})"
+    
+    pruned = []
+    for island_df in islands:
+        if len(island_df) <= critical_population_size:
+            pruned.append(island_df.copy() if isinstance(island_df, pd.DataFrame) else island_df)
+            continue
+        
+        # Handle pd.Series of program rows (legacy format)
+        if isinstance(island_df, pd.Series):
+            # Convert to DataFrame-like operations
+            sorted_df = sorted(range(len(island_df)), 
+                              key=lambda i: island_df.iloc[i].get(loss_type, float('inf')))
+            keep_indices = sorted_df[:critical_population_size]
+            pruned.append(pd.Series([island_df.iloc[i] for i in keep_indices]))
+            continue
+        
+        # DataFrame format with wise program handling
+        if 'llm_name' in island_df.columns and large_lm_name:
+            wise_programs = island_df[island_df['llm_name'] == large_lm_name]
+            top_wise = wise_programs.nsmallest(min_wise_population_size, loss_type).reset_index(drop=True)
+            
+            # Remove wise programs from pool
+            remaining = island_df[~island_df.index.isin(top_wise.index)].reset_index(drop=True)
+            
+            # Fill remaining slots with best non-wise programs
+            n_vacancies = critical_population_size - len(top_wise)
+            top_remaining = remaining.nsmallest(n_vacancies, loss_type).reset_index(drop=True)
+            
+            pruned.append(pd.concat([top_wise, top_remaining], ignore_index=True))
+        else:
+            # Simple pruning: keep best programs
+            sorted_df = island_df.sort_values(by=loss_type).reset_index(drop=True)
+            pruned.append(sorted_df.head(critical_population_size).reset_index(drop=True))
+    
+    return pruned
+
+
+def perform_probabilistic_migration(islands: List[pd.DataFrame],
+                                     n_migrants: int,
+                                     destination_islands: List[int],
+                                     temperature: float = 1.0) -> List[pd.DataFrame]:
+    """
+    Perform probabilistic migration between islands (v1 API compatibility wrapper).
+    
+    Uses softmax-based selection probabilities based on relative losses within each island.
+    Programs with lower losses have higher probability of being selected for migration.
+    
+    Args:
+        islands: List of DataFrames, each representing an island
+        n_migrants: Number of programs to migrate from each island
+        destination_islands: List mapping source island index to destination island index
+        temperature: Temperature for softmax selection (lower = more greedy)
+    
+    Returns:
+        List of DataFrames after migration
+    """
+    n_islands = len(islands)
+    if destination_islands is None:
+        logging.info("No destination islands provided, using default ring migration strategy.")
+        destination_islands = [(i + 1) % n_islands for i in range(n_islands)]
+
+    # DEBUG: Check for NaN or inf in train_loss before computing probabilities
+    for i, island in enumerate(islands):
+        train_losses = island['train_loss'].values
+        n_nan = np.sum(np.isnan(train_losses))
+        n_inf = np.sum(np.isinf(train_losses))
+        if n_nan > 0 or n_inf > 0:
+            raise ValueError(
+                f"Island {i} has {n_nan} NaN and {n_inf} inf values in train_loss.\n"
+                f"train_loss values: {train_losses}\n"
+                f"Island columns: {island.columns.tolist()}\n"
+                f"Island shape: {island.shape}"
+            )
+
+    # Calculate migration probabilities based on relative losses
+    temp = max(temperature, 1e-3)
+    relative_losses = [np.array(island['train_loss'] - island['train_loss'].min()) for island in islands]
+    rel_loss_std = [np.std(losses) for losses in relative_losses]
+    losses = [relative_losses[i] / (rel_loss_std[i] + 1e-6) for i in range(n_islands)]
+    migration_prob = [np.exp(-(losses[i] / temp)) for i in range(n_islands)]
+    migration_prob = [prob / np.sum(prob) for prob in migration_prob]
+
+    # Create a list of migrants for each island
+    migrants_list = []
+    for island_id in range(n_islands):
+        n_programs = len(islands[island_id])
+        n_nonzero_probs = np.sum(migration_prob[island_id] > 0)
+        n_migrants_i = min(n_migrants, n_nonzero_probs)
+        sampled_indices = np.random.choice(np.arange(n_programs), size=n_migrants_i, replace=False, p=migration_prob[island_id])
+        migrants = islands[island_id].iloc[sampled_indices].reset_index(drop=True) 
+        migrants_list.append(migrants)
+    
+    # Now we have a list of migrants for each island, migrate them to their destination islands
+    for island_id in range(n_islands):
+        dest_id = destination_islands[island_id]
+        islands[dest_id] = pd.concat([islands[dest_id], migrants_list[island_id]], ignore_index=True)
+    
+    return islands
+
+
+def compute_intersection(island_a: pd.Series, island_b: pd.Series, 
+                         mode: str = 'complicated',
+                         loss_tol: float = 0.01, cosine_tol: float = 0.99,
+                         loss_type: str = 'train_loss') -> List[int]:
+    """
+    Compute indices in island_b that have duplicates in island_a (v1 API compatibility wrapper).
+    
+    This is symmetric if and only if island_a and island_b do not harbour any duplicates.
+    
+    Args:
+        island_a: Series of program rows (reference island)
+        island_b: Series of program rows (island to check for duplicates)
+        mode: Comparison mode ('simple' or 'complicated')
+        loss_tol: Loss tolerance for complicated mode
+        cosine_tol: Cosine similarity threshold for complicated mode
+        loss_type: Which loss to use for comparison
+    
+    Returns:
+        List of indices in island_b that are duplicates of programs in island_a
+    """
+    duplicate_indices_in_b = []
+    n_programs_a, n_programs_b = len(island_a), len(island_b)
+    
+    for i in range(n_programs_b):
+        ref_program = island_b.iloc[i]
+        for j in range(n_programs_a):
+            candidate_match = island_a.iloc[j]
+            if compare_programs(ref_program, candidate_match, mode=mode,
+                               loss_tol=loss_tol, cosine_tol=cosine_tol, 
+                               loss_type=loss_type):
+                duplicate_indices_in_b.append(i)
+                break
+    
+    return duplicate_indices_in_b

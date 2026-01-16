@@ -8,7 +8,8 @@ import timeout_decorator
 import jaxopt, optax
 import pandas as pd
 from pathlib import Path
-from . import utils, diagnostic, genetic_helpers, loss_functions, llm_helper
+from . import utils, diagnostic, loss_functions, llm_helper
+from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .prompt_manager import PromptManager
 from .data_structures import Predictors, ensure_predictors
 import experiments.orientation_tuning.seed_programs # delete this once we read seed_programs from experiment.yaml
