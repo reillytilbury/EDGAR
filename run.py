@@ -6,9 +6,18 @@ import os, argparse
 from src import hypothesis_engine 
 from src.diagnostics_manager import load_diagnostics
 
-async def _run_many(test_mode: bool = False):
+async def _run_many(test_mode: bool = False, config_dir: str = "config"):
+    # Resolve config directory (relative to project root)
+    project_root = Path(__file__).parent
+    config_path = project_root / config_dir
+    
+    if not config_path.exists():
+        raise ValueError(f"Config directory not found: {config_path}")
+    
+    print(f"Using config directory: {config_path}")
+    
     # Load experiment configuration
-    experiment_config_path = Path(__file__).parent / "config" / "experiment.yaml"
+    experiment_config_path = config_path / "experiment.yaml"
     with open(experiment_config_path) as f:
         experiment_config = yaml.safe_load(f)
     
@@ -46,7 +55,7 @@ async def _run_many(test_mode: bool = False):
     if len(param_estimators) != 2:  
         raise ValueError("There must be exactly 2 parameter estimator seeds.")
 
-    data_config_path = Path(__file__).parent / "config" / "data.yaml"
+    data_config_path = config_path / "data.yaml"
     with open(data_config_path) as f:
         data_config = yaml.safe_load(f)
 
@@ -124,5 +133,6 @@ async def _run_many(test_mode: bool = False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Hypothesis Engine")
     parser.add_argument('--test_mode', action='store_true', help='Run in test mode with reduced iterations and time limit')
+    parser.add_argument('--config', type=str, default='config', help='Path to config directory (default: config)')
     args = parser.parse_args()
-    asyncio.run(_run_many(test_mode=args.test_mode))
+    asyncio.run(_run_many(test_mode=args.test_mode, config_dir=args.config))
