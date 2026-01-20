@@ -1001,6 +1001,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 load_and_process_data_fn = None,
                 data_config = None,
                 diagnostics_module = None,
+                log_best_loss = True,
                 random_seed = 42):
     """ 
     Main function to run the hypothesis engine.
@@ -1011,6 +1012,9 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                      directly to load_and_process_data_fn, which extracts whatever
                      parameters it needs. This allows different experiments to have
                      different parameter sets without changing hypothesis_engine.
+        log_best_loss: If True, logs the best loss at each iteration to a CSV file
+                       for live monitoring. The file is saved to the experiment
+                       output directory as 'best_loss_log.csv'.
         ...
     """
     if data_config is None:
@@ -1072,6 +1076,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
 
     # census[i] = [generation, island, batch_index, llm_name, loss, time, parent1_id, parent2_id, evaluation_matrix, n_free_params]
     census = []
+    
+    # Initialize best loss tracking for live monitoring
+    best_loss_log = []  # List of dicts: {iteration, timestamp, best_train_loss, best_island, ...}
+    best_loss_path = os.path.join(full_dir, 'best_loss_log.csv') if log_best_loss else None
     
     # store and compute loss of 2 initial programs
     t_start = time.time()
@@ -1361,6 +1369,21 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         census_path = os.path.join(iteration_dir, 'census.npy')
         census_np = np.array(census, dtype=object)
         np.save(census_path, census_np)
+        
+        # Log best loss across all islands for live monitoring
+        if log_best_loss:
+            all_programs = pd.concat([islands[idx] for idx in range(n_islands)], ignore_index=True)
+            best_program = all_programs.loc[all_programs['train_loss'].idxmin()]
+            best_loss_log.append({
+                'iteration': i,
+                'timestamp': pd.Timestamp.now().isoformat(),
+                'best_train_loss': best_program['train_loss'],
+                'best_island': best_program['birth_island'],
+                'n_programs_total': len(all_programs),
+                'elapsed_time': time.time() - t_start
+            })
+            # Write to CSV after each iteration for live monitoring
+            pd.DataFrame(best_loss_log).to_csv(best_loss_path, index=False)
 
     # -----------------------------
     # now carry out the loss calculation on the test samples
