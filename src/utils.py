@@ -61,9 +61,9 @@ def vmap_over_cells(model_fn):
     
     Returns:
         A vmapped function that accepts:
-        - X: shape (n_cells, n_features, n_trials)
-        - params_matrix: shape (n_cells, n_params)
-        Returns shape (n_cells, n_trials).
+        - X: shape (n_samples, n_features, n_trials)
+        - params_matrix: shape (n_samples, n_params)
+        Returns shape (n_samples, n_trials).
     """
     def _wrapped(X_cell, params_row):
         # X_cell shape: (n_features, n_trials) for one cell
@@ -557,7 +557,7 @@ Your task is to create a new parameter estimator, that estimates the free parame
 **Image Analysis Instructions:**
 Analyze the model's fit to the data in the image below. Identify systematic weaknesses of the model by observing patterns across multiple cell plots. Important notes:
 *   **Parameter Fits:** For each cell, and each parameter, how well does the model fit the data? Look for places where the model (**red** curve) deviates most from the binned data mean (**blue** curve). This is where the model is weakest, and where you should focus your improvements.
-*   **Cell References:** The image contains multiple cells. Identify cells where the fit is poor, and reference them in the docstring of your new parameter estimator. 
+*   **Cell References:** The image contains multiple e. Identify cells where the fit is poor, and reference them in the docstring of your new parameter estimator. 
 *   **Planning Improvements:** Combine your analysis of the weaknesses observed in the image with the code provided for the parameter estimator to create a new parameter estimator, that improves upon the previous estimator.
 
 **Code Generation Guidelines:**
@@ -771,10 +771,10 @@ def train_with_patience_optimization(
     if val1_fraction == 0 and val2_fraction == 0:
         print("\n=== Single-phase training on ALL data ===\n")
         params = init_params_from(x_data, y_data)
-        n_cells, n_params = params.shape
+        n_samples, n_params = params.shape
         init_opt, train_step = make_train_fns(x_data, y_data)
         opt_state = init_opt(params)
-        params_dynamic = np.zeros((num_steps, n_cells, n_params), dtype=np.float32)
+        params_dynamic = np.zeros((num_steps, n_samples, n_params), dtype=np.float32)
         for step in range(1, num_steps + 1):
             params, opt_state, loss_val = train_step(params, opt_state)
             params_dynamic[step - 1] = params
@@ -796,11 +796,11 @@ def train_with_patience_optimization(
     # ============================================================
     print("\n=== Phase A: Train on TRAIN only ===\n")
     params_A = init_params_from(x_train, y_train)
-    n_cells, n_params = params_A.shape
+    n_samples, n_params = params_A.shape
     init_opt_A, train_step_A = make_train_fns(x_train, y_train)
     opt_state_A = init_opt_A(params_A)
-    params_dynamic_A = np.zeros((num_steps, n_cells, n_params), dtype=np.float32)
-    val1_loss_dynamic = np.zeros((num_steps, n_cells), dtype=np.float32)
+    params_dynamic_A = np.zeros((num_steps, n_samples, n_params), dtype=np.float32)
+    val1_loss_dynamic = np.zeros((num_steps, n_samples), dtype=np.float32)
 
     val1_loss_cells = jax.jit(lambda p: loss_total(p, x_val1, y_val1))
     for step in range(1, num_steps + 1):
@@ -816,7 +816,7 @@ def train_with_patience_optimization(
     # ============================================================
     print("\n=== Phase B: Patience selection ===\n")
     best_steps_val1 = np.argmin(val1_loss_dynamic, axis=0)
-    patience_per_cell = np.zeros(n_cells, dtype=int)
+    patience_per_sample = np.zeros(n_samples, dtype=int)
 
     # Helper for per-cell loss
     val2_loss_single = jax.jit(lambda p, x, y: jnp.nanmean(loss_function(neuron_model(x, *p), y)))
@@ -824,35 +824,35 @@ def train_with_patience_optimization(
     if val2_fraction > 0:
         if cellwise_patience:
             # ----- per-cell patience -----
-            for i in range(n_cells):
+            for i in range(n_samples):
                 metrics = []
                 for p in patience_values:
                     step_idx = int(np.clip(best_steps_val1[i] + p, 0, num_steps - 1))
                     params_tmp = params_dynamic_A[step_idx, i]
                     metric = float(val2_loss_single(params_tmp, x_val2[i], y_val2[i]))
                     metrics.append(metric)
-                patience_per_cell[i] = patience_values[int(np.argmin(metrics))]
-            print(f"Cellwise patience selected (range {min(patience_per_cell)}–{max(patience_per_cell)})")
+                patience_per_sample[i] = patience_values[int(np.argmin(metrics))]
+            print(f"Cellwise patience selected (range {min(patience_per_sample)}–{max(patience_per_sample)})")
         else:
             # ----- global patience -----
             mean_metrics = []
             for p in patience_values:
                 step_idxs = np.clip(best_steps_val1 + p, 0, num_steps - 1)
-                params_tmp = np.array([params_dynamic_A[step_idxs[i], i] for i in range(n_cells)])
-                loss_val2 = np.array([val2_loss_single(params_tmp[i], x_val2[i], y_val2[i]) for i in range(n_cells)])
+                params_tmp = np.array([params_dynamic_A[step_idxs[i], i] for i in range(n_samples)])
+                loss_val2 = np.array([val2_loss_single(params_tmp[i], x_val2[i], y_val2[i]) for i in range(n_samples)])
                 mean_metrics.append(np.nanmean(loss_val2))
             best_p = patience_values[int(np.argmin(mean_metrics))]
-            patience_per_cell[:] = best_p
+            patience_per_sample[:] = best_p
             print(f"Global patience selected: {best_p}")
     else:
         # fallback: use val1 again if no val2
-        for i in range(n_cells):
+        for i in range(n_samples):
             metrics = [val1_loss_dynamic[int(np.clip(best_steps_val1[i] + p, 0, num_steps - 1)), i]
                        for p in patience_values]
-            patience_per_cell[i] = patience_values[int(np.argmin(metrics))]
+            patience_per_sample[i] = patience_values[int(np.argmin(metrics))]
         print("Patience selected using val1 (no val2 set).")
 
-    best_steps_final = np.clip(best_steps_val1 + patience_per_cell, 0, num_steps - 1)
+    best_steps_final = np.clip(best_steps_val1 + patience_per_sample, 0, num_steps - 1)
 
     # ============================================================
     # Phase C: Retrain on ALL data
@@ -861,7 +861,7 @@ def train_with_patience_optimization(
     params_C0 = init_params_from(x_data, y_data)
     init_opt_C, train_step_C = make_train_fns(x_data, y_data)
     opt_state_C = init_opt_C(params_C0)
-    params_dynamic_C = np.zeros((num_steps, n_cells, n_params), dtype=np.float32)
+    params_dynamic_C = np.zeros((num_steps, n_samples, n_params), dtype=np.float32)
     params_C = params_C0
 
     for step in range(1, num_steps + 1):
@@ -872,7 +872,7 @@ def train_with_patience_optimization(
 
     # Clip just in case
     best_steps_final = np.clip(best_steps_final, 0, num_steps - 1)
-    final_params = params_dynamic_C[best_steps_final, np.arange(n_cells)]
+    final_params = params_dynamic_C[best_steps_final, np.arange(n_samples)]
     final_loss = np.array(loss_total(final_params, x_data, y_data))
 
     return {
@@ -885,7 +885,7 @@ def train_with_patience_optimization(
             "val2_trials": val2_trials,
         },
         "best_steps": best_steps_final,
-        "patience_per_cell": patience_per_cell,
+        "patience_per_sample": patience_per_sample,
         "cellwise_patience": cellwise_patience,
     }
 
@@ -909,12 +909,12 @@ def train_simplified(
       - Pick, per cell, the start that gives the lowest loss
 
     Returns:
-      - params: (n_cells, n_params) best params per cell
-      - loss: (n_cells,) final loss per cell for the chosen start
-      - all_losses: (n_starts, n_cells) losses per cell for every start
-      - chosen_start_idx: (n_cells,) argmin over starts for each cell
-      - chosen_exponent: (n_cells,) exponent chosen per cell
-      - params_per_start: (n_starts, n_cells, n_params) final params for each start (useful for diagnostics)
+      - params: (n_samples, n_params) best params per cell
+      - loss: (n_samples,) final loss per cell for the chosen start
+      - all_losses: (n_starts, n_samples) losses per cell for every start
+      - chosen_start_idx: (n_samples,) argmin over starts for each cell
+      - chosen_exponent: (n_samples,) exponent chosen per cell
+      - params_per_start: (n_starts, n_samples, n_params) final params for each start (useful for diagnostics)
     """
     rng = np.random.default_rng(seed)
 
@@ -923,7 +923,7 @@ def train_simplified(
     # ---------------------------
     # loss for one cell & one param row
     loss_single = lambda p, x, y: jnp.nanmean(loss_function(neuron_model(x, *p), y), axis=-1)
-    # vectorize over cells: (n_cells, params) x (n_cells, ...) -> (n_cells,)
+    # vectorize over cells: (n_samples, params) x (n_samples, ...) -> (n_samples,)
     loss_total = jax.vmap(loss_single, in_axes=(0, 0, 0), out_axes=0)
     # mean over cells
     def mean_loss(params, x, y):
@@ -944,7 +944,7 @@ def train_simplified(
         v_obj_and_grad = jax.vmap(jax.value_and_grad(obj_single_start), in_axes=0, out_axes=(0, 0))
 
         def init_state(p0_starts):
-            # p0_starts: (n_starts, n_cells, n_params)
+            # p0_starts: (n_starts, n_samples, n_params)
             return jax.vmap(opt.init)(p0_starts)
 
         @jax.jit
@@ -966,21 +966,21 @@ def train_simplified(
             x=np.asarray(x),
             y=np.asarray(y),
         ).copy()
-        return p0  # (n_cells, n_params)
+        return p0  # (n_samples, n_params)
 
-    params_init = init_params_all(x_data, y_data)  # (n_cells, n_params)
-    n_cells, n_params = params_init.shape
+    params_init = init_params_all(x_data, y_data)  # (n_samples, n_params)
+    n_samples, n_params = params_init.shape
 
     # Build starts: either 1 start (no exhaustive) or one per exponent
     if exhaustive_exponents is None or len(exhaustive_exponents) == 0:
         starts = 1
-        p0_starts = params_init[None, ...]  # (1, n_cells, n_params)
+        p0_starts = params_init[None, ...]  # (1, n_samples, n_params)
         exps_arr = jnp.array([jnp.nan])     # placeholder
     else:
         exps_arr = jnp.asarray(exhaustive_exponents, dtype=params_init.dtype)  # (n_starts,)
         starts = int(exps_arr.shape[0])
         # tile and set exponent columns 5 and 10
-        p0_starts = jnp.repeat(params_init[None, ...], repeats=starts, axis=0)  # (n_starts, n_cells, n_params)
+        p0_starts = jnp.repeat(params_init[None, ...], repeats=starts, axis=0)  # (n_starts, n_samples, n_params)
         p0_starts = p0_starts.at[:, :, 5].set(exps_arr[:, None])
         p0_starts = p0_starts.at[:, :, 10].set(exps_arr[:, None])
 
@@ -1000,33 +1000,33 @@ def train_simplified(
     # ---------------------------
     # Evaluate per cell, per start & pick the best start for each cell
     # ---------------------------
-    # losses per start per cell: (n_starts, n_cells)
+    # losses per start per cell: (n_starts, n_samples)
     loss_per_start_per_cell = jax.vmap(lambda p: loss_total(p, x_data, y_data))(params_starts)
 
     # argmin over starts for each cell
-    best_start_idx = jnp.nanargmin(loss_per_start_per_cell, axis=0)  # (n_cells,)
+    best_start_idx = jnp.nanargmin(loss_per_start_per_cell, axis=0)  # (n_samples,)
 
-    # gather best params per cell from params_starts (n_starts, n_cells, n_params)
-    gather_idx = jnp.arange(n_cells)
-    best_params = params_starts[best_start_idx, gather_idx, :]  # (n_cells, n_params)
+    # gather best params per cell from params_starts (n_starts, n_samples, n_params)
+    gather_idx = jnp.arange(n_samples)
+    best_params = params_starts[best_start_idx, gather_idx, :]  # (n_samples, n_params)
 
     # final per-cell loss for chosen start
-    final_loss = loss_total(best_params, x_data, y_data)  # (n_cells,)
+    final_loss = loss_total(best_params, x_data, y_data)  # (n_samples,)
 
     # chosen exponent per cell (nan if no exhaustive search)
     chosen_exponent = jnp.where(
         jnp.isnan(exps_arr[0]),
-        jnp.full((n_cells,), jnp.nan, dtype=best_params.dtype),
+        jnp.full((n_samples,), jnp.nan, dtype=best_params.dtype),
         exps_arr[best_start_idx]
     )
 
     return {
         "params": np.array(best_params),
         "loss": np.array(final_loss),
-        "all_losses": np.array(loss_per_start_per_cell),    # (n_starts, n_cells)
-        "chosen_start_idx": np.array(best_start_idx),       # (n_cells,)
-        "chosen_exponent": np.array(chosen_exponent),       # (n_cells,)
-        "params_per_start": np.array(params_starts),        # (n_starts, n_cells, n_params)
+        "all_losses": np.array(loss_per_start_per_cell),    # (n_starts, n_samples)
+        "chosen_start_idx": np.array(best_start_idx),       # (n_samples,)
+        "chosen_exponent": np.array(chosen_exponent),       # (n_samples,)
+        "params_per_start": np.array(params_starts),        # (n_starts, n_samples, n_params)
     }
 
 # response, angles = load_data(data_dir = ['/home/reilly/Desktop/ali data/stim_sequence.npy','/home/reilly/Desktop/ali data/stim_resps.npy'],

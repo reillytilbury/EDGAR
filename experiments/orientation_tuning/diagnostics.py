@@ -16,7 +16,7 @@ def _ensure_predictor_format(x_cell: jnp.ndarray) -> jnp.ndarray:
 
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
                     x: jnp.ndarray, y: jnp.ndarray, 
-                    cell_selection: Sequence[int],
+                    sample_selection: Sequence[int],
                     n_eval: int = 100, n_mean: int = 50,
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
                     labels: Optional[list] = None, 
@@ -51,9 +51,9 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         ValueError: If predictor_idx != 0 when x is 2D, or if predictor_idx is out of range.
     """
     assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, but has {len(programs_df)} rows."
-    assert len(cell_selection) > 0, "cell_selection must not be empty."
-    assert len(cell_selection) == int(np.sqrt(len(cell_selection)))**2, \
-        f"cell_selection must be a square number, but has {len(cell_selection)} elements."
+    assert len(sample_selection) > 0, "sample_selection must not be empty."
+    assert len(sample_selection) == int(np.sqrt(len(sample_selection)))**2, \
+        f"sample_selection must be a square number, but has {len(sample_selection)} elements."
 
     # Early validation of predictor_idx
     x_arr = jnp.asarray(x)
@@ -73,15 +73,15 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     # define frequently used variables
     models = programs_df['program'].tolist()
     params = programs_df['params'].tolist()
-    cell_idx = jnp.array(cell_selection)
-    params = [p[cell_idx] for p in params]
-    spike_matrix = y[cell_idx]
+    sample_idx = jnp.array(sample_selection)
+    params = [p[sample_idx] for p in params]
+    spike_matrix = y[sample_idx]
     
-    # Handle both 2D (n_cells, n_trials) and 3D (n_cells, n_features, n_trials) input
+    # Handle both 2D (n_samples, n_trials) and 3D (n_samples, n_features, n_trials) input
     if x_arr.ndim == 2:
-        # 2D input: (n_cells, n_trials) - expand to (n_cells, 1, n_trials)
-        stimuli_3d = x_arr[cell_idx][:, jnp.newaxis, :]
-        stimuli_1d = x_arr[cell_idx]  # for plotting (single predictor)
+        # 2D input: (n_samples, n_trials) - expand to (n_samples, 1, n_trials)
+        stimuli_3d = x_arr[sample_idx][:, jnp.newaxis, :]
+        stimuli_1d = x_arr[sample_idx]  # for plotting (single predictor)
     else:
         # 3D input: (n_cells, n_features, n_trials)
         stimuli_3d = x_arr[cell_idx]
@@ -127,14 +127,14 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
 
     for c in range(n_cells):
         row, col = divmod(c, n_row_cols)
-        # Scatter plot of data points (x=stimulus, y=response) for cell c
+        # Scatter plot of data points (x=stimulus, y=response) for sample c
         ax[row, col].scatter(stimuli_1d[c], spike_matrix[c], c='black', alpha=point_alpha, s=point_size)
 
-        # Plot running mean for cell c
+        # Plot running mean for sample c
         ax[row, col].plot(x_values_mean, binned_mean[c], 
                           label='Mean', color="#3BD1FF", linewidth=line_width * 1.35)
 
-        # Plot model fits to cell c
+        # Plot model fits to sample c
         for i, model in enumerate(models):
             ax[row, col].plot(x_values_eval, model_outputs[i, c], 
                               label=labels[i] + f' (loss: {jnp.mean(point_losses[i, c]):.2f})',
@@ -146,7 +146,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
 
         # Set axis properties
         ax[row, col].set_ylim(0, max(model_max, mean_max) * 2)
-        ax[row, col].set_title(f'Cell {cell_selection[c]}', fontsize=16)
+        ax[row, col].set_title(f'Sample {sample_selection[c]}', fontsize=16)
         ax[row, col].legend(loc='upper right', fontsize=legend_fontsize)
         if row == n_row_cols - 1:
             ax[row, col].set_xlabel('Theta (radians)', fontsize=20)

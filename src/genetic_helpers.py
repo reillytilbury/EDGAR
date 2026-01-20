@@ -11,7 +11,7 @@ def compare_programs(program_a, program_b, loss_tol=0.02, cosine_tol=0.95, mode=
 
     If using simple mode, only checks if they have the same unique identifiers or code strings, or different param shapes.
 
-    if using complex mode, if it is inconclusive, it checks if the losses are within tolerance, and if the predictions are similar across cells.
+    if using complex mode, if it is inconclusive, it checks if the losses are within tolerance, and if the predictions are similar across samples.
 
     Args:
         program_a (pd.Series): First program to compare.

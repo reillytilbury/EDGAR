@@ -15,29 +15,29 @@ from src.genetic_helpers_v2 import (
 # Two programs with identical outputs are duplicates, regardless of code.
 # =============================================================================
 
-n_cells = 10
+n_samples = 10
 n_trials = 8
 
 # Parameters with 2 params per cell
-params_2 = jnp.arange(20, dtype=jnp.float32).reshape((n_cells, 2)) + 1
+params_2 = jnp.arange(20, dtype=jnp.float32).reshape((n_samples, 2)) + 1
 
 # Parameters with 3 params per cell (structurally different)
-params_3 = jnp.arange(30, dtype=jnp.float32).reshape((n_cells, 3)) + 1
+params_3 = jnp.arange(30, dtype=jnp.float32).reshape((n_samples, 3)) + 1
 
 # Create evaluation matrices that represent different behaviors
-# Each matrix is (n_trials, n_cells) - output for each cell across trials
+# Each matrix is (n_trials, n_samples) - output for each cell across trials
 
-# Behavior A: linear response pattern (varies across trials AND cells)
-eval_matrix_A = jnp.array([[float(t * c + 1) for c in range(n_cells)] for t in range(n_trials)], dtype=jnp.float32)
+# Behavior A: linear response pattern (varies across trials AND samples)
+eval_matrix_A = jnp.array([[float(t * c + 1) for c in range(n_samples)] for t in range(n_trials)], dtype=jnp.float32)
 
 # Behavior B: negative linear response (clearly different from A)
-eval_matrix_B = jnp.array([[float(-t * c - 1) for c in range(n_cells)] for t in range(n_trials)], dtype=jnp.float32)
+eval_matrix_B = jnp.array([[float(-t * c - 1) for c in range(n_samples)] for t in range(n_trials)], dtype=jnp.float32)
 
 # Behavior A': nearly identical to A (should be detected as duplicate)
 eval_matrix_A_prime = eval_matrix_A * 1.001  # 0.1% difference
 
 # Behavior C: quadratic response pattern
-eval_matrix_C = jnp.array([[float(t * c**2 + 1) for c in range(n_cells)] for t in range(n_trials)], dtype=jnp.float32)
+eval_matrix_C = jnp.array([[float(t * c**2 + 1) for c in range(n_samples)] for t in range(n_trials)], dtype=jnp.float32)
 
 
 def make_program(code: str, eval_matrix, params, train_loss: float = 0.1,
@@ -195,7 +195,7 @@ class TestIslandDeduplication:
 # =============================================================================
 
 # Legacy test data
-params_true = jnp.arange(20, dtype=jnp.float32).reshape((n_cells, 2)) + 1
+params_true = jnp.arange(20, dtype=jnp.float32).reshape((n_samples, 2)) + 1
 ref_program = pd.Series({
     'birth_island': 0,
     'iteration_number': 0,
@@ -229,7 +229,7 @@ program_5['evaluation_matrix'] = jnp.array([[-(i * a) + b for a, b in program_5[
 program_6 = program_4.copy()
 program_6['birth_island'] = 3
 program_6['program_code_string'] = 'def neuron_model(x, b, a): return b * x + a'
-program_6['params'] = jnp.arange(30, dtype=jnp.float32).reshape((n_cells, 3)) + 1
+program_6['params'] = jnp.arange(30, dtype=jnp.float32).reshape((n_samples, 3)) + 1
 program_6['evaluation_matrix'] = jnp.array([[i * b + a + 0.0 for b, a, c in program_6['params']] for i in range(10)], dtype=jnp.float32)
 
 

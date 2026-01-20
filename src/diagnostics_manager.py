@@ -42,7 +42,7 @@ class DiagnosticsProtocol(Protocol):
                         loss_function: Callable,
                         x: jnp.ndarray,
                         y: jnp.ndarray,
-                        cell_selection: Sequence[int],
+                        sample_selection: Sequence[int],
                         n_eval: int = 100,
                         n_mean: int = 50,
                         colours: list = ...,
@@ -56,7 +56,7 @@ class DiagnosticsProtocol(Protocol):
                         dpi: float = 100.0,
                         save_path: Optional[str] = None,
                         predictor_idx: int = 0) -> None:
-        """Plot fits of multiple models over selected cells."""
+        """Plot fits of multiple models over selected samples."""
         ...
     
     def plot_single_model_fit(self,

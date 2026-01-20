@@ -22,16 +22,16 @@ class Predictors:
     A container for multiple predictor variables used in model fitting.
     
     Supports both index-based access (X[0], X[1]) and name-based access (X['theta']).
-    Automatically handles conversion between 2D (n_cells, n_trials) and 
-    3D (n_cells, n_features, n_trials) representations.
+    Automatically handles conversion between 2D (n_samples, n_trials) and 
+    3D (n_samples, n_features, n_trials) representations.
     
     Attributes:
-        data: Internal storage as a 3D array of shape (n_cells, n_features, n_trials)
+        data: Internal storage as a 3D array of shape (n_samples, n_features, n_trials)
         names: List of predictor names in order (e.g., ['theta', 'speed'])
         
     Example:
         # Single predictor (backward compatible)
-        >>> angles = np.random.rand(100, 50)  # (n_cells, n_trials)
+        >>> angles = np.random.rand(100, 50)  # (n_samples, n_trials)
         >>> predictors = Predictors.from_array(angles, names=['theta'])
         >>> predictors.shape
         (100, 1, 50)
@@ -58,14 +58,14 @@ class Predictors:
         if not isinstance(self.data, (np.ndarray, jnp.ndarray)):
             self.data = np.asarray(self.data)
         
-        # Auto-expand 2D to 3D: (n_cells, n_trials) -> (n_cells, 1, n_trials)
+        # Auto-expand 2D to 3D: (n_samples, n_trials) -> (n_samples, 1, n_trials)
         if self.data.ndim == 2:
             self.data = self.data[:, np.newaxis, :]
         
         if self.data.ndim != 3:
             raise ValueError(
-                f"Predictors data must be 2D (n_cells, n_trials) or "
-                f"3D (n_cells, n_features, n_trials), got shape {self.data.shape}"
+                f"Predictors data must be 2D (n_samples, n_trials) or "
+                f"3D (n_samples, n_features, n_trials), got shape {self.data.shape}"
             )
         
         # Auto-generate names if not provided
@@ -88,7 +88,7 @@ class Predictors:
         Create Predictors from a numpy/jax array.
         
         Args:
-            data: Array of shape (n_cells, n_trials) or (n_cells, n_features, n_trials)
+            data: Array of shape (n_samples, n_trials) or (n_samples, n_features, n_trials)
             names: Optional list of predictor names
             
         Returns:
@@ -106,7 +106,7 @@ class Predictors:
         Create Predictors from a dictionary of named arrays.
         
         Args:
-            predictors_dict: Dict mapping predictor names to arrays of shape (n_cells, n_trials)
+            predictors_dict: Dict mapping predictor names to arrays of shape (n_samples, n_trials)
             order: Optional list specifying the order of predictors. 
                    If None, uses dict iteration order.
                    
@@ -115,8 +115,8 @@ class Predictors:
             
         Example:
             >>> predictors = Predictors.from_dict({
-            ...     'theta': angles,  # (n_cells, n_trials)
-            ...     'speed': speeds,  # (n_cells, n_trials)
+            ...     'theta': angles,  # (n_samples, n_trials)
+            ...     'speed': speeds,  # (n_samples, n_trials)
             ... })
         """
         if order is None:
@@ -136,19 +136,19 @@ class Predictors:
         if len(set(shapes)) > 1:
             raise ValueError(f"All predictor arrays must have the same shape, got {shapes}")
         
-        # Stack: each array is (n_cells, n_trials) -> result is (n_cells, n_features, n_trials)
+        # Stack: each array is (n_samples, n_trials) -> result is (n_samples, n_features, n_trials)
         stacked = np.stack(arrays, axis=1)
         
         return cls(data=stacked, names=order)
     
     @property
     def shape(self) -> tuple:
-        """Return the shape (n_cells, n_features, n_trials)."""
+        """Return the shape (n_samples, n_features, n_trials)."""
         return self.data.shape
     
     @property
-    def n_cells(self) -> int:
-        """Number of cells/samples."""
+    def n_samples(self) -> int:
+        """Number of samples."""
         return self.data.shape[0]
     
     @property
@@ -169,8 +169,8 @@ class Predictors:
             key: Integer index, string name, or slice
             
         Returns:
-            For single predictor: array of shape (n_cells, n_trials)
-            For slice: array of shape (n_cells, n_selected, n_trials)
+            For single predictor: array of shape (n_samples, n_trials)
+            For slice: array of shape (n_samples, n_selected, n_trials)
         """
         if isinstance(key, str):
             if key not in self.names:
@@ -193,7 +193,7 @@ class Predictors:
         Return the full 3D tensor representation.
         
         Returns:
-            Array of shape (n_cells, n_features, n_trials)
+            Array of shape (n_samples, n_features, n_trials)
         """
         return self.data
     
@@ -205,7 +205,7 @@ class Predictors:
             predictor: Index or name of the predictor to extract
             
         Returns:
-            Array of shape (n_cells, n_trials)
+            Array of shape (n_samples, n_trials)
         """
         return self[predictor]
     
@@ -214,31 +214,31 @@ class Predictors:
         Convert to a dictionary of named arrays.
         
         Returns:
-            Dict mapping predictor names to arrays of shape (n_cells, n_trials)
+            Dict mapping predictor names to arrays of shape (n_samples, n_trials)
         """
         return {name: self[name] for name in self.names}
     
-    def get_cell(self, cell_idx: int) -> ArrayLike:
+    def get_sample(self, sample_idx: int) -> ArrayLike:
         """
         Get all predictors for a single cell.
         
         Args:
-            cell_idx: Index of the cell
+            sample_idx: Index of the cell
             
         Returns:
             Array of shape (n_features, n_trials)
         """
-        return self.data[cell_idx, :, :]
+        return self.data[sample_idx, :, :]
     
-    def slice_cells(self, indices: ArrayLike) -> Predictors:
+    def slice_samples(self, indices: ArrayLike) -> Predictors:
         """
-        Create a new Predictors with a subset of cells.
+        Create a new Predictors with a subset of samples.
         
         Args:
-            indices: Array of cell indices to select
+            indices: Array of sample indices to select
             
         Returns:
-            New Predictors instance with selected cells
+            New Predictors instance with selected samples
         """
         return Predictors(data=self.data[indices], names=self.names.copy())
     
@@ -286,8 +286,8 @@ def ensure_predictors(
     
     This is the main entry point for backward compatibility. It accepts:
     - Predictors: returned as-is
-    - 2D array (n_cells, n_trials): wrapped as single predictor
-    - 3D array (n_cells, n_features, n_trials): wrapped directly
+    - 2D array (n_samples, n_trials): wrapped as single predictor
+    - 3D array (n_samples, n_features, n_trials): wrapped directly
     - Dict of arrays: converted via from_dict
     
     Args:
@@ -299,8 +299,8 @@ def ensure_predictors(
         
     Example:
         # All of these work:
-        >>> ensure_predictors(angles_2d)  # (n_cells, n_trials)
-        >>> ensure_predictors(angles_3d)  # (n_cells, n_features, n_trials)  
+        >>> ensure_predictors(angles_2d)  # (n_samples, n_trials)
+        >>> ensure_predictors(angles_3d)  # (n_samples, n_features, n_trials)  
         >>> ensure_predictors({'theta': angles, 'speed': speeds})
         >>> ensure_predictors(existing_predictors)
     """

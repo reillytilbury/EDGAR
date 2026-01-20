@@ -148,7 +148,7 @@ def load_and_process_data(
         "response": response_cropped,
         "predictors": predictors,
         # Backward compatibility: keep 'angles' as alias (DEPRECATED)
-        "angles": angles_cropped,
+        "trials": angles_cropped,
     }
 
 def unbiased_signal_fraction(R, min_repeats=2):
