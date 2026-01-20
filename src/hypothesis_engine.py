@@ -39,11 +39,11 @@ def compute_initial_params(param_estimator, neuron_model, x, y) -> jnp.ndarray:
     Args:
         param_estimator (function): Function to estimate initial parameters for the neuron model.
                                     Signature: param_estimator(X, response) -> params
-                                    where X has shape (n_predictors, n_trials) for a single cell.
+                                    where X has shape (n_features, n_trials) for a single cell.
         neuron_model (function): The model which predicts neural activity from stimuli and free parameters.
                                  Signature: neuron_model(X, *params) -> activity
-                                 where X has shape (n_predictors, n_trials) for a single cell.
-        x (np.ndarray): Predictor data, shape (n_cells, n_predictors, n_trials).
+                                 where X has shape (n_features, n_trials) for a single cell.
+        x (np.ndarray): Predictor data, shape (n_cells, n_features, n_trials).
         y (np.ndarray): Response data, shape (n_cells, n_trials).
     Returns:
         jnp.ndarray: The estimated parameters for each cell, shape (n_cells, n_params).
@@ -55,7 +55,7 @@ def compute_initial_params(param_estimator, neuron_model, x, y) -> jnp.ndarray:
         return pe(xi, yi)
     try:
         # any call taking >5s will raise timeout_decorator.TimeoutError
-        # xi has shape (n_predictors, n_trials), yi has shape (n_trials,)
+        # xi has shape (n_features, n_trials), yi has shape (n_trials,)
         return jnp.array([_safe_estimate(param_estimator, x[i], y[i]) for i in range(y.shape[0])])
     except timeout_decorator.TimeoutError:
         logging.warning("param_estimator timed out, falling back to defaults")
@@ -78,7 +78,7 @@ def compute_default_params(neuron_model) -> jnp.ndarray:
     Args:
         neuron_model (function): The model which predicts neural activity from stimuli and free parameters.
                                  Signature: neuron_model(X, *params) -> activity
-                                 where X has shape (n_predictors, n_trials) for a single cell.
+                                 where X has shape (n_features, n_trials) for a single cell.
     Returns:
         jnp.ndarray: The default parameters for the neuron model, shape (1, n_params).
                      If the parameter estimation fails, returns None.
@@ -111,14 +111,14 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
         neuron_model (function): The model which predicts neural activity from predictors
                                 and free parameters (for a single cell).
                                 Signature: neuron_model(X, *params) -> activity
-                                where X has shape (n_predictors, n_trials) for a single cell.
+                                where X has shape (n_features, n_trials) for a single cell.
         param_estimator (function): Function to estimate initial parameters for the neuron model.
                                 Signature: param_estimator(X, response) -> params
-                                where X has shape (n_predictors, n_trials) for a single cell.
+                                where X has shape (n_features, n_trials) for a single cell.
         loss_func (function): The loss function to use for calculating the loss.
         x: Predictor data. Can be:
            - 2D array (n_cells, n_trials) - will be auto-expanded to (n_cells, 1, n_trials)
-           - 3D array (n_cells, n_predictors, n_trials)
+           - 3D array (n_cells, n_features, n_trials)
            - Predictors object
         y (jnp.ndarray): Response data, shape (n_cells, n_trials).
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
@@ -139,11 +139,11 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
     """
     t_start = time.time()
     
-    # Normalize x to Predictors format: (n_cells, n_predictors, n_trials)
+    # Normalize x to Predictors format: (n_cells, n_features, n_trials)
     x_predictors = ensure_predictors(x)
-    x_data = x_predictors.to_tensor()  # shape: (n_cells, n_predictors, n_trials)
+    x_data = x_predictors.to_tensor()  # shape: (n_cells, n_features, n_trials)
     
-    n_cells, n_predictors, n_trials = x_data.shape
+    n_cells, n_features, n_trials = x_data.shape
     
     # train/test split over trials (axis 2)
     key = jax.random.PRNGKey(random_seed)
@@ -152,13 +152,13 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
     training_trials_idx = shuffled_indices[:training_size]
     test_trials_idx = shuffled_indices[training_size:]
     
-    # Split predictors and response: x has shape (n_cells, n_predictors, n_trials)
-    x_train = x_data[:, :, training_trials_idx]  # (n_cells, n_predictors, training_size)
+    # Split predictors and response: x has shape (n_cells, n_features, n_trials)
+    x_train = x_data[:, :, training_trials_idx]  # (n_cells, n_features, training_size)
     y_train = y[:, training_trials_idx]           # (n_cells, training_size)
-    x_test = x_data[:, :, test_trials_idx]        # (n_cells, n_predictors, test_size)
+    x_test = x_data[:, :, test_trials_idx]        # (n_cells, n_features, test_size)
     y_test = y[:, test_trials_idx]                # (n_cells, test_size)
 
-    # Perform initial param calc. x must be numpy array of shape (n_cells, n_predictors, n_trials)
+    # Perform initial param calc. x must be numpy array of shape (n_cells, n_features, n_trials)
     if use_param_estimator:
         initial_params = compute_initial_params(param_estimator, neuron_model, np.asarray(x_train), np.asarray(y_train))
     else:
@@ -185,13 +185,13 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
         return FAILED_PROGRAM_COST, jnp.zeros((n_cells, n_params)), FAILED_PROGRAM_COST, jnp.zeros((n_cells, n_params))
 
     # Fail immediately if neuron_model doesn't run
-    # x_data[cell_idx] has shape (n_predictors, n_trials)
+    # x_data[cell_idx] has shape (n_features, n_trials)
     try:
         # Check compatibility with JAX's tracing mechanism
         neuron_model_jit = jax.jit(neuron_model)
         test_n_trials = x_data.shape[2]  # full n_trials for validation
         for cell_idx in np.random.choice(n_cells, size=min(10, n_cells), replace=False):
-            # Validate with concrete values: x_data[cell_idx] is (n_predictors, n_trials)
+            # Validate with concrete values: x_data[cell_idx] is (n_features, n_trials)
             output = neuron_model_jit(x_data[cell_idx], *initial_params[cell_idx])
             if output.ndim != 1 or output.shape[0] != test_n_trials:
                 logging.info(f"Error: neuron_model output shape {output.shape[0]} does not match input n_trials {test_n_trials}.")
@@ -202,11 +202,11 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
         logging.info(f"Neuron model failed to run or is incompatible with JAX tracing: {e}")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
-    # Loss for a single cell: x_data has shape (n_predictors, n_trials), y_data has shape (n_trials,)
+    # Loss for a single cell: x_data has shape (n_features, n_trials), y_data has shape (n_trials,)
     loss_single_cell = lambda params, x_cell, y_cell: jnp.mean(loss_func(neuron_model(x_cell, *params), y_cell), axis=-1)
     # vectorize the loss function for all cells. The inputs will have shapes:
     # - params: (n_cells, n_params)
-    # - x_cell: (n_cells, n_predictors, n_trials) -> batched over axis 0
+    # - x_cell: (n_cells, n_features, n_trials) -> batched over axis 0
     # - y_cell: (n_cells, n_trials) -> batched over axis 0
     # The output will have shape (n_cells,)
     loss_total = jax.vmap(loss_single_cell, in_axes=(0, 0, 0), out_axes=0)
@@ -473,7 +473,7 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash-
     return jax_code_string, func
 
 def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100,
-                               predictor_idx: int = 0, n_predictors: int = 1) -> jnp.ndarray:
+                               predictor_idx: int = 0, n_features: int = 1) -> jnp.ndarray:
     """
     Computes the evaluation matrix for a given program and parameters.
     
@@ -483,29 +483,29 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
     Args:
         program (callable): The neuron model function with signature:
                            program(X, *params) -> (n_trials,)
-                           where X has shape (n_predictors, n_trials).
+                           where X has shape (n_features, n_trials).
         params (jnp.ndarray): The parameters for the neuron model. Shape: (n_cells, n_params)
         n_evaluation_points (int): Number of points to evaluate the model at.
         predictor_idx (int): Index of the predictor to vary for evaluation. Default is 0.
-        n_predictors (int): Total number of predictors in the model. Default is 1.
+        n_features (int): Total number of predictors in the model. Default is 1.
     Returns:
         jnp.ndarray: The evaluation matrix of shape (n_cells, n_evaluation_points).
     
     Raises:
-        ValueError: If predictor_idx >= n_predictors or predictor_idx < 0.
+        ValueError: If predictor_idx >= n_features or predictor_idx < 0.
     """
     # Early validation
-    if predictor_idx < 0 or predictor_idx >= n_predictors:
+    if predictor_idx < 0 or predictor_idx >= n_features:
         raise ValueError(
-            f"predictor_idx ({predictor_idx}) must be in range [0, {n_predictors}). "
-            f"Got n_predictors={n_predictors}."
+            f"predictor_idx ({predictor_idx}) must be in range [0, {n_features}). "
+            f"Got n_features={n_features}."
         )
     
     n_cells = params.shape[0]
     # Create evaluation angles
     angles = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
     # Create X with zeros for all predictors, then set the evaluation predictor
-    X_eval = jnp.zeros((n_cells, n_predictors, n_evaluation_points))
+    X_eval = jnp.zeros((n_cells, n_features, n_evaluation_points))
     X_eval = X_eval.at[:, predictor_idx, :].set(angles)
     # vmap over cells
     program_vmap = utils.vmap_over_cells(program)

@@ -23,10 +23,10 @@ class Predictors:
     
     Supports both index-based access (X[0], X[1]) and name-based access (X['theta']).
     Automatically handles conversion between 2D (n_cells, n_trials) and 
-    3D (n_cells, n_predictors, n_trials) representations.
+    3D (n_cells, n_features, n_trials) representations.
     
     Attributes:
-        data: Internal storage as a 3D array of shape (n_cells, n_predictors, n_trials)
+        data: Internal storage as a 3D array of shape (n_cells, n_features, n_trials)
         names: List of predictor names in order (e.g., ['theta', 'speed'])
         
     Example:
@@ -65,17 +65,17 @@ class Predictors:
         if self.data.ndim != 3:
             raise ValueError(
                 f"Predictors data must be 2D (n_cells, n_trials) or "
-                f"3D (n_cells, n_predictors, n_trials), got shape {self.data.shape}"
+                f"3D (n_cells, n_features, n_trials), got shape {self.data.shape}"
             )
         
         # Auto-generate names if not provided
-        n_predictors = self.data.shape[1]
+        n_features = self.data.shape[1]
         if not self.names:
-            self.names = [f"x{i}" for i in range(n_predictors)]
-        elif len(self.names) != n_predictors:
+            self.names = [f"x{i}" for i in range(n_features)]
+        elif len(self.names) != n_features:
             raise ValueError(
                 f"Number of names ({len(self.names)}) must match "
-                f"number of predictors ({n_predictors})"
+                f"number of predictors ({n_features})"
             )
     
     @classmethod
@@ -88,7 +88,7 @@ class Predictors:
         Create Predictors from a numpy/jax array.
         
         Args:
-            data: Array of shape (n_cells, n_trials) or (n_cells, n_predictors, n_trials)
+            data: Array of shape (n_cells, n_trials) or (n_cells, n_features, n_trials)
             names: Optional list of predictor names
             
         Returns:
@@ -136,14 +136,14 @@ class Predictors:
         if len(set(shapes)) > 1:
             raise ValueError(f"All predictor arrays must have the same shape, got {shapes}")
         
-        # Stack: each array is (n_cells, n_trials) -> result is (n_cells, n_predictors, n_trials)
+        # Stack: each array is (n_cells, n_trials) -> result is (n_cells, n_features, n_trials)
         stacked = np.stack(arrays, axis=1)
         
         return cls(data=stacked, names=order)
     
     @property
     def shape(self) -> tuple:
-        """Return the shape (n_cells, n_predictors, n_trials)."""
+        """Return the shape (n_cells, n_features, n_trials)."""
         return self.data.shape
     
     @property
@@ -152,7 +152,7 @@ class Predictors:
         return self.data.shape[0]
     
     @property
-    def n_predictors(self) -> int:
+    def n_features(self) -> int:
         """Number of predictor variables."""
         return self.data.shape[1]
     
@@ -178,9 +178,9 @@ class Predictors:
             idx = self.names.index(key)
             return self.data[:, idx, :]
         elif isinstance(key, int):
-            if key < 0 or key >= self.n_predictors:
+            if key < 0 or key >= self.n_features:
                 raise IndexError(
-                    f"Predictor index {key} out of range for {self.n_predictors} predictors"
+                    f"Predictor index {key} out of range for {self.n_features} predictors"
                 )
             return self.data[:, key, :]
         elif isinstance(key, slice):
@@ -193,7 +193,7 @@ class Predictors:
         Return the full 3D tensor representation.
         
         Returns:
-            Array of shape (n_cells, n_predictors, n_trials)
+            Array of shape (n_cells, n_features, n_trials)
         """
         return self.data
     
@@ -226,7 +226,7 @@ class Predictors:
             cell_idx: Index of the cell
             
         Returns:
-            Array of shape (n_predictors, n_trials)
+            Array of shape (n_features, n_trials)
         """
         return self.data[cell_idx, :, :]
     
@@ -274,7 +274,7 @@ class Predictors:
     
     def __len__(self) -> int:
         """Return number of predictors."""
-        return self.n_predictors
+        return self.n_features
 
 
 def ensure_predictors(
@@ -287,7 +287,7 @@ def ensure_predictors(
     This is the main entry point for backward compatibility. It accepts:
     - Predictors: returned as-is
     - 2D array (n_cells, n_trials): wrapped as single predictor
-    - 3D array (n_cells, n_predictors, n_trials): wrapped directly
+    - 3D array (n_cells, n_features, n_trials): wrapped directly
     - Dict of arrays: converted via from_dict
     
     Args:
@@ -300,7 +300,7 @@ def ensure_predictors(
     Example:
         # All of these work:
         >>> ensure_predictors(angles_2d)  # (n_cells, n_trials)
-        >>> ensure_predictors(angles_3d)  # (n_cells, n_predictors, n_trials)  
+        >>> ensure_predictors(angles_3d)  # (n_cells, n_features, n_trials)  
         >>> ensure_predictors({'theta': angles, 'speed': speeds})
         >>> ensure_predictors(existing_predictors)
     """

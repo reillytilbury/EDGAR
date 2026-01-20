@@ -78,7 +78,7 @@ def neuron_model_1(X, amplitude=1.0, baseline=0.0):
     Simple model description.
     
     Args:
-        X: Predictor array with shape (n_predictors, n_trials).
+        X: Predictor array with shape (n_features, n_trials).
            X[0] is the primary stimulus (e.g., orientation angles).
         amplitude: Response amplitude
         baseline: Baseline firing rate
@@ -101,7 +101,7 @@ def parameter_estimator_1(X, response):
     Estimate parameters from data.
     
     Args:
-        X: Predictor array with shape (n_predictors, n_trials).
+        X: Predictor array with shape (n_features, n_trials).
            X[0] is the primary stimulus.
         response: Observed responses for a single cell, shape (n_trials,)
     
@@ -118,7 +118,7 @@ def parameter_estimator_1(X, response):
 ```
 
 **Important constraints:**
-- **Function signature**: Models must accept `X` as first argument with shape `(n_predictors, n_trials)`
+- **Function signature**: Models must accept `X` as first argument with shape `(n_features, n_trials)`
 - **Predictor access**: Use index-based access like `theta = X[0]`, `contrast = X[1]`
 - Parameter estimators must be simple heuristics (no scipy.optimize, curve_fit, etc.)
 - JAX versions cannot use boolean indexing, dynamic shapes, or value-dependent control flow
@@ -191,7 +191,7 @@ The framework supports models with multiple predictor variables (e.g., orientati
 theta = data['orientation']  # (n_trials,)
 contrast = data['contrast']  # (n_trials,)
 
-# Stack into (n_cells, n_predictors, n_trials)
+# Stack into (n_cells, n_features, n_trials)
 predictors_array = np.stack([
     np.tile(theta, (n_cells, 1)),
     np.tile(contrast, (n_cells, 1))
@@ -295,7 +295,7 @@ The prompts control how LLMs generate code. Key sections:
   - `exploit`: Refinement mode
   - `image_analysis`: Instructions for interpreting diagnostic plots
   - `code_guidelines`: Code constraints and JAX compatibility rules
-  - `function_signature`: Required function signature format (X with shape `(n_predictors, n_trials)`)
+  - `function_signature`: Required function signature format (X with shape `(n_features, n_trials)`)
   - `docstring_guidelines`: Documentation format
 
 - `parameter_estimator`: Instructions for parameter estimation functions

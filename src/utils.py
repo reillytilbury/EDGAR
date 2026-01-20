@@ -57,16 +57,16 @@ def vmap_over_cells(model_fn):
     Args:
         model_fn: A neuron model function with signature:
                   model_fn(X, *params) -> (n_trials,)
-                  where X has shape (n_predictors, n_trials).
+                  where X has shape (n_features, n_trials).
     
     Returns:
         A vmapped function that accepts:
-        - X: shape (n_cells, n_predictors, n_trials)
+        - X: shape (n_cells, n_features, n_trials)
         - params_matrix: shape (n_cells, n_params)
         Returns shape (n_cells, n_trials).
     """
     def _wrapped(X_cell, params_row):
-        # X_cell shape: (n_predictors, n_trials) for one cell
+        # X_cell shape: (n_features, n_trials) for one cell
         # params_row shape: (k,) - one cell's parameters
         return model_fn(X_cell, *params_row)   # unpack to scalars
     return jax.vmap(_wrapped, in_axes=(0, 0))   # both X and params batched over cells

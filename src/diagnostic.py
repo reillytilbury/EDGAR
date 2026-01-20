@@ -8,10 +8,10 @@ from typing import Optional, Callable, Sequence
 
 
 def _ensure_predictor_format(x_cell: jnp.ndarray) -> jnp.ndarray:
-    """Convert 1D stimulus array to 2D predictor format (n_predictors, n_trials)."""
+    """Convert 1D stimulus array to 2D predictor format (n_features, n_trials)."""
     if x_cell.ndim == 1:
         return x_cell.reshape(1, -1)  # (n_trials,) -> (1, n_trials)
-    return x_cell  # already (n_predictors, n_trials)
+    return x_cell  # already (n_features, n_trials)
 
 
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
@@ -36,13 +36,13 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
             - must have columns 'program' and 'params'. 
             - must have n_rows <= 3
             - 'program': callable (written in JAX): (X: jnp.ndarray, *params) -> jnp.ndarray
-                         where X has shape (n_predictors, n_trials)
+                         where X has shape (n_features, n_trials)
             - 'params': jnp.ndarray (n_cells, n_params)
         loss_function: 
             - callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
         x: Predictor data. Can be:
            - 2D array (n_cells, n_trials) - will use first axis as theta
-           - 3D array (n_cells, n_predictors, n_trials)
+           - 3D array (n_cells, n_features, n_trials)
         y: (n_cells x n_trials) - jnp.ndarray
         predictor_idx (int): Index of the predictor to use for plotting (x-axis). Default is 0.
                              Must be 0 if x is 2D.
@@ -63,11 +63,11 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                 f"predictor_idx must be 0 for 2D input (single predictor), got {predictor_idx}."
             )
     else:
-        n_predictors = x_arr.shape[1]
-        if predictor_idx < 0 or predictor_idx >= n_predictors:
+        n_features = x_arr.shape[1]
+        if predictor_idx < 0 or predictor_idx >= n_features:
             raise ValueError(
-                f"predictor_idx ({predictor_idx}) must be in range [0, {n_predictors}). "
-                f"Got n_predictors={n_predictors}."
+                f"predictor_idx ({predictor_idx}) must be in range [0, {n_features}). "
+                f"Got n_features={n_features}."
             )
 
     # define frequently used variables
@@ -77,17 +77,17 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     params = [p[cell_idx] for p in params]
     spike_matrix = y[cell_idx]
     
-    # Handle both 2D (n_cells, n_trials) and 3D (n_cells, n_predictors, n_trials) input
+    # Handle both 2D (n_cells, n_trials) and 3D (n_cells, n_features, n_trials) input
     if x_arr.ndim == 2:
         # 2D input: (n_cells, n_trials) - expand to (n_cells, 1, n_trials)
         stimuli_3d = x_arr[cell_idx][:, jnp.newaxis, :]
         stimuli_1d = x_arr[cell_idx]  # for plotting (single predictor)
     else:
-        # 3D input: (n_cells, n_predictors, n_trials)
+        # 3D input: (n_cells, n_features, n_trials)
         stimuli_3d = x_arr[cell_idx]
         stimuli_1d = x_arr[cell_idx][:, predictor_idx, :]  # use specified predictor for plotting
     
-    n_cells, n_predictors, n_trials = stimuli_3d.shape
+    n_cells, n_features, n_trials = stimuli_3d.shape
     n_models = len(models)
     if labels is None:
         labels = [f'model {i + 1}' for i in range(n_models)]
@@ -103,7 +103,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     for i, model in enumerate(models):
         for c in range(n_cells):
             params_ic = params[i][c]
-            X_cell = stimuli_3d[c]  # (n_predictors, n_trials)
+            X_cell = stimuli_3d[c]  # (n_features, n_trials)
             predicted_response = model(X_cell, *params_ic)
             point_losses = point_losses.at[i, c].set(loss_function(predicted_response, spike_matrix[c]))
     
@@ -168,11 +168,11 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
     Plots the fit of a single model to a selection of cells in x and y, along with the running mean.
     Args:
         model: callable (written in JAX): (X: jnp.ndarray, *params) -> jnp.ndarray
-               where X has shape (n_predictors, n_trials)
+               where X has shape (n_features, n_trials)
         loss_function: callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
         x: Predictor data. Can be:
            - 2D array (n_cells, n_trials) - will use as single predictor
-           - 3D array (n_cells, n_predictors, n_trials)
+           - 3D array (n_cells, n_features, n_trials)
         y: (n_cells x n_trials) - jnp.ndarray
         params: (n_cells x n_params) - jnp.ndarray
         predictor_idx (int): Index of the predictor to use for plotting (x-axis). Default is 0.
@@ -196,7 +196,7 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
         if predictor_idx < 0 or predictor_idx >= n_preds:
             raise ValueError(
                 f"predictor_idx ({predictor_idx}) must be in range [0, {n_preds}). "
-                f"Got n_predictors={n_preds}."
+                f"Got n_features={n_preds}."
             )
     
     # Handle both 2D and 3D input
@@ -205,17 +205,17 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
         x_3d = x_arr[:, jnp.newaxis, :]
         x_1d = x_arr  # for plotting (single predictor)
     else:
-        # 3D input: (n_cells, n_predictors, n_trials)
+        # 3D input: (n_cells, n_features, n_trials)
         x_3d = x_arr
         x_1d = x_arr[:, predictor_idx, :]  # use specified predictor for plotting
     
-    n_cells, n_predictors, n_trials = x_3d.shape
+    n_cells, n_features, n_trials = x_3d.shape
 
     # Calculate loss for each cell and trial
     point_losses = jnp.zeros((n_cells, n_trials))
     for c in range(n_cells):
         params_c = params[c]
-        X_cell = x_3d[c]  # (n_predictors, n_trials)
+        X_cell = x_3d[c]  # (n_features, n_trials)
         predicted_response = model(X_cell, *params_c)
         point_losses = point_losses.at[c].set(loss_function(predicted_response, y[c]))
 

@@ -97,7 +97,7 @@ prompts:
       def neuron_model_v{next_version}(X, param1=default1, param2=default2, ...):
       ```
       where:
-      * `X` is a 2D array with shape `(n_predictors, n_trials)`. Each row `X[i]` is a different predictor variable.
+      * `X` is a 2D array with shape `(n_features, n_trials)`. Each row `X[i]` is a different predictor variable.
       * For orientation tuning, `X[0]` is the stimulus angle (theta) in radians.
       * Access predictors by index: `theta = X[0]`, `contrast = X[1]`, etc.
       * The remaining arguments are free parameters with default values.
@@ -152,7 +152,7 @@ prompts:
       def parameter_estimator_v{next_version}(X, spike_counts):
       ```
       where:
-      * `X` is a 2D array with shape `(n_predictors, n_trials)`. Each row `X[i]` is a different predictor variable.
+      * `X` is a 2D array with shape `(n_features, n_trials)`. Each row `X[i]` is a different predictor variable.
       * For orientation tuning, `X[0]` is the stimulus angle (theta) in radians.
       * Access predictors by index: `theta = X[0]`, `contrast = X[1]`, etc.
       * `spike_counts` has shape `(n_trials,)`.

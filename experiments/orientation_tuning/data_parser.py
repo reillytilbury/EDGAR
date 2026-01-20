@@ -106,7 +106,7 @@ def load_and_process_data(
     data_dict : dict
         Dictionary containing:
           - 'response': Preprocessed neural response. (n_cells, n_trials)
-          - 'predictors': Predictors object with shape (n_cells, n_predictors, n_trials)
+          - 'predictors': Predictors object with shape (n_cells, n_features, n_trials)
           - 'angles': (DEPRECATED) Alias for predictors['theta'], for backward compatibility.
                       Will be removed in a future version.
     """
