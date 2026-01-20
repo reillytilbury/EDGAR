@@ -512,7 +512,7 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
     y_eval = program_vmap(X_eval, params)
     return y_eval
 
-async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
+async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
                 critical_population_size=12, min_wise_population_size=0, 
                 n_migrants=2, fit_params=True, tol=1e-6, exploit_point=0.5,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
@@ -1454,6 +1454,6 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
 if __name__ == "__main__":
     for i in range(4):
         print("running with standard params")
-        asyncio.run(main(n_iterations=9, time_limit=60, use_image_feedback=True, use_large_every=0,
+        asyncio.run(main_deprecated(n_iterations=9, time_limit=60, use_image_feedback=True, use_large_every=0,
                          param_penalty_weight=0.01,
                          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.7))
