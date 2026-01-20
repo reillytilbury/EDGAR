@@ -1,0 +1,18 @@
+task: grid_cells  # name of the sub directory under experiments
+load_and_process_data_fn: experiments.grid_cells.data_parser.load_and_process_data
+data_path: /home/dabin/data/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
+
+# Data processing parameters
+time_start: 27826       # start time in seconds
+time_end: 31223         # end time in seconds
+n_bins: 65              # number of spatial bins per dimension
+smoothing_sigma: 1.5    # Gaussian smoothing sigma for rate maps
+wall_val: 0.75          # arena half-width for normalization
+
+# Predictor configuration - defines the input variables for models
+# Grid cells respond to 2D spatial position
+predictors:
+  - name: x
+    description: "Normalized x position in arena [-1, 1]"
+  - name: y
+    description: "Normalized y position in arena [-1, 1]"
