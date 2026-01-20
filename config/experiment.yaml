@@ -1,4 +1,9 @@
 task: orientation_tuning # this should be the name of the directory under experiments
+
+# Path to experiment-specific diagnostics module (relative to project root)
+# If not specified or file doesn't exist, diagnostics will be disabled
+diagnostics_path: experiments/orientation_tuning
+
 seed_programs:
   module: experiments.orientation_tuning.seed_programs
   function_seeds:

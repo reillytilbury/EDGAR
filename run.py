@@ -4,6 +4,7 @@ from pathlib import Path
 import importlib
 import os, argparse
 from src import hypothesis_engine 
+from src.diagnostics_manager import load_diagnostics
 
 async def _run_many(test_mode: bool = False):
     # Load experiment configuration
@@ -13,7 +14,11 @@ async def _run_many(test_mode: bool = False):
     
     # Extract experiment parameters
     params = experiment_config.get('experiment_params', {})
-    seed_programs = experiment_config.get('seed_programs', {})    
+    seed_programs = experiment_config.get('seed_programs', {})
+    
+    # Load experiment-specific diagnostics (returns None if not configured or file missing)
+    diagnostics_path = experiment_config.get('diagnostics_path', None)
+    diagnostics_module = load_diagnostics(diagnostics_path)
 
     # Dynamically load seed programs module
     module_path = seed_programs.get('module')
@@ -113,6 +118,7 @@ async def _run_many(test_mode: bool = False):
             activity_threshold=params['activity_threshold'],
             conc_threshold=params['conc_threshold'],
             predictor_names=predictor_names,
+            diagnostics_module=diagnostics_module,
         )
 
 if __name__ == "__main__":

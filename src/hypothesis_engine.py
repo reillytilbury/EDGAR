@@ -8,7 +8,7 @@ import timeout_decorator
 import jaxopt, optax
 import pandas as pd
 from pathlib import Path
-from . import utils, diagnostic, loss_functions, llm_helper
+from . import utils, loss_functions, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .prompt_manager import PromptManager
 from .data_structures import Predictors, ensure_predictors
@@ -306,10 +306,10 @@ async def generate_new_neuron_model(current_island, llm_name, client,
     use_image = img_dir is not None
     program_prompt = prompt_manager.get_program_prompt(random_programs, mode=mode, use_image=use_image)
 
-    if use_image:
+    if use_image and diagnostics_module is not None:
         try:
             sup_title = "".join([f"neuron_model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            diagnostic.plot_model_fits(programs_df=random_programs,
+            diagnostics_module.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
                                     x=stimuli, y=spike_matrix,
                                     cell_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
@@ -364,10 +364,10 @@ async def generate_new_parameter_estimator(current_island,
     random_programs_crude = random_programs.copy()
     random_programs_crude['params'] = random_programs['initial_params']
     # now try generating an image from the random programs
-    if use_image:
+    if use_image and diagnostics_module is not None:
         try:
             sup_title = "".join([f"neuron_model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            diagnostic.plot_model_fits(programs_df=random_programs_crude,
+            diagnostics_module.plot_model_fits(programs_df=random_programs_crude,
                                     loss_function=loss_functions.quadratic_loss,
                                     x=stimuli, y=spike_matrix,
                                     cell_selection=np.random.choice(spike_matrix.shape[0], size=4, replace=False),
@@ -653,7 +653,8 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
     logging.basicConfig(filename=log_file, level=logging.INFO, format='%(message)s')
-    diagnostic.plot_model_fits(programs_df=initial_programs,
+    if diagnostics_module is not None:
+        diagnostics_module.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
                                x=angles_train, y=response_train,
                                cell_selection=np.random.choice(len(angles_train), size=9, replace=False),
@@ -773,8 +774,8 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
 
 
             # plot the fits of the neuron model and parameter estimator if using image feedback
-            if use_image_feedback:
-                diagnostic.plot_model_fits(
+            if use_image_feedback and diagnostics_module is not None:
+                diagnostics_module.plot_model_fits(
                     programs_df=pd.DataFrame({'program': [neuron_model_new, neuron_model_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
                     x=angles_train,
@@ -847,34 +848,36 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
             logging.info(f"Iter {i}, Island {island_idx} programs:\n{pg_info}\n")
         
             # Save plots of top programs
-            top_df = islands[island_idx].sort_values(by='train_loss').head(3).reset_index(drop=True)
-            top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-            sup_title = f"Iteration {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
-            sup_title += "\n".join([f"model {j+1}: iter {top_df['iteration_number'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
-            diagnostic.plot_model_fits(
-                programs_df=top_df,
+            if diagnostics_module is not None:
+                top_df = islands[island_idx].sort_values(by='train_loss').head(3).reset_index(drop=True)
+                top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
+                sup_title = f"Iteration {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
+                sup_title += "\n".join([f"model {j+1}: iter {top_df['iteration_number'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
+                diagnostics_module.plot_model_fits(
+                    programs_df=top_df,
+                    loss_function=loss_functions.quadratic_loss,
+                    x=angles_train,
+                    y=response_train,
+                    cell_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
+                    title=sup_title,
+                    save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
+                    dpi=300.0)
+        
+        if diagnostics_module is not None:
+            all_programs = pd.concat([islands[idx] for idx in range(n_islands)], ignore_index=True)
+            top_programs = all_programs.sort_values(by='train_loss').head(3).reset_index(drop=True)
+            top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
+            sup_title = f"Iteration {i}, Top 3 Programs Overall\n"
+            sup_title += "\n".join([f"model {j+1}: iter {top_programs['iteration_number'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
+            diagnostics_module.plot_model_fits(
+                programs_df=top_programs,
                 loss_function=loss_functions.quadratic_loss,
                 x=angles_train,
                 y=response_train,
                 cell_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                 title=sup_title,
-                save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
+                save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
                 dpi=300.0)
-        
-        all_programs = pd.concat([islands[idx] for idx in range(n_islands)], ignore_index=True)
-        top_programs = all_programs.sort_values(by='train_loss').head(3).reset_index(drop=True)
-        top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-        sup_title = f"Iteration {i}, Top 3 Programs Overall\n"
-        sup_title += "\n".join([f"model {j+1}: iter {top_programs['iteration_number'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
-        diagnostic.plot_model_fits(
-            programs_df=top_programs,
-            loss_function=loss_functions.quadratic_loss,
-            x=angles_train,
-            y=response_train,
-            cell_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
-            title=sup_title,
-            save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
-            dpi=300.0)
         
         # save census
         census_path = os.path.join(iteration_dir, 'census.npy')
@@ -932,9 +935,10 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
 
     # ---------------------------
     # save losses plot    
-    diagnostic.plot_train_vs_test_loss(programs_df=combined_programs_dataframe,
-                                       island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
-                                       save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'))
+    if diagnostics_module is not None:
+        diagnostics_module.plot_train_vs_test_loss(programs_df=combined_programs_dataframe,
+                                           island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
+                                           save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'))
     
     # ---------------------------
     df_list = [combined_programs_dataframe] + islands
@@ -945,35 +949,36 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     config_str += f"llm_names={little_lm_name, large_lm_name}, fit_params={fit_params}, \n"
     config_str += f"critical_population_size={critical_population_size}.\n"
 
-    for i, df in enumerate(df_list):
-        df_sup = config_str
-        df = df.head(3)
-        df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
-        df_sup += "".join([f"model {len(df) - i}: iter {df['iteration_number'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, total loss {0.5 * (df['test_loss'][i] + df['train_loss'][i]):.2f}\n" for i in range(min(3, len(df)))])
-        diagnostic.plot_model_fits(
-            programs_df=df,
-            loss_function=loss_functions.quadratic_loss,
-            x=angles_test,
-            y=response_test,
-            cell_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
-            title=df_sup,
-            save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
-        )
-        # plot top 3 models separately
-        for j in range(min(3, len(df))):
-            birth_island = df['birth_island'][j]
-            iteration_number = df['iteration_number'][j]
-            batch_index = df['batch_index'][j]
-            cell_selection = np.random.choice(response_test.shape[0], size=9, replace=False)
-            diagnostic.plot_single_model_fit(
-                model=df['program'][j],
+    if diagnostics_module is not None:
+        for i, df in enumerate(df_list):
+            df_sup = config_str
+            df = df.head(3)
+            df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
+            df_sup += "".join([f"model {len(df) - i}: iter {df['iteration_number'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, total loss {0.5 * (df['test_loss'][i] + df['train_loss'][i]):.2f}\n" for i in range(min(3, len(df)))])
+            diagnostics_module.plot_model_fits(
+                programs_df=df,
                 loss_function=loss_functions.quadratic_loss,
-                x=angles_test[cell_selection],
-                y=response_test[cell_selection],
-                params=df['params'][j][cell_selection],
-                title=f"Island {birth_island}, Iteration {iteration_number}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
-                save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
+                x=angles_test,
+                y=response_test,
+                cell_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
+                title=df_sup,
+                save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
             )
+            # plot top 3 models separately
+            for j in range(min(3, len(df))):
+                birth_island = df['birth_island'][j]
+                iteration_number = df['iteration_number'][j]
+                batch_index = df['batch_index'][j]
+                cell_selection = np.random.choice(response_test.shape[0], size=9, replace=False)
+                diagnostics_module.plot_single_model_fit(
+                    model=df['program'][j],
+                    loss_function=loss_functions.quadratic_loss,
+                    x=angles_test[cell_selection],
+                    y=response_test[cell_selection],
+                    params=df['params'][j][cell_selection],
+                    title=f"Island {birth_island}, Iteration {iteration_number}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
+                    save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
+                )
 
 
 async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
@@ -998,6 +1003,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 activity_threshold = None,
                 conc_threshold = None,
                 predictor_names = None,
+                diagnostics_module = None,
                 random_seed = 42):
     """ 
     Main function to run the hypothesis engine.
@@ -1116,7 +1122,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
     logging.basicConfig(filename=log_file, level=logging.INFO, format='%(message)s')
-    diagnostic.plot_model_fits(programs_df=initial_programs,
+    if diagnostics_module is not None:
+        diagnostics_module.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
                                x=angles_train, y=response_train,
                                cell_selection=np.random.choice(len(angles_train), size=9, replace=False),
@@ -1237,8 +1244,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
 
 
             # plot the fits of the neuron model and parameter estimator if using image feedback
-            if use_image_feedback:
-                diagnostic.plot_model_fits(
+            if use_image_feedback and diagnostics_module is not None:
+                diagnostics_module.plot_model_fits(
                     programs_df=pd.DataFrame({'program': [neuron_model_new, neuron_model_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
                     x=angles_train,
@@ -1311,34 +1318,36 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             logging.info(f"Iter {i}, Island {island_idx} programs:\n{pg_info}\n")
         
             # Save plots of top programs
-            top_df = islands[island_idx].sort_values(by='train_loss').head(3).reset_index(drop=True)
-            top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-            sup_title = f"Iteration {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
-            sup_title += "\n".join([f"model {j+1}: iter {top_df['iteration_number'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
-            diagnostic.plot_model_fits(
-                programs_df=top_df,
+            if diagnostics_module is not None:
+                top_df = islands[island_idx].sort_values(by='train_loss').head(3).reset_index(drop=True)
+                top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
+                sup_title = f"Iteration {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
+                sup_title += "\n".join([f"model {j+1}: iter {top_df['iteration_number'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
+                diagnostics_module.plot_model_fits(
+                    programs_df=top_df,
+                    loss_function=loss_functions.quadratic_loss,
+                    x=angles_train,
+                    y=response_train,
+                    cell_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
+                    title=sup_title,
+                    save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
+                    dpi=300.0)
+        
+        if diagnostics_module is not None:
+            all_programs = pd.concat([islands[idx] for idx in range(n_islands)], ignore_index=True)
+            top_programs = all_programs.sort_values(by='train_loss').head(3).reset_index(drop=True)
+            top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
+            sup_title = f"Iteration {i}, Top 3 Programs Overall\n"
+            sup_title += "\n".join([f"model {j+1}: iter {top_programs['iteration_number'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
+            diagnostics_module.plot_model_fits(
+                programs_df=top_programs,
                 loss_function=loss_functions.quadratic_loss,
                 x=angles_train,
                 y=response_train,
                 cell_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                 title=sup_title,
-                save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
+                save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
                 dpi=300.0)
-        
-        all_programs = pd.concat([islands[idx] for idx in range(n_islands)], ignore_index=True)
-        top_programs = all_programs.sort_values(by='train_loss').head(3).reset_index(drop=True)
-        top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-        sup_title = f"Iteration {i}, Top 3 Programs Overall\n"
-        sup_title += "\n".join([f"model {j+1}: iter {top_programs['iteration_number'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
-        diagnostic.plot_model_fits(
-            programs_df=top_programs,
-            loss_function=loss_functions.quadratic_loss,
-            x=angles_train,
-            y=response_train,
-            cell_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
-            title=sup_title,
-            save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
-            dpi=300.0)
         
         # save census
         census_path = os.path.join(iteration_dir, 'census.npy')
@@ -1397,9 +1406,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
 
     # ---------------------------
     # save losses plot    
-    diagnostic.plot_train_vs_test_loss(programs_df=combined_programs_dataframe,
-                                       island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
-                                       save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'))
+    if diagnostics_module is not None:
+        diagnostics_module.plot_train_vs_test_loss(programs_df=combined_programs_dataframe,
+                                           island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
+                                           save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'))
     
     # ---------------------------
     df_list = [combined_programs_dataframe] + islands
@@ -1410,35 +1420,36 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     config_str += f"llm_names={little_lm_name, large_lm_name}, fit_params={fit_params}, \n"
     config_str += f"critical_population_size={critical_population_size}.\n"
 
-    for i, df in enumerate(df_list):
-        df_sup = config_str
-        df = df.head(3)
-        df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
-        df_sup += "".join([f"model {len(df) - i}: iter {df['iteration_number'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, total loss {0.5 * (df['test_loss'][i] + df['train_loss'][i]):.2f}\n" for i in range(min(3, len(df)))])
-        diagnostic.plot_model_fits(
-            programs_df=df,
-            loss_function=loss_functions.quadratic_loss,
-            x=angles_test,
-            y=response_test,
-            cell_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
-            title=df_sup,
-            save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
-        )
-        # plot top 3 models separately
-        for j in range(min(3, len(df))):
-            birth_island = df['birth_island'][j]
-            iteration_number = df['iteration_number'][j]
-            batch_index = df['batch_index'][j]
-            cell_selection = np.random.choice(response_test.shape[0], size=9, replace=False)
-            diagnostic.plot_single_model_fit(
-                model=df['program'][j],
+    if diagnostics_module is not None:
+        for i, df in enumerate(df_list):
+            df_sup = config_str
+            df = df.head(3)
+            df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
+            df_sup += "".join([f"model {len(df) - i}: iter {df['iteration_number'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, total loss {0.5 * (df['test_loss'][i] + df['train_loss'][i]):.2f}\n" for i in range(min(3, len(df)))])
+            diagnostics_module.plot_model_fits(
+                programs_df=df,
                 loss_function=loss_functions.quadratic_loss,
-                x=angles_test[cell_selection],
-                y=response_test[cell_selection],
-                params=df['params'][j][cell_selection],
-                title=f"Island {birth_island}, Iteration {iteration_number}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
-                save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
+                x=angles_test,
+                y=response_test,
+                cell_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
+                title=df_sup,
+                save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
             )
+            # plot top 3 models separately
+            for j in range(min(3, len(df))):
+                birth_island = df['birth_island'][j]
+                iteration_number = df['iteration_number'][j]
+                batch_index = df['batch_index'][j]
+                cell_selection = np.random.choice(response_test.shape[0], size=9, replace=False)
+                diagnostics_module.plot_single_model_fit(
+                    model=df['program'][j],
+                    loss_function=loss_functions.quadratic_loss,
+                    x=angles_test[cell_selection],
+                    y=response_test[cell_selection],
+                    params=df['params'][j][cell_selection],
+                    title=f"Island {birth_island}, Iteration {iteration_number}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
+                    save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
+                )
 
 if __name__ == "__main__":
     for i in range(4):
