@@ -85,7 +85,8 @@ def load_and_process_data(
     data_path: str, 
     activity_threshold: float = 0.1, 
     conc_threshold: float = 0.1,
-    predictor_names: Optional[List[str]] = None
+    predictor_names: Optional[List[str]] = None,
+    **kwargs  # Accept additional config params (e.g., task, predictors) without error
 ) -> dict:
     """
     Load and preprocess neural data from a specified .npy file.
