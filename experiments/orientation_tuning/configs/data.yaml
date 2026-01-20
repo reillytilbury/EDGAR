@@ -1,0 +1,15 @@
+task: orientation_tuning # name of the sub directory under experiments
+load_and_process_data_fn: experiments.orientation_tuning.data_parser.load_and_process_data
+data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
+# save some data parsing parameters (thresholds) so that we can save down a yaml copy each time we run an experiment
+activity_threshold: 0.4
+conc_threshold: 0.55
+
+# Predictor configuration - defines the input variables for models
+# Each predictor should have a name and description for prompt generation
+predictors:
+  - name: theta
+    description: "Stimulus orientation angle in radians [0, 2π]"
+  # Future predictors can be added here, e.g.:
+  # - name: speed
+  #   description: "Running speed of the mouse in cm/s"
