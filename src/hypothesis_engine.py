@@ -993,22 +993,29 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 little_lm_name = 'gemini-2.0-flash',
                 large_lm_name = 'gemini-2.5-flash',
                 use_large_every = 3,
-                conc_thresh = 0.55, activity_thresh = 0.4,
-                data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy',
                 training_ratio = 0.5, 
                 max_iter = 1_000,
                 numpy_programs = None,
                 jax_programs = None,
                 param_estimators = None,
                 load_and_process_data_fn = None,
-                activity_threshold = None,
-                conc_threshold = None,
-                predictor_names = None,
+                data_config = None,
                 diagnostics_module = None,
                 random_seed = 42):
     """ 
     Main function to run the hypothesis engine.
+    
+    Args:
+        ...
+        data_config: Dict containing all data loading parameters. This is passed
+                     directly to load_and_process_data_fn, which extracts whatever
+                     parameters it needs. This allows different experiments to have
+                     different parameter sets without changing hypothesis_engine.
+        ...
     """
+    if data_config is None:
+        data_config = {}
+    
     # load api keys
     load_dotenv()
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -1021,12 +1028,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     if param_estimators is None or len(param_estimators) != 2:
         raise ValueError("param_estimators must be a list of 2 functions.")
 
-    data_dict = load_and_process_data_fn(
-        data_path, 
-        activity_threshold=activity_threshold, 
-        conc_threshold=conc_threshold,
-        predictor_names=predictor_names
-    )
+    data_dict = load_and_process_data_fn(**data_config)
     response = data_dict['response']
     # Use 'predictors' if available (new format), fall back to 'trials' (deprecated)
     predictors = data_dict.get('predictors', None)
@@ -1043,7 +1045,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     training_samples, test_samples = create_train_test_split(n_good_samples, training_ratio)
     response_train, response_test = response[training_samples, :], response[test_samples, :]
     trials_train, trials_test = trials[training_samples, :], trials[test_samples, :]
-    print(f"Selected {n_good_samples} samples with activity > {activity_threshold} and concentration > {conc_threshold}.")
+    print(f"Loaded {n_good_samples} samples, {n_trials} trials per sample.")
     print(f"Using {len(training_samples)} samples for training and {len(test_samples)} samples for testing.")
 
     # create a dataframe to store the programs in each island

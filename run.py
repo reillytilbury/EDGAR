@@ -59,30 +59,21 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
     with open(data_config_path) as f:
         data_config = yaml.safe_load(f)
 
-    params['data_path'] = data_config.get('data_path', '')
-    
-    # Required parameters - error if not supplied
-    if 'activity_threshold' not in data_config:
-        raise ValueError("activity_threshold must be specified in config/data.yaml")
-    if 'conc_threshold' not in data_config:
-        raise ValueError("conc_threshold must be specified in config/data.yaml")
-    
-    params['activity_threshold'] = data_config['activity_threshold']
-    params['conc_threshold'] = data_config['conc_threshold']
-    
     # Dynamically load data extraction function
-    load_and_process_data_fn_path = data_config.get('load_and_process_data_fn')
+    load_and_process_data_fn_path = data_config.pop('load_and_process_data_fn', None)
     if load_and_process_data_fn_path:
         # Parse module path and function name (e.g., 'experiments.orientation_tuning.data_parser.load_and_process_data')
         module_path, function_name = load_and_process_data_fn_path.rsplit('.', 1)
         data_module = importlib.import_module(module_path)
         load_and_process_data_fn = getattr(data_module, function_name)
     else:
-        load_and_process_data_fn = None
+        raise ValueError("load_and_process_data_fn must be specified in data.yaml")
     
     # Extract predictor names from config (for multi-predictor support)
+    # These stay in data_config for the data loading function to use
     predictors_config = data_config.get('predictors', [])
-    predictor_names = [p['name'] for p in predictors_config] if predictors_config else None
+    if predictors_config:
+        data_config['predictor_names'] = [p['name'] for p in predictors_config]
 
     if test_mode:
         params['n_iterations'] = 1
@@ -106,7 +97,6 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
             param_penalty_weight=params['param_penalty_weight'],
             exploration_topology=params['exploration_topology'],
             exploit_point=params['exploit_point'],
-            data_path=params['data_path'], 
             k_max=params['k_max'],
             n_islands=params['n_islands'],
             batch_size=params['batch_size'],
@@ -124,9 +114,7 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
             jax_programs=jax_programs,
             param_estimators=param_estimators,
             load_and_process_data_fn=load_and_process_data_fn,
-            activity_threshold=params['activity_threshold'],
-            conc_threshold=params['conc_threshold'],
-            predictor_names=predictor_names,
+            data_config=data_config,
             diagnostics_module=diagnostics_module,
         )
 
