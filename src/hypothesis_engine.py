@@ -1033,13 +1033,17 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     n_good_cells, n_trials = response.shape
         
     key = jax.random.PRNGKey(random_seed)
-    training_size = int(n_good_cells * training_ratio)
-    shuffled_indices = jax.random.permutation(key, jnp.arange(n_good_cells))
-    training_cells, test_cells = shuffled_indices[:training_size], shuffled_indices[training_size:]
-    response_train, response_test = response[training_cells, :], response[test_cells, :]
-    angles_train, angles_test = angles[training_cells, :], angles[test_cells, :]
+    def create_train_test_split(n_samples, training_ratio):
+        training_size = int(n_samples * training_ratio)
+        shuffled_indices = jax.random.permutation(key, jnp.arange(n_samples))
+        training_samples = shuffled_indices[:training_size]
+        test_samples = shuffled_indices[training_size:]
+        return training_samples, test_samples
+    training_samples, test_samples = create_train_test_split(n_good_cells, training_ratio)
+    response_train, response_test = response[training_samples, :], response[test_samples, :]
+    angles_train, angles_test = angles[training_samples, :], angles[test_samples, :]
     print(f"Selected {n_good_cells} cells with activity > {activity_threshold} and concentration > {conc_threshold}.")
-    print(f"Using {len(training_cells)} cells for training and {len(test_cells)} cells for testing.")
+    print(f"Using {len(training_samples)} cells for training and {len(test_samples)} cells for testing.")
 
     # create a dataframe to store the programs in each island
     islands = []
