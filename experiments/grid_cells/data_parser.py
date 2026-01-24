@@ -17,16 +17,20 @@ def load_and_process_data(
     data_path: str,
     time_start: float = 27826,
     time_end: float = 31223,
-    n_bins: int = 65,
+    n_spatial_bins: int = 65,
+    time_bin_ms: int = 10,
     smoothing_sigma: float = 1.5,
     wall_val: float = 0.75,
     predictor_names: Optional[List[str]] = None,
     module_key: str = 'spikes_mod1',
     min_spikes: int = 100,
+    speed_threshold: float = 2.5,
+    max_trials: int = 5000,  # Subsample to avoid GPU OOM
     **kwargs  # Accept additional config params (e.g., task, predictors) without error
 ) -> Dict[str, Any]:
     """
     Load and preprocess grid cell data from .npz file.
+    Strategy : apply time and spatial binning first. And then filter for speed and min spikes.
     
     Parameters
     ----------
@@ -36,8 +40,10 @@ def load_and_process_data(
         Start time in seconds for data extraction.
     time_end : float
         End time in seconds for data extraction.
-    n_bins : int
+    n_spatial_bins : int
         Number of spatial bins per dimension for rate map computation.
+    time_bin_ms : int
+        Time bin size in milliseconds for temporal smoothing.
     smoothing_sigma : float
         Gaussian smoothing sigma for rate maps.
     wall_val : float
@@ -48,14 +54,16 @@ def load_and_process_data(
         Key in the npz file for spike data (e.g., 'spikes_mod1', 'spikes_mod2').
     min_spikes : int
         Minimum number of spikes for a cell to be included.
+    speed_threshold : float
+        Minimum speed threshold for including data points (in cm/s).
     
     Returns
     -------
     data_dict : dict
         Dictionary containing:
           - 'response': Firing rates at each position. (n_cells, n_trials)
-          - 'predictors': Predictors object with x, y positions. (n_cells, n_features, n_trials)
-          - 'rate_maps': 2D rate maps for visualization. (n_cells, n_bins, n_bins)
+          - 'predictors': Predictors object with x, y, z, azimuth positions. (n_cells, n_features, n_trials)
+          - 'rate_maps': 2D rate maps for visualization. (n_cells, n_spatial_bins, n_spatial_bins)
           - 'position_data': Dict with raw x, y, t arrays for diagnostics.
     """
     if predictor_names is None:
@@ -65,12 +73,79 @@ def load_and_process_data(
     data = np.load(data_path, allow_pickle=True)
     x_raw, y_raw, t_raw = data['x'], data['y'], data['t']
     
+    # Load optional predictors if available in data file
+    z_raw = data['z'] if 'z' in data.files else None
+    azimuth_raw = data['azimuth'] if 'azimuth' in data.files else None
+        
     # Filter to time window
     time_mask = (t_raw >= time_start) & (t_raw <= time_end)
     x = x_raw[time_mask]
     y = y_raw[time_mask]
     t = t_raw[time_mask]
+    z = z_raw[time_mask] if z_raw is not None else None
+    azimuth = azimuth_raw[time_mask] if azimuth_raw is not None else None
+
+    # apply time bin 
+    if time_bin_ms > 0:
+        time_bin_s = time_bin_ms / 1000.0
+        n_bins_time = int(np.ceil((time_end - time_start) / time_bin_s))
+        t_binned = np.linspace(time_start, time_end, n_bins_time)
+        
+        # Bin positions by averaging within each time bin
+        x_binned = np.zeros(n_bins_time)
+        y_binned = np.zeros(n_bins_time)
+        z_binned = np.zeros(n_bins_time) if z is not None else None
+        azimuth_binned = np.zeros(n_bins_time) if azimuth is not None else None
+        
+        for i in range(n_bins_time - 1):
+            bin_mask = (t >= t_binned[i]) & (t < t_binned[i + 1])
+            if np.any(bin_mask):
+                x_binned[i] = np.mean(x[bin_mask])
+                y_binned[i] = np.mean(y[bin_mask])
+                if z is not None:
+                    z_binned[i] = np.mean(z[bin_mask])
+                if azimuth is not None:
+                    azimuth_binned[i] = np.mean(azimuth[bin_mask])
+            else:
+                x_binned[i] = x_binned[i - 1] if i > 0 else 0
+                y_binned[i] = y_binned[i - 1] if i > 0 else 0
+                if z is not None:
+                    z_binned[i] = z_binned[i - 1] if i > 0 else 0
+                if azimuth is not None:
+                    azimuth_binned[i] = azimuth_binned[i - 1] if i > 0 else 0
+        
+        # Handle last bin
+        bin_mask = (t >= t_binned[-1])
+        if np.any(bin_mask):
+            x_binned[-1] = np.mean(x[bin_mask])
+            y_binned[-1] = np.mean(y[bin_mask])
+            if z is not None:
+                z_binned[-1] = np.mean(z[bin_mask])
+            if azimuth is not None:
+                azimuth_binned[-1] = np.mean(azimuth[bin_mask])
+        else:
+            x_binned[-1] = x_binned[-2]
+            y_binned[-1] = y_binned[-2]
+            if z is not None:
+                z_binned[-1] = z_binned[-2]
+            if azimuth is not None:
+                azimuth_binned[-1] = azimuth_binned[-2]
     
+    # Compute speed and apply speed threshold
+    dt = np.diff(t, prepend=t[0])
+    dx = np.diff(x, prepend=x[0])
+    dy = np.diff(y, prepend=y[0])
+    # Avoid division by zero - set dt=1 where dt=0 (first sample will have speed=0)
+    dt_safe = np.where(dt > 0, dt, 1.0)
+    speed = np.sqrt(dx**2 + dy**2) / dt_safe  # cm/s
+    speed[0] = 0  # First sample has no valid speed
+    speed_mask = speed >= speed_threshold
+    x = x[speed_mask]
+    y = y[speed_mask]
+    t = t[speed_mask]
+    z = z[speed_mask] if z is not None else None
+    azimuth = azimuth[speed_mask] if azimuth is not None else None
+
     # Process spike times
     spike_times_dict = data[module_key].item()
     
@@ -78,14 +153,19 @@ def load_and_process_data(
     # Round spike times and t to 2 decimal places, then convert to int
     t_int = (np.round(t, 2) * 100).astype(int) - int(time_start * 100)
     
+    # Create a mapping from t_int values to array indices
+    # This handles the case where t_int values are not contiguous (e.g., due to speed filtering)
+    t_int_to_idx = {t_val: idx for idx, t_val in enumerate(t_int)}
+    
     spike_times_list = []
     for neuron, times in spike_times_dict.items():
         times_filtered = times[(times >= time_start) & (times <= time_end)]
         times_rounded = np.round(times_filtered, 2)
         times_int = (times_rounded * 100).astype(int) - int(time_start * 100)
-        # Keep only spikes within the valid time range
-        times_int = times_int[(times_int >= t_int[0]) & (times_int <= t_int[-1])]
-        spike_times_list.append(times_int)
+        # Keep only spikes that have a corresponding position sample
+        # Convert t_int values to array indices
+        spike_indices = [t_int_to_idx[t_val] for t_val in times_int if t_val in t_int_to_idx]
+        spike_times_list.append(np.array(spike_indices, dtype=int))
     
     # Normalize positions to [-1, 1]
     x_norm = x / wall_val
@@ -102,16 +182,16 @@ def load_and_process_data(
     
     # Compute occupancy map
     occupancy, x_edges, y_edges = np.histogram2d(
-        x_norm, y_norm, bins=n_bins, range=[[-1, 1], [-1, 1]]
+        x_norm, y_norm, bins=n_spatial_bins, range=[[-1, 1], [-1, 1]]
     )
     
     # Compute spike count maps and rate maps for each cell
-    spike_maps = np.zeros((n_cells, n_bins, n_bins))
+    spike_maps = np.zeros((n_cells, n_spatial_bins, n_spatial_bins))
     for c, spikes in enumerate(spike_times_list):
         x_spikes = x_norm[spikes]
         y_spikes = y_norm[spikes]
         spike_maps[c], _, _ = np.histogram2d(
-            x_spikes, y_spikes, bins=n_bins, range=[[-1, 1], [-1, 1]]
+            x_spikes, y_spikes, bins=n_spatial_bins, range=[[-1, 1], [-1, 1]]
         )
     
     # Smooth and compute rate maps
@@ -124,25 +204,53 @@ def load_and_process_data(
     
     # Create trial-based representation
     # Each timepoint is a "trial" with x, y predictors and firing rate response
-    n_trials = len(t)
+    n_trials_full = len(t)
+    
+    # Subsample trials if too many (to avoid GPU OOM)
+    if n_trials_full > max_trials:
+        subsample_idx = np.linspace(0, n_trials_full - 1, max_trials, dtype=int)
+        x_norm = x_norm[subsample_idx]
+        y_norm = y_norm[subsample_idx]
+        if z is not None:
+            z = z[subsample_idx]
+        if azimuth is not None:
+            azimuth = azimuth[subsample_idx]
+        n_trials = max_trials
+        print(f"Subsampled from {n_trials_full} to {n_trials} trials")
+    else:
+        n_trials = n_trials_full
     
     # Build response matrix: for each cell, firing rate at each timepoint
     # Use the rate map to look up firing rate at each position
-    bin_x = np.clip(((x_norm + 1) / 2 * n_bins).astype(int), 0, n_bins - 1)
-    bin_y = np.clip(((y_norm + 1) / 2 * n_bins).astype(int), 0, n_bins - 1)
+    bin_x = np.clip(((x_norm + 1) / 2 * n_spatial_bins).astype(int), 0, n_spatial_bins - 1)
+    bin_y = np.clip(((y_norm + 1) / 2 * n_spatial_bins).astype(int), 0, n_spatial_bins - 1)
     
     response = np.zeros((n_cells, n_trials))
     for c in range(n_cells):
         response[c] = rate_maps[c, bin_x, bin_y]
     
-    # Create predictors: x and y position at each timepoint
-    # Shape: (n_cells, n_features, n_trials) where n_features = 2
-    # Note: same x, y for all cells (broadcast)
-    x_trials = np.tile(x_norm, (n_cells, 1))  # (n_cells, n_trials)
-    y_trials = np.tile(y_norm, (n_cells, 1))  # (n_cells, n_trials)
+    # Create predictors dynamically based on predictor_names from config
+    # Shape: (n_cells, n_features, n_trials)
+    # Available predictors: x, y, z, azimuth
+    available_predictors = {
+        'x': x_norm,
+        'y': y_norm,
+        'z': z,
+        'azimuth': azimuth,
+    }
     
-    # Stack to create (n_cells, 2, n_trials)
-    predictors_data = np.stack([x_trials, y_trials], axis=1)
+    predictor_arrays = []
+    for name in predictor_names:
+        if name not in available_predictors:
+            raise ValueError(f"Unknown predictor '{name}'. Available: {list(available_predictors.keys())}")
+        arr = available_predictors[name]
+        if arr is None:
+            raise ValueError(f"Predictor '{name}' requested but not available in data file.")
+        # Tile to match (n_cells, n_trials)
+        predictor_arrays.append(np.tile(arr, (n_cells, 1)))
+    
+    # Stack to create (n_cells, n_features, n_trials)
+    predictors_data = np.stack(predictor_arrays, axis=1)
     predictors = Predictors(data=predictors_data, names=predictor_names)
     
     return {
@@ -152,10 +260,13 @@ def load_and_process_data(
         "rate_maps": rate_maps,
         "position_data": {
             "x": x_norm,
-            "y": y_norm, 
+            "y": y_norm,
+            "z": z,
+            "azimuth": azimuth,
             "t": t,
             "spike_times": spike_times_list,
-            "n_bins": n_bins,
+            "n_spatial_bins": n_spatial_bins,
+            "time_bin_ms": time_bin_ms,
             "x_edges": x_edges,
             "y_edges": y_edges,
         }

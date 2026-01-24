@@ -224,8 +224,8 @@ def grid_model_2_jax(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0,
     
     inv2sig2 = 1.0 / (2.0 * sigma * sigma)
     
-    # Fixed lattice range for JIT compatibility
-    n_range = 10
+    # Fixed lattice range for JIT compatibility (reduced for memory efficiency)
+    n_range = 5
     n_vals = jnp.arange(-n_range, n_range + 1)
     m_vals = jnp.arange(-n_range, n_range + 1)
     N, M = jnp.meshgrid(n_vals, m_vals, indexing='ij')

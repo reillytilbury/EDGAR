@@ -17,7 +17,7 @@ seed_programs:
     - parameter_estimator_2
 
 experiment_params:
-  n_iterations: 9
+  n_iterations: 3
   time_limit: 60          # in minutes
   k_max: 2
   n_islands: 8

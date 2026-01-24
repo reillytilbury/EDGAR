@@ -2,10 +2,21 @@ task: grid_cells  # name of the sub directory under experiments
 load_and_process_data_fn: experiments.grid_cells.data_parser.load_and_process_data
 data_path: /home/dabin/data/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
 
+# some details on the data : 
+# spikes_mod1
+# └── object
+#     └── list (length = 97)
+#         ├── array of spike times for neuron 0 (length = 6,921)
+#         ├── array of spike times for neuron 1 (length = 37,621)
+#         ├── ...
+#         └── array of spike times for neuron 96
+
 # Data processing parameters
 time_start: 27826       # start time in seconds
 time_end: 31223         # end time in seconds
-n_bins: 65              # number of spatial bins per dimension
+n_spatial_bins: 65              # number of spatial bins per dimension
+time_bin_ms : 10               # size of time bin in ms 
+speed_threshold: 2.5   # minimum speed in cm/s to include data point
 smoothing_sigma: 1.5    # Gaussian smoothing sigma for rate maps
 wall_val: 0.75          # arena half-width for normalization
 
@@ -16,3 +27,7 @@ predictors:
     description: "Normalized x position in arena [-1, 1]"
   - name: y
     description: "Normalized y position in arena [-1, 1]"
+  - name: z
+    description: "Head height"
+  - name: azimuth
+    description: "Head azimuth angle in radians [0, 2π]"
