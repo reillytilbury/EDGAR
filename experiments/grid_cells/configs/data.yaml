@@ -14,11 +14,11 @@ data_path: /home/dabin/data/Toroidal_topology_grid_cell_data/rat_q_grid_modules_
 # Data processing parameters
 time_start: 27826       # start time in seconds
 time_end: 31223         # end time in seconds
-n_spatial_bins: 65              # number of spatial bins per dimension
-time_bin_ms : 10               # size of time bin in ms 
-speed_threshold: 2.5   # minimum speed in cm/s to include data point
-smoothing_sigma: 1.5    # Gaussian smoothing sigma for rate maps
-wall_val: 0.75          # arena half-width for normalization
+spatial_bin_cm: 3.0     # size of spatial bins in cm (arena is 150cm x 150cm, so 3cm gives 50x50 bins)
+time_bin_ms: 10         # size of time bin in ms 
+speed_threshold: 2.5    # minimum speed in cm/s to include data point
+smoothing_sigma: 1.5    # Gaussian smoothing sigma for rate maps (in bins)
+wall_val: 0.75          # arena half-width in meters (0.75m for 1.5m x 1.5m arena)
 
 # Predictor configuration - defines the input variables for models
 # Grid cells respond to 2D spatial position
