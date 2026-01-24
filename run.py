@@ -76,6 +76,7 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
         data_config['predictor_names'] = [p['name'] for p in predictors_config]
 
     if test_mode:
+        params['num_runs'] = 1
         params['n_iterations'] = 1
         params['time_limit'] = 10  # seconds
         params['n_islands'] = 2
@@ -85,9 +86,7 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
         params['exploration_topology'] = [1, 0]
         params['exploitation_topology'] = [1, 0]
 
-    num_runs = 4 if not test_mode else 1
-
-    for i in range(num_runs):
+    for i in range(params['num_runs']):
         print("running with standard params")
         await hypothesis_engine.hypothesis_engine(
             n_iterations=params['n_iterations'],
