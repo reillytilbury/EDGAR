@@ -651,6 +651,7 @@ def grid_cell_filter(
     
     # Compile diagnostic information
     filter_info = {
+        'grid_cell_indices': grid_cell_indices,  # Original indices of grid cells
         'coarse_rate_maps': coarse_rate_maps,
         'autocorrelograms': autocorrelograms,
         'umap_embedding': umap_embedding,

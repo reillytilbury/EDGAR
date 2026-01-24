@@ -27,7 +27,7 @@ predictors:
     description: "Normalized x position in arena [-1, 1]"
   - name: y
     description: "Normalized y position in arena [-1, 1]"
-  - name: z
-    description: "Head height"
-  - name: azimuth
-    description: "Head azimuth angle in radians [0, 2π]"
+  # - name: z
+  #   description: "Head height"
+  # - name: azimuth
+  #   description: "Head azimuth angle in radians [0, 2π]"
