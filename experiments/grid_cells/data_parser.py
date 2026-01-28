@@ -690,7 +690,7 @@ def grid_cell_filter(
     return grid_cell_indices, filter_info
 
 
-def compute_rate_maps(
+def compute_rate_map(
     x: np.ndarray,
     y: np.ndarray,
     firing_rates: np.ndarray,
@@ -699,14 +699,14 @@ def compute_rate_maps(
     extent: Tuple[float, float, float, float] = (-1, 1, -1, 1),
 ) -> np.ndarray:
     """
-    Compute a smoothed 2D rate map for multiple cells.
+    Compute a smoothed 2D rate map for one cell.
     
     Parameters
     ----------
     x, y : np.ndarray
-        Position coordinates (n_cells, n_time_bins,).
+        Position coordinates (n_time_bins,).
     firing_rates : np.ndarray
-        Firing rates (n_cells, n_time_bins).
+        Firing rates (n_time_bins,).
     spatial_bin_cm : float
         Size of spatial bins in centimeters.
     sigma : Optional[float]
@@ -717,7 +717,7 @@ def compute_rate_maps(
     Returns
     -------
     rate_map : np.ndarray
-        rate map of shape (n_cells, n_bins, n_bins).
+        rate map of shape (n_bins, n_bins).
     """
     xmin, xmax, ymin, ymax = extent
     
@@ -732,23 +732,21 @@ def compute_rate_maps(
     if sigma is not None:
         occupancy = gaussian_filter(occupancy, sigma=sigma)
 
-    n_cells = firing_rates.shape[0]
-    rate_maps = np.zeros((n_cells, n_spatial_bins, n_spatial_bins))
+    rate_map = np.zeros((n_spatial_bins, n_spatial_bins))
     bin_x = np.clip(((x + 1) / 2 * n_spatial_bins).astype(int), 0, n_spatial_bins - 1)
     bin_y = np.clip(((y + 1) / 2 * n_spatial_bins).astype(int), 0, n_spatial_bins - 1)
 
-    for c in range(n_cells):
-        spike_map = np.zeros((n_spatial_bins, n_spatial_bins))
-        for t_idx in range(firing_rates.shape[1]):
-            spike_map[bin_x[t_idx], bin_y[t_idx]] += firing_rates[c, t_idx]
+    spike_map = np.zeros((n_spatial_bins, n_spatial_bins))
+    for t_idx in range(firing_rates.shape[0]):
+        spike_map[bin_x[t_idx], bin_y[t_idx]] += firing_rates[t_idx]
 
-        if sigma is None:
-            rate_maps[c] = spike_map / (occupancy + 1e-6)
-        else:
-            spike_map_smooth = gaussian_filter(spike_map, sigma=sigma)
-            rate_maps[c] = spike_map_smooth / (occupancy_smooth + 1e-6)
+    if sigma is None:
+        rate_map = spike_map / (occupancy + 1e-6)
+    else:
+        spike_map_smooth = gaussian_filter(spike_map, sigma=sigma)
+        rate_map = spike_map_smooth / (occupancy + 1e-6)
     
-    return rate_maps
+    return rate_map
 
 
 def split_train_test(
