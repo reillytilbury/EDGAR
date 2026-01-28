@@ -252,10 +252,17 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
         #     params = initial_params
         #     logging.info(f"Error during optimization: {e}")
 
-        # 1.  build adam
-        learning_rate = 3e-3
-        beta1, beta2  = 0.9, 0.999
-        opt = optax.adam(learning_rate, b1=beta1, b2=beta2, eps=1e-8)
+        # 1.  build adam with learning rate schedule for better convergence
+        #     Higher initial LR helps parameters with different scales converge
+        peak_lr = 0.1
+        schedule = optax.warmup_cosine_decay_schedule(
+            init_value=peak_lr * 0.1,
+            peak_value=peak_lr,
+            warmup_steps=50,
+            decay_steps=max_iter,
+            end_value=peak_lr * 0.01
+        )
+        opt = optax.adam(schedule, b1=0.9, b2=0.999, eps=1e-8)
         opt_state = opt.init(initial_params.reshape(-1))
         
         # 2. jit single step
