@@ -1,5 +1,6 @@
 # Environment variables
 .env
+.vscode/ 
 
 # programs database
 git rm --cached -r program_databases
