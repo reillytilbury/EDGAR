@@ -101,7 +101,7 @@ def compute_default_params(neuron_model) -> jnp.ndarray:
 def objective(neuron_model, param_estimator, loss_func, x, y, 
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
-              use_param_estimator=True) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+              use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate the loss of the model. 
     
@@ -128,6 +128,7 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
         tol (float): Tolerance for optimization convergence. Default is 1e-2.
         max_iter (int): Maximum number of iterations for optimization. Default is 1_000.
         use_param_estimator (bool): Whether to use the parameter estimator to compute initial parameters. Default is True.
+        trial_batch_size (int): Number of trials to process per mini-batch to avoid GPU OOM. Default is 5000.
 
     Returns:
         tuple[
@@ -211,9 +212,29 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
     # The output will have shape (n_samples,)
     loss_total = jax.vmap(loss_single_cell, in_axes=(0, 0, 0), out_axes=0)
 
+    # Mini-batched loss computation over trials to avoid GPU OOM
+    n_train_trials = x_train.shape[2]
+    
+    def loss_param_batched(params):
+        """Compute loss by iterating over trial batches to save memory."""
+        params_2d = params.reshape(-1, n_params)
+        # Accumulate weighted sum: each batch contributes (batch_size / total_trials) weight
+        weighted_sum = 0.0
+        for start_idx in range(0, n_train_trials, trial_batch_size):
+            end_idx = min(start_idx + trial_batch_size, n_train_trials)
+            batch_size = end_idx - start_idx
+            x_batch = x_train[:, :, start_idx:end_idx]
+            y_batch = y_train[:, start_idx:end_idx]
+            # loss_total returns (n_samples,) - mean loss per sample over trials in this batch
+            # Weight by batch_size/n_train_trials to get proper weighted average
+            batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
+            weighted_sum += jnp.sum(batch_losses) * (batch_size / n_train_trials)
+        # Divide by n_samples to get mean over samples
+        return weighted_sum / n_samples
+
     if fit_params:
         # define the loss function wrt params. This will have input shape n_samples * n_params (note that params is flattened) and output shape (1,)
-        loss_param = lambda params: jnp.mean(loss_total(params.reshape(-1, n_params), x_train, y_train))
+        loss_param = loss_param_batched
         loss_param_and_grad = jax.value_and_grad(loss_param)
 
         # solver = jaxopt.ScipyMinimize(
@@ -270,13 +291,32 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
             return FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params))
 
     # compute the final loss on the test set for the initial and optimized parameters
-    initial_loss = jnp.nanmean(loss_total(initial_params, x_test, y_test)) + param_penalty_weight * n_params
+    # Use mini-batched evaluation to avoid GPU OOM
+    n_test_trials = x_test.shape[2]
+    
+    def eval_loss_batched(params_2d, x_eval, y_eval):
+        """Compute loss by iterating over trial batches."""
+        n_eval_trials = x_eval.shape[2]
+        # Accumulate weighted sum: each batch contributes (batch_size / total_trials) weight
+        weighted_sum = 0.0
+        for start_idx in range(0, n_eval_trials, trial_batch_size):
+            end_idx = min(start_idx + trial_batch_size, n_eval_trials)
+            batch_size = end_idx - start_idx
+            x_batch = x_eval[:, :, start_idx:end_idx]
+            y_batch = y_eval[:, start_idx:end_idx]
+            # loss_total returns (n_samples,) - mean loss per sample over trials in this batch
+            batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
+            weighted_sum += jnp.nansum(batch_losses) * (batch_size / n_eval_trials)
+        # Divide by n_samples to get mean over samples  
+        return weighted_sum / n_samples
+    
+    initial_loss = eval_loss_batched(initial_params, x_test, y_test) + param_penalty_weight * n_params
     # print number of nans in initial_loss
     n_nans = jnp.sum(jnp.isnan(initial_loss))
     if n_nans > 0:
         print(f"Warning: initial loss contains {n_nans} NaNs. This may indicate a problem with the model or data.")
     initial_loss = jnp.nan_to_num(initial_loss, nan=FAILED_PROGRAM_COST, posinf=FAILED_PROGRAM_COST, neginf=FAILED_PROGRAM_COST)
-    final_loss = jnp.nanmean(loss_total(params, x_test, y_test)) + param_penalty_weight * n_params
+    final_loss = eval_loss_batched(params, x_test, y_test) + param_penalty_weight * n_params
     # print number of nans in final_loss
     n_nans = jnp.sum(jnp.isnan(final_loss))
     if n_nans > 0:
@@ -311,7 +351,7 @@ async def generate_new_neuron_model(current_island, llm_name, client,
             sup_title = "".join([f"neuron_model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             diagnostics_module.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
-                                    x=stimuli, y=spike_matrix,
+                                    predictors=stimuli, response=spike_matrix,
                                     sample_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
                                     save_path=img_dir,
                                     labels=['v_1', 'v_2'],
@@ -369,7 +409,7 @@ async def generate_new_parameter_estimator(current_island,
             sup_title = "".join([f"neuron_model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             diagnostics_module.plot_model_fits(programs_df=random_programs_crude,
                                     loss_function=loss_functions.quadratic_loss,
-                                    x=stimuli, y=spike_matrix,
+                                    predictors=stimuli, response=spike_matrix,
                                     sample_selection=np.random.choice(spike_matrix.shape[0], size=4, replace=False),
                                     save_path=img_dir,
                                     labels=['v_1', 'v_2'],
@@ -471,46 +511,6 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash-
     jax_code_string = utils.extract_code_block(jax_code_string)
     func = utils.str_to_func(jax_code_string, 'neuron_model')
     return jax_code_string, func
-
-def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100,
-                               predictor_idx: int = 0, n_features: int = 1) -> jnp.ndarray:
-    """
-    Computes the evaluation matrix for a given program and parameters.
-    
-    Creates a uniform grid of trials [0, 2π] and evaluates the model at those points
-    for all samples. The evaluation grid is placed at `predictor_idx` in the predictor array.
-    
-    Args:
-        program (callable): The neuron model function with signature:
-                           program(X, *params) -> (n_trials,)
-                           where X has shape (n_features, n_trials).
-        params (jnp.ndarray): The parameters for the neuron model. Shape: (n_samples, n_params)
-        n_evaluation_points (int): Number of points to evaluate the model at.
-        predictor_idx (int): Index of the predictor to vary for evaluation. Default is 0.
-        n_features (int): Total number of predictors in the model. Default is 1.
-    Returns:
-        jnp.ndarray: The evaluation matrix of shape (n_samples, n_evaluation_points).
-    
-    Raises:
-        ValueError: If predictor_idx >= n_features or predictor_idx < 0.
-    """
-    # Early validation
-    if predictor_idx < 0 or predictor_idx >= n_features:
-        raise ValueError(
-            f"predictor_idx ({predictor_idx}) must be in range [0, {n_features}). "
-            f"Got n_features={n_features}."
-        )
-    
-    n_samples = params.shape[0]
-    # Create evaluation trials
-    trials = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
-    # Create X with zeros for all predictors, then set the evaluation predictor
-    X_eval = jnp.zeros((n_samples, n_features, n_evaluation_points))
-    X_eval = X_eval.at[:, predictor_idx, :].set(trials)
-    # vmap over samples
-    program_vmap = utils.vmap_over_cells(program)
-    y_eval = program_vmap(X_eval, params)
-    return y_eval
 
 async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
                 critical_population_size=12, min_wise_population_size=0, 
@@ -622,7 +622,12 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
         parameter_estimator_code_string = import_string + parameter_estimator_code_string
         program_jax_code_string = inspect.getsource(program_jax).replace(f'def {program_jax_name}(', f'def neuron_model_v{i+1}(')
         program_jax_code_string = import_string_jax + program_jax_code_string
-        y_eval = compute_evaluation_matrix(program_jax, params, n_evaluation_points=100)
+        if trials_train.shape[1] == 1 : 
+            # evenly spaced evaluation points for 1D inputs
+            eval_points = None
+        else : 
+            eval_points = trials_train
+        y_eval = diagnostics_module.compute_evaluation_matrix(program_jax, params, eval_points=eval_points, n_evaluation_points=100)
 
         new_program_df = pd.DataFrame({'program_code_string': program_code_string,
                                     'program': program_jax,
@@ -656,7 +661,7 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
     if diagnostics_module is not None:
         diagnostics_module.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
-                               x=trials_train, y=response_train,
+                               predictors=trials_train, response=response_train,
                                sample_selection=np.random.choice(len(trials_train), size=9, replace=False),
                                save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
                                labels=['seed_1', 'seed_2'],
@@ -766,7 +771,12 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
                 logging.info('-' * 50)
                 continue
 
-            y_eval = compute_evaluation_matrix(neuron_model_new, optimized_params, n_evaluation_points=100)
+            if trials_train.shape[1] == 1 : 
+                # evenly spaced evaluation points for 1D inputs
+                eval_points = None
+            else : 
+                eval_points = trials_train
+            y_eval = diagnostics_module.compute_evaluation_matrix(neuron_model_new, optimized_params, eval_points=eval_points, n_evaluation_points=100)
             logging.info(f"Prompt: \n{prompt}\n")
             logging.info(f"Loss: {loss:.2f}\n")
             logging.info(f"Neuron Model: \n{neuron_model_code_string}\n")
@@ -779,8 +789,8 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
                 diagnostics_module.plot_model_fits(
                     programs_df=pd.DataFrame({'program': [neuron_model_new, neuron_model_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
-                    x=trials_train,
-                    y=response_train,
+                    predictors=trials_train,
+                    response=response_train,
                     sample_selection=np.random.choice(len(trials_train), size=4, replace=False),
                     colours=['tab:green', 'tab:red'],
                     labels=['Param Estimator', 'Gradient Descent'],
@@ -857,8 +867,8 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
                 diagnostics_module.plot_model_fits(
                     programs_df=top_df,
                     loss_function=loss_functions.quadratic_loss,
-                    x=trials_train,
-                    y=response_train,
+                    predictors=trials_train,
+                    response=response_train,
                     sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                     title=sup_title,
                     save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
@@ -873,8 +883,8 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
             diagnostics_module.plot_model_fits(
                 programs_df=top_programs,
                 loss_function=loss_functions.quadratic_loss,
-                x=trials_train,
-                y=response_train,
+                predictors=trials_train,
+                response=response_train,
                 sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                 title=sup_title,
                 save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
@@ -959,8 +969,8 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
             diagnostics_module.plot_model_fits(
                 programs_df=df,
                 loss_function=loss_functions.quadratic_loss,
-                x=trials_test,
-                y=response_test,
+                predictors=trials_test,
+                response=response_test,
                 sample_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
                 title=df_sup,
                 save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
@@ -1106,7 +1116,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         program_jax_code_string = utils.format_function_source(
             program_jax, f'neuron_model_v{i+1}', 'import jax.numpy as jnp'
         )
-        y_eval = compute_evaluation_matrix(program_jax, params, n_evaluation_points=100)
+        if trials_train.shape[1] == 1 : 
+            # evenly spaced evaluation points for 1D inputs
+            eval_points = None
+        else : 
+            eval_points = trials_train
+        y_eval = diagnostics_module.compute_evaluation_matrix(program_jax, params, eval_points=eval_points, n_evaluation_points=100)
 
         new_program_df = pd.DataFrame({'program_code_string': program_code_string,
                                     'program': program_jax,
@@ -1140,7 +1155,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     if diagnostics_module is not None:
         diagnostics_module.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
-                               x=trials_train, y=response_train,
+                               predictors=trials_train, response=response_train,
                                sample_selection=np.random.choice(len(trials_train), size=9, replace=False),
                                save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
                                labels=['seed_1', 'seed_2'],
@@ -1251,7 +1266,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 logging.info('-' * 50)
                 continue
 
-            y_eval = compute_evaluation_matrix(neuron_model_new, optimized_params, n_evaluation_points=100)
+            if trials_train.shape[1] == 1 : 
+                # evenly spaced evaluation points for 1D inputs
+                eval_points = None
+            else : 
+                eval_points = trials_train
+            y_eval = diagnostics_module.compute_evaluation_matrix(neuron_model_new, optimized_params, eval_points=eval_points, n_evaluation_points=100)
             logging.info(f"Prompt: \n{prompt}\n")
             logging.info(f"Loss: {loss:.2f}\n")
             logging.info(f"Neuron Model: \n{neuron_model_code_string}\n")
@@ -1264,8 +1284,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 diagnostics_module.plot_model_fits(
                     programs_df=pd.DataFrame({'program': [neuron_model_new, neuron_model_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
-                    x=trials_train,
-                    y=response_train,
+                    predictors=trials_train,
+                    response=response_train,
                     sample_selection=np.random.choice(len(trials_train), size=4, replace=False),
                     colours=['tab:green', 'tab:red'],
                     labels=['Param Estimator', 'Gradient Descent'],
@@ -1342,8 +1362,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 diagnostics_module.plot_model_fits(
                     programs_df=top_df,
                     loss_function=loss_functions.quadratic_loss,
-                    x=trials_train,
-                    y=response_train,
+                    predictors=trials_train,
+                    response=response_train,
                     sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                     title=sup_title,
                     save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
@@ -1358,8 +1378,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             diagnostics_module.plot_model_fits(
                 programs_df=top_programs,
                 loss_function=loss_functions.quadratic_loss,
-                x=trials_train,
-                y=response_train,
+                predictors=trials_train,
+                response=response_train,
                 sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                 title=sup_title,
                 save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
@@ -1460,8 +1480,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             diagnostics_module.plot_model_fits(
                 programs_df=df,
                 loss_function=loss_functions.quadratic_loss,
-                x=trials_test,
-                y=response_test,
+                predictors=trials_test,
+                response=response_test,
                 sample_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
                 title=df_sup,
                 save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
@@ -1482,9 +1502,9 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                     save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
                 )
 
-if __name__ == "__main__":
-    for i in range(4):
-        print("running with standard params")
-        asyncio.run(main_deprecated(n_iterations=9, time_limit=60, use_image_feedback=True, use_large_every=0,
-                         param_penalty_weight=0.01,
-                         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.7))
+# if __name__ == "__main__":
+#     for i in range(4):
+#         print("running with standard params")
+#         asyncio.run(main_deprecated(n_iterations=9, time_limit=60, use_image_feedback=True, use_large_every=0,
+#                          param_penalty_weight=0.01,
+#                          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.7))
