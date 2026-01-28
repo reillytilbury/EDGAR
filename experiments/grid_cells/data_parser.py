@@ -9,6 +9,7 @@ import numpy as np
 import jax.numpy as jnp
 from scipy.ndimage import gaussian_filter
 from typing import Dict, Any, Optional, List, Tuple
+import time 
 
 from src.data_structures import Predictors
 
@@ -112,11 +113,12 @@ def load_and_process_data(
     -------
     data_dict : dict
         Dictionary containing:
-          - 'response': Firing rates at each position. (n_cells, n_trials)
-          - 'predictors': Predictors object with x, y, z, azimuth positions. (n_cells, n_features, n_trials)
-          - 'rate_maps': 2D rate maps for visualization. (n_cells, n_spatial_bins, n_spatial_bins)
-          - 'position_data': Dict with raw x, y, t arrays for diagnostics.
+          - 'response': Firing rate at each position. (n_cells, n_trials) where n_trials = n_time_bins after filtering
+          - 'predictors': Predictors object with x, y, z, azimuth positions. (n_cells, n_features, n_trials) where n_features = len(predictor_names) and n_trials = n_time_bins after filtering
+          - 'position_data': Dict with raw x, y, t arrays.
     """
+    # take note of time for logging purposes 
+    clock_time_start = time.time()    
     if predictor_names is None:
         predictor_names = ['x', 'y']
     
@@ -124,7 +126,8 @@ def load_and_process_data(
     # Arena is 2 * wall_val meters = 2 * wall_val * 100 cm
     arena_size_cm = 2 * wall_val * 100  # 150 cm for default wall_val=0.75
     n_spatial_bins = int(np.ceil(arena_size_cm / spatial_bin_cm))
-    print(f"Spatial binning: {n_spatial_bins}x{n_spatial_bins} bins of {spatial_bin_cm:.1f}cm for {arena_size_cm:.0f}cm arena")
+    time_taken = time.time() - clock_time_start
+    print(f"{time_taken:.3f}s : Spatial binning: {n_spatial_bins}x{n_spatial_bins} bins of {spatial_bin_cm:.1f}cm for {arena_size_cm:.0f}cm arena")
     
     # =========================================================================
     # Step 1: Load raw data
@@ -137,14 +140,14 @@ def load_and_process_data(
     # KNOWN_FEATURES = ['x', 'y', 'z', 'azimuth']
     KNOWN_FEATURES = ['x', 'y']
     
-    # Load all available features into a dictionary
+    # Load all available features into a dictionary 
     features_raw = {}
     for feat_name in KNOWN_FEATURES:
         if feat_name in data.files:
-            features_raw[feat_name] = data[feat_name]
-    
-    print(f"Available features in data file: {list(features_raw.keys())}")
-    
+            features_raw[feat_name] =  data[feat_name]
+
+    time_taken = time.time() - clock_time_start    
+    print(f"{time_taken:.3f}s : Available features in data file: {list(features_raw.keys())}")
     # Load spike times for each neuron
     spike_times_dict = data[module_key].item()
     n_neurons_raw = len(spike_times_dict)
@@ -158,12 +161,12 @@ def load_and_process_data(
     bin_edges = np.linspace(time_start, time_end, n_time_bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
     
-    print(f"Time discretisation: {n_time_bins} bins of {time_bin_ms} ms from {time_start}s to {time_end}s")
+    time_taken = time.time() - clock_time_start
+    print(f"{time_taken:.3f}s : Time discretisation: {n_time_bins} bins of {time_bin_ms} ms from {time_start}s to {time_end}s")
     
     # =========================================================================
-    # Step 3: Convert spike times into binned firing rates
+    # Step 3: Convert spike times into binned firing rates (vectorized)
     # =========================================================================
-    # For each neuron, count spikes in each time bin
     firing_rates = np.zeros((n_neurons_raw, n_time_bins))
     total_spikes_per_neuron = np.zeros(n_neurons_raw)
     
@@ -172,19 +175,37 @@ def load_and_process_data(
         spikes_in_window = spike_times[(spike_times >= time_start) & (spike_times < time_end)]
         total_spikes_per_neuron[neuron_idx] = len(spikes_in_window)
         
-        # Bin the spikes
+        # Bin the spikes using histogram 
         spike_counts, _ = np.histogram(spikes_in_window, bins=bin_edges)
         # Convert to firing rate (Hz)
         firing_rates[neuron_idx] = spike_counts / time_bin_s
+
+    time_taken = time.time() - clock_time_start
+    print(f"{time_taken:.3f}s : Step 3 Spike binning complete")
     
     # =========================================================================
-    # Step 4: Interpolate behavioural variables to bin centers
+    # Step 4: Calculate the binned mean of behavioural variables (vectorized)
     # =========================================================================
+    # Use np.digitize for O(n) instead of O(n_time_bins * n) complexity
+    bin_indices = np.digitize(t_raw, bin_edges) - 1  # digitize returns 1-indexed
+    bin_indices = np.clip(bin_indices, 0, n_time_bins - 1)
+    
+    # Count samples per bin
+    counts_per_bin = np.bincount(bin_indices, minlength=n_time_bins)
+    
     features = {}
     for feat_name, feat_raw in features_raw.items():
-        # Interpolate to bin centers
-        features[feat_name] = np.interp(bin_centers, t_raw, feat_raw)
-    
+        # Sum values per bin using bincount with weights
+        sums_per_bin = np.bincount(bin_indices, weights=feat_raw, minlength=n_time_bins)
+        # Compute mean, handling empty bins
+        with np.errstate(invalid='ignore'):
+            features[feat_name] = np.where(counts_per_bin > 0, 
+                                           sums_per_bin / counts_per_bin, 
+                                           np.nan)
+
+    time_taken = time.time() - clock_time_start
+    print(f"{time_taken:.3f}s : Step 4 Binned behavioural features computed")
+
     # =========================================================================
     # Step 5: Exclude low-speed periods
     # =========================================================================
@@ -208,7 +229,10 @@ def load_and_process_data(
         firing_rates = firing_rates[:, speed_mask]
         features = {name: arr[speed_mask] for name, arr in features.items()}
         n_time_bins = len(bin_centers)
-    
+
+    time_taken = time.time() - clock_time_start
+    print(f"{time_taken:.3f}s : Step 5 Low-speed periods excluded")
+
     # =========================================================================
     # Step 6: Filter neurons by minimum spike count
     # =========================================================================
@@ -216,7 +240,8 @@ def load_and_process_data(
     firing_rates = firing_rates[good_neurons]
     n_cells = firing_rates.shape[0]
     
-    print(f"Loaded {n_cells} neurons (from {n_neurons_raw} total) with >= {min_spikes} spikes")
+    time_taken = time.time() - clock_time_start
+    print(f"{time_taken:.3f}s : Step 6 : Loaded {n_cells} neurons (from {n_neurons_raw} total) with >= {min_spikes} spikes")
     print(f"Final data shape: {n_cells} neurons x {n_time_bins} time bins")
     
     # =========================================================================
@@ -226,14 +251,6 @@ def load_and_process_data(
     features['x'] = features['x'] / wall_val
     features['y'] = features['y'] / wall_val
     
-    # Subsample time bins if too many (to avoid GPU OOM)
-    if n_time_bins > max_trials:
-        subsample_idx = np.linspace(0, n_time_bins - 1, max_trials, dtype=int)
-        bin_centers = bin_centers[subsample_idx]
-        firing_rates = firing_rates[:, subsample_idx]
-        features = {name: arr[subsample_idx] for name, arr in features.items()}
-        print(f"Subsampled from {n_time_bins} to {max_trials} time bins")
-        n_time_bins = max_trials
     
     # Response: firing rates (n_cells, n_time_bins)
     response = firing_rates
@@ -250,7 +267,7 @@ def load_and_process_data(
     predictors = Predictors(data=predictors_data, names=predictor_names)
     
     # =========================================================================
-    # Compute rate maps for visualization (optional diagnostic)
+    # Compute rate maps using compute_rate_map 
     # =========================================================================
     x_norm = features['x']
     y_norm = features['y']
@@ -260,7 +277,8 @@ def load_and_process_data(
     )
     
     # Weight occupancy by time spent (all bins equal for now)
-    occupancy_smooth = gaussian_filter(occupancy, sigma=smoothing_sigma)
+    if smoothing_sigma is not None:
+        occupancy_smooth = gaussian_filter(occupancy, sigma=smoothing_sigma)
     
     # Compute rate maps by averaging firing rates at each spatial bin
     rate_maps = np.zeros((n_cells, n_spatial_bins, n_spatial_bins))
@@ -271,8 +289,12 @@ def load_and_process_data(
         spike_map = np.zeros((n_spatial_bins, n_spatial_bins))
         for t_idx in range(n_time_bins):
             spike_map[bin_x[t_idx], bin_y[t_idx]] += firing_rates[c, t_idx]
-        spike_map_smooth = gaussian_filter(spike_map, sigma=smoothing_sigma)
-        rate_maps[c] = spike_map_smooth / (occupancy_smooth + 1e-6)
+
+        if smoothing_sigma is None:
+            rate_maps[c] = spike_map / (occupancy + 1e-6)
+        else:
+            spike_map_smooth = gaussian_filter(spike_map, sigma=smoothing_sigma)
+            rate_maps[c] = spike_map_smooth / (occupancy_smooth + 1e-6)
     
     # =========================================================================
     # Optional: Apply grid cell filtering
@@ -314,10 +336,10 @@ def load_and_process_data(
             print("Warning: No grid cells identified, returning all cells")
     
     return {
-        "response": response,
-        "predictors": predictors,
-        "trials": predictors_data,  # For backward compatibility
-        "rate_maps": rate_maps,
+        "response": response, # Firing rates (n_cells, n_trials)
+        "predictors": predictors, # Predictors object
+        "trials": predictors_data,  # (n_cells, n_features, n_trials)
+        "rate_maps": rate_maps, # (n_cells, n_spatial_bins, n_spatial_bins)
         "position_data": {
             **features,
             "t": bin_centers,
@@ -326,7 +348,8 @@ def load_and_process_data(
             "x_edges": x_edges,
             "y_edges": y_edges,
         },
-        "grid_filter_info": grid_filter_info,  # None if filter_grid_cells=False
+        "grid_filter_info": grid_filter_info,  # None if filter_grid_cells=False, 
+        "smoothing_sigma": smoothing_sigma,
     }
 
 def grid_cell_filter(
@@ -667,61 +690,65 @@ def grid_cell_filter(
     return grid_cell_indices, filter_info
 
 
-
-
-def compute_rate_map(
+def compute_rate_maps(
     x: np.ndarray,
     y: np.ndarray,
-    spike_times: np.ndarray,
+    firing_rates: np.ndarray,
     spatial_bin_cm: float = 3.0,
-    sigma: float = 1.5,
+    sigma: Optional[float] = 1.5,
     extent: Tuple[float, float, float, float] = (-1, 1, -1, 1),
 ) -> np.ndarray:
     """
-    Compute a smoothed 2D rate map for a single cell.
+    Compute a smoothed 2D rate map for multiple cells.
     
     Parameters
     ----------
     x, y : np.ndarray
-        Position coordinates (n_timepoints,).
-    spike_times : np.ndarray
-        Integer indices of spike times into x, y arrays.
-    n_bins : int
-        Number of spatial bins per dimension.
-    sigma : float
-        Gaussian smoothing sigma.
+        Position coordinates (n_cells, n_time_bins,).
+    firing_rates : np.ndarray
+        Firing rates (n_cells, n_time_bins).
+    spatial_bin_cm : float
+        Size of spatial bins in centimeters.
+    sigma : Optional[float]
+        Gaussian smoothing sigma. If None, no smoothing is applied.
     extent : tuple
         (xmin, xmax, ymin, ymax) for histogram range.
     
     Returns
     -------
     rate_map : np.ndarray
-        Smoothed rate map of shape (n_bins, n_bins).
+        rate map of shape (n_cells, n_bins, n_bins).
     """
     xmin, xmax, ymin, ymax = extent
     
     # Compute number of spatial bins from bin size
     arena_size_cm = (xmax - xmin) * 100  # Convert meters to cm
-    n_bins = int(np.ceil(arena_size_cm / spatial_bin_cm))
+    n_spatial_bins = int(np.ceil(arena_size_cm / spatial_bin_cm))
     
-    # Occupancy
+    # Occupancy - global to all cells
     occupancy, _, _ = np.histogram2d(
-        x, y, bins=n_bins, range=[[xmin, xmax], [ymin, ymax]]
+        x, y, bins=n_spatial_bins, range=[[xmin, xmax], [ymin, ymax]]
     )
+    if sigma is not None:
+        occupancy = gaussian_filter(occupancy, sigma=sigma)
+
+    n_cells = firing_rates.shape[0]
+    rate_maps = np.zeros((n_cells, n_spatial_bins, n_spatial_bins))
+    bin_x = np.clip(((x + 1) / 2 * n_spatial_bins).astype(int), 0, n_spatial_bins - 1)
+    bin_y = np.clip(((y + 1) / 2 * n_spatial_bins).astype(int), 0, n_spatial_bins - 1)
+
+    for c in range(n_cells):
+        spike_map = np.zeros((n_spatial_bins, n_spatial_bins))
+        for t_idx in range(firing_rates.shape[1]):
+            spike_map[bin_x[t_idx], bin_y[t_idx]] += firing_rates[c, t_idx]
+
+        if sigma is None:
+            rate_maps[c] = spike_map / (occupancy + 1e-6)
+        else:
+            spike_map_smooth = gaussian_filter(spike_map, sigma=sigma)
+            rate_maps[c] = spike_map_smooth / (occupancy_smooth + 1e-6)
     
-    # Spike counts
-    x_spikes = x[spike_times]
-    y_spikes = y[spike_times]
-    spike_counts, _, _ = np.histogram2d(
-        x_spikes, y_spikes, bins=n_bins, range=[[xmin, xmax], [ymin, ymax]]
-    )
-    
-    # Smooth and divide
-    occupancy_smooth = gaussian_filter(occupancy, sigma=sigma)
-    spike_counts_smooth = gaussian_filter(spike_counts, sigma=sigma)
-    
-    rate_map = spike_counts_smooth / (occupancy_smooth + 1e-6)
-    return rate_map
+    return rate_maps
 
 
 def split_train_test(
