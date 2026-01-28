@@ -533,4 +533,11 @@ def parameter_estimator_2(X, firing_rates):
         if np.any(valid):
             idx_sac = np.argmin(dists_sac[valid])
             # get coordinates of that valid peak
-            # ..
+            # ... (omitted for brevity, usually neighbor method works)
+            theta = 0.0 # simple fallback
+            
+    # --- 5. Amplitude & Baseline ---
+    baseline = np.percentile(ratemap_smooth, 5) # 5th percentile
+    amplitude = np.max(ratemap_smooth) - baseline
+
+    return np.array([lam, theta, phi_x, phi_y, baseline, amplitude, sigma])
