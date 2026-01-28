@@ -345,7 +345,7 @@ def _ensure_predictor_format(x_cell: jnp.ndarray) -> jnp.ndarray:
 
 
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
-                    x: jnp.ndarray, y: jnp.ndarray,
+                    predictors: jnp.ndarray, response: jnp.ndarray,
                     sample_selection: Sequence[int],
                     rate_maps: Optional[np.ndarray] = None,
                     n_eval: int = 50,
@@ -369,10 +369,10 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     Args:
         programs_df: DataFrame with 'program' and 'params' columns.
         loss_function: Loss function (y_est, y_true) -> loss.
-        x: Predictor data of shape (n_cells, n_features, n_trials) where n_features=2 (x, y).
-        y: Response data of shape (n_cells, n_trials).
+        predictors: Predictor data of shape (n_cells, n_features, n_trials) where n_features=2 (x, y).
+        response: Response data of shape (n_cells, n_trials).
         rate_maps: Precomputed rate maps of shape (n_cells, n_bins, n_bins). If None,
-            rate maps are computed from x, y, response.
+            rate maps are computed from predictors, response.
         sample_selection: Indices of cells to plot.
         n_eval: Number of evaluation points per dimension for model prediction grid.
         save_path: Path to save figure.
@@ -390,8 +390,8 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     
     # Subset params and data for selected cells
     params = [p[sample_idx] for p in params]
-    y_subset = y[sample_idx]
-    x_subset = x[sample_idx]  # (n_cells_plot, n_features, n_trials)
+    response_subset = response[sample_idx]
+    predictors_subset = predictors[sample_idx]  # (n_cells_plot, n_features, n_trials)
     
     # Subset rate maps if provided
     rate_maps_subset = rate_maps[sample_idx] if rate_maps is not None else None
@@ -422,10 +422,10 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                 zoom_factor = n_eval / data_rate_map.shape[0]
                 data_rate_map = zoom(data_rate_map, zoom_factor, order=1)
         else:
-            x_pos = np.array(x_subset[c_idx, 0, :])
-            y_pos = np.array(x_subset[c_idx, 1, :])
-            response = np.array(y_subset[c_idx])
-            data_rate_map = _bin_to_rate_map(x_pos, y_pos, response, n_bins=n_eval)
+            x_pos = np.array(predictors_subset[c_idx, 0, :])
+            y_pos = np.array(predictors_subset[c_idx, 1, :])
+            response_cell = np.array(response_subset[c_idx])
+            data_rate_map = _bin_to_rate_map(x_pos, y_pos, response_cell, n_bins=n_eval)
         
         peak_rate = data_rate_map.max()
         
@@ -447,9 +447,9 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
             model_map = np.array(model_output).reshape(n_eval, n_eval)
             
             # Compute loss
-            X_cell = x_subset[c]  # (2, n_trials)
+            X_cell = predictors_subset[c, :, :]  # (n_features, n_trials)
             pred = model(X_cell, *params_c)
-            loss_val = float(jnp.mean(loss_function(pred, y_subset[c])))
+            loss_val = float(jnp.mean(loss_function(pred, response_subset[c])))
             
             ax = axes[c_idx, m_idx + 1]
             im = ax.imshow(model_map.T, origin='lower', extent=[-1, 1, -1, 1],
