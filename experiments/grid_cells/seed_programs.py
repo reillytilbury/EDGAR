@@ -11,7 +11,7 @@ Two main approaches:
 
 import numpy as np
 import jax.numpy as jnp
-
+from scipy import signal, ndimage, spatial
 
 def grid_model_1(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, amplitude=1.0):
     """
@@ -92,7 +92,7 @@ def grid_model_1_jax(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, 
     return baseline + amplitude * s
 
 
-def parameter_estimator_1(X, firing_rates):
+def parameter_estimator_1_old(X, firing_rates):
     """
     Estimate parameters for grid_model_1 from firing rate data.
     
@@ -128,6 +128,124 @@ def parameter_estimator_1(X, firing_rates):
     
     # Orientation - start with 0, will be refined
     theta = 0.0
+    
+    return np.array([lam, theta, phi_x, phi_y, baseline, amplitude])
+
+def parameter_estimator_1(X, firing_rates):
+    """
+    Robust parameter estimator using Peak Detection on Spatial Autocorrelation.
+    """
+    x = X[0]
+    y = X[1]
+    
+    # ==========================================================
+    # 1. CREATE SMOOTHED RATE MAP
+    # ==========================================================
+    # Use a fixed number of bins to create an image
+    nbins = 50
+    # Range is fixed to [-1, 1] based on your model description
+    search_range = [[-1, 1], [-1, 1]]
+    
+    # Histogram the data
+    heatmap, x_edges, y_edges = np.histogram2d(x, y, bins=nbins, range=search_range, weights=firing_rates)
+    occupancy, _, _ = np.histogram2d(x, y, bins=nbins, range=search_range)
+    
+    # Avoid division by zero
+    ratemap = np.divide(heatmap, occupancy, out=np.zeros_like(heatmap), where=occupancy!=0)
+    
+    # Gaussian smooth the map. 
+    # Sigma=2.0 pixels is usually good for 50 bins.
+    ratemap_smooth = ndimage.gaussian_filter(ratemap, sigma=2.0)
+    
+    # ==========================================================
+    # 2. COMPUTE SPATIAL AUTOCORRELATION (SAC)
+    # ==========================================================
+    # Center the rate map (subtract mean) to handle baseline
+    rm_centered = ratemap_smooth - np.mean(ratemap_smooth)
+    
+    # Compute 2D autocorrelation using FFT
+    sac = signal.fftconvolve(rm_centered, rm_centered[::-1, ::-1], mode='same')
+    
+    # ==========================================================
+    # 3. DETECT PEAKS TO FIND GEOMETRY (LAMBDA & THETA)
+    # ==========================================================
+    # Instead of masking, we find Local Maxima.
+    # This finds pixels that are the highest in their immediate neighborhood.
+    # size=5 means we look at a 5x5 patch.
+    local_max = ndimage.maximum_filter(sac, size=5) == sac
+    
+    # We also discard low-value background noise.
+    # We only keep peaks that are at least 10% of the maximum correlation.
+    sac_max = np.max(sac)
+    binary_peaks = local_max & (sac > 0.1 * sac_max)
+    
+    # Get coordinates of these peaks
+    peak_y, peak_x = np.where(binary_peaks)
+    
+    # Center of the image
+    cy, cx = sac.shape[0] // 2, sac.shape[1] // 2
+    
+    # Calculate distances of all peaks from the center
+    # Scale factor: Total range 2.0 / 50 bins = 0.04 units per pixel
+    pixel_scale = 2.0 / nbins
+    distances_px = np.sqrt((peak_x - cx)**2 + (peak_y - cy)**2)
+    
+    # Filter out the central peak (distance is 0 or very close to 0)
+    # We look for peaks strictly > 0. Since we use grid coordinates, exact 0 is possible.
+    valid_mask = distances_px > 1.0 # Ignore peaks within 1 pixel of center
+    
+    valid_distances = distances_px[valid_mask]
+    valid_y = peak_y[valid_mask]
+    valid_x = peak_x[valid_mask]
+    
+    if len(valid_distances) > 0:
+        # The Grid Spacing (lam) is the distance to the NEAREST neighbor peak
+        nearest_idx = np.argmin(valid_distances)
+        min_dist_px = valid_distances[nearest_idx]
+        
+        lam = min_dist_px * pixel_scale
+        
+        # The Orientation (theta) is the angle of that nearest peak
+        dy = valid_y[nearest_idx] - cy
+        dx = valid_x[nearest_idx] - cx
+        theta = np.arctan2(dy, dx)
+        
+        # Normalize theta to [0, 60] degrees (pi/3) due to hexagonal symmetry
+        theta = theta % (np.pi / 3.0)
+    else:
+        # Fallback if no peaks found (e.g. very low firing)
+        lam = 0.5
+        theta = 0.0
+
+    # ==========================================================
+    # 4. ESTIMATE PHASE (PHI) & AMPLITUDE
+    # ==========================================================
+    # Baseline is roughly the minimum firing rate
+    baseline = np.min(ratemap_smooth)
+    peak_rate = np.max(ratemap_smooth)
+    
+    # Amplitude heuristic
+    amplitude = (peak_rate - baseline) / 3.0
+    
+    # Phase: Location of the highest firing peak in the SMOOTHED map
+    # This aligns the grid "blob" with the data "blob"
+    max_rate_idx = np.unravel_index(np.argmax(ratemap_smooth), ratemap_smooth.shape)
+    
+    # Convert array indices to X,Y coordinates
+    # Indices are (row, col) -> (y, x). Y goes top to bottom in array, but usually bottom-up in plots.
+    # However, histogram2d maps x to dim 0 and y to dim 1 if not careful, 
+    # but standard is (y, x) for image.
+    # Let's map consistently with the histogram generation:
+    # x_edges[i] is the left edge of bin i.
+    
+    # x index is max_rate_idx[1], y index is max_rate_idx[0]
+    phi_x_idx = max_rate_idx[1]
+    phi_y_idx = max_rate_idx[0]
+    
+    # Convert index to coordinate value
+    # (Index + 0.5) * bin_width + min_edge
+    phi_x = -1.0 + (phi_x_idx + 0.5) * pixel_scale
+    phi_y = -1.0 + (phi_y_idx + 0.5) * pixel_scale
     
     return np.array([lam, theta, phi_x, phi_y, baseline, amplitude])
 
@@ -247,7 +365,7 @@ def grid_model_2_jax(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0,
     return r
 
 
-def parameter_estimator_2(X, firing_rates):
+def parameter_estimator_2_old(X, firing_rates):
     """
     Estimate parameters for grid_model_2 from firing rate data.
     
@@ -284,3 +402,135 @@ def parameter_estimator_2(X, firing_rates):
     sigma = 0.06
     
     return np.array([lam, theta, phi_x, phi_y, baseline, amplitude, sigma])
+
+def parameter_estimator_2(X, firing_rates):
+    """
+    Estimator using 'Anchor & Triangulation' logic.
+    1. Finds the global spacing (Lambda) and blob size (Sigma) using Autocorrelation.
+    2. Finds the 'Brightest Dot' (Anchor) to set Phase (Phi).
+    3. Finds neighbors of the Anchor to calculate the precise Orientation (Theta).
+    """
+    x = X[0]
+    y = X[1]
+    
+    # --- 1. Rate Map Generation ---
+    nbins = 60 # Slightly higher res for peak finding
+    range_lims = [[-1, 1], [-1, 1]]
+    heatmap, x_edges, y_edges = np.histogram2d(x, y, bins=nbins, range=range_lims, weights=firing_rates)
+    occupancy, _, _ = np.histogram2d(x, y, bins=nbins, range=range_lims)
+    
+    # Safe division & smoothing
+    ratemap = np.divide(heatmap, occupancy, out=np.zeros_like(heatmap), where=occupancy!=0)
+    ratemap_smooth = ndimage.gaussian_filter(ratemap, sigma=1.5)
+    
+    # Pixel to physical unit scaler
+    pixel_scale = 2.0 / nbins
+    
+    # --- 2. Global Geometry (Lambda & Sigma) via SAC ---
+    # We still use SAC for Lambda because individual peak distances are noisy.
+    rm_centered = ratemap_smooth - np.mean(ratemap_smooth)
+    sac = signal.fftconvolve(rm_centered, rm_centered[::-1, ::-1], mode='same')
+    
+    # Get Lambda (Distance to nearest SAC peak)
+    sac_max = np.max(sac)
+    # Find peaks in SAC
+    local_max_sac = ndimage.maximum_filter(sac, size=5) == sac
+    peaks_sac_y, peaks_sac_x = np.where(local_max_sac & (sac > 0.1 * sac_max))
+    
+    cy, cx = sac.shape[0] // 2, sac.shape[1] // 2
+    dists_sac = np.sqrt((peaks_sac_x - cx)**2 + (peaks_sac_y - cy)**2)
+    
+    # Filter center
+    valid_mask = dists_sac > 2.0
+    if np.any(valid_mask):
+        lam_px = np.min(dists_sac[valid_mask])
+        lam = lam_px * pixel_scale
+    else:
+        lam = 0.5 # Fallback
+        lam_px = 0.5 / pixel_scale
+
+    # Get Sigma (HWHM of central SAC peak)
+    # Scan right from center
+    mid_slice = sac[cy, cx:]
+    mid_slice = mid_slice / mid_slice[0]
+    # Find where it drops below 0.5
+    hwhm = np.searchsorted(-mid_slice, -0.5) 
+    sigma = (hwhm * pixel_scale) / 1.66
+    
+    # --- 3. Phase (Phi) via Brightest Point ---
+    # Find peaks in the actual Rate Map
+    local_max_rm = ndimage.maximum_filter(ratemap_smooth, size=3) == ratemap_smooth
+    # Keep significant peaks
+    peak_mask = local_max_rm & (ratemap_smooth > 0.2 * np.max(ratemap_smooth))
+    p_y, p_x = np.where(peak_mask)
+    
+    if len(p_y) == 0:
+        return np.array([lam, 0.0, 0.0, 0.0, 0.0, 1.0, sigma])
+
+    # Find the "Brightest" peak (Highest firing rate)
+    peak_rates = ratemap_smooth[p_y, p_x]
+    brightest_idx = np.argmax(peak_rates)
+    
+    # Set Phase to this coordinate
+    # Convert bin index to x,y
+    phi_x = -1.0 + (p_x[brightest_idx] + 0.5) * pixel_scale
+    phi_y = -1.0 + (p_y[brightest_idx] + 0.5) * pixel_scale
+    
+    # --- 4. Orientation (Theta) via Neighbors ---
+    # We look for peaks that form a triangle with the brightest peak.
+    anchor_y, anchor_x = p_y[brightest_idx], p_x[brightest_idx]
+    
+    # Calculate distances from Anchor to all other peaks
+    dx = p_x - anchor_x
+    dy = p_y - anchor_y
+    distances = np.sqrt(dx**2 + dy**2)
+    
+    # Find neighbors that are approximately 1 Lambda away
+    # We allow a tolerance (e.g., +/- 25%)
+    tolerance = 0.25 * lam_px
+    neighbor_mask = (distances > (lam_px - tolerance)) & (distances < (lam_px + tolerance))
+    
+    neighbor_indices = np.where(neighbor_mask)[0]
+    
+    if len(neighbor_indices) > 0:
+        # Calculate angles to these neighbors
+        angles = []
+        for idx in neighbor_indices:
+            # Angle relative to positive x-axis
+            # Note: y-axis in array increases downwards, but usually we treat y as up.
+            # However, provided we are consistent, it matches. 
+            # Let's stick to array coords: dy is (neighbor - anchor)
+            
+            vec_y = (p_y[idx] - anchor_y)
+            vec_x = (p_x[idx] - anchor_x)
+            
+            angle = np.arctan2(vec_y, vec_x)
+            angles.append(angle)
+            
+        angles = np.array(angles)
+        
+        # Grid symmetry is 60 degrees (pi/3).
+        # We want the average angle modulo 60 degrees.
+        # But simple mean(angles % 60) fails at the wrap-around (e.g. 59 deg and 1 deg).
+        # We use circular mean logic for 6-fold symmetry:
+        # Multiply angles by 6, take mean vector, divide phase by 6.
+        
+        sin_sum = np.sum(np.sin(6 * angles))
+        cos_sum = np.sum(np.cos(6 * angles))
+        mean_angle_6x = np.arctan2(sin_sum, cos_sum)
+        
+        theta = mean_angle_6x / 6.0
+        
+        # Ensure positive theta in [0, pi/3]
+        theta = theta % (np.pi / 3.0)
+        
+    else:
+        # If the brightest peak has no neighbors (isolated), 
+        # fall back to SAC-based theta (finding nearest peak in SAC)
+        peaks_sac_y, peaks_sac_x = np.where(local_max_sac) # Re-get without threshold
+        dists_sac = np.sqrt((peaks_sac_x - cx)**2 + (peaks_sac_y - cy)**2)
+        valid = dists_sac > (lam_px * 0.5)
+        if np.any(valid):
+            idx_sac = np.argmin(dists_sac[valid])
+            # get coordinates of that valid peak
+            # ..
