@@ -20,7 +20,7 @@ from matplotlib.gridspec import GridSpec
 import jax.numpy as jnp
 from typing import Optional, Callable, Sequence, Tuple, Dict, Any
 
-
+from src import utils
 # =============================================================================
 # Data loading diagnostics
 # =============================================================================
@@ -343,6 +343,46 @@ def _ensure_predictor_format(x_cell: jnp.ndarray) -> jnp.ndarray:
         return x_cell.reshape(1, -1)  # (n_trials,) -> (1, n_trials)
     return x_cell  # already (n_features, n_trials)
 
+
+def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100, eval_points : Optional[np.ndarray] = None, 
+                            n_features: int = 2) -> jnp.ndarray:
+    """
+    Computes the evaluation matrix for a given program and parameters.
+    
+    Evaluate the model at eval_points (n_samples x n_features x n_trials) by selecting n_evaluation_points out of n_trials.
+
+    Args:
+        program (callable): The neuron model function with signature:
+                           program(X, *params) -> (n_trials,)
+                           where X has shape (n_features, n_trials).
+        params (jnp.ndarray): The parameters for the neuron model. Shape: (n_samples, n_params)
+        n_evaluation_points (int): Number of points to evaluate the model at.
+        eval_points (Optional[np.ndarray]): Specific evaluation points to use. If None, this will raise an error for now. Has shape (n_samples x n_features x n_trials)
+        n_features (int): Total number of predictors in the model. Default is 2.
+    Returns:
+        jnp.ndarray: The evaluation matrix of shape (n_samples, n_evaluation_points).
+    
+    Raises:
+        ValueError: If eval_points is None
+    """
+    # Early validation
+    if eval_points is None:
+        raise ValueError("eval_points must be provided for grid cell models.")
+    
+    if n_features != eval_points.shape[1]:
+        raise ValueError(
+            f"eval_points must have shape (n_samples, n_features, n_trials). "
+            f"Got {eval_points.shape} with n_features={n_features}."
+        )
+    n_samples = params.shape[0]
+    # randomly select n_evaluation_points from eval_points along the last axis
+    trials_idx = np.random.choice(eval_points.shape[2], size=n_evaluation_points, replace=False)
+    X_eval = eval_points[:, :, trials_idx]  # (n_samples, n_features, n_evaluation_points)
+
+    # vmap over samples
+    program_vmap = utils.vmap_over_cells(program)
+    y_eval = program_vmap(X_eval, params)
+    return y_eval
 
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                     predictors: jnp.ndarray, response: jnp.ndarray,
