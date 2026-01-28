@@ -14,6 +14,46 @@ def _ensure_predictor_format(x_cell: jnp.ndarray) -> jnp.ndarray:
     return x_cell  # already (n_features, n_trials)
 
 
+def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100,
+                               predictor_idx: int = 0, n_features: int = 1) -> jnp.ndarray:
+    """
+    Computes the evaluation matrix for a given program and parameters.
+    
+    Creates a uniform grid of trials [0, 2π] and evaluates the model at those points
+    for all samples. The evaluation grid is placed at `predictor_idx` in the predictor array.
+    
+    Args:
+        program (callable): The neuron model function with signature:
+                           program(X, *params) -> (n_trials,)
+                           where X has shape (n_features, n_trials).
+        params (jnp.ndarray): The parameters for the neuron model. Shape: (n_samples, n_params)
+        n_evaluation_points (int): Number of points to evaluate the model at.
+        predictor_idx (int): Index of the predictor to vary for evaluation. Default is 0.
+        n_features (int): Total number of predictors in the model. Default is 1.
+    Returns:
+        jnp.ndarray: The evaluation matrix of shape (n_samples, n_evaluation_points).
+    
+    Raises:
+        ValueError: If predictor_idx >= n_features or predictor_idx < 0.
+    """
+    # Early validation
+    if predictor_idx < 0 or predictor_idx >= n_features:
+        raise ValueError(
+            f"predictor_idx ({predictor_idx}) must be in range [0, {n_features}). "
+            f"Got n_features={n_features}."
+        )
+    
+    n_samples = params.shape[0]
+    # Create evaluation trials
+    trials = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
+    # Create X with zeros for all predictors, then set the evaluation predictor
+    X_eval = jnp.zeros((n_samples, n_features, n_evaluation_points))
+    X_eval = X_eval.at[:, predictor_idx, :].set(trials)
+    # vmap over samples
+    program_vmap = utils.vmap_over_cells(program)
+    y_eval = program_vmap(X_eval, params)
+    return y_eval
+
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
                     x: jnp.ndarray, y: jnp.ndarray, 
                     sample_selection: Sequence[int],
