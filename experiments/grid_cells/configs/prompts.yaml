@@ -50,9 +50,13 @@ prompts:
   program_prompt:
     base: | 
       You are an AI scientist. The programs below are biological models of grid cells in the entorhinal cortex.
-      Grid cells fire in a hexagonal pattern as an animal navigates through space. The models are sorted from highest to lowest loss.
+      The models are sorted from highest to lowest loss.
       Your task is to create a new grid cell model, grid_model_v{next_version}, that has a lower loss than the models below.
       *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
+      
+      **Domain Knowledge:** Grid cells fire in a hexagonal pattern as an animal navigates through space. Grid cell firing rates are bounded, typically 0-50 Hz. Your model outputs must remain in this physiological range.
+      Unbounded functions like `exp(alpha * x)` with large alpha can produce astronomically large outputs, leading to numerical overflow and failed optimization.
+      Always ensure your model outputs are bounded (e.g., by clipping exponential arguments or the final output).
 
     explore: |
       Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? 
@@ -94,6 +98,8 @@ prompts:
         - `lam = np.clip(lam, 0.1, 1.5)` for grid spacing
         - `theta = np.clip(theta, 0, np.pi/3)` for orientation (60-degree periodicity)
         - `sigma = np.clip(sigma, 0.01, 0.3)` for field width
+      * If using `np.exp()`, ALWAYS clip the argument to prevent overflow: `np.exp(np.clip(x, -10, 10))`
+        - Unbounded functions like `exp(alpha * x)` with large alpha will cause numerical overflow and infinite loss.
       * IMPORTANT: Your code will be translated to JAX. Avoid boolean indexing (e.g., `array[condition]`), dynamic shapes, and control flow based on array values. Use `jnp.where()` instead of boolean indexing.
 
     function_signature: |
