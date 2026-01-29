@@ -212,31 +212,44 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
     # The output will have shape (n_samples,)
     loss_total = jax.vmap(loss_single_cell, in_axes=(0, 0, 0), out_axes=0)
 
-    # Mini-batched loss computation over trials to avoid GPU OOM
+    # Mini-batched loss and gradient computation to avoid GPU OOM
+    # Key: we JIT only the per-batch computation, NOT the loop over batches
     n_train_trials = x_train.shape[2]
     
-    def loss_param_batched(params):
-        """Compute loss by iterating over trial batches to save memory."""
+    # JIT-compiled loss for a single batch
+    @jax.jit
+    def loss_single_batch(params_2d, x_batch, y_batch):
+        """Compute sum of losses for one batch (JIT-compiled)."""
+        batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
+        return jnp.sum(batch_losses)
+    
+    # Gradient of per-batch loss
+    grad_single_batch = jax.jit(jax.grad(loss_single_batch))
+    
+    def loss_and_grad_batched(params):
+        """Compute loss and gradient by accumulating over trial batches (not JIT-compiled)."""
         params_2d = params.reshape(-1, n_params)
-        # Accumulate weighted sum: each batch contributes (batch_size / total_trials) weight
-        weighted_sum = 0.0
+        total_loss = 0.0
+        total_grad = jnp.zeros_like(params)
+        
         for start_idx in range(0, n_train_trials, trial_batch_size):
             end_idx = min(start_idx + trial_batch_size, n_train_trials)
-            batch_size = end_idx - start_idx
+            batch_weight = (end_idx - start_idx) / n_train_trials
             x_batch = x_train[:, :, start_idx:end_idx]
             y_batch = y_train[:, start_idx:end_idx]
-            # loss_total returns (n_samples,) - mean loss per sample over trials in this batch
-            # Weight by batch_size/n_train_trials to get proper weighted average
-            batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
-            weighted_sum += jnp.sum(batch_losses) * (batch_size / n_train_trials)
-        # Divide by n_samples to get mean over samples
-        return weighted_sum / n_samples
+            
+            # Compute loss and gradient for this batch
+            batch_loss = loss_single_batch(params_2d, x_batch, y_batch)
+            batch_grad = grad_single_batch(params_2d, x_batch, y_batch)
+            
+            # Accumulate with proper weighting
+            total_loss += batch_loss * batch_weight
+            total_grad += batch_grad.reshape(-1) * batch_weight
+        
+        # Normalize by n_samples
+        return total_loss / n_samples, total_grad / n_samples
 
     if fit_params:
-        # define the loss function wrt params. This will have input shape n_samples * n_params (note that params is flattened) and output shape (1,)
-        loss_param = loss_param_batched
-        loss_param_and_grad = jax.value_and_grad(loss_param)
-
         # solver = jaxopt.ScipyMinimize(
         #     fun=loss_param_and_grad,
         #     value_and_grad=True,
@@ -251,6 +264,7 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
         # except Exception as e:
         #     params = initial_params
         #     logging.info(f"Error during optimization: {e}")
+        # 
 
         # 1.  build adam with learning rate schedule for better convergence
         #     Higher initial LR helps parameters with different scales converge
@@ -265,18 +279,25 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
         opt = optax.adam(schedule, b1=0.9, b2=0.999, eps=1e-8)
         opt_state = opt.init(initial_params.reshape(-1))
         
-        # 2. jit single step
-        @jax.jit
+        # 2. Define update step (NOT jit-compiled because loss_and_grad_batched has Python loop)
         def train_step(params, opt_state):
-            loss, grad = loss_param_and_grad(params)
-            updates, opt_state = opt.update(grad, opt_state, params)
-            params = optax.apply_updates(params, updates)
-            return params, opt_state, loss
+            loss, grad = loss_and_grad_batched(params)
+            updates, new_opt_state = opt.update(grad, opt_state, params)
+            new_params = optax.apply_updates(params, updates)
+            return new_params, new_opt_state, loss
         
         # 3.  iterate
         print_every = 50
         params = initial_params.reshape(-1)  # Flatten params for the optimizer
-        initial_loss = loss_param(params)
+        initial_loss, _ = loss_and_grad_batched(params)
+        
+        # Early exit for catastrophically bad programs (loss > 1e10 suggests garbage outputs)
+        CATASTROPHIC_LOSS_THRESHOLD = 1e6
+        if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
+            print(f"Initial loss {initial_loss:.2e} exceeds threshold {CATASTROPHIC_LOSS_THRESHOLD:.0e}. Skipping optimization.")
+            logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
+            return FAILED_PROGRAM_COST, initial_params
+        
         best_loss, best_params = initial_loss.copy(), params.copy()
         for step in range(1, max_iter + 1):
             params, opt_state, loss_val = train_step(params, opt_state)
@@ -284,6 +305,11 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
                 logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
                 print(f"Final loss: {loss_val:.4f} at step {step}")
                 break
+            # Also exit early if loss explodes during training
+            if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
+                logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
+                print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
+                return FAILED_PROGRAM_COST, initial_params
             if loss_val < best_loss:
                 best_loss = loss_val.copy()
                 best_params = params.copy()
@@ -837,10 +863,10 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
             islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
             census.append([i, island_idx, j, llm_name, loss, t_added, parent1_id, parent2_id, y_eval, optimized_params.shape[1]])
             success_rate += 1 / (n_islands * batch_size)
-            print(f"iteration {i}, island {island_idx}, batch {j}, loss: {loss:.2f}")
-            print('-' * 50)
+            print(f"iteration {i}, island {island_idx}, batch {j}, loss: {loss:.2f}", flush=True)
+            print('-' * 50, flush=True)
             logging.info("-" * 50)
-        print("Success rate:", success_rate)
+        print("Success rate:", success_rate, flush=True)
 
         # sort each island by loss
         for island_idx in range(n_islands):
@@ -1332,10 +1358,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
             census.append([i, island_idx, j, llm_name, loss, t_added, parent1_id, parent2_id, y_eval, optimized_params.shape[1]])
             success_rate += 1 / (n_islands * batch_size)
-            print(f"iteration {i}, island {island_idx}, batch {j}, loss: {loss:.2f}")
-            print('-' * 50)
+            print(f"iteration {i}, island {island_idx}, batch {j}, loss: {loss:.2f}", flush=True)
+            print('-' * 50, flush=True)
             logging.info("-" * 50)
-        print("Success rate:", success_rate)
+        print("Success rate:", success_rate, flush=True)
 
         # sort each island by loss
         for island_idx in range(n_islands):
@@ -1416,7 +1442,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     # now carry out the loss calculation on the test samples
     logging.info("Calculating loss on test set...")
     for island_idx in range(n_islands):
-        logging.info(f"Island {island_idx} programs:")
+        logging.info(f"Island {island_idx} programs: {(len(islands[island_idx]))} programs to evaluate.")
         for j in range(len(islands[island_idx])):
             program = islands[island_idx].iloc[j]
             neuron_model = program['program']
