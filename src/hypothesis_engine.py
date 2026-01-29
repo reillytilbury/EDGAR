@@ -144,11 +144,13 @@ def objective(model, param_estimator, loss_func, x, y,
     n_samples, n_features, n_trials = x_data.shape
     
     # train/test split over trials (axis 2)
-    key = jax.random.PRNGKey(random_seed)
-    training_size = n_trials // 2
-    shuffled_indices = jax.random.permutation(key, jnp.arange(n_trials))
-    training_trials_idx = shuffled_indices[:training_size]
-    test_trials_idx = shuffled_indices[training_size:]
+    # split the trials into 10 equal length chunks and allocate all odd chunks to train and even chunks to test 
+    key = jax.random.PRNGKey(random_seed)    
+    n_trial_splits = 10 
+    trials_per_split = n_trials // n_trial_splits
+    split_indices = [jnp.arange(i * trials_per_split, (i + 1) * trials_per_split) for i in range(n_trial_splits)]
+    training_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 1])
+    test_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 0])
     
     # Split predictors and response: x has shape (n_samples, n_features, n_trials)
     x_train = x_data[:, :, training_trials_idx]  # (n_samples, n_features, training_size)
