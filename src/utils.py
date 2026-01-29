@@ -114,59 +114,7 @@ def extract_code_block(text: Union[str, None], start_marker: str = "```python\n"
     # return just the code between the fences
     return text[start:end].rstrip()
 
-def split_via_ast(output: Union[str, None]) -> Union[Tuple[str, str], Tuple[None, None]]:
-    """
-    Splits the output string into two parts: one containing the neuron_model function and the other containing the parameter_estimator function.
-    If the output string does not contain valid python code, or is missing either function, or if the output is None, this function returns None, None.
-    Args:
-        output (str or None): The output string containing the code to be split.
-    Returns:
-        Tuple[str, str]: A tuple containing the neuron_model and parameter_estimator code as strings.
-                         If either function is not found, returns None for that part.
-    """
-    if output is None:
-        return None, None
-    # Parse the output string into an AST
-    try:
-        module = ast.parse(output)
-    except SyntaxError as e:
-        print(f"SyntaxError while parsing LLM code: {e}")
-        return None, None
-
-    # Separate imports from function definitions
-    raw_imports = [n for n in module.body 
-                   if isinstance(n, (ast.Import, ast.ImportFrom))]
-
-    # Dedupe by their unparsed source text (preserves first occurrence order)
-    seen_src = set()
-    unique_imports = []
-    for node in raw_imports:
-        src = ast.unparse(node)
-        if src not in seen_src:
-            seen_src.add(src)
-            unique_imports.append(node)
-    
-    funcs = [n for n in module.body if isinstance(n, ast.FunctionDef)]
-
-    # Find exactly the neuron_model and parameter_estimator nodes. Return empty functions if not found.
-    try:
-        model_fn = next(f for f in funcs if f.name.startswith("neuron_model"))
-        est_fn = next(f for f in funcs if f.name.startswith("parameter_estimator"))
-    except StopIteration:
-        return None, None
-    
-    # Rename the functions
-    model_fn.name = "neuron_model"
-    est_fn.name = "parameter_estimator"
-
-    # Reconstruct two mini‐modules
-    mod_tree = ast.Module(body=unique_imports + [model_fn], type_ignores=[])
-    est_tree = ast.Module(body=unique_imports + [est_fn],   type_ignores=[])
-
-    # Turn them back into source code
-    return ast.unparse(mod_tree), ast.unparse(est_tree)
-
-def str_to_func(code_string: Tuple[str, None], needle: str = 'neuron_model') -> Tuple[callable, None]:
+def str_to_func(code_string: Tuple[str, None], needle: str) -> Tuple[callable, None]:
     """
     Convert a string containing Python code into a callable function,
 

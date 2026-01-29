@@ -59,6 +59,11 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
     with open(data_config_path) as f:
         data_config = yaml.safe_load(f)
 
+    # Path to prompts.yaml in the config directory
+    prompts_config_path = config_path / "prompts.yaml"
+    if not prompts_config_path.exists():
+        raise ValueError(f"prompts.yaml not found in config directory: {prompts_config_path}")
+
     # Dynamically load data extraction function
     load_and_process_data_fn_path = data_config.pop('load_and_process_data_fn', None)
     if load_and_process_data_fn_path:
@@ -115,6 +120,7 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
             load_and_process_data_fn=load_and_process_data_fn,
             data_config=data_config,
             diagnostics_module=diagnostics_module,
+            prompts_config_path=prompts_config_path,
         )
 
 if __name__ == "__main__":

@@ -24,30 +24,27 @@ warnings.filterwarnings(
     message="The behavior of DataFrame concatenation with empty or all-NA entries is deprecated.*"
 )
 
-# Initialize prompt manager
-prompt_manager = PromptManager(config_path=Path(__file__).parent.parent / "config" / "prompts.yaml")
-
 print(jax.default_backend())    # should print "gpu"
 print(jax.devices())
 
-def compute_initial_params(param_estimator, neuron_model, x, y) -> jnp.ndarray:
+def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
     """
-    Compute initial parameters for the neuron model using the provided parameter estimator. 
-    The parameter estimator is written in numpy, but the neuron model is written in JAX. 
+    Compute initial parameters for the model using the provided parameter estimator. 
+    The parameter estimator is written in numpy, but the model is written in JAX. 
     So the data x and y will be numpy arrays, but the output will be a JAX array.
     
     Args:
-        param_estimator (function): Function to estimate initial parameters for the neuron model.
+        param_estimator (function): Function to estimate initial parameters for the model.
                                     Signature: param_estimator(X, response) -> params
                                     where X has shape (n_features, n_trials) for a single sample.
-        neuron_model (function): The model which predicts neural activity from stimuli and free parameters.
-                                 Signature: neuron_model(X, *params) -> activity
+        model (function): The model which predicts neural activity from stimuli and free parameters.
+                                 Signature: model(X, *params) -> activity
                                  where X has shape (n_features, n_trials) for a single sample.
         x (np.ndarray): Predictor data, shape (n_samples, n_features, n_trials).
         y (np.ndarray): Response data, shape (n_samples, n_trials).
     Returns:
         jnp.ndarray: The estimated parameters for each sample, shape (n_samples, n_params).
-                     If the parameter estimation fails, returns an array of default parameters based on the neuron model's signature.
+                     If the parameter estimation fails, returns an array of default parameters based on the model's signature.
                      If this also fails, returns None.
     """
     @timeout_decorator.timeout(5, use_signals=True)
@@ -62,8 +59,8 @@ def compute_initial_params(param_estimator, neuron_model, x, y) -> jnp.ndarray:
     except Exception as e:
         logging.info(f"Error during parameter estimation: {e}")
 
-    # If parameter estimation fails, compute default parameters based on the neuron model's signature
-    params = compute_default_params(neuron_model)
+    # If parameter estimation fails, compute default parameters based on the model's signature
+    params = compute_default_params(model)
     if params is not None:
         # default params is a 2D array with shape (1, n_params), so we need to repeat it for each sample
         n_samples = y.shape[0]
@@ -72,19 +69,19 @@ def compute_initial_params(param_estimator, neuron_model, x, y) -> jnp.ndarray:
         logging.info("Error: Unable to compute default parameters for the neuron model.")
         return None
 
-def compute_default_params(neuron_model) -> jnp.ndarray:
+def compute_default_params(model) -> jnp.ndarray:
     """
-    Compute default parameters for the neuron model based on its signature.
+    Compute default parameters for the model based on its signature.
     Args:
-        neuron_model (function): The model which predicts neural activity from stimuli and free parameters.
-                                 Signature: neuron_model(X, *params) -> activity
+        model (function): The model which predicts neural activity from stimuli and free parameters.
+                                 Signature: model(X, *params) -> activity
                                  where X has shape (n_features, n_trials) for a single sample.
     Returns:
-        jnp.ndarray: The default parameters for the neuron model, shape (1, n_params).
+        jnp.ndarray: The default parameters for the model, shape (1, n_params).
                      If the parameter estimation fails, returns None.
     """
     try:
-        sig = inspect.signature(neuron_model)
+        sig = inspect.signature(model)
         # First parameter is the predictor input (X or theta), skip it
         all_param_names = list(sig.parameters.keys())
         # The first param is the predictor (could be named 'X', 'theta', or anything)
@@ -98,7 +95,7 @@ def compute_default_params(neuron_model) -> jnp.ndarray:
         return None
         return None    
 
-def objective(neuron_model, param_estimator, loss_func, x, y, 
+def objective(model, param_estimator, loss_func, x, y, 
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
               use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -108,11 +105,11 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
     The loss is calculated as the mean over samples and trials of the loss function provided.
     
     Args:
-        neuron_model (function): The model which predicts neural activity from predictors
+        model (function): The model which predicts neural activity from predictors
                                 and free parameters (for a single sample).
-                                Signature: neuron_model(X, *params) -> activity
+                                Signature: model(X, *params) -> activity
                                 where X has shape (n_features, n_trials) for a single sample.
-        param_estimator (function): Function to estimate initial parameters for the neuron model.
+        param_estimator (function): Function to estimate initial parameters for the model.
                                 Signature: param_estimator(X, response) -> params
                                 where X has shape (n_features, n_trials) for a single sample.
         loss_func (function): The loss function to use for calculating the loss.
@@ -161,9 +158,9 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
 
     # Perform initial param calc. x must be numpy array of shape (n_samples, n_features, n_trials)
     if use_param_estimator:
-        initial_params = compute_initial_params(param_estimator, neuron_model, np.asarray(x_train), np.asarray(y_train))
+        initial_params = compute_initial_params(param_estimator, model, np.asarray(x_train), np.asarray(y_train))
     else:
-        initial_params = compute_default_params(neuron_model)
+        initial_params = compute_default_params(model)
         # if initial_params not none, reshape from (1, n_params) to (n_samples, n_params)
         if initial_params is not None:
             n_params = initial_params.shape[1]
@@ -185,26 +182,26 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
         logging.info("Error: Cannot fit non-numeric parameters.")
         return FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params)), FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params))
 
-    # Fail immediately if neuron_model doesn't run
+    # Fail immediately if model doesn't run
     # x_data[sample_idx] has shape (n_features, n_trials)
     try:
         # Check compatibility with JAX's tracing mechanism
-        neuron_model_jit = jax.jit(neuron_model)
+        model_jit = jax.jit(model)
         test_n_trials = x_data.shape[2]  # full n_trials for validation
         for sample_idx in np.random.choice(n_samples, size=min(10, n_samples), replace=False):
             # Validate with concrete values: x_data[sample_idx] is (n_features, n_trials)
-            output = neuron_model_jit(x_data[sample_idx], *initial_params[sample_idx])
+            output = model_jit(x_data[sample_idx], *initial_params[sample_idx])
             if output.ndim != 1 or output.shape[0] != test_n_trials:
-                logging.info(f"Error: neuron_model output shape {output.shape[0]} does not match input n_trials {test_n_trials}.")
+                logging.info(f"Error: model output shape {output.shape[0]} does not match input n_trials {test_n_trials}.")
                 return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
             # Validate with abstract tracer values
-            jax.eval_shape(neuron_model_jit, x_data[sample_idx], *initial_params[sample_idx])
+            jax.eval_shape(model_jit, x_data[sample_idx], *initial_params[sample_idx])
     except Exception as e:
-        logging.info(f"Neuron model failed to run or is incompatible with JAX tracing: {e}")
+        logging.info(f"Model failed to run or is incompatible with JAX tracing: {e}")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
     # Loss for a single sample: x_data has shape (n_features, n_trials), y_data has shape (n_trials,)
-    loss_single_cell = lambda params, x_i, y_i: jnp.mean(loss_func(neuron_model(x_i, *params), y_i), axis=-1)
+    loss_single_cell = lambda params, x_i, y_i: jnp.mean(loss_func(model(x_i, *params), y_i), axis=-1)
     # vectorize the loss function for all samples. The inputs will have shapes:
     # - params: (n_samples, n_params)
     # - x_i: (n_samples, n_features, n_trials) -> batched over axis 0
@@ -318,7 +315,7 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
         params = best_params.reshape(n_samples, n_params)
         print(f"params optimized. Loss: {best_loss:.4f}")
     else:
-        params = compute_initial_params(param_estimator, neuron_model, np.asarray(x_train), np.asarray(y_train))
+        params = compute_initial_params(param_estimator, model, np.asarray(x_train), np.asarray(y_train))
         if params is None or not isinstance(params, jnp.ndarray):
             logging.info("Error: params should be a JAX array.")
             return FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params))
@@ -362,8 +359,8 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-async def generate_new_neuron_model(current_island, llm_name, client, 
-                                    spike_matrix, stimuli,
+async def generate_new_model(current_island, llm_name, client, 
+                                    spike_matrix, stimuli, prompt_manager,
                                     mode='explore', k_max=2, temp=1, 
                                     thinking_budget=1, img_dir=None, diagnostics_module=None):
     k = min(k_max, len(current_island))
@@ -377,17 +374,18 @@ async def generate_new_neuron_model(current_island, llm_name, client,
                   random_programs['birth_island'][1], 
                   random_programs['batch_index'][1])
     use_image = img_dir is not None
+    model_name = prompt_manager.get_model_name()
     program_prompt = prompt_manager.get_program_prompt(random_programs, mode=mode, use_image=use_image)
 
     if use_image and diagnostics_module is not None:
         try:
-            sup_title = "".join([f"neuron_model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
+            sup_title = "".join([f"{model_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             diagnostics_module.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
                                     predictors=stimuli, response=spike_matrix,
                                     sample_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
                                     save_path=img_dir,
-                                    labels=['v_1', 'v_2'],
+                                    labels=[f'{model_name}_v_1', f'{model_name}_v_2'],
                                     colours=['tab:green', 'tab:red'],
                                     dpi=384*3/20,
                                     title=sup_title,
@@ -410,18 +408,18 @@ async def generate_new_neuron_model(current_island, llm_name, client,
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
         return None, None, (parent1_id, parent2_id)
-    code_string = code_string.replace(f'def neuron_model_v{k+1}(', 'def neuron_model(')
+    code_string = code_string.replace(f'def {model_name}_v{k+1}(', f'def {model_name}(')
     
     return code_string, program_prompt, (parent1_id, parent2_id)
 
 async def generate_new_parameter_estimator(current_island, 
-                                           neuron_model_code_string: str,
+                                           model_code_string: str,
                                            llm_name, client, 
-                                           spike_matrix, stimuli,
+                                           spike_matrix, stimuli, prompt_manager,
                                            k_max=1, temp=1,
                                            param_estimator_max_lines=100, img_dir=None,
                                            swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']):
-    if neuron_model_code_string is None:
+    if model_code_string is None:
         logging.info("No neuron model code string provided, skipping parameter estimator generation.")
         return None, None
     k = min(k_max, len(current_island))
@@ -430,7 +428,7 @@ async def generate_new_parameter_estimator(current_island,
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
     use_image = img_dir is not None
     prompt = prompt_manager.get_parameter_estimator_prompt(random_programs,
-                                                    neuron_model_code_string=neuron_model_code_string,
+                                                    model_code_string=model_code_string,
                                                     max_lines=param_estimator_max_lines,
                                                     use_image=use_image)
     
@@ -439,7 +437,7 @@ async def generate_new_parameter_estimator(current_island,
     # now try generating an image from the random programs
     if use_image and diagnostics_module is not None:
         try:
-            sup_title = "".join([f"neuron_model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
+            sup_title = "".join([f"model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             diagnostics_module.plot_model_fits(programs_df=random_programs_crude,
                                     loss_function=loss_functions.quadratic_loss,
                                     predictors=stimuli, response=spike_matrix,
@@ -523,11 +521,14 @@ async def generate_new_parameter_estimator_from_image_feedback(image_prompt: str
     func = utils.str_to_func(code_string, 'parameter_estimator')
     return code_string, func
 
-async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash-lite') -> tuple[str, callable]:
+async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='gemini-2.0-flash-lite') -> tuple[str, callable]:
     """
     Translates a neuron model code string to JAX format.
     Args:
         code_string (str): The neuron model code string to translate.
+        client: The LLM client.
+        prompt_manager: PromptManager instance for generating prompts.
+        llm_name (str): The LLM model name to use.
     Returns:
         callable: The translated JAX function.
     """
@@ -542,7 +543,8 @@ async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash-
     
     jax_code_string = await llm_helper.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
     jax_code_string = utils.extract_code_block(jax_code_string)
-    func = utils.str_to_func(jax_code_string, 'neuron_model')
+    model_name = prompt_manager.get_model_name()
+    func = utils.str_to_func(jax_code_string, model_name)
     return jax_code_string, func
 
 async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
@@ -741,6 +743,7 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
                                                                    temp=temperature,
                                                                    spike_matrix=response_train, 
                                                                    stimuli=trials_train,
+                                                                   prompt_manager=prompt_manager,
                                                                    img_dir=model_image_dirs[island_idx, j],
                                                                    diagnostics_module=diagnostics_module) 
                                          for island_idx in range(n_islands) for j in range(batch_size)]
@@ -752,7 +755,7 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
         parent_ids = [result[2] for result in neuron_model_results]
         
         # convert to jax
-        neuron_model_function_translation_tasks = [translate_to_jax(code_string, client, tiny_lm_name) for code_string in neuron_model_code_strings]
+        neuron_model_function_translation_tasks = [translate_to_jax(code_string, client, prompt_manager, tiny_lm_name) for code_string in neuron_model_code_strings]
         jax_results = await asyncio.gather(*neuron_model_function_translation_tasks)
         neuron_model_results = [(neuron_model_code_strings[j], neuron_model_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
@@ -765,6 +768,7 @@ async def main_deprecated(n_iterations=9, time_limit=60, k_max=2, n_islands=8, b
                 client=client,
                 spike_matrix=response_train, # training data
                 stimuli=trials_train,
+                prompt_manager=prompt_manager,
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
@@ -1044,6 +1048,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 load_and_process_data_fn = None,
                 data_config = None,
                 diagnostics_module = None,
+                prompts_config_path = None,
                 log_best_loss = True,
                 random_seed = 42):
     """ 
@@ -1062,6 +1067,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     """
     if data_config is None:
         data_config = {}
+    
+    # Initialize prompt manager with experiment-specific prompts
+    if prompts_config_path is None:
+        # Fall back to default config path
+        prompts_config_path = Path(__file__).parent.parent / "config" / "prompts.yaml"
+    prompt_manager = PromptManager(config_path=prompts_config_path)
     
     # load api keys
     load_dotenv()
@@ -1127,6 +1138,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     # store and compute loss of 2 initial programs
     t_start = time.time()
     seed_losses = np.zeros(2)
+    model_name = prompt_manager.get_model_name()
     for i in range(2):
         # get the program, parameter estimator, and jax program
         program_num = numpy_programs[i]
@@ -1141,13 +1153,13 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         seed_losses[i] = loss
         # format strings
         program_code_string = utils.format_function_source(
-            program_num, f'neuron_model_v{i+1}', 'import numpy as np'
+            program_num, f'{model_name}_v{i+1}', 'import numpy as np'
         )
         parameter_estimator_code_string = utils.format_function_source(
             param_est, f'parameter_estimator_v{i+1}', 'import numpy as np'
         )
         program_jax_code_string = utils.format_function_source(
-            program_jax, f'neuron_model_v{i+1}', 'import jax.numpy as jnp'
+            program_jax, f'{model_name}_v{i+1}', 'import jax.numpy as jnp'
         )
         if trials_train.shape[1] == 1 : 
             # evenly spaced evaluation points for 1D inputs
@@ -1227,7 +1239,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                     model_image_dirs[island_idx, j] = None
                     # param_est_image_dirs[island_idx, j] = None
         # generate new programs
-        neuron_model_generation_tasks = [generate_new_neuron_model(islands[island_idx], 
+        model_generation_tasks = [generate_new_model(islands[island_idx], 
                                                                    llm_name=llm_name, 
                                                                    client=client, 
                                                                    mode=mode, 
@@ -1235,30 +1247,32 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                    temp=temperature,
                                                                    spike_matrix=response_train, 
                                                                    stimuli=trials_train,
+                                                                   prompt_manager=prompt_manager,
                                                                    img_dir=model_image_dirs[island_idx, j],
                                                                    diagnostics_module=diagnostics_module) 
                                          for island_idx in range(n_islands) for j in range(batch_size)]
-        logging.info(f"Generating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
-        print(f"Generating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
-        neuron_model_results = await asyncio.gather(*neuron_model_generation_tasks)
-        neuron_model_code_strings = [result[0] for result in neuron_model_results]
-        neuron_model_prompts = [result[1] for result in neuron_model_results]
-        parent_ids = [result[2] for result in neuron_model_results]
+        logging.info(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
+        print(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
+        model_results = await asyncio.gather(*model_generation_tasks)
+        model_code_strings = [result[0] for result in model_results]
+        model_prompts = [result[1] for result in model_results]
+        parent_ids = [result[2] for result in model_results]
         
         # convert to jax
-        neuron_model_function_translation_tasks = [translate_to_jax(code_string, client, tiny_lm_name) for code_string in neuron_model_code_strings]
-        jax_results = await asyncio.gather(*neuron_model_function_translation_tasks)
-        neuron_model_results = [(neuron_model_code_strings[j], neuron_model_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
+        model_function_translation_tasks = [translate_to_jax(code_string, client, prompt_manager, tiny_lm_name) for code_string in model_code_strings]
+        jax_results = await asyncio.gather(*model_function_translation_tasks)
+        model_results = [(model_code_strings[j], model_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
         # build parameter‑estimator tasks
         param_estimation_tasks = [
             generate_new_parameter_estimator(
                 current_island=islands[island_idx],
-                neuron_model_code_string=neuron_model_code_strings[island_idx * batch_size + j],
+                model_code_string=model_code_strings[island_idx * batch_size + j],
                 llm_name=little_lm_name,  # same model used for programs
                 client=client,
                 spike_matrix=response_train, # training data
                 stimuli=trials_train,
+                prompt_manager=prompt_manager,
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
@@ -1275,20 +1289,20 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         logging.info(f"Generating {n_islands * batch_size} new parameter estimators... Model: {little_lm_name}, mode: {mode}, temperature: {temperature:.2f}")
         param_est_results = await asyncio.gather(*param_estimation_tasks)
         # combine results
-        island_results = [[neuron_model_results[island_idx * batch_size + j] + param_est_results[island_idx * batch_size + j] for j in range(batch_size)] for island_idx in range(n_islands)]
+        island_results = [[model_results[island_idx * batch_size + j] + param_est_results[island_idx * batch_size + j] for j in range(batch_size)] for island_idx in range(n_islands)]
 
         # now loop through the results and compute losses
         success_rate = 0.0
         for island_idx, j in np.ndindex(n_islands, batch_size):
             logging.info(f"id={i},{island_idx},{j}")
-            neuron_model_code_string, prompt, neuron_model_code_string_jax, neuron_model_new, param_est_code_string, param_est_new = island_results[island_idx][j]
+            model_code_string, prompt, model_code_string_jax, model_new, param_est_code_string, param_est_new = island_results[island_idx][j]
             parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
-            if neuron_model_new is None or param_est_new is None:
+            if model_new is None or param_est_new is None:
                 logging.info(f"Skipping island {island_idx}, batch {j} due to LLM generation failure.")
                 logging.info('-' * 50)
                 continue
             
-            initial_loss, initial_params, loss, optimized_params = objective(neuron_model_new, param_est_new, 
+            initial_loss, initial_params, loss, optimized_params = objective(model_new, param_est_new, 
                                                                                 loss_func=loss_functions.quadratic_loss,
                                                                                 x=trials_train, y=response_train,
                                                                                 param_penalty_weight=param_penalty_weight,
@@ -1304,18 +1318,18 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 eval_points = None
             else : 
                 eval_points = trials_train
-            y_eval = diagnostics_module.compute_evaluation_matrix(neuron_model_new, optimized_params, eval_points=eval_points, n_evaluation_points=100)
+            y_eval = diagnostics_module.compute_evaluation_matrix(model_new, optimized_params, eval_points=eval_points, n_evaluation_points=100)
             logging.info(f"Prompt: \n{prompt}\n")
             logging.info(f"Loss: {loss:.2f}\n")
-            logging.info(f"Neuron Model: \n{neuron_model_code_string}\n")
-            logging.info(f"Neuron Model (JAX): \n{neuron_model_code_string_jax}\n")
+            logging.info(f"Model: \n{model_code_string}\n")
+            logging.info(f"Model (JAX): \n{model_code_string_jax}\n")
             logging.info(f"Parameter Estimator: \n{param_est_code_string}\n")
 
 
             # plot the fits of the neuron model and parameter estimator if using image feedback
             if use_image_feedback and diagnostics_module is not None:
                 diagnostics_module.plot_model_fits(
-                    programs_df=pd.DataFrame({'program': [neuron_model_new, neuron_model_new], 'params': [initial_params, optimized_params]}),
+                    programs_df=pd.DataFrame({'program': [model_new, model_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
                     predictors=trials_train,
                     response=response_train,
@@ -1332,13 +1346,13 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                     save_path=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_updated_param_est.png')
                 )
             
-            param_names = [n for n in inspect.signature(neuron_model_new).parameters if n != "theta"]
+            param_names = [n for n in inspect.signature(model_new).parameters if n != "theta"]
             if optimized_params.shape[1] == len(param_names):
                 df = pd.DataFrame(np.array(optimized_params)[:10], columns=param_names)
                 logging.info(f"Optimized Parameters for 10 samples:\n{df}\n")
             t_added = time.time() - t_start
-            new_program_df = pd.DataFrame({'program_code_string': neuron_model_code_string,
-                                        'program': neuron_model_new,
+            new_program_df = pd.DataFrame({'program_code_string': model_code_string,
+                                        'program': model_new,
                                         'parameter_estimator_code_string': param_est_code_string,
                                         'parameter_estimator': param_est_new,
                                         'iteration_number': i,
@@ -1445,10 +1459,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         logging.info(f"Island {island_idx} programs: {(len(islands[island_idx]))} programs to evaluate.")
         for j in range(len(islands[island_idx])):
             program = islands[island_idx].iloc[j]
-            neuron_model = program['program']
+            model = program['program']
             param_estimator = program['parameter_estimator']
             # compute the test loss
-            _, _, test_loss, optimized_params = objective(neuron_model, param_estimator,
+            _, _, test_loss, optimized_params = objective(model, param_estimator,
                                                           loss_func=loss_functions.quadratic_loss,
                                                           x=trials_test, y=response_test, fit_params=fit_params,
                                                           max_iter=max_iter, 

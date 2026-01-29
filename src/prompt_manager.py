@@ -20,6 +20,14 @@ class PromptManager:
     def _load_config(self, path):
         with open(path) as f:
             return yaml.safe_load(f)
+
+    def get_model_name(self):
+        """Get the model name from config. Raise error if not found."""
+        model_name = self.config.get('model_name')        
+        if model_name is None:
+            raise ValueError("Model name not found in config. Add 'model_name: your_model_name' at the top level of prompts.yaml")
+        
+        return model_name
     
     def get_program_prompt(self, programs_df : pd.DataFrame, mode : str, use_image=True) -> str:
         """Build program generation prompt from config.
@@ -37,6 +45,7 @@ class PromptManager:
         assert mode in ['explore', 'exploit'], "Invalid mode. Choose either 'explore' or 'exploit'."
 
         k = len(programs_df)
+        model_name = self.get_model_name()
         templates = self.config['prompts']['program_prompt']
 
         # Format with variables
@@ -59,18 +68,18 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
-            program_code_string = programs_df.iloc[i]['program_code_string'].replace('def neuron_model(', f'def neuron_model_v{model_idx}(')
+            program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
             per_model_prompt = templates['per_model_detail'].format(model_idx=f"{model_idx}", train_loss=f'{train_loss}: .2f', program_code_string=program_code_string)
             prompt += per_model_prompt
         
         return prompt
     
-    def get_parameter_estimator_prompt(self, programs_df : pd.DataFrame, neuron_model_code_string : str, max_lines : int = 100, use_image : bool = True) -> str:
+    def get_parameter_estimator_prompt(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100, use_image : bool = True) -> str:
         """ Build parameter estimator generation prompt from config (prompts.yaml)
 
         Args :
             programs_df (pd.DataFrame): DataFrame of existing parameter estimators.
-            neuron_model_code_string (str): The code string of the neuron model to be used.
+            model_code_string (str): The code string of the model to be used.
             max_lines (int): Maximum number of lines for the generated code.
             use_image (bool): Whether to include image analysis section.
 
@@ -78,6 +87,7 @@ class PromptManager:
             prompt (str): The prompt string for the AI to generate a new parameter estimator.
         """
         k = len(programs_df)
+        model_name = self.get_model_name()
         templates = self.config['prompts']['parameter_estimator']
         prompt = templates['base'].format(k=f"{k}", next_version=f"{k+1}")
 
@@ -91,13 +101,13 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
-            program_code_string = programs_df.iloc[i]['program_code_string'].replace('def neuron_model(', f'def neuron_model_v{model_idx}(')
+            program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
             parameter_estimator_code_string = programs_df.iloc[i]['parameter_estimator_code_string'].replace('def parameter_estimator(', f'def parameter_estimator_v{model_idx}(')
             per_model_prompt = templates['per_model_detail'].format(model_idx=f"{model_idx}", train_loss=f'{train_loss}: .2f', program_code_string=program_code_string, parameter_estimator_code_string=parameter_estimator_code_string)
             prompt += per_model_prompt
 
         # add the neuron model code string to the prompt
-        prompt += neuron_model_code_string + "\n"
+        prompt += model_code_string + "\n"
 
         return prompt
 

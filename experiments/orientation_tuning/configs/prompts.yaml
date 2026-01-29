@@ -1,3 +1,5 @@
+model_name: neuron_model
+
 # Metadata section for validation
 _metadata:
   required_prompts:
@@ -17,7 +19,7 @@ _metadata:
   optional_prompts:
     - prompts.program_prompt.image_analysis
     - prompts.parameter_estimator.image_analysis
-  
+    
   # Define allowed variables for each prompt type. If you update the allowed variables, please also update prompt_manager.py accordingly
   allowed_variables:
     program_prompt:
