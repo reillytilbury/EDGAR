@@ -126,6 +126,6 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Hypothesis Engine")
     parser.add_argument('--test_mode', action='store_true', help='Run in test mode with reduced iterations and time limit')
-    parser.add_argument('--config', type=str, default='config', help='Path to config directory (default: config)')
+    parser.add_argument('--config', type=str, help='Path to experiment specific config directory')
     args = parser.parse_args()
     asyncio.run(_run_many(test_mode=args.test_mode, config_dir=args.config))

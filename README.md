@@ -285,7 +285,7 @@ predictors:
   #   description: "Stimulus contrast level"
 ```
 
-### 6. (Optional) Customize Prompts in `config/prompts.yaml`
+### 6. Customize Prompts in `config/prompts.yaml`
 
 The prompts control how LLMs generate code. Key sections:
 
