@@ -334,7 +334,13 @@ def load_and_process_data(
             print(f"Grid cell filtering: kept {n_cells} grid cells")
         else:
             print("Warning: No grid cells identified, returning all cells")
-    
+
+    # =========================================================================
+    # Normalisation - z-score per cell responses
+    # =========================================================================
+    response = (response - response.mean(axis=1, keepdims=True)) / (response.std(axis=1, keepdims=True) + 1e-6)
+    rate_maps = (rate_maps - rate_maps.mean(axis=(1,2), keepdims=True)) / (rate_maps.std(axis=(1,2), keepdims=True) + 1e-6)
+
     return {
         "response": response, # Firing rates (n_cells, n_trials)
         "predictors": predictors, # Predictors object
