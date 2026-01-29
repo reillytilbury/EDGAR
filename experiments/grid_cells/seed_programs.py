@@ -133,122 +133,164 @@ def parameter_estimator_1_old(X, firing_rates):
 
 def parameter_estimator_1(X, firing_rates):
     """
-    Robust parameter estimator using Peak Detection on Spatial Autocorrelation.
+    Robust parameter estimator for Cosine Grid Model using Triangulation.
+    
+    Strategy:
+    1. lambda (spacing): Derived from Spatial Autocorrelation (SAC) for global stability.
+    2. phi (phase): Anchored to the 'brightest' peak in the Rate Map.
+    3. theta (orientation): Calculated by triangulation between the Anchor 
+       and its neighbors in the Rate Map.
+    
+    Args:
+        X (np.ndarray): (2, N) array of positions x, y in [-1, 1].
+        firing_rates (np.ndarray): (N,) array of firing rates.
+        
+    Returns:
+        np.ndarray: [lam, theta, phi_x, phi_y, baseline, amplitude]
     """
     x = X[0]
     y = X[1]
     
-    # ==========================================================
-    # 1. CREATE SMOOTHED RATE MAP
-    # ==========================================================
-    # Use a fixed number of bins to create an image
-    nbins = 50
-    # Range is fixed to [-1, 1] based on your model description
-    search_range = [[-1, 1], [-1, 1]]
+    # -----------------------------------------------------------
+    # 1. PRE-PROCESSING: RATE MAP & SMOOTHING
+    # -----------------------------------------------------------
+    # Use slightly higher resolution (60) for better peak localization
+    nbins = 60
+    range_lims = [[-1, 1], [-1, 1]]
     
-    # Histogram the data
-    heatmap, x_edges, y_edges = np.histogram2d(x, y, bins=nbins, range=search_range, weights=firing_rates)
-    occupancy, _, _ = np.histogram2d(x, y, bins=nbins, range=search_range)
+    # Create histograms
+    heatmap, x_edges, y_edges = np.histogram2d(x, y, bins=nbins, range=range_lims, weights=firing_rates)
+    occupancy, _, _ = np.histogram2d(x, y, bins=nbins, range=range_lims)
     
-    # Avoid division by zero
-    ratemap = np.divide(heatmap, occupancy, out=np.zeros_like(heatmap), where=occupancy!=0)
+    # Calculate Rate Map (Transposed so dim 0 is y, dim 1 is x for image logic)
+    # np.histogram2d returns H[x,y], we usually want H[row, col] -> H[y,x]
+    ratemap = np.divide(heatmap, occupancy, out=np.zeros_like(heatmap), where=occupancy!=0).T
     
-    # Gaussian smooth the map. 
-    # Sigma=2.0 pixels is usually good for 50 bins.
-    ratemap_smooth = ndimage.gaussian_filter(ratemap, sigma=2.0)
+    # Smooth the map (Crucial for peak finding)
+    ratemap_smooth = ndimage.gaussian_filter(ratemap, sigma=1.5)
     
-    # ==========================================================
-    # 2. COMPUTE SPATIAL AUTOCORRELATION (SAC)
-    # ==========================================================
-    # Center the rate map (subtract mean) to handle baseline
+    # Conversion factor: Physical units per pixel
+    pixel_scale = 2.0 / nbins
+
+    # -----------------------------------------------------------
+    # 2. ESTIMATE LAMBDA (SPACING) VIA AUTOCORRELATION
+    # -----------------------------------------------------------
+    # We use SAC for lambda because it averages spacing over the whole arena
     rm_centered = ratemap_smooth - np.mean(ratemap_smooth)
-    
-    # Compute 2D autocorrelation using FFT
     sac = signal.fftconvolve(rm_centered, rm_centered[::-1, ::-1], mode='same')
     
-    # ==========================================================
-    # 3. DETECT PEAKS TO FIND GEOMETRY (LAMBDA & THETA)
-    # ==========================================================
-    # Instead of masking, we find Local Maxima.
-    # This finds pixels that are the highest in their immediate neighborhood.
-    # size=5 means we look at a 5x5 patch.
-    local_max = ndimage.maximum_filter(sac, size=5) == sac
-    
-    # We also discard low-value background noise.
-    # We only keep peaks that are at least 10% of the maximum correlation.
+    # Find peaks in SAC
     sac_max = np.max(sac)
-    binary_peaks = local_max & (sac > 0.1 * sac_max)
+    local_max_sac = ndimage.maximum_filter(sac, size=5) == sac
+    peaks_sac_y, peaks_sac_x = np.where(local_max_sac & (sac > 0.1 * sac_max))
     
-    # Get coordinates of these peaks
-    peak_y, peak_x = np.where(binary_peaks)
-    
-    # Center of the image
+    # Center of SAC
     cy, cx = sac.shape[0] // 2, sac.shape[1] // 2
     
-    # Calculate distances of all peaks from the center
-    # Scale factor: Total range 2.0 / 50 bins = 0.04 units per pixel
-    pixel_scale = 2.0 / nbins
-    distances_px = np.sqrt((peak_x - cx)**2 + (peak_y - cy)**2)
+    # Calculate distances from center
+    dists_sac = np.sqrt((peaks_sac_x - cx)**2 + (peaks_sac_y - cy)**2)
     
-    # Filter out the central peak (distance is 0 or very close to 0)
-    # We look for peaks strictly > 0. Since we use grid coordinates, exact 0 is possible.
-    valid_mask = distances_px > 1.0 # Ignore peaks within 1 pixel of center
+    # Exclude the central peak (dist ~ 0)
+    # We look for the first ring of peaks
+    valid_mask = dists_sac > 2.0 # Ignore center
     
-    valid_distances = distances_px[valid_mask]
-    valid_y = peak_y[valid_mask]
-    valid_x = peak_x[valid_mask]
-    
-    if len(valid_distances) > 0:
-        # The Grid Spacing (lam) is the distance to the NEAREST neighbor peak
-        nearest_idx = np.argmin(valid_distances)
-        min_dist_px = valid_distances[nearest_idx]
-        
-        lam = min_dist_px * pixel_scale
-        
-        # The Orientation (theta) is the angle of that nearest peak
-        dy = valid_y[nearest_idx] - cy
-        dx = valid_x[nearest_idx] - cx
-        theta = np.arctan2(dy, dx)
-        
-        # Normalize theta to [0, 60] degrees (pi/3) due to hexagonal symmetry
-        theta = theta % (np.pi / 3.0)
+    if np.any(valid_mask):
+        # Lambda is the distance to the nearest neighbor in SAC
+        lam_px = np.min(dists_sac[valid_mask])
+        lam = lam_px * pixel_scale
     else:
-        # Fallback if no peaks found (e.g. very low firing)
+        # Fallback defaults
         lam = 0.5
-        theta = 0.0
+        lam_px = 0.5 / pixel_scale
 
-    # ==========================================================
-    # 4. ESTIMATE PHASE (PHI) & AMPLITUDE
-    # ==========================================================
-    # Baseline is roughly the minimum firing rate
-    baseline = np.min(ratemap_smooth)
+    # -----------------------------------------------------------
+    # 3. ESTIMATE PHI (PHASE) VIA BRIGHTEST ANCHOR
+    # -----------------------------------------------------------
+    # Find local maxima in the actual Rate Map
+    local_max_rm = ndimage.maximum_filter(ratemap_smooth, size=3) == ratemap_smooth
+    # Filter out noise (must be > 20% of max rate)
+    peak_mask = local_max_rm & (ratemap_smooth > 0.2 * np.max(ratemap_smooth))
+    p_y, p_x = np.where(peak_mask)
+    
+    if len(p_y) == 0:
+        return np.array([0.5, 0.0, 0.0, 0.0, 0.0, 1.0])
+
+    # Find the "Brightest" peak index
+    peak_vals = ratemap_smooth[p_y, p_x]
+    brightest_idx = np.argmax(peak_vals)
+    
+    anchor_y = p_y[brightest_idx]
+    anchor_x = p_x[brightest_idx]
+    
+    # Convert Anchor to physical coordinates (-1 to 1) for Phi
+    # Note: edges[0] is -1. Bin i center is -1 + (i + 0.5)*scale
+    phi_x = -1.0 + (anchor_x + 0.5) * pixel_scale
+    phi_y = -1.0 + (anchor_y + 0.5) * pixel_scale
+
+    # -----------------------------------------------------------
+    # 4. ESTIMATE THETA (ORIENTATION) VIA TRIANGULATION
+    # -----------------------------------------------------------
+    # Calculate distances from the Anchor to all other peaks in Rate Map
+    dx = p_x - anchor_x
+    dy = p_y - anchor_y
+    dists_rm = np.sqrt(dx**2 + dy**2)
+    
+    # Find neighbors that are roughly 1 lambda away
+    # Allow tolerance (e.g., +/- 25% of lambda)
+    tolerance = 0.25 * lam_px
+    neighbor_mask = (dists_rm > (lam_px - tolerance)) & (dists_rm < (lam_px + tolerance))
+    
+    neighbor_indices = np.where(neighbor_mask)[0]
+    
+    if len(neighbor_indices) > 0:
+        # Calculate angles from Anchor to Neighbors
+        # Note: In image coords, y increases downwards. 
+        # Standard math assumes y increases upwards. 
+        # However, for orientation, as long as we are consistent, it works.
+        # We'll use standard image indices (row=y, col=x).
+        vec_y = p_y[neighbor_indices] - anchor_y
+        vec_x = p_x[neighbor_indices] - anchor_x
+        
+        angles = np.arctan2(vec_y, vec_x)
+        
+        # Grid has 6-fold symmetry (repeats every 60 deg or pi/3)
+        # We need the circular mean modulo 60 degrees.
+        # Formula: Mean_Angle = atan2(sum(sin(6*angles)), sum(cos(6*angles))) / 6
+        
+        sin_sum = np.sum(np.sin(6 * angles))
+        cos_sum = np.sum(np.cos(6 * angles))
+        
+        theta_6x = np.arctan2(sin_sum, cos_sum)
+        theta = theta_6x / 6.0
+        
+        # Normalize to range [0, pi/3]
+        theta = theta % (np.pi / 3.0)
+        
+    else:
+        # Fallback: Use SAC if anchor has no neighbors (e.g. isolated blob)
+        # Find nearest peak in SAC again
+        valid_indices = np.where(valid_mask)[0]
+        if len(valid_indices) > 0:
+            nearest_sac_idx = valid_indices[np.argmin(dists_sac[valid_mask])]
+            dy = peaks_sac_y[nearest_sac_idx] - cy
+            dx = peaks_sac_x[nearest_sac_idx] - cx
+            theta = np.arctan2(dy, dx) % (np.pi / 3.0)
+        else:
+            theta = 0.0
+
+    # -----------------------------------------------------------
+    # 5. BASELINE AND AMPLITUDE
+    # -----------------------------------------------------------
+    # Simple percentile heuristics
+    baseline = np.percentile(ratemap_smooth, 5)
     peak_rate = np.max(ratemap_smooth)
     
-    # Amplitude heuristic
+    # For Sum of 3 Cosines: Range is [-1.5, 3] * Amp. Total range 4.5 * Amp.
+    # However, max value is Baseline + 3 * Amp.
+    # So Amp = (Peak - Baseline) / 3 is a decent starting point.
     amplitude = (peak_rate - baseline) / 3.0
     
-    # Phase: Location of the highest firing peak in the SMOOTHED map
-    # This aligns the grid "blob" with the data "blob"
-    max_rate_idx = np.unravel_index(np.argmax(ratemap_smooth), ratemap_smooth.shape)
-    
-    # Convert array indices to X,Y coordinates
-    # Indices are (row, col) -> (y, x). Y goes top to bottom in array, but usually bottom-up in plots.
-    # However, histogram2d maps x to dim 0 and y to dim 1 if not careful, 
-    # but standard is (y, x) for image.
-    # Let's map consistently with the histogram generation:
-    # x_edges[i] is the left edge of bin i.
-    
-    # x index is max_rate_idx[1], y index is max_rate_idx[0]
-    phi_x_idx = max_rate_idx[1]
-    phi_y_idx = max_rate_idx[0]
-    
-    # Convert index to coordinate value
-    # (Index + 0.5) * bin_width + min_edge
-    phi_x = -1.0 + (phi_x_idx + 0.5) * pixel_scale
-    phi_y = -1.0 + (phi_y_idx + 0.5) * pixel_scale
-    
     return np.array([lam, theta, phi_x, phi_y, baseline, amplitude])
-
 
 def grid_model_2(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, 
                  amplitude=1.0, sigma=0.08):
