@@ -602,7 +602,8 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
 
 def plot_train_vs_test_loss(programs_df: pd.DataFrame,
                             island_labels: list,
-                            save_path: Optional[str] = None):
+                            save_path: Optional[str] = None,
+                            loss_thresh: float = 1000.0):
     """
     Plot train vs test loss for each program in the DataFrame.
     
@@ -622,10 +623,24 @@ def plot_train_vs_test_loss(programs_df: pd.DataFrame,
     train_loss = np.nan_to_num(train_loss, nan=np.inf)
     test_loss = np.nan_to_num(test_loss, nan=np.inf)
     
-    mask = (train_loss < 100) & (test_loss < 100)
+    mask = (train_loss < loss_thresh) & (test_loss < loss_thresh)
     train_loss = train_loss[mask]
     test_loss = test_loss[mask]
     birth_island = birth_island[mask]
+    
+    # Guard against empty arrays after filtering
+    if len(train_loss) == 0:
+        print(f"Warning: No valid programs to plot (all losses >= {loss_thresh}). Skipping plot.")
+        plt.figure(figsize=(10, 10))
+        plt.text(0.5, 0.5, f'No valid programs\n(all losses >= {loss_thresh})', 
+                 ha='center', va='center', fontsize=14, transform=plt.gca().transAxes)
+        plt.xlabel('Train Loss')
+        plt.ylabel('Test Loss')
+        plt.title('Train vs Test Loss')
+        if save_path:
+            plt.savefig(save_path)
+        plt.close()
+        return
     
     cmap = plt.get_cmap('tab10')
     
