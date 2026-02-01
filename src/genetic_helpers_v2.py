@@ -1018,6 +1018,12 @@ def compare_programs(program1: pd.Series, program2: pd.Series,
     eval1 = jnp.array(eval1)
     eval2 = jnp.array(eval2)
     
+    # Ensure 2D: (n_cells, n_eval_points) - handle 1D case (single cell or flattened)
+    if eval1.ndim == 1:
+        eval1 = eval1.reshape(1, -1)
+    if eval2.ndim == 1:
+        eval2 = eval2.reshape(1, -1)
+    
     # Different output shapes = different behavior
     if eval1.shape != eval2.shape:
         return False

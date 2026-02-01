@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import jax.numpy as jnp
 from typing import Optional, Callable, Sequence
 
+from src import utils
+
 
 def _ensure_predictor_format(x_cell: jnp.ndarray) -> jnp.ndarray:
     """Convert 1D stimulus array to 2D predictor format (n_features, n_trials)."""
@@ -14,48 +16,55 @@ def _ensure_predictor_format(x_cell: jnp.ndarray) -> jnp.ndarray:
     return x_cell  # already (n_features, n_trials)
 
 
-def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100,
+def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100, eval_points : Optional[np.ndarray] = None, 
                                predictor_idx: int = 0, n_features: int = 1) -> jnp.ndarray:
     """
     Computes the evaluation matrix for a given program and parameters.
     
-    Creates a uniform grid of trials [0, 2π] and evaluates the model at those points
-    for all samples. The evaluation grid is placed at `predictor_idx` in the predictor array.
+    Creates a uniform grid of evaluation points and evaluates the model at those points
+    for all samples. 
+    
+    For backward compatibility:
+    - When n_features=1: passes X as 1D array (n_trials,) - original behavior
+    - When n_features>1: passes X as 2D array (n_features, n_trials) - new behavior
     
     Args:
-        program (callable): The neuron model function with signature:
-                           program(X, *params) -> (n_trials,)
-                           where X has shape (n_features, n_trials).
+        program (callable): The neuron model function.
         params (jnp.ndarray): The parameters for the neuron model. Shape: (n_samples, n_params)
         n_evaluation_points (int): Number of points to evaluate the model at.
-        predictor_idx (int): Index of the predictor to vary for evaluation. Default is 0.
+        eval_points (np.ndarray, optional): Custom evaluation points. If None, uses linspace(0, 2π).
+        predictor_idx (int): Index of the predictor to vary for evaluation (for n_features > 1).
         n_features (int): Total number of predictors in the model. Default is 1.
     Returns:
         jnp.ndarray: The evaluation matrix of shape (n_samples, n_evaluation_points).
-    
-    Raises:
-        ValueError: If predictor_idx >= n_features or predictor_idx < 0.
     """
-    # Early validation
-    if predictor_idx < 0 or predictor_idx >= n_features:
-        raise ValueError(
-            f"predictor_idx ({predictor_idx}) must be in range [0, {n_features}). "
-            f"Got n_features={n_features}."
-        )
+    # Create evaluation points
+    if eval_points is not None:
+        trials = jnp.asarray(eval_points)
+        n_evaluation_points = trials.shape[0]
+    else:
+        trials = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
     
-    n_samples = params.shape[0]
-    # Create evaluation trials
-    trials = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
-    # Create X with zeros for all predictors, then set the evaluation predictor
-    X_eval = jnp.zeros((n_samples, n_features, n_evaluation_points))
-    X_eval = X_eval.at[:, predictor_idx, :].set(trials)
     # vmap over samples
     program_vmap = utils.vmap_over_cells(program)
-    y_eval = program_vmap(X_eval, params)
+    
+    if n_features == 1:
+        # Original 1D behavior: pass trials directly (shape: n_eval,)
+        # This is what orientation tuning models expect
+        y_eval = program_vmap(trials, params)
+    else:
+        # New 2D behavior for multi-predictor models (e.g., grid cells)
+        # Create X with zeros for all predictors, then set the evaluation predictor
+        n_samples = params.shape[0]
+        X_eval = jnp.zeros((n_samples, n_features, n_evaluation_points))
+        trials_broadcast = jnp.broadcast_to(trials, (n_samples, n_evaluation_points))
+        X_eval = X_eval.at[:, predictor_idx, :].set(trials_broadcast)
+        y_eval = program_vmap(X_eval, params)
+    
     return y_eval
 
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
-                    x: jnp.ndarray, y: jnp.ndarray, 
+                    predictors: jnp.ndarray, response: jnp.ndarray, 
                     sample_selection: Sequence[int],
                     n_eval: int = 100, n_mean: int = 50,
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
@@ -80,15 +89,15 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
             - 'params': jnp.ndarray (n_cells, n_params)
         loss_function: 
             - callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
-        x: Predictor data. Can be:
+        predictors: Predictor data. Can be:
            - 2D array (n_cells, n_trials) - will use first axis as theta
            - 3D array (n_cells, n_features, n_trials)
-        y: (n_cells x n_trials) - jnp.ndarray
+        response: (n_cells x n_trials) - jnp.ndarray
         predictor_idx (int): Index of the predictor to use for plotting (x-axis). Default is 0.
-                             Must be 0 if x is 2D.
+                             Must be 0 if predictors is 2D.
     
     Raises:
-        ValueError: If predictor_idx != 0 when x is 2D, or if predictor_idx is out of range.
+        ValueError: If predictor_idx != 0 when predictors is 2D, or if predictor_idx is out of range.
     """
     assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, but has {len(programs_df)} rows."
     assert len(sample_selection) > 0, "sample_selection must not be empty."
@@ -96,7 +105,8 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         f"sample_selection must be a square number, but has {len(sample_selection)} elements."
 
     # Early validation of predictor_idx
-    x_arr = jnp.asarray(x)
+    x_arr = jnp.asarray(predictors)
+    y = jnp.asarray(response)
     if x_arr.ndim == 2:
         if predictor_idx != 0:
             raise ValueError(
