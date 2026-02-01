@@ -114,3 +114,30 @@ class PromptManager:
     def get_jax_translator_prompt(self, function_code):
         template = self.config['prompts']['jax_translator_prompt']
         return template.format(function_code=function_code)
+
+    def get_system_instruction(self) -> str:
+        """
+        Build the system instruction for chat-based LLM sessions.
+        
+        This contains the static guidelines that don't change per query:
+        - Role description
+        - Code guidelines
+        - Function signature requirements
+        - Docstring guidelines
+        
+        Returns:
+            str: The system instruction for the chat session.
+        """
+        templates = self.config['prompts']['program_prompt']
+        
+        # Build system instruction from static sections
+        # Note: We use placeholder values for k/next_version since these are
+        # just guidelines that apply regardless of iteration number
+        system_parts = [
+            templates['base'].format(k="N", next_version="N+1"),
+            templates['code_guidelines'].format(max_lines="100"),
+            templates['function_signature'].format(next_version="N+1"),
+            templates['docstring_guidelines'].format(next_version="N+1"),
+        ]
+        
+        return "\n\n".join(system_parts)

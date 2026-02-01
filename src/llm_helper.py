@@ -1,11 +1,194 @@
 import time
-from typing import Union
+import datetime
+from typing import Union, Optional, List
 # gemini client
 from google import genai
 from google.genai import types
 # anthropic client
 import anthropic
 
+class IslandChatManager:
+    """
+    Manages persistent chat sessions for each island in the genetic algorithm.
+    
+    Each island maintains its own chat history, allowing the LLM to learn from
+    the context of previous generations within that island's evolutionary lineage.
+    
+    Args:
+        client: The Google GenAI client instance.
+        system_instruction: The system instruction to use for all island chats.
+                           This should contain the static guidelines (code style,
+                           function signatures, etc.) that don't change per query.
+        model_name: The default model to use for chat sessions.
+        temperature: Default temperature for generation.
+    """
+    
+    def __init__(self, client: genai.Client, system_instruction: str, 
+                 model_name: str = "gemini-2.0-flash", temperature: float = 1.0):
+        self.client = client
+        self.model_name = model_name
+        self.system_instruction = system_instruction
+        self.temperature = temperature
+        # Dictionary to store chat sessions: { island_id: chat_object }
+        self.islands: dict[int, genai.aio.chats.Chat] = {}
+    
+    def _create_chat_config(self, temperature: Optional[float] = None) -> types.GenerateContentConfig:
+        """Create a GenerateContentConfig for chat creation."""
+        temp = temperature if temperature is not None else self.temperature
+        
+        if '2.5' in self.model_name:
+            # Default thinking budget for 2.5 models
+            thinking_budget = int(1.0 * 24_576)
+            config = types.GenerateContentConfig(
+                temperature=temp,
+                thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget)
+            )
+        else:
+            config = types.GenerateContentConfig(temperature=temp)
+        
+        return config
+
+    def _create_island_chat(self, island_id: int) -> genai.aio.chats.Chat:
+        """
+        Create a new chat session for an island.
+        
+        Args:
+            island_id: The island identifier.
+            
+        Returns:
+            A new async chat object.
+        """
+        config = self._create_chat_config()
+        
+        chat = self.client.aio.chats.create(
+            model=self.model_name,
+            config=config,
+            history=[],
+            system_instruction=self.system_instruction
+        )
+        
+        return chat
+
+    async def get_or_create_island(self, island_id: int) -> genai.aio.chats.Chat:
+        """
+        Get the chat session for an island, creating one if it doesn't exist.
+        
+        Args:
+            island_id: The island identifier.
+            
+        Returns:
+            The chat object for this island.
+        """
+        if island_id not in self.islands:
+            self.islands[island_id] = self._create_island_chat(island_id)
+        return self.islands[island_id]
+
+    async def ask_island(self, island_id: int, prompt: str, 
+                         png_img: Optional[bytes] = None) -> str:
+        """
+        Send a message to an island's chat and get a response.
+        
+        The message is automatically appended to the island's chat history,
+        allowing the LLM to see and learn from previous interactions.
+        
+        Args:
+            island_id: The island identifier.
+            prompt: The prompt text to send.
+            png_img: Optional PNG image bytes to include with the prompt.
+            
+        Returns:
+            The LLM's response text, or empty string on error.
+        """
+        chat = await self.get_or_create_island(island_id)
+        
+        try:
+            if png_img is not None:
+                response = await chat.send_message(
+                    contents=[prompt, types.Part.from_bytes(data=png_img, mime_type="image/png")]
+                )
+            else:
+                response = await chat.send_message(contents=[prompt])
+            return response.text
+        except Exception as e:
+            print(f"Error sending message to island {island_id} chat: {e}")
+            return ""
+
+    async def get_island_history(self, island_id: int) -> list:
+        """
+        Retrieve the chat history for an island.
+        
+        Args:
+            island_id: The island identifier.
+            
+        Returns:
+            The chat history list, or empty list if not found/error.
+        """
+        try:
+            if island_id in self.islands:
+                current_history = await self.islands[island_id].get_history()
+                return current_history
+            else:
+                print(f"No chat found for island_id {island_id}")
+                return []
+        except Exception as e:
+            print(f"Error retrieving island history for island_id={island_id}: {e}")
+            return []
+    
+    def get_n_islands(self) -> int:
+        """Return the number of active island chats."""
+        return len(self.islands)
+    
+    def reset_island(self, island_id: int) -> None:
+        """
+        Reset an island's chat history by creating a fresh chat.
+        
+        Useful if the chat history grows too large or needs to be cleared.
+        
+        Args:
+            island_id: The island identifier to reset.
+        """
+        if island_id in self.islands:
+            self.islands[island_id] = self._create_island_chat(island_id)
+    
+    def reset_all_islands(self) -> None:
+        """Reset all island chat histories."""
+        for island_id in list(self.islands.keys()):
+            self.reset_island(island_id)
+
+async def dnu_switch_gemini_model(
+    chat: genai.aio.chats.Chat,
+    new_model_name: str,
+    temperature: float = 1.0,
+    thinking_budget: float = 1.0,
+    ) -> None:
+    """
+    Switch the model of an existing Gemini chat client. Do not use this until we figure out how expensive it is to recreate chats with the same history.
+    Args:
+        chat: An instance of genai.aio.chats.Chat.
+        new_model_name: Name of the new Gemini model to switch to.
+    """
+    # Create the config for the request (thinking budget for 2.5 flash model)
+    if '2.5' in new_model_name:
+        thinking_budget = int(thinking_budget * 24_576) if thinking_budget >= 0 else -1
+        config = types.GenerateContentConfig(temperature=temperature, thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget))
+    else:
+        config = types.GenerateContentConfig(temperature=temperature)
+    chat.model = new_model_name
+    chat.config = config
+
+    current_history = await chat.get_history()
+
+    # create a new chat with a different model using the same history
+    new_chat = chat.client.aio.chats.create(
+        model=new_model_name,
+        config=config,
+        history=current_history,
+    )
+    return new_chat
+
+# ---------------------------------------------------------------
+# legacy functions 
+# ---------------------------------------------------------------
 def call_llm(
     prompt_text: str,
     model_name: str = "gemini-2.0-flash",
