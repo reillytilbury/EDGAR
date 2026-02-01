@@ -370,7 +370,8 @@ def objective(model, param_estimator, loss_func, x, y,
 async def generate_new_model(current_island, llm_name, client, 
                                     spike_matrix, stimuli, prompt_manager,
                                     mode='explore', k_max=2, temp=1, 
-                                    thinking_budget=1, img_dir=None, diagnostics_module=None):
+                                    thinking_budget=1, img_dir=None, diagnostics_module=None,
+                                    island_chat_manager=None, island_id: int = None):
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
@@ -411,8 +412,15 @@ async def generate_new_model(current_island, llm_name, client,
             use_image = False
     else:
         img_bytes = None
-    llm_output = await llm_helper.call_llm_async(program_prompt, model_name=llm_name, client=client, temperature=temp, 
-                                            thinking_budget=thinking_budget, img_bytes=img_bytes)
+    
+    # Use chat-based or legacy LLM call
+    if island_chat_manager is not None and island_id is not None:
+        llm_output = await island_chat_manager.ask_island(island_id, program_prompt, png_img=img_bytes)
+    else:
+        # Legacy: independent query
+        llm_output = await llm_helper.call_llm_async(program_prompt, model_name=llm_name, client=client, temperature=temp, 
+                                                thinking_budget=thinking_budget, img_bytes=img_bytes)
+    
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
         return None, None, (parent1_id, parent2_id)
@@ -426,7 +434,9 @@ async def generate_new_parameter_estimator(current_island,
                                            spike_matrix, stimuli, prompt_manager,
                                            k_max=1, temp=1,
                                            param_estimator_max_lines=100, img_dir=None,
-                                           swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']):
+                                           swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'], 
+                                           island_chat_manager=None, island_id: int = None,
+                                           diagnostics_module=None):
     if model_code_string is None:
         logging.info("No neuron model code string provided, skipping parameter estimator generation.")
         return None, None
@@ -469,8 +479,13 @@ async def generate_new_parameter_estimator(current_island,
     else:
         img_bytes = None
     
-    llm_output = await llm_helper.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
-                                            thinking_budget=0.25, img_bytes=img_bytes)
+    # Use chat-based or legacy LLM call
+    if island_chat_manager is not None and island_id is not None:
+        llm_output = await island_chat_manager.ask_island(island_id, prompt, png_img=img_bytes)
+    else:
+        # Legacy: independent query
+        llm_output = await llm_helper.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
+                                                thinking_budget=0.25, img_bytes=img_bytes)
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -486,7 +501,7 @@ async def generate_new_parameter_estimator(current_island,
     func = utils.str_to_func(code_string, 'parameter_estimator')
     return code_string, func
 
-async def generate_new_parameter_estimator_from_image_feedback(image_prompt: str,
+async def not_used_yet_generate_new_parameter_estimator_from_image_feedback(image_prompt: str,
                                                                image_dir: str,
                                                                model_name='gemini-2.0-flash',
                                                                swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'],
@@ -560,6 +575,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 n_migrants=2, fit_params=True, tol=1e-6, exploit_point=0.5,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
                 use_image_feedback=True, use_param_estimator=True,
+                use_chat_mode=True,  # If True, use persistent chat sessions per island
                 exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 tiny_lm_name = 'gemini-2.0-flash-lite',
@@ -603,6 +619,24 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     # load api keys
     load_dotenv()
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+
+    # Initialize IslandChatManager if using chat mode
+    # For now, use a simple system instruction - Step 3 will refactor this with prompt_manager
+    island_chat_manager = None
+    if use_chat_mode:
+        # Build system instruction from prompt_manager (static guidelines)
+        system_instruction = prompt_manager.get_system_instruction()
+        island_chat_manager = llm_helper.IslandChatManager(
+            client=client,
+            system_instruction=system_instruction,
+            model_name=large_lm_name,  # Use large model for chat-based generation
+            temperature=1.0
+        )
+        logging.info(f"Initialized IslandChatManager with model {large_lm_name}")
+        print(f"Chat mode enabled: using persistent chat sessions per island")
+    else:
+        logging.info("Chat mode disabled: using independent LLM queries")
+        print("Chat mode disabled: using independent LLM queries")
 
     # raise error if numpy_programs, jax_programs, or param_estimators are None or have length /= 2
     if numpy_programs is None or len(numpy_programs) != 2:
@@ -775,7 +809,9 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                    stimuli=trials_train,
                                                                    prompt_manager=prompt_manager,
                                                                    img_dir=model_image_dirs[island_idx, j],
-                                                                   diagnostics_module=diagnostics_module) 
+                                                                   diagnostics_module=diagnostics_module,
+                                                                   island_chat_manager=island_chat_manager,
+                                                                   island_id=island_idx) 
                                          for island_idx in range(n_islands) for j in range(batch_size)]
         logging.info(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
         print(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
@@ -802,7 +838,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
-                img_dir=None # no image feedback for parameter estimator generation
+                img_dir=None, # no image feedback for parameter estimator generation
+                island_chat_manager=island_chat_manager,
+                island_id=island_idx,
+                diagnostics_module=diagnostics_module
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)
