@@ -24,6 +24,12 @@ warnings.filterwarnings(
     message="The behavior of DataFrame concatenation with empty or all-NA entries is deprecated.*"
 )
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(relativeCreated)dms | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
 print(jax.default_backend())    # should print "gpu"
 print(jax.devices())
 
@@ -267,7 +273,7 @@ def objective(model, param_estimator, loss_func, x, y,
 
         # 1.  build adam with learning rate schedule for better convergence
         #     Higher initial LR helps parameters with different scales converge
-        peak_lr = 0.1
+        peak_lr = 0.001
         schedule = optax.warmup_cosine_decay_schedule(
             init_value=peak_lr * 0.1,
             peak_value=peak_lr,
