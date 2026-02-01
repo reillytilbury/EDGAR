@@ -29,8 +29,15 @@ class PromptManager:
         
         return model_name
     
-    def get_program_prompt(self, programs_df : pd.DataFrame, mode : str, use_image=True) -> str:
-        """Build program generation prompt from config.
+    # ---------------------------------------------------------------
+    # Legacy prompt functions (full self-contained prompts)
+    # ---------------------------------------------------------------
+    
+    def get_program_prompt_legacy(self, programs_df : pd.DataFrame, mode : str, use_image=True) -> str:
+        """Build full program generation prompt from config (legacy mode).
+        
+        This creates a self-contained prompt with all guidelines included.
+        Use this when NOT using chat mode.
         
         Args :
             programs_df (pd.DataFrame): DataFrame of existing programs.
@@ -38,8 +45,7 @@ class PromptManager:
             use_image (bool): Whether to include image analysis section.
 
         Returns:
-            prompt (str): The prompt string for the AI to generate a new neuron model.
-
+            prompt (str): The full prompt string for the AI to generate a new model.
         """
         # Ensure the mode is valid
         assert mode in ['explore', 'exploit'], "Invalid mode. Choose either 'explore' or 'exploit'."
@@ -74,8 +80,11 @@ class PromptManager:
         
         return prompt
     
-    def get_parameter_estimator_prompt(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100, use_image : bool = True) -> str:
-        """ Build parameter estimator generation prompt from config (prompts.yaml)
+    def get_parameter_estimator_prompt_legacy(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100, use_image : bool = True) -> str:
+        """Build full parameter estimator prompt from config (legacy mode).
+        
+        This creates a self-contained prompt with all guidelines included.
+        Use this when NOT using chat mode.
 
         Args :
             programs_df (pd.DataFrame): DataFrame of existing parameter estimators.
@@ -84,7 +93,7 @@ class PromptManager:
             use_image (bool): Whether to include image analysis section.
 
         Returns:
-            prompt (str): The prompt string for the AI to generate a new parameter estimator.
+            prompt (str): The full prompt string for the AI to generate a new parameter estimator.
         """
         k = len(programs_df)
         model_name = self.get_model_name()
@@ -106,10 +115,105 @@ class PromptManager:
             per_model_prompt = templates['per_model_detail'].format(model_idx=f"{model_idx}", train_loss=f'{train_loss}: .2f', program_code_string=program_code_string, parameter_estimator_code_string=parameter_estimator_code_string)
             prompt += per_model_prompt
 
-        # add the neuron model code string to the prompt
+        # add the model code string to the prompt
         prompt += model_code_string + "\n"
 
         return prompt
+
+    # ---------------------------------------------------------------
+    # Chat mode prompt functions (dynamic content only)
+    # ---------------------------------------------------------------
+    
+    def get_program_prompt(self, programs_df : pd.DataFrame, mode : str, use_image=True) -> str:
+        """Build program generation prompt for chat mode (dynamic content only).
+        
+        This creates a shorter prompt containing only the dynamic parts.
+        Static guidelines are assumed to be in the system instruction.
+        Use this when using chat mode with IslandChatManager.
+        
+        Args :
+            programs_df (pd.DataFrame): DataFrame of existing programs.
+            mode (str): 'exploit' or 'explore'.
+            use_image (bool): Whether to include image analysis section.
+
+        Returns:
+            prompt (str): The dynamic prompt for generating a new model.
+        """
+        assert mode in ['explore', 'exploit'], "Invalid mode. Choose either 'explore' or 'exploit'."
+
+        k = len(programs_df)
+        model_name = self.get_model_name()
+        templates = self.config['prompts']['program_prompt']
+        
+        prompt_parts = []
+        
+        # Brief context line using model_name from config
+        prompt_parts.append(f"Generate {model_name}_v{k+1} based on the {k} parent models below.")
+
+        # Mode-specific instructions
+        if mode == 'exploit':
+            prompt_parts.append(templates['exploit'].format(k=f"{k}", next_version=f"{k+1}"))
+        else:        
+            prompt_parts.append(templates['explore'].format(k=f"{k}", next_version=f"{k+1}"))
+        
+        # Image analysis if applicable
+        if use_image:
+            prompt_parts.append(templates['image_analysis'].format(k=f"{k}", next_version=f"{k+1}"))
+        
+        # Parent model details
+        prompt_parts.append("\n**Parent Models:**\n")
+        for i in range(k):
+            model_idx = i + 1 
+            train_loss = programs_df.iloc[i]['train_loss']
+            program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
+            per_model_prompt = templates['per_model_detail'].format(model_idx=f"{model_idx}", train_loss=f'{train_loss}: .2f', program_code_string=program_code_string)
+            prompt_parts.append(per_model_prompt)
+        
+        return "\n".join(prompt_parts)
+    
+    def get_parameter_estimator_prompt(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100, use_image : bool = True) -> str:
+        """Build parameter estimator prompt for chat mode (dynamic content only).
+        
+        This creates a shorter prompt containing only the dynamic parts.
+        Static guidelines are assumed to be in the system instruction.
+        Use this when using chat mode with IslandChatManager.
+
+        Args :
+            programs_df (pd.DataFrame): DataFrame of existing parameter estimators.
+            model_code_string (str): The code string of the model to be used.
+            max_lines (int): Maximum number of lines for the generated code.
+            use_image (bool): Whether to include image analysis section.
+
+        Returns:
+            prompt (str): The dynamic prompt for generating a new parameter estimator.
+        """
+        k = len(programs_df)
+        model_name = self.get_model_name()
+        templates = self.config['prompts']['parameter_estimator']
+        
+        prompt_parts = []
+        
+        # Brief context line
+        prompt_parts.append(f"Now create parameter_estimator_v{k+1} for the new {model_name} below.")
+
+        if use_image:
+            prompt_parts.append(templates['image_analysis'].format(k=f"{k}", next_version=f"{k+1}"))
+
+        # Parent model details
+        prompt_parts.append("\n**Parent Models and Estimators:**\n")
+        for i in range(k):
+            model_idx = i + 1 
+            train_loss = programs_df.iloc[i]['train_loss']
+            program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
+            parameter_estimator_code_string = programs_df.iloc[i]['parameter_estimator_code_string'].replace('def parameter_estimator(', f'def parameter_estimator_v{model_idx}(')
+            per_model_prompt = templates['per_model_detail'].format(model_idx=f"{model_idx}", train_loss=f'{train_loss}: .2f', program_code_string=program_code_string, parameter_estimator_code_string=parameter_estimator_code_string)
+            prompt_parts.append(per_model_prompt)
+
+        # Add the new model code string
+        prompt_parts.append(f"\n**New {model_name} to create parameter estimator for:**\n")
+        prompt_parts.append(model_code_string)
+
+        return "\n".join(prompt_parts)
 
     def get_jax_translator_prompt(self, function_code):
         template = self.config['prompts']['jax_translator_prompt']
@@ -120,24 +224,31 @@ class PromptManager:
         Build the system instruction for chat-based LLM sessions.
         
         This contains the static guidelines that don't change per query:
-        - Role description
+        - Role description for model generation
         - Code guidelines
         - Function signature requirements
         - Docstring guidelines
+        - Parameter estimator guidelines
         
         Returns:
             str: The system instruction for the chat session.
         """
-        templates = self.config['prompts']['program_prompt']
+        program_templates = self.config['prompts']['program_prompt']
+        param_est_templates = self.config['prompts']['parameter_estimator']
         
         # Build system instruction from static sections
-        # Note: We use placeholder values for k/next_version since these are
-        # just guidelines that apply regardless of iteration number
+        model_name = self.get_model_name()
         system_parts = [
-            templates['base'].format(k="N", next_version="N+1"),
-            templates['code_guidelines'].format(max_lines="100"),
-            templates['function_signature'].format(next_version="N+1"),
-            templates['docstring_guidelines'].format(next_version="N+1"),
+            f"# {model_name.upper()} GENERATION GUIDELINES",
+            program_templates['base'].format(k="N", next_version="N+1"),
+            program_templates['code_guidelines'].format(max_lines="100"),
+            program_templates['function_signature'].format(next_version="N+1"),
+            program_templates['docstring_guidelines'].format(next_version="N+1"),
+            "\n# PARAMETER ESTIMATOR GUIDELINES",
+            param_est_templates['base'].format(k="N", next_version="N+1"),
+            param_est_templates['code_guidelines'].format(max_lines="100"),
+            param_est_templates['function_signature'].format(next_version="N+1"),
+            param_est_templates['docstring_guidelines'].format(next_version="N+1"),
         ]
         
         return "\n\n".join(system_parts)

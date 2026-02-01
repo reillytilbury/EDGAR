@@ -1,9 +1,10 @@
 import time
 import datetime
-from typing import Union, Optional, List
+import logging
+from typing import Union, Optional, List, Any
 # gemini client
 from google import genai
-from google.genai import types
+from google.genai import types, chats
 # anthropic client
 import anthropic
 
@@ -30,25 +31,49 @@ class IslandChatManager:
         self.system_instruction = system_instruction
         self.temperature = temperature
         # Dictionary to store chat sessions: { island_id: chat_object }
-        self.islands: dict[int, genai.aio.chats.Chat] = {}
+        self.islands: dict[int, genai.chats.AsyncChats] = {}
     
-    def _create_chat_config(self, temperature: Optional[float] = None) -> types.GenerateContentConfig:
+    def log_configuration(self) -> None:
+        """
+        Log the IslandChatManager configuration to the current logging handler.
+        
+        Call this method AFTER the logging file handler is set up to ensure
+        the system instruction is captured in the log file.
+        """
+        logging.info("="*80)
+        logging.info("ISLAND CHAT MANAGER CONFIGURATION")
+        logging.info("="*80)
+        logging.info(f"Model: {self.model_name}")
+        logging.info(f"Temperature: {self.temperature}")
+        logging.info(f"Active islands: {list(self.islands.keys()) if self.islands else 'None yet'}")
+        logging.info("")
+        logging.info("SYSTEM INSTRUCTION (sent to all island chats):")
+        logging.info("-"*40)
+        for line in self.system_instruction.split('\n'):
+            logging.info(line)
+        logging.info("-"*40)
+        logging.info("="*80)
+    
+    def _create_chat_config(self, temperature: Optional[float] = None, system_instruction: Optional[str] = None) -> types.GenerateContentConfig:
         """Create a GenerateContentConfig for chat creation."""
         temp = temperature if temperature is not None else self.temperature
+        system_instruction = system_instruction if system_instruction is not None else self.system_instruction
         
         if '2.5' in self.model_name:
             # Default thinking budget for 2.5 models
-            thinking_budget = int(1.0 * 24_576)
+            thinking_budget = int(1.0 * 24_576)            
             config = types.GenerateContentConfig(
                 temperature=temp,
-                thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget)
+                thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
+                system_instruction=system_instruction
             )
         else:
-            config = types.GenerateContentConfig(temperature=temp)
+            config = types.GenerateContentConfig(temperature=temp, 
+                                                 system_instruction=system_instruction)
         
         return config
 
-    def _create_island_chat(self, island_id: int) -> genai.aio.chats.Chat:
+    def _create_island_chat(self, island_id: int) -> genai.chats.AsyncChats:
         """
         Create a new chat session for an island.
         
@@ -58,18 +83,18 @@ class IslandChatManager:
         Returns:
             A new async chat object.
         """
-        config = self._create_chat_config()
+        config = self._create_chat_config(system_instruction=self.system_instruction)
         
         chat = self.client.aio.chats.create(
             model=self.model_name,
             config=config,
             history=[],
-            system_instruction=self.system_instruction
         )
         
+        logging.info(f"Created new chat session for Island {island_id} (model={self.model_name})")
         return chat
 
-    async def get_or_create_island(self, island_id: int) -> genai.aio.chats.Chat:
+    async def get_or_create_island(self, island_id: int) -> genai.chats.AsyncChats:
         """
         Get the chat session for an island, creating one if it doesn't exist.
         
@@ -103,11 +128,14 @@ class IslandChatManager:
         
         try:
             if png_img is not None:
-                response = await chat.send_message(
-                    contents=[prompt, types.Part.from_bytes(data=png_img, mime_type="image/png")]
-                )
+                # Create the parts for the multi-modal message
+                message_parts = [
+                    types.Part.from_text(text=prompt),
+                    types.Part.from_bytes(data=png_img, mime_type="image/png")
+                ]
             else:
-                response = await chat.send_message(contents=[prompt])
+                message_parts = [types.Part.from_text(text=prompt)]
+            response = await chat.send_message(message_parts)
             return response.text
         except Exception as e:
             print(f"Error sending message to island {island_id} chat: {e}")
@@ -156,7 +184,7 @@ class IslandChatManager:
             self.reset_island(island_id)
 
 async def dnu_switch_gemini_model(
-    chat: genai.aio.chats.Chat,
+    chat: genai.chats.AsyncChats,
     new_model_name: str,
     temperature: float = 1.0,
     thinking_budget: float = 1.0,

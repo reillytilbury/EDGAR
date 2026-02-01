@@ -383,8 +383,14 @@ async def generate_new_model(current_island, llm_name, client,
                   random_programs['birth_island'][1], 
                   random_programs['batch_index'][1])
     use_image = img_dir is not None
+    use_chat_mode = island_chat_manager is not None and island_id is not None
     model_name = prompt_manager.get_model_name()
-    program_prompt = prompt_manager.get_program_prompt(random_programs, mode=mode, use_image=use_image)
+    
+    # Use appropriate prompt function based on mode
+    if use_chat_mode:
+        program_prompt = prompt_manager.get_program_prompt(random_programs, mode=mode, use_image=use_image)
+    else:
+        program_prompt = prompt_manager.get_program_prompt_legacy(random_programs, mode=mode, use_image=use_image)
 
     if use_image and diagnostics_module is not None:
         try:
@@ -445,10 +451,19 @@ async def generate_new_parameter_estimator(current_island,
     # sort from worst to best (loss descending)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
     use_image = img_dir is not None
-    prompt = prompt_manager.get_parameter_estimator_prompt(random_programs,
-                                                    model_code_string=model_code_string,
-                                                    max_lines=param_estimator_max_lines,
-                                                    use_image=use_image)
+    use_chat_mode = island_chat_manager is not None and island_id is not None
+    
+    # Use appropriate prompt function based on mode
+    if use_chat_mode:
+        prompt = prompt_manager.get_parameter_estimator_prompt(random_programs,
+                                                        model_code_string=model_code_string,
+                                                        max_lines=param_estimator_max_lines,
+                                                        use_image=use_image)
+    else:
+        prompt = prompt_manager.get_parameter_estimator_prompt_legacy(random_programs,
+                                                        model_code_string=model_code_string,
+                                                        max_lines=param_estimator_max_lines,
+                                                        use_image=use_image)
     
     random_programs_crude = random_programs.copy()
     random_programs_crude['params'] = random_programs['initial_params']
@@ -757,6 +772,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
     logging.basicConfig(filename=log_file, level=logging.INFO, format='%(message)s')
+    
+    # Log the IslandChatManager configuration (including system instruction)
+    if island_chat_manager is not None:
+        island_chat_manager.log_configuration()
+    
     if diagnostics_module is not None:
         diagnostics_module.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
