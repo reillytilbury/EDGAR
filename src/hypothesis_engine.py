@@ -817,6 +817,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         if time.time() - t_start > time_limit * 60:
             logging.info(f"Time limit of {time_limit} minutes reached. Stopping iterations.")
             break
+        
+        # Reset per-iteration token tracking (if using chat mode)
+        if island_chat_manager is not None:
+            island_chat_manager.start_iteration()
+        
         logging.info(f"Iteration {i}")
         if use_large_every > 0 and i % use_large_every == 0:
             llm_name = large_lm_name
@@ -1044,6 +1049,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         census_np = np.array(census, dtype=object)
         np.save(census_path, census_np)
         
+        # Log token usage summary for this iteration (if using chat mode)
+        if island_chat_manager is not None:
+            island_chat_manager.log_iteration_summary(i)
+        
         # Log best loss across all islands for live monitoring
         if log_best_loss:
             all_programs = pd.concat([islands[idx] for idx in range(n_islands)], ignore_index=True)
@@ -1155,3 +1164,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                     title=f"Island {birth_island}, Iteration {iteration_number}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
                     save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
                 )
+    
+    # Log final token usage summary (if using chat mode)
+    if island_chat_manager is not None:
+        island_chat_manager.log_final_summary()

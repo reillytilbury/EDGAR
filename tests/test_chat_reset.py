@@ -365,5 +365,145 @@ class TestMultipleIslands:
         assert manager.island_token_counts[2] == 10000
 
 
+class TestCostTracking:
+    """Tests for cumulative cost tracking and logging methods."""
+    
+    @pytest.mark.asyncio
+    async def test_cumulative_tokens_tracked(self):
+        """Cumulative token counts should accumulate across all calls."""
+        from src.llm_helper import IslandChatManager
+        
+        responses = [
+            create_mock_response(prompt_tokens=1000, output_tokens=200),
+            create_mock_response(prompt_tokens=2000, output_tokens=300),
+        ]
+        mock_chat = create_mock_chat(responses)
+        mock_client = create_mock_client(mock_chat)
+        
+        manager = IslandChatManager(
+            client=mock_client,
+            get_system_instruction=mock_get_system_instruction,
+            chat_token_limit=50000
+        )
+        
+        await manager.ask_island(island_id=0, prompt="first")
+        await manager.ask_island(island_id=0, prompt="second")
+        
+        # Cumulative should be sum of all tokens (prompt + output)
+        assert manager.island_cumulative_tokens[0] == 1000 + 200 + 2000 + 300
+        assert manager.total_prompt_tokens == 1000 + 2000
+        assert manager.total_output_tokens == 200 + 300
+    
+    @pytest.mark.asyncio
+    async def test_iteration_tokens_reset_on_start_iteration(self):
+        """start_iteration() should reset per-iteration token tracking."""
+        from src.llm_helper import IslandChatManager
+        
+        responses = [
+            create_mock_response(prompt_tokens=1000, output_tokens=100),
+            create_mock_response(prompt_tokens=2000, output_tokens=200),
+        ]
+        mock_chat = create_mock_chat(responses)
+        mock_client = create_mock_client(mock_chat)
+        
+        manager = IslandChatManager(
+            client=mock_client,
+            get_system_instruction=mock_get_system_instruction,
+        )
+        
+        # First iteration
+        await manager.ask_island(island_id=0, prompt="test")
+        assert manager.island_iteration_tokens[0] == 1000 + 100
+        
+        # Start new iteration - should reset iteration tokens
+        manager.start_iteration()
+        assert manager.island_iteration_tokens == {}
+        
+        # Second call in new iteration
+        await manager.ask_island(island_id=0, prompt="test")
+        assert manager.island_iteration_tokens[0] == 2000 + 200
+        
+        # But cumulative should keep growing
+        assert manager.island_cumulative_tokens[0] == 1000 + 100 + 2000 + 200
+    
+    @pytest.mark.asyncio
+    async def test_reset_count_increments(self):
+        """Reset counts should increment with each reset."""
+        from src.llm_helper import IslandChatManager
+        
+        # Responses for: 2 normal calls + 2 summary calls
+        responses = [
+            create_mock_response(prompt_tokens=10000),
+            create_mock_response(text="Summary 1"),
+            create_mock_response(prompt_tokens=10000),
+            create_mock_response(text="Summary 2"),
+        ]
+        mock_chat = create_mock_chat(responses)
+        mock_client = create_mock_client(mock_chat)
+        
+        manager = IslandChatManager(
+            client=mock_client,
+            get_system_instruction=mock_get_system_instruction,
+        )
+        
+        await manager.ask_island(island_id=0, prompt="test")
+        await manager.summarize_and_reset_island(island_id=0)
+        
+        assert manager.island_reset_counts[0] == 1
+        assert manager.total_resets == 1
+        
+        # Reset the mock to get new chat with proper responses
+        await manager.ask_island(island_id=0, prompt="test")
+        await manager.summarize_and_reset_island(island_id=0)
+        
+        assert manager.island_reset_counts[0] == 2
+        assert manager.total_resets == 2
+    
+    def test_log_iteration_summary_no_error(self):
+        """log_iteration_summary should run without error."""
+        from src.llm_helper import IslandChatManager
+        
+        mock_chat = create_mock_chat()
+        mock_client = create_mock_client(mock_chat)
+        
+        manager = IslandChatManager(
+            client=mock_client,
+            get_system_instruction=mock_get_system_instruction,
+        )
+        
+        # Set up some tracking data
+        manager.island_iteration_tokens = {0: 5000, 1: 3000}
+        manager.island_token_counts = {0: 5000, 1: 3000}
+        manager.island_reset_counts = {0: 1, 1: 0}
+        manager.total_prompt_tokens = 8000
+        manager.total_output_tokens = 1000
+        manager.total_resets = 1
+        
+        # Should not raise
+        manager.log_iteration_summary(iteration=5)
+    
+    def test_log_final_summary_no_error(self):
+        """log_final_summary should run without error."""
+        from src.llm_helper import IslandChatManager
+        
+        mock_chat = create_mock_chat()
+        mock_client = create_mock_client(mock_chat)
+        
+        manager = IslandChatManager(
+            client=mock_client,
+            get_system_instruction=mock_get_system_instruction,
+        )
+        
+        # Set up some tracking data
+        manager.island_cumulative_tokens = {0: 50000, 1: 30000, 2: 20000}
+        manager.island_reset_counts = {0: 2, 1: 1, 2: 0}
+        manager.total_prompt_tokens = 80000
+        manager.total_output_tokens = 20000
+        manager.total_resets = 3
+        
+        # Should not raise
+        manager.log_final_summary()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

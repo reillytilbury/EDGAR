@@ -53,8 +53,20 @@ class IslandChatManager:
         # Dictionary to store chat sessions: { island_id: chat_object }
         self.islands: dict[int, genai.chats.AsyncChats] = {}
         
-        # Track token usage per island: { island_id: total_prompt_tokens }
+        # Track token usage per island: { island_id: current_prompt_tokens }
         self.island_token_counts: dict[int, int] = {}
+        
+        # ===== COST TRACKING =====
+        # Cumulative token counts per island: { island_id: total_tokens_ever }
+        self.island_cumulative_tokens: dict[int, int] = {}
+        # Tokens used in current iteration per island
+        self.island_iteration_tokens: dict[int, int] = {}
+        # Total resets per island
+        self.island_reset_counts: dict[int, int] = {}
+        # Global counters
+        self.total_prompt_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_resets: int = 0
         
         # Build the 4 configs
         self._build_configs()
@@ -236,11 +248,18 @@ class IslandChatManager:
 
             # Track token usage
             prompt_tokens = response.usage_metadata.prompt_token_count
+            output_tokens = response.usage_metadata.candidates_token_count
             self.island_token_counts[island_id] = prompt_tokens
+            
+            # Update cumulative tracking
+            self.island_cumulative_tokens[island_id] = self.island_cumulative_tokens.get(island_id, 0) + prompt_tokens + output_tokens
+            self.island_iteration_tokens[island_id] = self.island_iteration_tokens.get(island_id, 0) + prompt_tokens + output_tokens
+            self.total_prompt_tokens += prompt_tokens
+            self.total_output_tokens += output_tokens
             
             logging.info(f"Tokens in this turn: {response.usage_metadata.total_token_count}")
             logging.info(f"History + Prompt (Input): {prompt_tokens}")
-            logging.info(f"New Equation (Output): {response.usage_metadata.candidates_token_count}")
+            logging.info(f"New Equation (Output): {output_tokens}")
             
             # Check if we've exceeded the token limit
             if self.chat_token_limit > 0 and prompt_tokens > self.chat_token_limit:
@@ -360,8 +379,12 @@ class IslandChatManager:
         # Reset token count for this island
         self.island_token_counts[island_id] = 0
         
-        logging.info(f"Island {island_id} reset: {old_token_count} tokens -> 0 tokens")
-        print(f"Island {island_id} has been reset with summary checkpoint.")
+        # Track reset counts
+        self.island_reset_counts[island_id] = self.island_reset_counts.get(island_id, 0) + 1
+        self.total_resets += 1
+        
+        logging.info(f"Island {island_id} reset: {old_token_count} tokens -> 0 tokens (reset #{self.island_reset_counts[island_id]})")
+        print(f"Island {island_id} has been reset with summary checkpoint (reset #{self.island_reset_counts[island_id]}).")
         return summary_text
 
     def get_n_islands(self) -> int:
@@ -388,6 +411,99 @@ class IslandChatManager:
         """Reset all island chat histories."""
         for island_id in list(self.islands.keys()):
             self.reset_island(island_id, mode, use_large_model)
+
+    def start_iteration(self) -> None:
+        """
+        Call at the start of each iteration to reset per-iteration token tracking.
+        """
+        self.island_iteration_tokens = {}
+    
+    def log_iteration_summary(self, iteration: int) -> None:
+        """
+        Log token usage summary for the current iteration with visual $ borders.
+        Call this at the end of each iteration.
+        
+        Args:
+            iteration: The current iteration number.
+        """
+        width = 60
+        border = "$" * width
+        
+        logging.info(border)
+        logging.info(f"${'TOKEN USAGE - ITERATION ' + str(iteration):^{width-2}}$")
+        logging.info(border)
+        
+        # Per-island stats for this iteration
+        total_iter_tokens = 0
+        for island_id in sorted(self.island_iteration_tokens.keys()):
+            tokens = self.island_iteration_tokens[island_id]
+            total_iter_tokens += tokens
+            resets = self.island_reset_counts.get(island_id, 0)
+            current = self.island_token_counts.get(island_id, 0)
+            logging.info(f"$ Island {island_id}: {tokens:,} tokens this iter, {current:,} in context, {resets} resets $")
+        
+        logging.info(f"${'':^{width-2}}$")
+        logging.info(f"$ {'Iteration Total:':<20} {total_iter_tokens:>15,} tokens{' ':>17}$")
+        logging.info(f"$ {'Cumulative Total:':<20} {self.total_prompt_tokens + self.total_output_tokens:>15,} tokens{' ':>17}$")
+        logging.info(f"$ {'Total Resets:':<20} {self.total_resets:>15}{' ':>23}$")
+        logging.info(border)
+        
+        # Also print to console
+        print(border)
+        print(f"TOKEN USAGE - ITERATION {iteration}")
+        print(f"  Iteration tokens: {total_iter_tokens:,}")
+        print(f"  Cumulative tokens: {self.total_prompt_tokens + self.total_output_tokens:,}")
+        print(f"  Total resets: {self.total_resets}")
+        print(border)
+    
+    def log_final_summary(self) -> None:
+        """
+        Log final token usage summary at the end of the run with visual $ borders.
+        """
+        width = 70
+        border = "$" * width
+        
+        logging.info("")
+        logging.info(border)
+        logging.info(f"${'FINAL TOKEN USAGE SUMMARY':^{width-2}}$")
+        logging.info(border)
+        
+        total_tokens = self.total_prompt_tokens + self.total_output_tokens
+        
+        # Global stats
+        logging.info(f"$ {'Total Prompt Tokens:':<25} {self.total_prompt_tokens:>20,}{' ':>21}$")
+        logging.info(f"$ {'Total Output Tokens:':<25} {self.total_output_tokens:>20,}{' ':>21}$")
+        logging.info(f"$ {'TOTAL TOKENS:':<25} {total_tokens:>20,}{' ':>21}$")
+        logging.info(f"${'':^{width-2}}$")
+        logging.info(f"$ {'Total Resets Triggered:':<25} {self.total_resets:>20}{' ':>21}$")
+        logging.info(f"${'':^{width-2}}$")
+        
+        # Per-island breakdown
+        logging.info(f"${'PER-ISLAND BREAKDOWN':^{width-2}}$")
+        logging.info(f"${'':^{width-2}}$")
+        for island_id in sorted(self.island_cumulative_tokens.keys()):
+            cumulative = self.island_cumulative_tokens[island_id]
+            resets = self.island_reset_counts.get(island_id, 0)
+            logging.info(f"$   Island {island_id}: {cumulative:>15,} tokens, {resets:>3} resets{' ':>30}$")
+        
+        logging.info(border)
+        
+        # Also print to console
+        print("")
+        print(border)
+        print(f"{'FINAL TOKEN USAGE SUMMARY':^{width}}")
+        print(border)
+        print(f"  Total Prompt Tokens:  {self.total_prompt_tokens:>15,}")
+        print(f"  Total Output Tokens:  {self.total_output_tokens:>15,}")
+        print(f"  TOTAL TOKENS:         {total_tokens:>15,}")
+        print(f"  Total Resets:         {self.total_resets:>15}")
+        print("")
+        print("  Per-Island Breakdown:")
+        for island_id in sorted(self.island_cumulative_tokens.keys()):
+            cumulative = self.island_cumulative_tokens[island_id]
+            resets = self.island_reset_counts.get(island_id, 0)
+            print(f"    Island {island_id}: {cumulative:>12,} tokens, {resets} resets")
+        print(border)
 
 async def dnu_switch_gemini_model(
     chat: genai.chats.AsyncChats,
