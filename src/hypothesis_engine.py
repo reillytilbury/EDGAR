@@ -372,6 +372,7 @@ async def generate_new_model(current_island, llm_name, client,
                                     mode='explore', k_max=2, temp=1, 
                                     thinking_budget=1, img_dir=None, diagnostics_module=None,
                                     island_chat_manager=None, island_id: int = None,
+                                    batch_id: int = 0,
                                     use_large_model: bool = True):
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
@@ -423,7 +424,8 @@ async def generate_new_model(current_island, llm_name, client,
     # Use chat-based or legacy LLM call
     if island_chat_manager is not None and island_id is not None:
         llm_output = await island_chat_manager.ask_island(
-            island_id, program_prompt, 
+            island_id, program_prompt,
+            batch_id=batch_id,
             mode=mode, 
             use_large_model=use_large_model,
             png_img=img_bytes
@@ -448,8 +450,9 @@ async def generate_new_parameter_estimator(current_island,
                                            param_estimator_max_lines=100, img_dir=None,
                                            swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'], 
                                            island_chat_manager=None, island_id: int = None,
+                                           batch_id: int = 0,
                                            diagnostics_module=None,
-                                           use_large_model: bool = False):
+                                           use_large_model: bool = False):                                           
     if model_code_string is None:
         logging.info("No neuron model code string provided, skipping parameter estimator generation.")
         return None, None
@@ -505,6 +508,7 @@ async def generate_new_parameter_estimator(current_island,
     if island_chat_manager is not None and island_id is not None:
         llm_output = await island_chat_manager.ask_island(
             island_id, prompt,
+            batch_id=batch_id,
             mode=mode,
             use_large_model=use_large_model,
             png_img=img_bytes
@@ -660,10 +664,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             explore_temperature=1.5,  # Higher temperature for creative exploration
             exploit_temperature=0.7,  # Lower temperature for focused exploitation
             thinking_budget_fraction=1.0,
-            chat_token_limit=chat_token_limit
+            chat_token_limit=chat_token_limit,
+            batch_size=batch_size
         )
         logging.info(f"Initialized IslandChatManager with models {little_lm_name} / {large_lm_name}")
-        print(f"Chat mode enabled: using persistent chat sessions per island")
+        print(f"Chat mode enabled: using persistent chat sessions per (island, batch) pair")
+        print(f"  - Total chats: {n_islands * batch_size} ({n_islands} islands × {batch_size} batches)")
         print(f"  - Explore: T=1.5, Exploit: T=0.7")
         print(f"  - Small model: {little_lm_name}, Large model: {large_lm_name}")
         print(f"  - Token limit per chat: {chat_token_limit} (0 = unlimited)")
@@ -856,6 +862,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                    diagnostics_module=diagnostics_module,
                                                                    island_chat_manager=island_chat_manager,
                                                                    island_id=island_idx,
+                                                                   batch_id=j,
                                                                    use_large_model=use_large_model) 
                                          for island_idx in range(n_islands) for j in range(batch_size)]
         logging.info(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
@@ -887,6 +894,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 img_dir=None,
                 island_chat_manager=island_chat_manager,
                 island_id=island_idx,
+                batch_id=j,
                 diagnostics_module=diagnostics_module,
                 use_large_model=False  # Parameter estimators use small model
             )

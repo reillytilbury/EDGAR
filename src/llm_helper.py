@@ -10,10 +10,15 @@ import anthropic
 
 class IslandChatManager:
     """
-    Manages persistent chat sessions for each island in the genetic algorithm.
+    Manages persistent chat sessions for each (island, batch) pair in the genetic algorithm.
     
-    Each island maintains its own chat history, allowing the LLM to learn from
-    the context of previous generations within that island's evolutionary lineage.
+    Each (island, batch) combination maintains its own chat history, allowing the LLM 
+    to learn from the context of previous generations within that specific lineage.
+    This provides diversity across batches while maintaining history within each batch.
+    
+    With n_islands=8 and batch_size=6, this creates 48 independent chat sessions.
+    This is actually MORE cost-effective than per-island chats because each chat
+    accumulates history 6x slower (1 message per iteration vs 6).
     
     Supports 4 runtime configurations for different model/mode combinations:
     - large_explore: Large model (2.5) with explore system instruction, higher temperature
@@ -31,6 +36,8 @@ class IslandChatManager:
         explore_temperature: Temperature for explore mode (higher = more creative).
         exploit_temperature: Temperature for exploit mode (lower = more focused).
         thinking_budget_fraction: Fraction of max thinking budget for 2.5 models (0-1).
+        chat_token_limit: Max tokens per chat before auto-summarize and reset. 0 = unlimited.
+        batch_size: Number of batches per island (for logging aggregation).
     """
     
     def __init__(self, client: genai.Client, 
@@ -40,7 +47,8 @@ class IslandChatManager:
                  explore_temperature: float = 1.5,
                  exploit_temperature: float = 0.7,
                  thinking_budget_fraction: float = 1.0,
-                 chat_token_limit: int = 50000):
+                 chat_token_limit: int = 50000,
+                 batch_size: int = 6):
         self.client = client
         self.get_system_instruction = get_system_instruction
         self.small_model_name = small_model_name
@@ -49,20 +57,21 @@ class IslandChatManager:
         self.exploit_temperature = exploit_temperature
         self.thinking_budget_fraction = thinking_budget_fraction
         self.chat_token_limit = chat_token_limit
+        self.batch_size = batch_size
         
-        # Dictionary to store chat sessions: { island_id: chat_object }
-        self.islands: dict[int, genai.chats.AsyncChats] = {}
+        # Dictionary to store chat sessions: { (island_id, batch_id): chat_object }
+        self.chats: dict[tuple[int, int], genai.chats.AsyncChats] = {}
         
-        # Track token usage per island: { island_id: current_prompt_tokens }
-        self.island_token_counts: dict[int, int] = {}
+        # Track token usage per chat: { (island_id, batch_id): current_prompt_tokens }
+        self.chat_token_counts: dict[tuple[int, int], int] = {}
         
         # ===== COST TRACKING =====
-        # Cumulative token counts per island: { island_id: total_tokens_ever }
-        self.island_cumulative_tokens: dict[int, int] = {}
-        # Tokens used in current iteration per island
-        self.island_iteration_tokens: dict[int, int] = {}
-        # Total resets per island
-        self.island_reset_counts: dict[int, int] = {}
+        # Cumulative token counts per chat: { (island_id, batch_id): total_tokens_ever }
+        self.chat_cumulative_tokens: dict[tuple[int, int], int] = {}
+        # Tokens used in current iteration per chat
+        self.chat_iteration_tokens: dict[tuple[int, int], int] = {}
+        # Total resets per chat
+        self.chat_reset_counts: dict[tuple[int, int], int] = {}
         # Global counters
         self.total_prompt_tokens: int = 0
         self.total_output_tokens: int = 0
@@ -143,7 +152,7 @@ class IslandChatManager:
         logging.info(f"Exploit Temperature: {self.exploit_temperature}")
         logging.info(f"Thinking Budget Fraction: {self.thinking_budget_fraction}")
         logging.info(f"Chat Token Limit: {self.chat_token_limit} (0 = unlimited)")
-        logging.info(f"Active islands: {list(self.islands.keys()) if self.islands else 'None yet'}")
+        logging.info(f"Active chats: {list(self.chats.keys()) if self.chats else 'None yet'}")
         logging.info("")
         logging.info("EXPLORE MODE SYSTEM INSTRUCTION:")
         logging.info("-"*40)
@@ -158,13 +167,14 @@ class IslandChatManager:
         logging.info("-"*40)
         logging.info("="*80)
 
-    def _create_island_chat(self, island_id: int, mode: str = 'explore', 
-                            use_large_model: bool = True) -> genai.chats.AsyncChats:
+    def _create_chat(self, island_id: int, batch_id: int, mode: str = 'explore', 
+                      use_large_model: bool = True) -> genai.chats.AsyncChats:
         """
-        Create a new chat session for an island.
+        Create a new chat session for an (island, batch) pair.
         
         Args:
             island_id: The island identifier.
+            batch_id: The batch identifier within the island.
             mode: 'explore' or 'exploit' - determines system instruction.
             use_large_model: If True, use the large model; otherwise use small model.
             
@@ -180,36 +190,40 @@ class IslandChatManager:
             history=[],
         )
         
-        logging.info(f"Created new chat session for Island {island_id} "
+        logging.info(f"Created new chat session for Island {island_id}, Batch {batch_id} "
                     f"(model={model_name}, mode={mode})")
         return chat
 
-    async def get_or_create_island(self, island_id: int, mode: str = 'explore',
+    async def get_or_create_chat(self, island_id: int, batch_id: int, mode: str = 'explore',
                                    use_large_model: bool = True) -> genai.chats.AsyncChats:
         """
-        Get the chat session for an island, creating one if it doesn't exist.
+        Get the chat session for an (island, batch) pair, creating one if it doesn't exist.
         
         Args:
             island_id: The island identifier.
+            batch_id: The batch identifier within the island.
             mode: 'explore' or 'exploit' for new chat creation.
             use_large_model: Model size for new chat creation.
             
         Returns:
-            The chat object for this island.
+            The chat object for this (island, batch) pair.
         """
-        if island_id not in self.islands:
-            self.islands[island_id] = self._create_island_chat(island_id, mode, use_large_model)
-        return self.islands[island_id]
+        chat_key = (island_id, batch_id)
+        if chat_key not in self.chats:
+            self.chats[chat_key] = self._create_chat(island_id, batch_id, mode, use_large_model)
+        return self.chats[chat_key]
 
     async def ask_island(self, island_id: int, prompt: str, 
+                         batch_id: int,
                          mode: str = 'explore',
                          use_large_model: bool = True,
                          png_img: Optional[bytes] = None) -> str:
         """
-        Send a message to an island's chat and get a response.
+        Send a message to an (island, batch) chat and get a response.
         
-        The message is automatically appended to the island's chat history,
-        allowing the LLM to see and learn from previous interactions.
+        The message is automatically appended to the chat's history,
+        allowing the LLM to see and learn from previous interactions
+        within this specific (island, batch) lineage.
         
         Uses override config to dynamically switch between model/mode combinations
         without recreating the chat session.
@@ -219,12 +233,14 @@ class IslandChatManager:
             prompt: The prompt text to send.
             mode: 'explore' or 'exploit' - affects system instruction and temperature.
             use_large_model: If True, use large model config; otherwise small model.
+            batch_id: The batch identifier within the island (default 0).
             png_img: Optional PNG image bytes to include with the prompt.
             
         Returns:
             The LLM's response text, or empty string on error.
         """
-        chat = await self.get_or_create_island(island_id, mode, use_large_model)
+        chat_key = (island_id, batch_id)
+        chat = await self.get_or_create_chat(island_id, batch_id, mode, use_large_model)
         
         # Get the appropriate override config for this request
         override_config = self.get_config(mode, use_large_model)
@@ -249,44 +265,44 @@ class IslandChatManager:
             # Track token usage
             prompt_tokens = response.usage_metadata.prompt_token_count
             output_tokens = response.usage_metadata.candidates_token_count
-            self.island_token_counts[island_id] = prompt_tokens
+            self.chat_token_counts[chat_key] = prompt_tokens
             
             # Update cumulative tracking
-            self.island_cumulative_tokens[island_id] = self.island_cumulative_tokens.get(island_id, 0) + prompt_tokens + output_tokens
-            self.island_iteration_tokens[island_id] = self.island_iteration_tokens.get(island_id, 0) + prompt_tokens + output_tokens
+            self.chat_cumulative_tokens[chat_key] = self.chat_cumulative_tokens.get(chat_key, 0) + prompt_tokens + output_tokens
+            self.chat_iteration_tokens[chat_key] = self.chat_iteration_tokens.get(chat_key, 0) + prompt_tokens + output_tokens
             self.total_prompt_tokens += prompt_tokens
             self.total_output_tokens += output_tokens
             
-            logging.info(f"Tokens in this turn: {response.usage_metadata.total_token_count}")
-            logging.info(f"History + Prompt (Input): {prompt_tokens}")
-            logging.info(f"New Equation (Output): {output_tokens}")
+            logging.info(f"[Island {island_id}, Batch {batch_id}] Tokens: {response.usage_metadata.total_token_count} (in={prompt_tokens}, out={output_tokens})")
             
             # Check if we've exceeded the token limit
             if self.chat_token_limit > 0 and prompt_tokens > self.chat_token_limit:
-                logging.info(f"Island {island_id} exceeded token limit ({prompt_tokens} > {self.chat_token_limit}). Summarizing and resetting...")
-                print(f"Island {island_id} exceeded token limit ({prompt_tokens} > {self.chat_token_limit}). Summarizing and resetting...")
-                await self.summarize_and_reset_island(island_id, mode, use_large_model)
+                logging.info(f"Chat ({island_id}, {batch_id}) exceeded token limit ({prompt_tokens} > {self.chat_token_limit}). Summarizing and resetting...")
+                print(f"Chat ({island_id}, {batch_id}) exceeded token limit ({prompt_tokens} > {self.chat_token_limit}). Summarizing and resetting...")
+                await self.summarize_and_reset_chat(island_id, batch_id, mode, use_large_model)
 
             return response.text
         except Exception as e:
             model_name = self.get_model_name(use_large_model)
-            print(f"Error sending message to island {island_id} chat "
+            print(f"Error sending message to chat ({island_id}, {batch_id}) "
                   f"(model={model_name}, mode={mode}): {e}")
             return ""
 
-    async def get_island_history(self, island_id: int) -> list:
+    async def get_chat_history(self, island_id: int, batch_id: int = 0) -> list:
         """
-        Retrieve the chat history for an island.
+        Retrieve the chat history for an (island, batch) pair.
         
         Args:
             island_id: The island identifier.
+            batch_id: The batch identifier within the island.
             
         Returns:
             The chat history list, or empty list if not found/error.
         """
+        chat_key = (island_id, batch_id)
         try:
-            if island_id in self.islands:
-                chat = self.islands[island_id]
+            if chat_key in self.chats:
+                chat = self.chats[chat_key]
                 # get_history() may or may not be async depending on SDK version
                 history = chat.get_history()
                 # If it's a coroutine, await it
@@ -294,33 +310,35 @@ class IslandChatManager:
                     history = await history
                 return list(history) if history else []
             else:
-                print(f"No chat found for island_id {island_id}")
+                print(f"No chat found for ({island_id}, {batch_id})")
                 return []
         except Exception as e:
-            print(f"Error retrieving island history for island_id={island_id}: {e}")
+            print(f"Error retrieving chat history for ({island_id}, {batch_id}): {e}")
             return []
     
-    async def summarize_and_reset_island(self, island_id: int, 
-                                          mode: str = 'explore',
-                                          use_large_model: bool = False) -> Optional[str]:
+    async def summarize_and_reset_chat(self, island_id: int, batch_id: int = 0,
+                                         mode: str = 'explore',
+                                         use_large_model: bool = False) -> Optional[str]:
         """
-        Compresses the history of an island into a summary and starts a fresh session.
+        Compresses the history of an (island, batch) chat into a summary and starts fresh.
         
         Called automatically when token usage exceeds chat_token_limit.
         
         Args:
-            island_id: The island to reset.
+            island_id: The island identifier.
+            batch_id: The batch identifier within the island.
             mode: Current mode for the new chat session.
             use_large_model: Whether to use large model for the new session.
             
         Returns:
-            The summary text, or None if island doesn't exist.
+            The summary text, or None if chat doesn't exist.
         """
-        if island_id not in self.islands:
+        chat_key = (island_id, batch_id)
+        if chat_key not in self.chats:
             return None
 
-        old_chat = self.islands[island_id]
-        old_token_count = self.island_token_counts.get(island_id, 0)
+        old_chat = self.chats[chat_key]
+        old_token_count = self.chat_token_counts.get(chat_key, 0)
         
         # 1. Ask for a technical summary using small model config (cheaper)
         summary_prompt = (
@@ -338,10 +356,10 @@ class IslandChatManager:
             response = await old_chat.send_message(summary_prompt, config=summary_config)
             summary_text = response.text
             
-            logging.info(f"Island {island_id} summary generated ({len(summary_text)} chars)")
+            logging.info(f"Chat ({island_id}, {batch_id}) summary generated ({len(summary_text)} chars)")
             logging.info(f"Summary: {summary_text[:500]}..." if len(summary_text) > 500 else f"Summary: {summary_text}")
         except Exception as e:
-            logging.info(f"Error generating summary for island {island_id}: {e}")
+            logging.info(f"Error generating summary for chat ({island_id}, {batch_id}): {e}")
             summary_text = "Previous session context unavailable."
 
         # 2. Create a new chat with the summary as context
@@ -350,7 +368,7 @@ class IslandChatManager:
         enhanced_instruction = (
             f"{base_instruction}\n\n"
             f"# CONTEXT FROM PREVIOUS SESSION\n"
-            f"The following is a summary of our previous work on this island:\n"
+            f"The following is a summary of our previous work on this lineage:\n"
             f"{summary_text}"
         )
         
@@ -370,53 +388,56 @@ class IslandChatManager:
             )
 
         # 3. Replace the old chat with a brand new one (clears history)
-        self.islands[island_id] = self.client.aio.chats.create(
+        self.chats[chat_key] = self.client.aio.chats.create(
             model=self.get_model_name(use_large_model),
             config=new_config,
             history=[]
         )
         
-        # Reset token count for this island
-        self.island_token_counts[island_id] = 0
+        # Reset token count for this chat
+        self.chat_token_counts[chat_key] = 0
         
         # Track reset counts
-        self.island_reset_counts[island_id] = self.island_reset_counts.get(island_id, 0) + 1
+        self.chat_reset_counts[chat_key] = self.chat_reset_counts.get(chat_key, 0) + 1
         self.total_resets += 1
         
-        logging.info(f"Island {island_id} reset: {old_token_count} tokens -> 0 tokens (reset #{self.island_reset_counts[island_id]})")
-        print(f"Island {island_id} has been reset with summary checkpoint (reset #{self.island_reset_counts[island_id]}).")
+        logging.info(f"Chat ({island_id}, {batch_id}) reset: {old_token_count} tokens -> 0 tokens (reset #{self.chat_reset_counts[chat_key]})")
+        print(f"Chat ({island_id}, {batch_id}) has been reset with summary checkpoint (reset #{self.chat_reset_counts[chat_key]}).")
         return summary_text
 
-    def get_n_islands(self) -> int:
-        """Return the number of active island chats."""
-        return len(self.islands)
+    def get_n_chats(self) -> int:
+        """Return the number of active chats."""
+        return len(self.chats)
     
-    def reset_island(self, island_id: int, mode: str = 'explore', 
-                     use_large_model: bool = True) -> None:
+    def reset_chat(self, island_id: int, batch_id: int = 0, mode: str = 'explore', 
+                   use_large_model: bool = True) -> None:
         """
-        Reset an island's chat history by creating a fresh chat.
+        Reset a chat's history by creating a fresh chat.
         
         Useful if the chat history grows too large or needs to be cleared.
         
         Args:
-            island_id: The island identifier to reset.
+            island_id: The island identifier.
+            batch_id: The batch identifier within the island.
             mode: 'explore' or 'exploit' for the new chat.
             use_large_model: Model size for the new chat.
         """
-        if island_id in self.islands:
-            self.islands[island_id] = self._create_island_chat(island_id, mode, use_large_model)
-            logging.info(f"Reset chat session for Island {island_id}")
+        chat_key = (island_id, batch_id)
+        if chat_key in self.chats:
+            self.chats[chat_key] = self._create_chat(island_id, batch_id, mode, use_large_model)
+            logging.info(f"Reset chat session for ({island_id}, {batch_id})")
     
-    def reset_all_islands(self, mode: str = 'explore', use_large_model: bool = True) -> None:
-        """Reset all island chat histories."""
-        for island_id in list(self.islands.keys()):
-            self.reset_island(island_id, mode, use_large_model)
+    def reset_all_chats(self, mode: str = 'explore', use_large_model: bool = True) -> None:
+        """Reset all chat histories."""
+        for chat_key in list(self.chats.keys()):
+            island_id, batch_id = chat_key
+            self.reset_chat(island_id, batch_id, mode, use_large_model)
 
     def start_iteration(self) -> None:
         """
         Call at the start of each iteration to reset per-iteration token tracking.
         """
-        self.island_iteration_tokens = {}
+        self.chat_iteration_tokens = {}
     
     def log_iteration_summary(self, iteration: int) -> None:
         """
@@ -426,20 +447,27 @@ class IslandChatManager:
         Args:
             iteration: The current iteration number.
         """
-        width = 60
+        width = 70
         border = "$" * width
         
         logging.info(border)
         logging.info(f"${'TOKEN USAGE - ITERATION ' + str(iteration):^{width-2}}$")
         logging.info(border)
         
-        # Per-island stats for this iteration
+        # Per-chat stats for this iteration (aggregate by island for readability)
+        island_tokens = {}  # island_id -> total tokens this iteration
         total_iter_tokens = 0
-        for island_id in sorted(self.island_iteration_tokens.keys()):
-            tokens = self.island_iteration_tokens[island_id]
+        for chat_key in sorted(self.chat_iteration_tokens.keys()):
+            tokens = self.chat_iteration_tokens[chat_key]
             total_iter_tokens += tokens
-            resets = self.island_reset_counts.get(island_id, 0)
-            current = self.island_token_counts.get(island_id, 0)
+            island_id = chat_key[0]
+            island_tokens[island_id] = island_tokens.get(island_id, 0) + tokens
+        
+        for island_id in sorted(island_tokens.keys()):
+            tokens = island_tokens[island_id]
+            # Count resets for all batches of this island
+            resets = sum(self.chat_reset_counts.get((island_id, b), 0) for b in range(self.batch_size))
+            current = sum(self.chat_token_counts.get((island_id, b), 0) for b in range(self.batch_size))
             logging.info(f"$ Island {island_id}: {tokens:,} tokens this iter, {current:,} in context, {resets} resets $")
         
         logging.info(f"${'':^{width-2}}$")
@@ -478,12 +506,15 @@ class IslandChatManager:
         logging.info(f"$ {'Total Resets Triggered:':<25} {self.total_resets:>20}{' ':>21}$")
         logging.info(f"${'':^{width-2}}$")
         
-        # Per-island breakdown
+        # Per-island breakdown (aggregate across batches)
         logging.info(f"${'PER-ISLAND BREAKDOWN':^{width-2}}$")
         logging.info(f"${'':^{width-2}}$")
-        for island_id in sorted(self.island_cumulative_tokens.keys()):
-            cumulative = self.island_cumulative_tokens[island_id]
-            resets = self.island_reset_counts.get(island_id, 0)
+        
+        # Get unique island IDs
+        island_ids = set(chat_key[0] for chat_key in self.chat_cumulative_tokens.keys())
+        for island_id in sorted(island_ids):
+            cumulative = sum(self.chat_cumulative_tokens.get((island_id, b), 0) for b in range(self.batch_size))
+            resets = sum(self.chat_reset_counts.get((island_id, b), 0) for b in range(self.batch_size))
             logging.info(f"$   Island {island_id}: {cumulative:>15,} tokens, {resets:>3} resets{' ':>30}$")
         
         logging.info(border)
@@ -499,9 +530,9 @@ class IslandChatManager:
         print(f"  Total Resets:         {self.total_resets:>15}")
         print("")
         print("  Per-Island Breakdown:")
-        for island_id in sorted(self.island_cumulative_tokens.keys()):
-            cumulative = self.island_cumulative_tokens[island_id]
-            resets = self.island_reset_counts.get(island_id, 0)
+        for island_id in sorted(island_ids):
+            cumulative = sum(self.chat_cumulative_tokens.get((island_id, b), 0) for b in range(self.batch_size))
+            resets = sum(self.chat_reset_counts.get((island_id, b), 0) for b in range(self.batch_size))
             print(f"    Island {island_id}: {cumulative:>12,} tokens, {resets} resets")
         print(border)
 

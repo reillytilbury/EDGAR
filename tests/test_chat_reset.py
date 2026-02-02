@@ -2,8 +2,8 @@
 Tests for IslandChatManager token limit and reset functionality.
 
 Tests that:
-1. Token counts are tracked per island
-2. summarize_and_reset_island resets token count to 0
+1. Token counts are tracked per (island, batch) pair
+2. summarize_and_reset_chat resets token count to 0
 3. System instruction is updated with summary context after reset
 """
 import asyncio
@@ -77,9 +77,9 @@ class TestTokenTracking:
             chat_token_limit=50000
         )
         
-        await manager.ask_island(island_id=0, prompt="test prompt")
+        await manager.ask_island(island_id=0, batch_id=0, prompt="test prompt")
         
-        assert manager.island_token_counts[0] == expected_tokens
+        assert manager.chat_token_counts[(0, 0)] == expected_tokens
     
     @pytest.mark.asyncio
     async def test_token_count_updates_on_each_call(self):
@@ -101,14 +101,14 @@ class TestTokenTracking:
             chat_token_limit=50000
         )
         
-        await manager.ask_island(island_id=0, prompt="first")
-        assert manager.island_token_counts[0] == 1000
+        await manager.ask_island(island_id=0, batch_id=0, prompt="first")
+        assert manager.chat_token_counts[(0, 0)] == 1000
         
-        await manager.ask_island(island_id=0, prompt="second")
-        assert manager.island_token_counts[0] == 3000
+        await manager.ask_island(island_id=0, batch_id=0, prompt="second")
+        assert manager.chat_token_counts[(0, 0)] == 3000
         
-        await manager.ask_island(island_id=0, prompt="third")
-        assert manager.island_token_counts[0] == 6000
+        await manager.ask_island(island_id=0, batch_id=0, prompt="third")
+        assert manager.chat_token_counts[(0, 0)] == 6000
 
 
 class TestSummarizeAndReset:
@@ -116,7 +116,7 @@ class TestSummarizeAndReset:
     
     @pytest.mark.asyncio
     async def test_reset_reduces_token_count_to_zero(self):
-        """After reset, token count for the island should be 0."""
+        """After reset, token count for the (island, batch) should be 0."""
         from src.llm_helper import IslandChatManager
         
         # First response builds up tokens, second is the summary response
@@ -134,14 +134,14 @@ class TestSummarizeAndReset:
         )
         
         # Build up token count
-        await manager.ask_island(island_id=0, prompt="test")
-        assert manager.island_token_counts[0] == 40000
+        await manager.ask_island(island_id=0, batch_id=0, prompt="test")
+        assert manager.chat_token_counts[(0, 0)] == 40000
         
         # Manually trigger reset
-        await manager.summarize_and_reset_island(island_id=0, mode='explore', use_large_model=False)
+        await manager.summarize_and_reset_chat(island_id=0, batch_id=0, mode='explore', use_large_model=False)
         
         # Token count should be reset to 0
-        assert manager.island_token_counts[0] == 0
+        assert manager.chat_token_counts[(0, 0)] == 0
     
     @pytest.mark.asyncio
     async def test_reset_creates_new_chat_with_enhanced_instruction(self):
@@ -162,12 +162,12 @@ class TestSummarizeAndReset:
             chat_token_limit=50000
         )
         
-        # Create island and build token count
-        await manager.ask_island(island_id=0, prompt="test")
+        # Create chat and build token count
+        await manager.ask_island(island_id=0, batch_id=0, prompt="test")
         
-        # Reset the island
-        returned_summary = await manager.summarize_and_reset_island(
-            island_id=0, mode='explore', use_large_model=False
+        # Reset the chat
+        returned_summary = await manager.summarize_and_reset_chat(
+            island_id=0, batch_id=0, mode='explore', use_large_model=False
         )
         
         # Verify the summary was returned
@@ -189,8 +189,8 @@ class TestSummarizeAndReset:
         assert summary_text in config.system_instruction
     
     @pytest.mark.asyncio
-    async def test_reset_returns_none_for_nonexistent_island(self):
-        """Resetting a non-existent island should return None."""
+    async def test_reset_returns_none_for_nonexistent_chat(self):
+        """Resetting a non-existent chat should return None."""
         from src.llm_helper import IslandChatManager
         
         mock_chat = create_mock_chat()
@@ -201,7 +201,7 @@ class TestSummarizeAndReset:
             get_system_instruction=mock_get_system_instruction,
         )
         
-        result = await manager.summarize_and_reset_island(island_id=999)
+        result = await manager.summarize_and_reset_chat(island_id=999, batch_id=0)
         assert result is None
 
 
@@ -227,12 +227,12 @@ class TestAutoResetOnTokenLimit:
             chat_token_limit=50000
         )
         
-        # Spy on summarize_and_reset_island
-        with patch.object(manager, 'summarize_and_reset_island', wraps=manager.summarize_and_reset_island) as mock_reset:
-            await manager.ask_island(island_id=0, prompt="big prompt")
+        # Spy on summarize_and_reset_chat
+        with patch.object(manager, 'summarize_and_reset_chat', wraps=manager.summarize_and_reset_chat) as mock_reset:
+            await manager.ask_island(island_id=0, batch_id=0, prompt="big prompt")
             
             # Verify reset was called
-            mock_reset.assert_called_once_with(0, 'explore', True)
+            mock_reset.assert_called_once_with(0, 0, 'explore', True)
     
     @pytest.mark.asyncio
     async def test_no_reset_when_under_limit(self):
@@ -251,8 +251,8 @@ class TestAutoResetOnTokenLimit:
             chat_token_limit=50000
         )
         
-        with patch.object(manager, 'summarize_and_reset_island') as mock_reset:
-            await manager.ask_island(island_id=0, prompt="normal prompt")
+        with patch.object(manager, 'summarize_and_reset_chat') as mock_reset:
+            await manager.ask_island(island_id=0, batch_id=0, prompt="normal prompt")
             
             # Verify reset was NOT called
             mock_reset.assert_not_called()
@@ -274,35 +274,35 @@ class TestAutoResetOnTokenLimit:
             chat_token_limit=0  # Unlimited
         )
         
-        with patch.object(manager, 'summarize_and_reset_island') as mock_reset:
-            await manager.ask_island(island_id=0, prompt="huge prompt")
+        with patch.object(manager, 'summarize_and_reset_chat') as mock_reset:
+            await manager.ask_island(island_id=0, batch_id=0, prompt="huge prompt")
             
             # Verify reset was NOT called (unlimited mode)
             mock_reset.assert_not_called()
 
 
-class TestMultipleIslands:
-    """Tests for tracking across multiple islands."""
+class TestMultipleChats:
+    """Tests for tracking across multiple (island, batch) pairs."""
     
     @pytest.mark.asyncio
-    async def test_separate_token_counts_per_island(self):
-        """Each island should have its own token count."""
+    async def test_separate_token_counts_per_chat(self):
+        """Each (island, batch) pair should have its own token count."""
         from src.llm_helper import IslandChatManager
         
-        # Create multiple mock chats, one per island
+        # Create multiple mock chats, one per (island, batch)
         mock_chats = {}
-        def create_chat_for_island(*args, **kwargs):
-            island_count = len(mock_chats)
-            # Different token counts per island
-            tokens = (island_count + 1) * 1000  # 1k, 2k, 3k...
+        def create_chat_for_call(*args, **kwargs):
+            chat_count = len(mock_chats)
+            # Different token counts per chat
+            tokens = (chat_count + 1) * 1000  # 1k, 2k, 3k...
             chat = create_mock_chat([create_mock_response(prompt_tokens=tokens)])
-            mock_chats[island_count] = chat
+            mock_chats[chat_count] = chat
             return chat
         
         mock_client = Mock()
         mock_client.aio = Mock()
         mock_client.aio.chats = Mock()
-        mock_client.aio.chats.create = Mock(side_effect=create_chat_for_island)
+        mock_client.aio.chats.create = Mock(side_effect=create_chat_for_call)
         
         manager = IslandChatManager(
             client=mock_client,
@@ -310,22 +310,23 @@ class TestMultipleIslands:
             chat_token_limit=50000
         )
         
-        await manager.ask_island(island_id=0, prompt="test")
-        await manager.ask_island(island_id=1, prompt="test")
-        await manager.ask_island(island_id=2, prompt="test")
+        # Different (island, batch) pairs
+        await manager.ask_island(island_id=0, batch_id=0, prompt="test")
+        await manager.ask_island(island_id=0, batch_id=1, prompt="test")
+        await manager.ask_island(island_id=1, batch_id=0, prompt="test")
         
-        assert manager.island_token_counts[0] == 1000
-        assert manager.island_token_counts[1] == 2000
-        assert manager.island_token_counts[2] == 3000
+        assert manager.chat_token_counts[(0, 0)] == 1000
+        assert manager.chat_token_counts[(0, 1)] == 2000
+        assert manager.chat_token_counts[(1, 0)] == 3000
     
     @pytest.mark.asyncio
-    async def test_reset_only_affects_target_island(self):
-        """Resetting one island should not affect others."""
+    async def test_reset_only_affects_target_chat(self):
+        """Resetting one chat should not affect others."""
         from src.llm_helper import IslandChatManager
         
         # Create chats that will be reused
         call_count = [0]
-        def create_chat_for_island(*args, **kwargs):
+        def create_chat_for_call(*args, **kwargs):
             call_count[0] += 1
             tokens = 10000  # All start with 10k tokens
             # The summary call response
@@ -338,7 +339,7 @@ class TestMultipleIslands:
         mock_client = Mock()
         mock_client.aio = Mock()
         mock_client.aio.chats = Mock()
-        mock_client.aio.chats.create = Mock(side_effect=create_chat_for_island)
+        mock_client.aio.chats.create = Mock(side_effect=create_chat_for_call)
         
         manager = IslandChatManager(
             client=mock_client,
@@ -346,23 +347,23 @@ class TestMultipleIslands:
             chat_token_limit=50000
         )
         
-        # Create 3 islands
-        await manager.ask_island(island_id=0, prompt="test")
-        await manager.ask_island(island_id=1, prompt="test")
-        await manager.ask_island(island_id=2, prompt="test")
+        # Create 3 chats
+        await manager.ask_island(island_id=0, batch_id=0, prompt="test")
+        await manager.ask_island(island_id=0, batch_id=1, prompt="test")
+        await manager.ask_island(island_id=1, batch_id=0, prompt="test")
         
         # All should have 10k tokens
-        assert manager.island_token_counts[0] == 10000
-        assert manager.island_token_counts[1] == 10000
-        assert manager.island_token_counts[2] == 10000
+        assert manager.chat_token_counts[(0, 0)] == 10000
+        assert manager.chat_token_counts[(0, 1)] == 10000
+        assert manager.chat_token_counts[(1, 0)] == 10000
         
-        # Reset only island 1
-        await manager.summarize_and_reset_island(island_id=1, mode='explore')
+        # Reset only (0, 1)
+        await manager.summarize_and_reset_chat(island_id=0, batch_id=1, mode='explore')
         
-        # Only island 1 should be reset
-        assert manager.island_token_counts[0] == 10000
-        assert manager.island_token_counts[1] == 0
-        assert manager.island_token_counts[2] == 10000
+        # Only (0, 1) should be reset
+        assert manager.chat_token_counts[(0, 0)] == 10000
+        assert manager.chat_token_counts[(0, 1)] == 0
+        assert manager.chat_token_counts[(1, 0)] == 10000
 
 
 class TestCostTracking:
@@ -386,11 +387,11 @@ class TestCostTracking:
             chat_token_limit=50000
         )
         
-        await manager.ask_island(island_id=0, prompt="first")
-        await manager.ask_island(island_id=0, prompt="second")
+        await manager.ask_island(island_id=0, batch_id=0, prompt="first")
+        await manager.ask_island(island_id=0, batch_id=0, prompt="second")
         
         # Cumulative should be sum of all tokens (prompt + output)
-        assert manager.island_cumulative_tokens[0] == 1000 + 200 + 2000 + 300
+        assert manager.chat_cumulative_tokens[(0, 0)] == 1000 + 200 + 2000 + 300
         assert manager.total_prompt_tokens == 1000 + 2000
         assert manager.total_output_tokens == 200 + 300
     
@@ -412,19 +413,19 @@ class TestCostTracking:
         )
         
         # First iteration
-        await manager.ask_island(island_id=0, prompt="test")
-        assert manager.island_iteration_tokens[0] == 1000 + 100
+        await manager.ask_island(island_id=0, batch_id=0, prompt="test")
+        assert manager.chat_iteration_tokens[(0, 0)] == 1000 + 100
         
         # Start new iteration - should reset iteration tokens
         manager.start_iteration()
-        assert manager.island_iteration_tokens == {}
+        assert manager.chat_iteration_tokens == {}
         
         # Second call in new iteration
-        await manager.ask_island(island_id=0, prompt="test")
-        assert manager.island_iteration_tokens[0] == 2000 + 200
+        await manager.ask_island(island_id=0, batch_id=0, prompt="test")
+        assert manager.chat_iteration_tokens[(0, 0)] == 2000 + 200
         
         # But cumulative should keep growing
-        assert manager.island_cumulative_tokens[0] == 1000 + 100 + 2000 + 200
+        assert manager.chat_cumulative_tokens[(0, 0)] == 1000 + 100 + 2000 + 200
     
     @pytest.mark.asyncio
     async def test_reset_count_increments(self):
@@ -446,17 +447,17 @@ class TestCostTracking:
             get_system_instruction=mock_get_system_instruction,
         )
         
-        await manager.ask_island(island_id=0, prompt="test")
-        await manager.summarize_and_reset_island(island_id=0)
+        await manager.ask_island(island_id=0, batch_id=0, prompt="test")
+        await manager.summarize_and_reset_chat(island_id=0, batch_id=0)
         
-        assert manager.island_reset_counts[0] == 1
+        assert manager.chat_reset_counts[(0, 0)] == 1
         assert manager.total_resets == 1
         
         # Reset the mock to get new chat with proper responses
-        await manager.ask_island(island_id=0, prompt="test")
-        await manager.summarize_and_reset_island(island_id=0)
+        await manager.ask_island(island_id=0, batch_id=0, prompt="test")
+        await manager.summarize_and_reset_chat(island_id=0, batch_id=0)
         
-        assert manager.island_reset_counts[0] == 2
+        assert manager.chat_reset_counts[(0, 0)] == 2
         assert manager.total_resets == 2
     
     def test_log_iteration_summary_no_error(self):
@@ -471,10 +472,10 @@ class TestCostTracking:
             get_system_instruction=mock_get_system_instruction,
         )
         
-        # Set up some tracking data
-        manager.island_iteration_tokens = {0: 5000, 1: 3000}
-        manager.island_token_counts = {0: 5000, 1: 3000}
-        manager.island_reset_counts = {0: 1, 1: 0}
+        # Set up some tracking data with tuple keys
+        manager.chat_iteration_tokens = {(0, 0): 5000, (1, 0): 3000}
+        manager.chat_token_counts = {(0, 0): 5000, (1, 0): 3000}
+        manager.chat_reset_counts = {(0, 0): 1, (1, 0): 0}
         manager.total_prompt_tokens = 8000
         manager.total_output_tokens = 1000
         manager.total_resets = 1
@@ -494,9 +495,9 @@ class TestCostTracking:
             get_system_instruction=mock_get_system_instruction,
         )
         
-        # Set up some tracking data
-        manager.island_cumulative_tokens = {0: 50000, 1: 30000, 2: 20000}
-        manager.island_reset_counts = {0: 2, 1: 1, 2: 0}
+        # Set up some tracking data with tuple keys
+        manager.chat_cumulative_tokens = {(0, 0): 50000, (1, 0): 30000, (2, 0): 20000}
+        manager.chat_reset_counts = {(0, 0): 2, (1, 0): 1, (2, 0): 0}
         manager.total_prompt_tokens = 80000
         manager.total_output_tokens = 20000
         manager.total_resets = 3
