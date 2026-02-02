@@ -34,7 +34,8 @@ experiment_params:
   FAILED_PROGRAM_COST: .inf
   use_image_feedback: true
   use_param_estimator: true
-  use_chat_mode: false  # If true, uses persistent chat sessions per island (expensive). Default: false (legacy independent queries)
+  use_chat_mode: true  # If true, uses persistent chat sessions per island (expensive). Default: false (legacy independent queries)
+  chat_token_limit: 50000  # Max tokens per island chat before auto-summarize and reset. 0 = unlimited
   exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
   exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
   tiny_lm_name: gemini-2.0-flash-lite

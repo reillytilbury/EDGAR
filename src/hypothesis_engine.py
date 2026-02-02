@@ -603,6 +603,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
                 use_image_feedback=True, use_param_estimator=True,
                 use_chat_mode=False,  # If True, use persistent chat sessions per island (expensive)
+                chat_token_limit=50000,  # Max tokens per chat before auto-summarize and reset. 0 = unlimited
                 exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 tiny_lm_name = 'gemini-2.0-flash-lite',
@@ -658,12 +659,14 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             large_model_name=large_lm_name,
             explore_temperature=1.5,  # Higher temperature for creative exploration
             exploit_temperature=0.7,  # Lower temperature for focused exploitation
-            thinking_budget_fraction=1.0
+            thinking_budget_fraction=1.0,
+            chat_token_limit=chat_token_limit
         )
         logging.info(f"Initialized IslandChatManager with models {little_lm_name} / {large_lm_name}")
         print(f"Chat mode enabled: using persistent chat sessions per island")
         print(f"  - Explore: T=1.5, Exploit: T=0.7")
         print(f"  - Small model: {little_lm_name}, Large model: {large_lm_name}")
+        print(f"  - Token limit per chat: {chat_token_limit} (0 = unlimited)")
     else:
         logging.info("Chat mode disabled: using independent LLM queries")
         print("Chat mode disabled: using independent LLM queries")

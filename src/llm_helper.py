@@ -39,7 +39,8 @@ class IslandChatManager:
                  large_model_name: str = "gemini-2.5-flash",
                  explore_temperature: float = 1.5,
                  exploit_temperature: float = 0.7,
-                 thinking_budget_fraction: float = 1.0):
+                 thinking_budget_fraction: float = 1.0,
+                 chat_token_limit: int = 50000):
         self.client = client
         self.get_system_instruction = get_system_instruction
         self.small_model_name = small_model_name
@@ -47,9 +48,13 @@ class IslandChatManager:
         self.explore_temperature = explore_temperature
         self.exploit_temperature = exploit_temperature
         self.thinking_budget_fraction = thinking_budget_fraction
+        self.chat_token_limit = chat_token_limit
         
         # Dictionary to store chat sessions: { island_id: chat_object }
         self.islands: dict[int, genai.chats.AsyncChats] = {}
+        
+        # Track token usage per island: { island_id: total_prompt_tokens }
+        self.island_token_counts: dict[int, int] = {}
         
         # Build the 4 configs
         self._build_configs()
@@ -125,6 +130,7 @@ class IslandChatManager:
         logging.info(f"Explore Temperature: {self.explore_temperature}")
         logging.info(f"Exploit Temperature: {self.exploit_temperature}")
         logging.info(f"Thinking Budget Fraction: {self.thinking_budget_fraction}")
+        logging.info(f"Chat Token Limit: {self.chat_token_limit} (0 = unlimited)")
         logging.info(f"Active islands: {list(self.islands.keys()) if self.islands else 'None yet'}")
         logging.info("")
         logging.info("EXPLORE MODE SYSTEM INSTRUCTION:")
@@ -227,6 +233,21 @@ class IslandChatManager:
             
             # Use override config to apply the appropriate settings
             response = await chat.send_message(message_parts, config=override_config)
+
+            # Track token usage
+            prompt_tokens = response.usage_metadata.prompt_token_count
+            self.island_token_counts[island_id] = prompt_tokens
+            
+            logging.info(f"Tokens in this turn: {response.usage_metadata.total_token_count}")
+            logging.info(f"History + Prompt (Input): {prompt_tokens}")
+            logging.info(f"New Equation (Output): {response.usage_metadata.candidates_token_count}")
+            
+            # Check if we've exceeded the token limit
+            if self.chat_token_limit > 0 and prompt_tokens > self.chat_token_limit:
+                logging.info(f"Island {island_id} exceeded token limit ({prompt_tokens} > {self.chat_token_limit}). Summarizing and resetting...")
+                print(f"Island {island_id} exceeded token limit ({prompt_tokens} > {self.chat_token_limit}). Summarizing and resetting...")
+                await self.summarize_and_reset_island(island_id, mode, use_large_model)
+
             return response.text
         except Exception as e:
             model_name = self.get_model_name(use_large_model)
@@ -260,6 +281,89 @@ class IslandChatManager:
             print(f"Error retrieving island history for island_id={island_id}: {e}")
             return []
     
+    async def summarize_and_reset_island(self, island_id: int, 
+                                          mode: str = 'explore',
+                                          use_large_model: bool = False) -> Optional[str]:
+        """
+        Compresses the history of an island into a summary and starts a fresh session.
+        
+        Called automatically when token usage exceeds chat_token_limit.
+        
+        Args:
+            island_id: The island to reset.
+            mode: Current mode for the new chat session.
+            use_large_model: Whether to use large model for the new session.
+            
+        Returns:
+            The summary text, or None if island doesn't exist.
+        """
+        if island_id not in self.islands:
+            return None
+
+        old_chat = self.islands[island_id]
+        old_token_count = self.island_token_counts.get(island_id, 0)
+        
+        # 1. Ask for a technical summary using small model config (cheaper)
+        summary_prompt = (
+            "Summarize our conversation so far. Provide a concise technical summary of:\n"
+            "1. The best-performing model architectures we've discovered.\n"
+            "2. Key insights about what features correlate with lower loss.\n"
+            "3. Key insights about what improved parameter estimator performance.\n"
+            "4. Approaches that did NOT work well (to avoid repeating).\n"
+            "5. The current best loss achieved.\n"
+            "Be concise - this summary will seed a fresh conversation."
+        )
+        
+        try:
+            summary_config = self.get_config('exploit', use_large_model=False)  # Use small model for summary
+            response = await old_chat.send_message(summary_prompt, config=summary_config)
+            summary_text = response.text
+            
+            logging.info(f"Island {island_id} summary generated ({len(summary_text)} chars)")
+            logging.info(f"Summary: {summary_text[:500]}..." if len(summary_text) > 500 else f"Summary: {summary_text}")
+        except Exception as e:
+            logging.info(f"Error generating summary for island {island_id}: {e}")
+            summary_text = "Previous session context unavailable."
+
+        # 2. Create a new chat with the summary as context
+        # Get the base system instruction and append the summary
+        base_instruction = self.get_system_instruction(mode)
+        enhanced_instruction = (
+            f"{base_instruction}\n\n"
+            f"# CONTEXT FROM PREVIOUS SESSION\n"
+            f"The following is a summary of our previous work on this island:\n"
+            f"{summary_text}"
+        )
+        
+        # Create new config with enhanced system instruction
+        config = self.get_config(mode, use_large_model)
+        # We need to create a new config with the enhanced instruction
+        if use_large_model:
+            new_config = types.GenerateContentConfig(
+                temperature=config.temperature,
+                thinking_config=config.thinking_config,
+                system_instruction=enhanced_instruction
+            )
+        else:
+            new_config = types.GenerateContentConfig(
+                temperature=config.temperature,
+                system_instruction=enhanced_instruction
+            )
+
+        # 3. Replace the old chat with a brand new one (clears history)
+        self.islands[island_id] = self.client.aio.chats.create(
+            model=self.get_model_name(use_large_model),
+            config=new_config,
+            history=[]
+        )
+        
+        # Reset token count for this island
+        self.island_token_counts[island_id] = 0
+        
+        logging.info(f"Island {island_id} reset: {old_token_count} tokens -> 0 tokens")
+        print(f"Island {island_id} has been reset with summary checkpoint.")
+        return summary_text
+
     def get_n_islands(self) -> int:
         """Return the number of active island chats."""
         return len(self.islands)
