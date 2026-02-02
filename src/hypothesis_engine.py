@@ -371,7 +371,8 @@ async def generate_new_model(current_island, llm_name, client,
                                     spike_matrix, stimuli, prompt_manager,
                                     mode='explore', k_max=2, temp=1, 
                                     thinking_budget=1, img_dir=None, diagnostics_module=None,
-                                    island_chat_manager=None, island_id: int = None):
+                                    island_chat_manager=None, island_id: int = None,
+                                    use_large_model: bool = True):
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
@@ -421,7 +422,12 @@ async def generate_new_model(current_island, llm_name, client,
     
     # Use chat-based or legacy LLM call
     if island_chat_manager is not None and island_id is not None:
-        llm_output = await island_chat_manager.ask_island(island_id, program_prompt, png_img=img_bytes)
+        llm_output = await island_chat_manager.ask_island(
+            island_id, program_prompt, 
+            mode=mode, 
+            use_large_model=use_large_model,
+            png_img=img_bytes
+        )
     else:
         # Legacy: independent query
         llm_output = await llm_helper.call_llm_async(program_prompt, model_name=llm_name, client=client, temperature=temp, 
@@ -438,11 +444,12 @@ async def generate_new_parameter_estimator(current_island,
                                            model_code_string: str,
                                            llm_name, client, 
                                            spike_matrix, stimuli, prompt_manager,
-                                           k_max=1, temp=1,
+                                           mode='explore', k_max=1, temp=1,
                                            param_estimator_max_lines=100, img_dir=None,
                                            swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'], 
                                            island_chat_manager=None, island_id: int = None,
-                                           diagnostics_module=None):
+                                           diagnostics_module=None,
+                                           use_large_model: bool = False):
     if model_code_string is None:
         logging.info("No neuron model code string provided, skipping parameter estimator generation.")
         return None, None
@@ -496,7 +503,12 @@ async def generate_new_parameter_estimator(current_island,
     
     # Use chat-based or legacy LLM call
     if island_chat_manager is not None and island_id is not None:
-        llm_output = await island_chat_manager.ask_island(island_id, prompt, png_img=img_bytes)
+        llm_output = await island_chat_manager.ask_island(
+            island_id, prompt,
+            mode=mode,
+            use_large_model=use_large_model,
+            png_img=img_bytes
+        )
     else:
         # Legacy: independent query
         llm_output = await llm_helper.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
@@ -636,19 +648,22 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
     # Initialize IslandChatManager if using chat mode
-    # For now, use a simple system instruction - Step 3 will refactor this with prompt_manager
     island_chat_manager = None
     if use_chat_mode:
-        # Build system instruction from prompt_manager (static guidelines)
-        system_instruction = prompt_manager.get_system_instruction()
+        # Create IslandChatManager with mode-aware system instructions
         island_chat_manager = llm_helper.IslandChatManager(
             client=client,
-            system_instruction=system_instruction,
-            model_name=large_lm_name,  # Use large model for chat-based generation
-            temperature=1.0
+            get_system_instruction=prompt_manager.get_system_instruction,
+            small_model_name=little_lm_name,
+            large_model_name=large_lm_name,
+            explore_temperature=1.5,  # Higher temperature for creative exploration
+            exploit_temperature=0.7,  # Lower temperature for focused exploitation
+            thinking_budget_fraction=1.0
         )
-        logging.info(f"Initialized IslandChatManager with model {large_lm_name}")
+        logging.info(f"Initialized IslandChatManager with models {little_lm_name} / {large_lm_name}")
         print(f"Chat mode enabled: using persistent chat sessions per island")
+        print(f"  - Explore: T=1.5, Exploit: T=0.7")
+        print(f"  - Small model: {little_lm_name}, Large model: {large_lm_name}")
     else:
         logging.info("Chat mode disabled: using independent LLM queries")
         print("Chat mode disabled: using independent LLM queries")
@@ -806,6 +821,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         else:
             llm_name = little_lm_name
             logging.info(f"Using little LLM: {llm_name}")
+        use_large_model = (llm_name == large_lm_name)  # Track whether using large model
         mode = 'explore' if i < n_iterations * exploit_point else 'exploit'
         temperature = 1 + np.exp(-i / n_iterations)
         model_image_dirs = np.empty((n_islands, batch_size), dtype=object)
@@ -831,7 +847,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                    img_dir=model_image_dirs[island_idx, j],
                                                                    diagnostics_module=diagnostics_module,
                                                                    island_chat_manager=island_chat_manager,
-                                                                   island_id=island_idx) 
+                                                                   island_id=island_idx,
+                                                                   use_large_model=use_large_model) 
                                          for island_idx in range(n_islands) for j in range(batch_size)]
         logging.info(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
         print(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
@@ -845,23 +862,25 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         jax_results = await asyncio.gather(*model_function_translation_tasks)
         model_results = [(model_code_strings[j], model_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
-        # build parameter‑estimator tasks
+        # build parameter‑estimator tasks (use small model for param estimators)
         param_estimation_tasks = [
             generate_new_parameter_estimator(
                 current_island=islands[island_idx],
                 model_code_string=model_code_strings[island_idx * batch_size + j],
-                llm_name=little_lm_name,  # same model used for programs
+                llm_name=little_lm_name,
                 client=client,
-                spike_matrix=response_train, # training data
+                spike_matrix=response_train,
                 stimuli=trials_train,
                 prompt_manager=prompt_manager,
+                mode=mode,
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
-                img_dir=None, # no image feedback for parameter estimator generation
+                img_dir=None,
                 island_chat_manager=island_chat_manager,
                 island_id=island_idx,
-                diagnostics_module=diagnostics_module
+                diagnostics_module=diagnostics_module,
+                use_large_model=False  # Parameter estimators use small model
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)
@@ -869,7 +888,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
 
         logging.info(
             f"Generating {n_islands * batch_size} parameter estimators "
-            f"(LLM={llm_name}, mode={mode}, T={temperature:.2f})"
+            f"(LLM={little_lm_name}, mode={mode}, T={temperature:.2f})"
         )
         logging.info(f"Generating {n_islands * batch_size} new parameter estimators... Model: {little_lm_name}, mode: {mode}, temperature: {temperature:.2f}")
         param_est_results = await asyncio.gather(*param_estimation_tasks)

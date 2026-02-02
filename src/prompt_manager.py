@@ -219,20 +219,26 @@ class PromptManager:
         template = self.config['prompts']['jax_translator_prompt']
         return template.format(function_code=function_code)
 
-    def get_system_instruction(self) -> str:
+    def get_system_instruction(self, mode: str = 'explore') -> str:
         """
         Build the system instruction for chat-based LLM sessions.
         
         This contains the static guidelines that don't change per query:
         - Role description for model generation
+        - Mode-specific guidance (explore vs exploit)
         - Code guidelines
         - Function signature requirements
         - Docstring guidelines
         - Parameter estimator guidelines
         
+        Args:
+            mode: Either 'explore' or 'exploit'. Determines the strategy guidance.
+        
         Returns:
             str: The system instruction for the chat session.
         """
+        assert mode in ['explore', 'exploit'], f"Invalid mode: {mode}. Choose 'explore' or 'exploit'."
+        
         program_templates = self.config['prompts']['program_prompt']
         param_est_templates = self.config['prompts']['parameter_estimator']
         
@@ -241,6 +247,8 @@ class PromptManager:
         system_parts = [
             f"# {model_name.upper()} GENERATION GUIDELINES",
             program_templates['base'].format(k="N", next_version="N+1"),
+            f"\n# CURRENT MODE: {mode.upper()}",
+            program_templates[mode].format(k="N", next_version="N+1"),
             program_templates['code_guidelines'].format(max_lines="100"),
             program_templates['function_signature'].format(next_version="N+1"),
             program_templates['docstring_guidelines'].format(next_version="N+1"),

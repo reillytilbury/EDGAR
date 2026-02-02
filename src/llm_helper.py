@@ -1,7 +1,7 @@
 import time
 import datetime
 import logging
-from typing import Union, Optional, List, Any
+from typing import Union, Optional, List, Any, Callable
 # gemini client
 from google import genai
 from google.genai import types, chats
@@ -15,23 +15,100 @@ class IslandChatManager:
     Each island maintains its own chat history, allowing the LLM to learn from
     the context of previous generations within that island's evolutionary lineage.
     
+    Supports 4 runtime configurations for different model/mode combinations:
+    - large_explore: Large model (2.5) with explore system instruction, higher temperature
+    - large_exploit: Large model (2.5) with exploit system instruction, lower temperature
+    - small_explore: Small model (2.0) with explore system instruction, higher temperature
+    - small_exploit: Small model (2.0) with exploit system instruction, lower temperature
+    
+    The appropriate config is selected via `ask_island(mode='explore', use_large_model=True)`.
+    
     Args:
         client: The Google GenAI client instance.
-        system_instruction: The system instruction to use for all island chats.
-                           This should contain the static guidelines (code style,
-                           function signatures, etc.) that don't change per query.
-        model_name: The default model to use for chat sessions.
-        temperature: Default temperature for generation.
+        get_system_instruction: Callable that takes mode ('explore'/'exploit') and returns system instruction.
+        small_model_name: The smaller/faster model (e.g., "gemini-2.0-flash").
+        large_model_name: The larger/smarter model (e.g., "gemini-2.5-flash").
+        explore_temperature: Temperature for explore mode (higher = more creative).
+        exploit_temperature: Temperature for exploit mode (lower = more focused).
+        thinking_budget_fraction: Fraction of max thinking budget for 2.5 models (0-1).
     """
     
-    def __init__(self, client: genai.Client, system_instruction: str, 
-                 model_name: str = "gemini-2.0-flash", temperature: float = 1.0):
+    def __init__(self, client: genai.Client, 
+                 get_system_instruction: Callable[[str], str],
+                 small_model_name: str = "gemini-2.0-flash",
+                 large_model_name: str = "gemini-2.5-flash",
+                 explore_temperature: float = 1.5,
+                 exploit_temperature: float = 0.7,
+                 thinking_budget_fraction: float = 1.0):
         self.client = client
-        self.model_name = model_name
-        self.system_instruction = system_instruction
-        self.temperature = temperature
+        self.get_system_instruction = get_system_instruction
+        self.small_model_name = small_model_name
+        self.large_model_name = large_model_name
+        self.explore_temperature = explore_temperature
+        self.exploit_temperature = exploit_temperature
+        self.thinking_budget_fraction = thinking_budget_fraction
+        
         # Dictionary to store chat sessions: { island_id: chat_object }
         self.islands: dict[int, genai.chats.AsyncChats] = {}
+        
+        # Build the 4 configs
+        self._build_configs()
+        
+        # Track the current mode for logging
+        self.current_mode = 'explore'
+        self.current_use_large = True
+    
+    def _build_configs(self) -> None:
+        """Build the 4 GenerateContentConfig objects for each model/mode combination."""
+        max_thinking_budget = 24_576
+        thinking_budget = int(self.thinking_budget_fraction * max_thinking_budget)
+        
+        # Get system instructions for both modes
+        explore_instruction = self.get_system_instruction('explore')
+        exploit_instruction = self.get_system_instruction('exploit')
+        
+        # Large model configs (with thinking budget for 2.5)
+        self.large_explore_config = types.GenerateContentConfig(
+            temperature=self.explore_temperature,
+            thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
+            system_instruction=explore_instruction
+        )
+        self.large_exploit_config = types.GenerateContentConfig(
+            temperature=self.exploit_temperature,
+            thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
+            system_instruction=exploit_instruction
+        )
+        
+        # Small model configs (no thinking budget)
+        self.small_explore_config = types.GenerateContentConfig(
+            temperature=self.explore_temperature,
+            system_instruction=explore_instruction
+        )
+        self.small_exploit_config = types.GenerateContentConfig(
+            temperature=self.exploit_temperature,
+            system_instruction=exploit_instruction
+        )
+        
+        # Store for easy access
+        self.configs = {
+            ('large', 'explore'): self.large_explore_config,
+            ('large', 'exploit'): self.large_exploit_config,
+            ('small', 'explore'): self.small_explore_config,
+            ('small', 'exploit'): self.small_exploit_config,
+        }
+        
+        # Store system instructions for logging
+        self.explore_instruction = explore_instruction
+        self.exploit_instruction = exploit_instruction
+    
+    def get_config(self, mode: str = 'explore', use_large_model: bool = True) -> types.GenerateContentConfig:
+        """Get the appropriate config for the given mode and model size."""
+        size = 'large' if use_large_model else 'small'
+        return self.configs[(size, mode)]
+    
+    def get_model_name(self, use_large_model: bool = True) -> str:
+        """Get the model name for the given size."""
+        return self.large_model_name if use_large_model else self.small_model_name
     
     def log_configuration(self) -> None:
         """
@@ -43,72 +120,72 @@ class IslandChatManager:
         logging.info("="*80)
         logging.info("ISLAND CHAT MANAGER CONFIGURATION")
         logging.info("="*80)
-        logging.info(f"Model: {self.model_name}")
-        logging.info(f"Temperature: {self.temperature}")
+        logging.info(f"Small Model: {self.small_model_name}")
+        logging.info(f"Large Model: {self.large_model_name}")
+        logging.info(f"Explore Temperature: {self.explore_temperature}")
+        logging.info(f"Exploit Temperature: {self.exploit_temperature}")
+        logging.info(f"Thinking Budget Fraction: {self.thinking_budget_fraction}")
         logging.info(f"Active islands: {list(self.islands.keys()) if self.islands else 'None yet'}")
         logging.info("")
-        logging.info("SYSTEM INSTRUCTION (sent to all island chats):")
+        logging.info("EXPLORE MODE SYSTEM INSTRUCTION:")
         logging.info("-"*40)
-        for line in self.system_instruction.split('\n'):
+        for line in self.explore_instruction.split('\n'):
+            logging.info(line)
+        logging.info("-"*40)
+        logging.info("")
+        logging.info("EXPLOIT MODE SYSTEM INSTRUCTION:")
+        logging.info("-"*40)
+        for line in self.exploit_instruction.split('\n'):
             logging.info(line)
         logging.info("-"*40)
         logging.info("="*80)
-    
-    def _create_chat_config(self, temperature: Optional[float] = None, system_instruction: Optional[str] = None) -> types.GenerateContentConfig:
-        """Create a GenerateContentConfig for chat creation."""
-        temp = temperature if temperature is not None else self.temperature
-        system_instruction = system_instruction if system_instruction is not None else self.system_instruction
-        
-        if '2.5' in self.model_name:
-            # Default thinking budget for 2.5 models
-            thinking_budget = int(1.0 * 24_576)            
-            config = types.GenerateContentConfig(
-                temperature=temp,
-                thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
-                system_instruction=system_instruction
-            )
-        else:
-            config = types.GenerateContentConfig(temperature=temp, 
-                                                 system_instruction=system_instruction)
-        
-        return config
 
-    def _create_island_chat(self, island_id: int) -> genai.chats.AsyncChats:
+    def _create_island_chat(self, island_id: int, mode: str = 'explore', 
+                            use_large_model: bool = True) -> genai.chats.AsyncChats:
         """
         Create a new chat session for an island.
         
         Args:
             island_id: The island identifier.
+            mode: 'explore' or 'exploit' - determines system instruction.
+            use_large_model: If True, use the large model; otherwise use small model.
             
         Returns:
             A new async chat object.
         """
-        config = self._create_chat_config(system_instruction=self.system_instruction)
+        config = self.get_config(mode, use_large_model)
+        model_name = self.get_model_name(use_large_model)
         
         chat = self.client.aio.chats.create(
-            model=self.model_name,
+            model=model_name,
             config=config,
             history=[],
         )
         
-        logging.info(f"Created new chat session for Island {island_id} (model={self.model_name})")
+        logging.info(f"Created new chat session for Island {island_id} "
+                    f"(model={model_name}, mode={mode})")
         return chat
 
-    async def get_or_create_island(self, island_id: int) -> genai.chats.AsyncChats:
+    async def get_or_create_island(self, island_id: int, mode: str = 'explore',
+                                   use_large_model: bool = True) -> genai.chats.AsyncChats:
         """
         Get the chat session for an island, creating one if it doesn't exist.
         
         Args:
             island_id: The island identifier.
+            mode: 'explore' or 'exploit' for new chat creation.
+            use_large_model: Model size for new chat creation.
             
         Returns:
             The chat object for this island.
         """
         if island_id not in self.islands:
-            self.islands[island_id] = self._create_island_chat(island_id)
+            self.islands[island_id] = self._create_island_chat(island_id, mode, use_large_model)
         return self.islands[island_id]
 
     async def ask_island(self, island_id: int, prompt: str, 
+                         mode: str = 'explore',
+                         use_large_model: bool = True,
                          png_img: Optional[bytes] = None) -> str:
         """
         Send a message to an island's chat and get a response.
@@ -116,15 +193,27 @@ class IslandChatManager:
         The message is automatically appended to the island's chat history,
         allowing the LLM to see and learn from previous interactions.
         
+        Uses override config to dynamically switch between model/mode combinations
+        without recreating the chat session.
+        
         Args:
             island_id: The island identifier.
             prompt: The prompt text to send.
+            mode: 'explore' or 'exploit' - affects system instruction and temperature.
+            use_large_model: If True, use large model config; otherwise small model.
             png_img: Optional PNG image bytes to include with the prompt.
             
         Returns:
             The LLM's response text, or empty string on error.
         """
-        chat = await self.get_or_create_island(island_id)
+        chat = await self.get_or_create_island(island_id, mode, use_large_model)
+        
+        # Get the appropriate override config for this request
+        override_config = self.get_config(mode, use_large_model)
+        
+        # Track for logging
+        self.current_mode = mode
+        self.current_use_large = use_large_model
         
         try:
             if png_img is not None:
@@ -135,10 +224,14 @@ class IslandChatManager:
                 ]
             else:
                 message_parts = [types.Part.from_text(text=prompt)]
-            response = await chat.send_message(message_parts)
+            
+            # Use override config to apply the appropriate settings
+            response = await chat.send_message(message_parts, config=override_config)
             return response.text
         except Exception as e:
-            print(f"Error sending message to island {island_id} chat: {e}")
+            model_name = self.get_model_name(use_large_model)
+            print(f"Error sending message to island {island_id} chat "
+                  f"(model={model_name}, mode={mode}): {e}")
             return ""
 
     async def get_island_history(self, island_id: int) -> list:
@@ -153,8 +246,13 @@ class IslandChatManager:
         """
         try:
             if island_id in self.islands:
-                current_history = await self.islands[island_id].get_history()
-                return current_history
+                chat = self.islands[island_id]
+                # get_history() may or may not be async depending on SDK version
+                history = chat.get_history()
+                # If it's a coroutine, await it
+                if hasattr(history, '__await__'):
+                    history = await history
+                return list(history) if history else []
             else:
                 print(f"No chat found for island_id {island_id}")
                 return []
@@ -166,7 +264,8 @@ class IslandChatManager:
         """Return the number of active island chats."""
         return len(self.islands)
     
-    def reset_island(self, island_id: int) -> None:
+    def reset_island(self, island_id: int, mode: str = 'explore', 
+                     use_large_model: bool = True) -> None:
         """
         Reset an island's chat history by creating a fresh chat.
         
@@ -174,14 +273,17 @@ class IslandChatManager:
         
         Args:
             island_id: The island identifier to reset.
+            mode: 'explore' or 'exploit' for the new chat.
+            use_large_model: Model size for the new chat.
         """
         if island_id in self.islands:
-            self.islands[island_id] = self._create_island_chat(island_id)
+            self.islands[island_id] = self._create_island_chat(island_id, mode, use_large_model)
+            logging.info(f"Reset chat session for Island {island_id}")
     
-    def reset_all_islands(self) -> None:
+    def reset_all_islands(self, mode: str = 'explore', use_large_model: bool = True) -> None:
         """Reset all island chat histories."""
         for island_id in list(self.islands.keys()):
-            self.reset_island(island_id)
+            self.reset_island(island_id, mode, use_large_model)
 
 async def dnu_switch_gemini_model(
     chat: genai.chats.AsyncChats,
