@@ -47,7 +47,7 @@ def save_data_summary(
     
     This function documents:
     1. Sample split (training vs test cells)
-    2. Trial split (training vs test trials within objective function)
+    2. Trial split (training vs test inputs within objective function)
     3. Feature counts and data shapes
     4. Data types and estimated memory sizes
     
@@ -255,7 +255,7 @@ def save_data_summary(
     
     # === OBJECTIVE FUNCTION SUB-MATRICES (within training samples) ===
     # These are created inside objective() for the training samples
-    if trials.ndim == 2:
+    if inputs.ndim == 2:
         x_train_shape = (n_train_samples, 1, n_training_trials)
         x_test_shape = (n_train_samples, 1, n_test_trials)
     else:
@@ -270,9 +270,9 @@ def save_data_summary(
         'matrix_name': 'x_train (in objective)',
         'description': 'Training samples, training trials (param fitting)',
         'shape': str(x_train_shape),
-        'dtype': str(trials_dtype),
-        'size_bytes': calc_size(x_train_shape, trials_dtype),
-        'size_human': format_size(calc_size(x_train_shape, trials_dtype)),
+        'dtype': str(inputs_dtype),
+        'size_bytes': calc_size(x_train_shape, inputs_dtype),
+        'size_human': format_size(calc_size(x_train_shape, inputs_dtype)),
         'n_elements': np.prod(x_train_shape)
     })
     
@@ -292,9 +292,9 @@ def save_data_summary(
         'matrix_name': 'x_test (in objective)',
         'description': 'Training samples, test trials (loss evaluation)',
         'shape': str(x_test_shape),
-        'dtype': str(trials_dtype),
-        'size_bytes': calc_size(x_test_shape, trials_dtype),
-        'size_human': format_size(calc_size(x_test_shape, trials_dtype)),
+        'dtype': str(inputs_dtype),
+        'size_bytes': calc_size(x_test_shape, inputs_dtype),
+        'size_human': format_size(calc_size(x_test_shape, inputs_dtype)),
         'n_elements': np.prod(x_test_shape)
     })
     
@@ -333,7 +333,7 @@ def save_data_summary(
     print(f"Sample Split: {n_train_samples}/{n_total_samples} train, {n_test_samples}/{n_total_samples} test")
     print(f"Trial Split:  {n_training_trials}/{n_trials} train, {n_test_trials}/{n_trials} test (per sample, in objective)")
     print(f"Features:     {n_features} per sample")
-    print(f"Data Types:   response={response_dtype}, trials={trials_dtype}")
+    print(f"Data Types:   response={response_dtype}, inputs={inputs_dtype}")
     total_size = sum(r['size_bytes'] for r in rows if isinstance(r['size_bytes'], (int, float)))
     print(f"Total Data:   {format_size(total_size)}")
     print(f"Saved to:     {csv_path}")
@@ -1002,8 +1002,13 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     data_dict = load_and_process_data_fn(**data_config)
     response = data_dict['response']
     # Use 'inputs' if available (new format), fall back to 'trials' (deprecated)
-    inputs = data_dict.get('inputs', None)
-    trials = data_dict['trials']  # Keep for backward compat during transition
+    if 'inputs' in data_dict:
+        inputs = data_dict['inputs'].data
+    else:
+        inputs = data_dict['trials'].data  # Keep for backward compat during transition
+
+    print(f'DEBUG ************************************')
+    print(f'*************** input shape: {inputs.shape} ******************')
     n_good_samples, n_trials = response.shape
         
     key = jax.random.PRNGKey(random_seed)
@@ -1014,8 +1019,9 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         test_samples = shuffled_indices[training_size:]
         return training_samples, test_samples
     training_samples, test_samples = create_train_test_split(n_good_samples, training_ratio)
+    print(f"************DEBUG AGAIN : training_samples shape: {training_samples.shape} & test_samples shape: {test_samples.shape} ***************")
     response_train, response_test = response[training_samples, :], response[test_samples, :]
-    trials_train, trials_test = trials[training_samples, :], trials[test_samples, :]
+    inputs_train, inputs_test = inputs[training_samples, :], inputs[test_samples, :]  # has shape (n_samples, n_features, n_trials)
     print(f"Loaded {n_good_samples} samples, {n_trials} trials per sample.")
     print(f"Using {len(training_samples)} samples for training and {len(test_samples)} samples for testing.")
 
@@ -1044,7 +1050,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     # Save data summary CSV for inspection
     save_data_summary(
         response=response,
-        trials=trials,
+        inputs=inputs,
         training_samples=training_samples,
         test_samples=test_samples,
         output_dir=full_dir,
@@ -1070,7 +1076,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         # score the initial program
         loss_init, params_init, loss, params = objective(program_jax, param_est, 
                                         loss_func=loss_functions.quadratic_loss, 
-                                        x=trials_train, y=response_train, 
+                                        x=inputs_train, y=response_train, 
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol,
                                         use_param_estimator=use_param_estimator, max_iter=max_iter)
         seed_losses[i] = loss
@@ -1084,11 +1090,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         program_jax_code_string = utils.format_function_source(
             program_jax, f'{model_name}_v{i+1}', 'import jax.numpy as jnp'
         )
-        if trials_train.shape[1] == 1 : 
+        if inputs_train.shape[1] == 1 : 
             # evenly spaced evaluation points for 1D inputs
             eval_points = None
         else : 
-            eval_points = trials_train
+            eval_points = inputs_train
         y_eval = diagnostics_module.compute_evaluation_matrix(program_jax, params, eval_points=eval_points, n_evaluation_points=100)
 
         new_program_df = pd.DataFrame({'program_code_string': program_code_string,
@@ -1128,8 +1134,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     if diagnostics_module is not None:
         diagnostics_module.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
-                               inputs=trials_train, response=response_train,
-                               sample_selection=np.random.choice(len(trials_train), size=9, replace=False),
+                               inputs=inputs_train, response=response_train,
+                               sample_selection=np.random.choice(len(inputs_train), size=9, replace=False),
                                save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
                                labels=['seed_1', 'seed_2'],
                                colours=['tab:green', 'tab:red'],
@@ -1180,7 +1186,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                    k_max=k_max, 
                                                                    temp=temperature,
                                                                    spike_matrix=response_train, 
-                                                                   stimuli=trials_train,
+                                                                   stimuli=inputs_train,
                                                                    prompt_manager=prompt_manager,
                                                                    img_dir=model_image_dirs[island_idx, j],
                                                                    diagnostics_module=diagnostics_module,
@@ -1209,7 +1215,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 llm_name=little_lm_name,
                 client=client,
                 spike_matrix=response_train,
-                stimuli=trials_train,
+                stimuli=inputs_train,
                 prompt_manager=prompt_manager,
                 mode=mode,
                 k_max=2,
@@ -1248,7 +1254,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             
             initial_loss, initial_params, loss, optimized_params = objective(model_new, param_est_new, 
                                                                                 loss_func=loss_functions.quadratic_loss,
-                                                                                x=trials_train, y=response_train,
+                                                                                x=inputs_train, y=response_train,
                                                                                 param_penalty_weight=param_penalty_weight,
                                                                                 fit_params=fit_params, tol=tol, 
                                                                                 use_param_estimator=use_param_estimator, 
@@ -1257,11 +1263,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 logging.info('-' * 50)
                 continue
 
-            if trials_train.shape[1] == 1 : 
+            if inputs_train.shape[1] == 1 : 
                 # evenly spaced evaluation points for 1D inputs
                 eval_points = None
             else : 
-                eval_points = trials_train
+                eval_points = inputs_train
             y_eval = diagnostics_module.compute_evaluation_matrix(model_new, optimized_params, eval_points=eval_points, n_evaluation_points=100)
             logging.info(f"Prompt: \n{prompt}\n")
             logging.info(f"Loss: {loss:.2f}\n")
@@ -1275,9 +1281,9 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 diagnostics_module.plot_model_fits(
                     programs_df=pd.DataFrame({'program': [model_new, model_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
-                    inputs=trials_train,
+                    inputs=inputs_train,
                     response=response_train,
-                    sample_selection=np.random.choice(len(trials_train), size=4, replace=False),
+                    sample_selection=np.random.choice(len(inputs_train), size=4, replace=False),
                     colours=['tab:green', 'tab:red'],
                     labels=['Param Estimator', 'Gradient Descent'],
                     line_alpha=1.0,
@@ -1353,7 +1359,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 diagnostics_module.plot_model_fits(
                     programs_df=top_df,
                     loss_function=loss_functions.quadratic_loss,
-                    inputs=trials_train,
+                    inputs=inputs_train,
                     response=response_train,
                     sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                     title=sup_title,
@@ -1369,7 +1375,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             diagnostics_module.plot_model_fits(
                 programs_df=top_programs,
                 loss_function=loss_functions.quadratic_loss,
-                inputs=trials_train,
+                inputs=inputs_train,
                 response=response_train,
                 sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                 title=sup_title,
@@ -1412,7 +1418,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             # compute the test loss
             _, _, test_loss, optimized_params = objective(model, param_estimator,
                                                           loss_func=loss_functions.quadratic_loss,
-                                                          x=trials_test, y=response_test, fit_params=fit_params,
+                                                          x=inputs_test, y=response_test, fit_params=fit_params,
                                                           max_iter=max_iter, 
                                                           param_penalty_weight=param_penalty_weight, tol=tol,
                                                           use_param_estimator=use_param_estimator, 
@@ -1475,7 +1481,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             diagnostics_module.plot_model_fits(
                 programs_df=df,
                 loss_function=loss_functions.quadratic_loss,
-                inputs=trials_test,
+                inputs=inputs_test,
                 response=response_test,
                 sample_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
                 title=df_sup,
@@ -1490,7 +1496,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 diagnostics_module.plot_single_model_fit(
                     model=df['program'][j],
                     loss_function=loss_functions.quadratic_loss,
-                    x=trials_test[sample_selection],
+                    x=inputs_test[sample_selection],
                     y=response_test[sample_selection],
                     params=df['params'][j][sample_selection],
                     title=f"Island {birth_island}, Iteration {iteration_number}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
