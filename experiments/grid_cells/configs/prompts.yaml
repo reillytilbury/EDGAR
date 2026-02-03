@@ -111,9 +111,9 @@ prompts:
       def grid_model_v{next_version}(X, param1=default1, param2=default2, ...):
       ```
       where:
-      * `X` is a 2D array with shape `(n_features, n_trials)`. Each row `X[i]` is a different predictor variable.
+      * `X` is a 2D array with shape `(n_features, n_trials)`. Each row `X[i]` is a different input variable.
       * For grid cells, `X[0]` is the x position and `X[1]` is the y position (both normalized to [-1, 1]).
-      * Access predictors by index: `x = X[0]`, `y = X[1]`
+      * Access inputs by index: `x = X[0]`, `y = X[1]`
       * The remaining arguments are free parameters with default values.
       * Return shape: `(n_trials,)` — the predicted firing rate for each position.
 
@@ -134,7 +134,12 @@ prompts:
   parameter_estimator:
     base: |
       You are an AI scientist. Your task is to create a parameter estimator function, parameter_estimator_v{next_version}, to estimate the free parameters of the latest grid cell model, grid_model_v{next_version}.
-      The parameters should be estimated directly from the 2D spatial firing pattern, using knowledge of what the parameters represent:
+      The role of the parameter estimator is to infer the best parameter values of each cell from observed firing rate of individual cells. 
+      To achieve this, inspect the mathematical structure of the grid_model and understand how each parameter influences the firing pattern. 
+      Importantly, focus on triangulating the spatial periodicity and symmetry that is often inherent in grid cell firing. 
+      Parameterising the spread of each firing field and the overall grid orientation will be crucial for accurate estimation.
+
+      Example parameters you might consider adopting include : 
       * Grid spacing (lambda): distance between firing field centers
       * Orientation (theta): rotation of the hexagonal pattern
       * Phase offsets (phi_x, phi_y): position of the pattern in space
@@ -160,7 +165,7 @@ prompts:
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
-      * The only arguments to the function should be the predictors (X) and the firing rates.
+      * The only arguments to the function should be the inputs (X) and the firing rates.
       * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
       * Use spatial autocorrelation, peak detection, or FFT-based methods to estimate grid parameters.
       * Do not use complex fitting functions like `curve_fit`, `least_squares` or `minimize`.

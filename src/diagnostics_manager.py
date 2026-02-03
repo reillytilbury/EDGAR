@@ -55,7 +55,7 @@ class DiagnosticsProtocol(Protocol):
                         legend_fontsize: int = 12,
                         dpi: float = 100.0,
                         save_path: Optional[str] = None,
-                        predictor_idx: int = 0) -> None:
+                        input_idx: int = 0) -> None:
         """Plot fits of multiple models over selected samples."""
         ...
     
@@ -70,7 +70,7 @@ class DiagnosticsProtocol(Protocol):
                               dpi: float = 100.0,
                               title: str = '',
                               save_path: Optional[str] = None,
-                              predictor_idx: int = 0) -> None:
+                              input_idx: int = 0) -> None:
         """Plot fit of a single model."""
         ...
     

@@ -5,11 +5,11 @@ data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
 activity_threshold: 0.4
 conc_threshold: 0.55
 
-# Predictor configuration - defines the input variables for models
-# Each predictor should have a name and description for prompt generation
-predictors:
+# Input configuration - defines the input variables for models
+# Each input should have a name and description for prompt generation
+inputs:
   - name: theta
     description: "Stimulus orientation angle in radians [0, 2π]"
-  # Future predictors can be added here, e.g.:
+  # Future inputs can be added here, e.g.:
   # - name: speed
   #   description: "Running speed of the mouse in cm/s"

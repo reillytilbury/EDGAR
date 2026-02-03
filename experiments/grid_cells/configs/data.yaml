@@ -20,9 +20,9 @@ speed_threshold: 2.5    # minimum speed in cm/s to include data point
 smoothing_sigma: 1.5    # Gaussian smoothing sigma for rate maps (in bins)
 wall_val: 0.75          # arena half-width in meters (0.75m for 1.5m x 1.5m arena)
 
-# Predictor configuration - defines the input variables for models
+# Input configuration - defines the input variables for models
 # Grid cells respond to 2D spatial position
-predictors:
+inputs:
   - name: x
     description: "Normalized x position in arena [-1, 1]"
   - name: y

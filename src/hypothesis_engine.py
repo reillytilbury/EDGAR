@@ -11,7 +11,7 @@ from pathlib import Path
 from . import utils, loss_functions, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .prompt_manager import PromptManager
-from .data_structures import Predictors, ensure_predictors
+from .data_structures import Inputs, ensure_
 import experiments.orientation_tuning.seed_programs # delete this once we read seed_programs from experiment.yaml
 from tqdm import tqdm
 from google import genai
@@ -36,7 +36,7 @@ print(jax.devices())
 
 def save_data_summary(
     response: np.ndarray,
-    trials: np.ndarray,
+    inputs: np.ndarray,
     training_samples: jnp.ndarray,
     test_samples: jnp.ndarray,
     output_dir: str,
@@ -53,7 +53,7 @@ def save_data_summary(
     
     Args:
         response: Full response matrix, shape (n_samples, n_trials)
-        trials: Full trials/predictors matrix, shape (n_samples, n_trials) or (n_samples, n_features, n_trials)
+        inputs: Full inputs matrix, shape (n_samples, n_trials) or (n_samples, n_features, n_trials)
         training_samples: Indices of samples used for training
         test_samples: Indices of samples used for testing
         output_dir: Directory to save the CSV
@@ -66,13 +66,13 @@ def save_data_summary(
     n_train_samples = len(training_samples)
     n_test_samples = len(test_samples)
     
-    # Determine trials shape and features
-    if trials.ndim == 2:
+    # Determine inputs shape and features
+    if inputs.ndim == 2:
         n_features = 1
-        trials_shape_str = f"({trials.shape[0]}, {trials.shape[1]})"
+        inputs_shape_str = f"({inputs.shape[0]}, {inputs.shape[1]})"
     else:
-        n_features = trials.shape[1]
-        trials_shape_str = f"({trials.shape[0]}, {trials.shape[1]}, {trials.shape[2]})"
+        n_features = inputs.shape[1]
+        inputs_shape_str = f"({inputs.shape[0]}, {inputs.shape[1]}, {inputs.shape[2]})"
     
     # Calculate trial split (same logic as in objective function)
     n_trial_splits = 10
@@ -211,46 +211,46 @@ def save_data_summary(
         'n_elements': np.prod(response_test_shape)
     })
     
-    # Trials/predictors matrices
-    trials_dtype = trials.dtype
+    # Input matrices
+    inputs_dtype = inputs.dtype
     rows.append({
         'category': 'DATA_MATRIX',
-        'matrix_name': 'trials/predictors (full)',
+        'matrix_name': 'inputs (full)',
         'description': f'All cells, {n_features} features, all trials',
-        'shape': trials_shape_str,
-        'dtype': str(trials_dtype),
-        'size_bytes': calc_size(trials.shape, trials_dtype),
-        'size_human': format_size(calc_size(trials.shape, trials_dtype)),
-        'n_elements': np.prod(trials.shape)
+        'shape': inputs_shape_str,
+        'dtype': str(inputs_dtype),
+        'size_bytes': calc_size(inputs.shape, inputs_dtype),
+        'size_human': format_size(calc_size(inputs.shape, inputs_dtype)),
+        'n_elements': np.prod(inputs.shape)
     })
     
-    if trials.ndim == 2:
-        trials_train_shape = (n_train_samples, n_trials)
-        trials_test_shape = (n_test_samples, n_trials)
+    if inputs.ndim == 2:
+        inputs_train_shape = (n_train_samples, n_trials)
+        inputs_test_shape = (n_test_samples, n_trials)
     else:
-        trials_train_shape = (n_train_samples, n_features, n_trials)
-        trials_test_shape = (n_test_samples, n_features, n_trials)
+        inputs_train_shape = (n_train_samples, n_features, n_trials)
+        inputs_test_shape = (n_test_samples, n_features, n_trials)
     
     rows.append({
         'category': 'DATA_MATRIX',
-        'matrix_name': 'trials_train',
+        'matrix_name': 'inputs_train',
         'description': f'Training cells, {n_features} features, all trials',
-        'shape': str(trials_train_shape),
-        'dtype': str(trials_dtype),
-        'size_bytes': calc_size(trials_train_shape, trials_dtype),
-        'size_human': format_size(calc_size(trials_train_shape, trials_dtype)),
-        'n_elements': np.prod(trials_train_shape)
+        'shape': str(inputs_train_shape),
+        'dtype': str(inputs_dtype),
+        'size_bytes': calc_size(inputs_train_shape, inputs_dtype),
+        'size_human': format_size(calc_size(inputs_train_shape, inputs_dtype)),
+        'n_elements': np.prod(inputs_train_shape)
     })
     
     rows.append({
         'category': 'DATA_MATRIX',
-        'matrix_name': 'trials_test',
+        'matrix_name': 'inputs_test',
         'description': f'Test cells, {n_features} features, all trials',
-        'shape': str(trials_test_shape),
-        'dtype': str(trials_dtype),
-        'size_bytes': calc_size(trials_test_shape, trials_dtype),
-        'size_human': format_size(calc_size(trials_test_shape, trials_dtype)),
-        'n_elements': np.prod(trials_test_shape)
+        'shape': str(inputs_test_shape),
+        'dtype': str(inputs_dtype),
+        'size_bytes': calc_size(inputs_test_shape, inputs_dtype),
+        'size_human': format_size(calc_size(inputs_test_shape, inputs_dtype)),
+        'n_elements': np.prod(inputs_test_shape)
     })
     
     # === OBJECTIVE FUNCTION SUB-MATRICES (within training samples) ===
@@ -313,7 +313,7 @@ def save_data_summary(
     rows.append({
         'category': 'FEATURES',
         'matrix_name': 'n_features',
-        'description': 'Number of predictor features per sample',
+        'description': 'Number of input features per sample',
         'shape': '-',
         'dtype': '-',
         'size_bytes': '-',
@@ -357,7 +357,7 @@ def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
         model (function): The model which predicts neural activity from stimuli and free parameters.
                                  Signature: model(X, *params) -> activity
                                  where X has shape (n_features, n_trials) for a single sample.
-        x (np.ndarray): Predictor data, shape (n_samples, n_features, n_trials).
+        x (np.ndarray): Input data, shape (n_samples, n_features, n_trials).
         y (np.ndarray): Response data, shape (n_samples, n_trials).
     Returns:
         jnp.ndarray: The estimated parameters for each sample, shape (n_samples, n_params).
@@ -399,9 +399,9 @@ def compute_default_params(model) -> jnp.ndarray:
     """
     try:
         sig = inspect.signature(model)
-        # First parameter is the predictor input (X or theta), skip it
+        # First parameter is the input (X or theta), skip it
         all_param_names = list(sig.parameters.keys())
-        # The first param is the predictor (could be named 'X', 'theta', or anything)
+        # The first param is the input (could be named 'X', 'theta', or anything)
         # All subsequent params are the model parameters to fit
         param_names = all_param_names[1:] if all_param_names else []
         defaults = [sig.parameters[n].default if sig.parameters[n].default is not inspect._empty else 0.0 for n in param_names]
@@ -422,7 +422,7 @@ def objective(model, param_estimator, loss_func, x, y,
     The loss is calculated as the mean over samples and trials of the loss function provided.
     
     Args:
-        model (function): The model which predicts neural activity from predictors
+        model (function): The model which predicts neural activity from inputs
                                 and free parameters (for a single sample).
                                 Signature: model(X, *params) -> activity
                                 where X has shape (n_features, n_trials) for a single sample.
@@ -430,10 +430,10 @@ def objective(model, param_estimator, loss_func, x, y,
                                 Signature: param_estimator(X, response) -> params
                                 where X has shape (n_features, n_trials) for a single sample.
         loss_func (function): The loss function to use for calculating the loss.
-        x: Predictor data. Can be:
+        x: Input data. Can be:
            - 2D array (n_samples, n_trials) - will be auto-expanded to (n_samples, 1, n_trials)
            - 3D array (n_samples, n_features, n_trials)
-           - Predictors object
+           - Inputs object
         y (jnp.ndarray): Response data, shape (n_samples, n_trials).
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
@@ -454,9 +454,9 @@ def objective(model, param_estimator, loss_func, x, y,
     """
     t_start = time.time()
     
-    # Normalize x to Predictors format: (n_samples, n_features, n_trials)
-    x_predictors = ensure_predictors(x)
-    x_data = x_predictors.to_tensor()  # shape: (n_samples, n_features, n_trials)
+    # Normalize x to Inputs format: (n_samples, n_features, n_trials)
+    x_inputs = ensure_inputs(x)
+    x_data = x_inputs.to_tensor()  # shape: (n_samples, n_features, n_trials)
     
     n_samples, n_features, n_trials = x_data.shape
     
@@ -469,7 +469,7 @@ def objective(model, param_estimator, loss_func, x, y,
     training_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 1])
     test_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 0])
     
-    # Split predictors and response: x has shape (n_samples, n_features, n_trials)
+    # Split inputs and response: x has shape (n_samples, n_features, n_trials)
     x_train = x_data[:, :, training_trials_idx]  # (n_samples, n_features, training_size)
     y_train = y[:, training_trials_idx]           # (n_samples, training_size)
     x_test = x_data[:, :, test_trials_idx]        # (n_samples, n_features, test_size)
@@ -713,7 +713,7 @@ async def generate_new_model(current_island, llm_name, client,
             sup_title = "".join([f"{model_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             diagnostics_module.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
-                                    predictors=stimuli, response=spike_matrix,
+                                    inputs=stimuli, response=spike_matrix,
                                     sample_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
                                     save_path=img_dir,
                                     labels=[f'{model_name}_v_1', f'{model_name}_v_2'],
@@ -797,7 +797,7 @@ async def generate_new_parameter_estimator(current_island,
             sup_title = "".join([f"model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             diagnostics_module.plot_model_fits(programs_df=random_programs_crude,
                                     loss_function=loss_functions.quadratic_loss,
-                                    predictors=stimuli, response=spike_matrix,
+                                    inputs=stimuli, response=spike_matrix,
                                     sample_selection=np.random.choice(spike_matrix.shape[0], size=4, replace=False),
                                     save_path=img_dir,
                                     labels=['v_1', 'v_2'],
@@ -1001,8 +1001,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
 
     data_dict = load_and_process_data_fn(**data_config)
     response = data_dict['response']
-    # Use 'predictors' if available (new format), fall back to 'trials' (deprecated)
-    predictors = data_dict.get('predictors', None)
+    # Use 'inputs' if available (new format), fall back to 'trials' (deprecated)
+    inputs = data_dict.get('inputs', None)
     trials = data_dict['trials']  # Keep for backward compat during transition
     n_good_samples, n_trials = response.shape
         
@@ -1128,7 +1128,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     if diagnostics_module is not None:
         diagnostics_module.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
-                               predictors=trials_train, response=response_train,
+                               inputs=trials_train, response=response_train,
                                sample_selection=np.random.choice(len(trials_train), size=9, replace=False),
                                save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
                                labels=['seed_1', 'seed_2'],
@@ -1275,7 +1275,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 diagnostics_module.plot_model_fits(
                     programs_df=pd.DataFrame({'program': [model_new, model_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
-                    predictors=trials_train,
+                    inputs=trials_train,
                     response=response_train,
                     sample_selection=np.random.choice(len(trials_train), size=4, replace=False),
                     colours=['tab:green', 'tab:red'],
@@ -1353,7 +1353,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 diagnostics_module.plot_model_fits(
                     programs_df=top_df,
                     loss_function=loss_functions.quadratic_loss,
-                    predictors=trials_train,
+                    inputs=trials_train,
                     response=response_train,
                     sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                     title=sup_title,
@@ -1369,7 +1369,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             diagnostics_module.plot_model_fits(
                 programs_df=top_programs,
                 loss_function=loss_functions.quadratic_loss,
-                predictors=trials_train,
+                inputs=trials_train,
                 response=response_train,
                 sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                 title=sup_title,
@@ -1475,7 +1475,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             diagnostics_module.plot_model_fits(
                 programs_df=df,
                 loss_function=loss_functions.quadratic_loss,
-                predictors=trials_test,
+                inputs=trials_test,
                 response=response_test,
                 sample_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
                 title=df_sup,

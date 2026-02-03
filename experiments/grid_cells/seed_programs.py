@@ -24,7 +24,7 @@ def grid_model_1(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, ampl
     where q = 4*pi/(sqrt(3)*lam) and u_k are unit vectors 60 degrees apart.
     
     Args:
-        X (np.ndarray): Predictor array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (n_features, n_trials).
                         X[0] is x position, X[1] is y position (normalized to [-1, 1]).
         lam (float): Grid spacing (wavelength) in same units as x,y.
         theta (float): Orientation of the grid pattern in radians.
@@ -103,7 +103,7 @@ def parameter_estimator_1_old(X, firing_rates):
     - Amplitude/baseline: from min/max firing rates
     
     Args:
-        X (np.ndarray): Predictor array (2, n_trials) with x, y positions.
+        X (np.ndarray): Input array (2, n_trials) with x, y positions.
         firing_rates (np.ndarray): Firing rates, shape (n_trials,).
     
     Returns:
@@ -301,7 +301,7 @@ def grid_model_2(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0,
     lattice, providing sharper field boundaries than the cosine model.
     
     Args:
-        X (np.ndarray): Predictor array (n_features, n_trials).
+        X (np.ndarray): Input array (n_features, n_trials).
                         X[0] is x, X[1] is y (normalized to [-1, 1]).
         lam (float): Lattice spacing.
         theta (float): Orientation of the lattice in radians.
@@ -414,7 +414,7 @@ def parameter_estimator_2_old(X, firing_rates):
     Similar to parameter_estimator_1 but includes sigma estimation.
     
     Args:
-        X (np.ndarray): Predictor array (2, n_trials) with x, y positions.
+        X (np.ndarray): Input array (2, n_trials) with x, y positions.
         firing_rates (np.ndarray): Firing rates, shape (n_trials,).
     
     Returns:

@@ -11,7 +11,7 @@ from scipy.ndimage import gaussian_filter
 from typing import Dict, Any, Optional, List, Tuple
 import time 
 
-from src.data_structures import Predictors
+from src.data_structures import Inputs
 
 # How to align spike trains with behavioural time and position
 
@@ -70,14 +70,14 @@ def load_and_process_data(
     time_bin_ms: int = 10,
     smoothing_sigma: float = 1.5,
     wall_val: float = 0.75,
-    predictor_names: Optional[List[str]] = None,
+    input_names: Optional[List[str]] = None,
     module_key: str = 'spikes_mod1',
     min_spikes: int = 100,
     speed_threshold: float = 2.5,
     max_trials: int = 5000,  # Subsample to avoid GPU OOM
     filter_grid_cells: bool = True,  # Apply grid cell filtering
     grid_filter_kwargs: Optional[Dict[str, Any]] = None,  # Parameters for grid_cell_filter
-    **kwargs  # Accept additional config params (e.g., task, predictors) without error
+    **kwargs  # Accept additional config params (e.g., task, inputs) without error
 ) -> Dict[str, Any]:
     """
     Load and preprocess grid cell data from .npz file.
@@ -100,8 +100,8 @@ def load_and_process_data(
         Gaussian smoothing sigma for rate maps (in bins).
     wall_val : float
         Arena half-width in meters (0.75m for 1.5m x 1.5m arena).
-    predictor_names : list of str, optional
-        Names for the predictor variables. Defaults to ['x', 'y'].
+    input_names : list of str, optional
+        Names for the input variables. Defaults to ['x', 'y'].
     module_key : str
         Key in the npz file for spike data (e.g., 'spikes_mod1', 'spikes_mod2').
     min_spikes : int
@@ -114,13 +114,13 @@ def load_and_process_data(
     data_dict : dict
         Dictionary containing:
           - 'response': Firing rate at each position. (n_cells, n_trials) where n_trials = n_time_bins after filtering
-          - 'predictors': Predictors object with x, y, z, azimuth positions. (n_cells, n_features, n_trials) where n_features = len(predictor_names) and n_trials = n_time_bins after filtering
+          - 'inputs': Inputs object with x, y, z, azimuth positions. (n_cells, n_features, n_trials) where n_features = len(input_names) and n_trials = n_time_bins after filtering
           - 'position_data': Dict with raw x, y, t arrays.
     """
     # take note of time for logging purposes 
     clock_time_start = time.time()    
-    if predictor_names is None:
-        predictor_names = ['x', 'y']
+    if input_names is None:
+        input_names = ['x', 'y']
     
     # Compute number of spatial bins from bin size
     # Arena is 2 * wall_val meters = 2 * wall_val * 100 cm
@@ -138,7 +138,7 @@ def load_and_process_data(
     # Define all possible feature names (excluding 't' which is always required)
     # Add new features here as they become available in data files
     # KNOWN_FEATURES = ['x', 'y', 'z', 'azimuth']
-    KNOWN_FEATURES = ['x', 'y']
+    KNOWN_FEATURES = input_names
     
     # Load all available features into a dictionary 
     features_raw = {}
@@ -245,7 +245,7 @@ def load_and_process_data(
     print(f"Final data shape: {n_cells} neurons x {n_time_bins} time bins")
     
     # =========================================================================
-    # Step 7: Normalize positions and prepare predictors
+    # Step 7: Normalize positions and prepare inputs
     # =========================================================================
     # Normalize x, y to [-1, 1]
     features['x'] = features['x'] / wall_val
@@ -255,16 +255,16 @@ def load_and_process_data(
     # Response: firing rates (n_cells, n_time_bins)
     response = firing_rates
     
-    # Build predictors array
-    predictor_arrays = []
-    for name in predictor_names:
+    # Build inputs array
+    input_arrays = []
+    for name in input_names:
         if name not in features:
-            raise ValueError(f"Predictor '{name}' requested but not available. Available: {list(features.keys())}")
+            raise ValueError(f"Input '{name}' requested but not available. Available: {list(features.keys())}")
         # Tile to match (n_cells, n_time_bins)
-        predictor_arrays.append(np.tile(features[name], (n_cells, 1)))
+        input_arrays.append(np.tile(features[name], (n_cells, 1)))
     
-    predictors_data = np.stack(predictor_arrays, axis=1)
-    predictors = Predictors(data=predictors_data, names=predictor_names)
+    inputs_data = np.stack(input_arrays, axis=1)
+    inputs = Inputs(data=inputs_data, names=input_names)
     
     # =========================================================================
     # Compute rate maps using compute_rate_map 
@@ -317,7 +317,7 @@ def load_and_process_data(
         
         grid_cell_indices, grid_filter_info = grid_cell_filter(
             response=response,
-            predictors=predictors,
+            inputs=inputs,
             rate_maps=rate_maps,
             position_data=position_data_for_filter,
             **filter_kwargs
@@ -327,9 +327,9 @@ def load_and_process_data(
             # Filter to only grid cells
             response = response[grid_cell_indices]
             rate_maps = rate_maps[grid_cell_indices]
-            # Rebuild predictors for filtered cells
-            predictors_data = predictors_data[grid_cell_indices]
-            predictors = Predictors(data=predictors_data, names=predictor_names)
+            # Rebuild inputs for filtered cells
+            inputs_data = inputs_data[grid_cell_indices]
+            inputs = Inputs(data=inputs_data, names=input_names)
             n_cells = len(grid_cell_indices)
             print(f"Grid cell filtering: kept {n_cells} grid cells")
         else:
@@ -343,8 +343,8 @@ def load_and_process_data(
 
     return {
         "response": response, # Firing rates (n_cells, n_trials)
-        "predictors": predictors, # Predictors object
-        "trials": predictors_data,  # (n_cells, n_features, n_trials)
+        "inputs": inputs, # Inputs object
+        "trials": inputs_data,  # (n_cells, n_features, n_trials)
         "rate_maps": rate_maps, # (n_cells, n_spatial_bins, n_spatial_bins)
         "position_data": {
             **features,
@@ -360,7 +360,7 @@ def load_and_process_data(
 
 def grid_cell_filter(
     response: np.ndarray,
-    predictors: Predictors,
+    inputs: Inputs,
     rate_maps: np.ndarray,
     position_data: Dict[str, np.ndarray],
     # Quality control parameters
@@ -399,8 +399,8 @@ def grid_cell_filter(
     ----------
     response : np.ndarray
         Firing rates matrix of shape (n_cells, n_time_bins).
-    predictors : Predictors
-        Predictors object with position data.
+    inputs : Inputs
+        Inputs object with position data.
     rate_maps : np.ndarray
         Fine-grained rate maps of shape (n_cells, n_spatial_bins, n_spatial_bins).
     position_data : dict
@@ -475,9 +475,9 @@ def grid_cell_filter(
     # =========================================================================
     n_coarse_bins = int(np.ceil(arena_size_cm / coarse_bin_cm))
     
-    # Get positions from predictors (first cell, all same)
-    x_norm = predictors.data[0, 0, :]  # Normalized x in [-1, 1]
-    y_norm = predictors.data[0, 1, :]  # Normalized y in [-1, 1]
+    # Get positions from inputs (first cell, all same)
+    x_norm = inputs.data[0, 0, :]  # Normalized x in [-1, 1]
+    y_norm = inputs.data[0, 1, :]  # Normalized y in [-1, 1]
     
     # Compute coarse rate maps without smoothing
     coarse_rate_maps = np.zeros((n_cells, n_coarse_bins, n_coarse_bins))

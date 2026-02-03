@@ -5,7 +5,7 @@ def neuron_model_1(X, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=
     """
     A simple neuron model that computes the response based on a Gaussian tuning curve.
     Args:
-        X (np.ndarray): Predictor array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (n_features, n_trials).
                         X[0] is the stimulus angle theta in radians.
         theta_pref (float): Preferred direction of the neuron.
         baseline (float): Baseline firing rate.
@@ -14,7 +14,7 @@ def neuron_model_1(X, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=
     Returns:
         np.ndarray: The firing rate of the neuron, shape (n_trials,).
     """
-    theta = X[0]  # Extract theta from first predictor
+    theta = X[0]  # Extract theta from first input
     theta_pref = np.clip(theta_pref, 0, 2 * np.pi)
     baseline = np.clip(baseline, 0, None)
     amplitude = np.clip(amplitude, 0, None)
@@ -25,7 +25,7 @@ def neuron_model_1(X, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=
     return baseline + amplitude * np.exp(-0.5 * (dist / tuning_width) ** 2)
 
 def neuron_model_1_jax(X, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=1.0):
-    theta = X[0]  # Extract theta from first predictor
+    theta = X[0]  # Extract theta from first input
     theta_pref = jnp.clip(theta_pref, 0, 2 * jnp.pi)
     baseline = jnp.clip(baseline, 0, None)
     amplitude = jnp.clip(amplitude, 0, None)
@@ -38,13 +38,13 @@ def parameter_estimator_1(X, spike_counts):
     """
     Estimates the parameters of the gaussian neuron model. We do this by creating a binned tuning curve and picking out salient features.
     Args:
-        X (np.ndarray): Predictor array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (n_features, n_trials).
                         X[0] is the stimulus angle theta in radians.
         spike_counts (np.ndarray): Spike counts corresponding to each trial, shape (n_trials,).
     Returns:
         np.ndarray: Estimated parameters [theta_pref, baseline, amplitude, tuning_width].
     """
-    theta = X[0]  # Extract theta from first predictor
+    theta = X[0]  # Extract theta from first input
     n_bins = 20
     bin_idx = ((theta * n_bins) / (2 * np.pi)).astype(np.int32)
     bin_idx = np.clip(bin_idx, 0, n_bins - 1)
@@ -67,7 +67,7 @@ def neuron_model_2(X, theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2
     """
     A neuron model that computes the response based on a double peaked gaussian tuning curve, with peaks at theta_pref and (theta_pref + pi) % 2pi.
     Args:
-        X (np.ndarray): Predictor array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (n_features, n_trials).
                         X[0] is the stimulus angle theta in radians.
         theta_pref (float): Preferred angle in radians.
         baseline (float): Baseline firing rate.
@@ -77,7 +77,7 @@ def neuron_model_2(X, theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2
     Returns:
         np.ndarray: The response of the neuron model, shape (n_trials,).
     """
-    theta = X[0]  # Extract theta from first predictor
+    theta = X[0]  # Extract theta from first input
     theta_pref = np.clip(theta_pref, 0, 2 * np.pi)
     baseline = np.clip(baseline, 0, None)
     amplitude_1 = np.clip(amplitude_1, 0, None)
@@ -90,7 +90,7 @@ def neuron_model_2(X, theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2
     return baseline + amplitude_1 * np.exp(-0.5 * (dist_1 / tuning_width) ** 2) + amplitude_2 * np.exp(-0.5 * (dist_2 / tuning_width) ** 2)
 
 def neuron_model_2_jax(X, theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2=0.0, tuning_width=1.0):
-    theta = X[0]  # Extract theta from first predictor
+    theta = X[0]  # Extract theta from first input
     theta_pref = jnp.clip(theta_pref, 0, 2 * jnp.pi)
     baseline = jnp.clip(baseline, 0, None)
     amplitude_1 = jnp.clip(amplitude_1, 0, None)
@@ -106,13 +106,13 @@ def parameter_estimator_2(X, spike_counts):
     """
     A parameter estimator for the double peaked neuron model. Creates a binned tuning curve from spike counts and estimates parameters using features from the tuning curve.
     Args:
-        X (np.ndarray): Predictor array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (n_features, n_trials).
                         X[0] is the stimulus angle theta in radians.
         spike_counts (np.ndarray): Spike counts corresponding to the angles, shape (n_trials,).
     Returns:
         np.ndarray: Estimated parameters [theta_pref, baseline, amplitude_1, amplitude_2, tuning_width].
     """
-    theta = X[0]  # Extract theta from first predictor
+    theta = X[0]  # Extract theta from first input
     n_bins = 50
     bin_idx = ((theta * n_bins) / (2 * np.pi)).astype(np.int32)
     bin_idx = np.clip(bin_idx, 0, n_bins - 1)

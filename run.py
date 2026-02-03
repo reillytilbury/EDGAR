@@ -74,12 +74,11 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
     else:
         raise ValueError("load_and_process_data_fn must be specified in data.yaml")
     
-    # Extract predictor names from config (for multi-predictor support)
+    # Extract input names from config (for multi-input support)
     # These stay in data_config for the data loading function to use
-    predictors_config = data_config.get('predictors', [])
-    if predictors_config:
-        data_config['predictor_names'] = [p['name'] for p in predictors_config]
-
+    inputs_config = data_config.get('inputs', [])
+    if inputs_config:
+        data_config['input_names'] = [p['name'] for p in inputs_config]
     if test_mode:
         params['num_runs'] = 1
         params['n_iterations'] = 1

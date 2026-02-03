@@ -337,8 +337,8 @@ def plot_rate_map_comparison(rate_maps: np.ndarray,
 # Model fitting diagnostics
 # =============================================================================
 
-def _ensure_predictor_format(x_cell: jnp.ndarray) -> jnp.ndarray:
-    """Convert 1D/2D stimulus array to 2D predictor format (n_features, n_trials)."""
+def _ensure_input_format(x_cell: jnp.ndarray) -> jnp.ndarray:
+    """Convert 1D/2D stimulus array to 2D input format (n_features, n_trials)."""
     if x_cell.ndim == 1:
         return x_cell.reshape(1, -1)  # (n_trials,) -> (1, n_trials)
     return x_cell  # already (n_features, n_trials)
@@ -358,7 +358,7 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
         params (jnp.ndarray): The parameters for the neuron model. Shape: (n_samples, n_params)
         n_evaluation_points (int): Number of points to evaluate the model at.
         eval_points (Optional[np.ndarray]): Specific evaluation points to use. If None, this will raise an error for now. Has shape (n_samples x n_features x n_trials)
-        n_features (int): Total number of predictors in the model. Default is 2.
+        n_features (int): Total number of inputs in the model. Default is 2.
     Returns:
         jnp.ndarray: The evaluation matrix of shape (n_samples, n_evaluation_points).
     
@@ -385,7 +385,7 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
     return y_eval
 
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
-                    predictors: jnp.ndarray, response: jnp.ndarray,
+                    inputs: jnp.ndarray, response: jnp.ndarray,
                     sample_selection: Sequence[int],
                     rate_maps: Optional[np.ndarray] = None,
                     n_eval: int = 50,
@@ -399,7 +399,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                     legend_fontsize: int = 12,
                     dpi: float = 100.0,
                     save_path: Optional[str] = None,
-                    predictor_idx: int = 0):
+                    input_idx: int = 0):
     """
     Plot 2D rate map fits for grid cell models.
     
@@ -409,14 +409,14 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     Args:
         programs_df: DataFrame with 'program' and 'params' columns.
         loss_function: Loss function (y_est, y_true) -> loss.
-        predictors: Predictor data of shape (n_cells, n_features, n_trials) where n_features=2 (x, y).
+        inputs: Input data of shape (n_cells, n_features, n_trials) where n_features=2 (x, y).
         response: Response data of shape (n_cells, n_trials).
         rate_maps: Precomputed rate maps of shape (n_cells, n_bins, n_bins). If None,
-            rate maps are computed from predictors, response.
+            rate maps are computed from inputs, response.
         sample_selection: Indices of cells to plot.
         n_eval: Number of evaluation points per dimension for model prediction grid.
         save_path: Path to save figure.
-        predictor_idx: Ignored for grid cells (uses both x and y).
+        input_idx: Ignored for grid cells (uses both x and y).
     """
     assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, got {len(programs_df)}"
     assert len(sample_selection) > 0, "sample_selection must not be empty"
@@ -431,7 +431,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     # Subset params and data for selected cells
     params = [p[sample_idx] for p in params]
     response_subset = response[sample_idx]
-    predictors_subset = predictors[sample_idx]  # (n_cells_plot, n_features, n_trials)
+    inputs_subset = inputs[sample_idx]  # (n_cells_plot, n_features, n_trials)
     
     # Subset rate maps if provided
     rate_maps_subset = rate_maps[sample_idx] if rate_maps is not None else None
@@ -462,8 +462,8 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                 zoom_factor = n_eval / data_rate_map.shape[0]
                 data_rate_map = zoom(data_rate_map, zoom_factor, order=1)
         else:
-            x_pos = np.array(predictors_subset[c_idx, 0, :])
-            y_pos = np.array(predictors_subset[c_idx, 1, :])
+            x_pos = np.array(inputs_subset[c_idx, 0, :])
+            y_pos = np.array(inputs_subset[c_idx, 1, :])
             response_cell = np.array(response_subset[c_idx])
             data_rate_map = _bin_to_rate_map(x_pos, y_pos, response_cell, n_bins=n_eval)
         
@@ -487,7 +487,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
             model_map = np.array(model_output).reshape(n_eval, n_eval)
             
             # Compute loss
-            X_cell = predictors_subset[c, :, :]  # (n_features, n_trials)
+            X_cell = inputs_subset[c, :, :]  # (n_features, n_trials)
             pred = model(X_cell, *params_c)
             loss_val = float(jnp.mean(loss_function(pred, response_subset[c])))
             
@@ -515,14 +515,14 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
                           n_eval: int = 50,
                           dpi: float = 100.0, title: str = '',
                           save_path: Optional[str] = None,
-                          predictor_idx: int = 0):
+                          input_idx: int = 0):
     """
     Plot fit of a single grid cell model.
     
     Args:
         model: Grid cell model function.
         loss_function: Loss function.
-        x: Predictor data of shape (n_cells, n_features, n_trials).
+        x: Input data of shape (n_cells, n_features, n_trials).
         y: Response data of shape (n_cells, n_trials).
         params: Parameters of shape (n_cells, n_params).
         rate_maps: Precomputed rate maps of shape (n_cells, n_bins, n_bins). Optional.
@@ -920,7 +920,7 @@ def quick_data_check(data_dict: Dict[str, Any]) -> None:
         data_dict: Dictionary returned by load_and_process_data.
     """
     response = data_dict.get('response')
-    predictors = data_dict.get('predictors')
+    inputs = data_dict.get('inputs')
     rate_maps = data_dict.get('rate_maps')
     position_data = data_dict.get('position_data', {})
     grid_filter_info = data_dict.get('grid_filter_info')
@@ -935,9 +935,9 @@ def quick_data_check(data_dict: Dict[str, Any]) -> None:
         print(f"  Mean FR: {response.mean():.3f} Hz")
         print(f"  Max FR:  {response.max():.3f} Hz")
     
-    if predictors is not None:
-        print(f"Predictors: {predictors.data.shape}")
-        print(f"  Names: {predictors.names}")
+    if inputs is not None:
+        print(f"Inputs: {inputs.data.shape}")
+        print(f"  Names: {inputs.names}")
     
     if rate_maps is not None:
         print(f"Rate maps: {rate_maps.shape}")

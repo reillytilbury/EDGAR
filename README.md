@@ -48,7 +48,7 @@ EDGAR-gamma/
 ├── src/                      # Core framework code
 │   ├── hypothesis_engine.py  # Main evolution loop
 │   ├── genetic_helpers.py    # Island operations (migration, pruning)
-│   ├── data_structures.py    # Predictors class for multi-predictor support
+│   ├── data_structures.py    # Inputs class for multi-input support
 │   ├── prompt_manager.py     # LLM prompt generation
 │   ├── llm_helper.py         # LLM API interactions
 │   ├── diagnostic.py         # Visualization tools
@@ -78,7 +78,7 @@ def neuron_model_1(X, amplitude=1.0, baseline=0.0):
     Simple model description.
     
     Args:
-        X: Predictor array with shape (n_features, n_trials).
+        X: Input array with shape (n_features, n_trials).
            X[0] is the primary stimulus (e.g., orientation angles).
         amplitude: Response amplitude
         baseline: Baseline firing rate
@@ -86,13 +86,13 @@ def neuron_model_1(X, amplitude=1.0, baseline=0.0):
     Returns:
         Predicted firing rate, shape (n_trials,)
     """
-    theta = X[0]  # Extract first predictor
+    theta = X[0]  # Extract first input
     return amplitude * np.cos(theta) + baseline
 
 # JAX version (used for gradient-based optimization)
 def neuron_model_1_jax(X, amplitude=1.0, baseline=0.0):
     """Same as neuron_model_1 but using JAX."""
-    theta = X[0]  # Extract first predictor
+    theta = X[0]  # Extract first input
     return amplitude * jnp.cos(theta) + baseline
 
 # Parameter estimator
@@ -101,14 +101,14 @@ def parameter_estimator_1(X, response):
     Estimate parameters from data.
     
     Args:
-        X: Predictor array with shape (n_features, n_trials).
+        X: Input array with shape (n_features, n_trials).
            X[0] is the primary stimulus.
         response: Observed responses for a single cell, shape (n_trials,)
     
     Returns:
         np.ndarray: Estimated parameters [amplitude, baseline]
     """
-    theta = X[0]  # Extract first predictor
+    theta = X[0]  # Extract first input
     baseline = np.mean(response)
     amplitude = np.std(response)
     return np.array([amplitude, baseline])
@@ -119,7 +119,7 @@ def parameter_estimator_1(X, response):
 
 **Important constraints:**
 - **Function signature**: Models must accept `X` as first argument with shape `(n_features, n_trials)`
-- **Predictor access**: Use index-based access like `theta = X[0]`, `contrast = X[1]`
+- **Input access**: Use index-based access like `theta = X[0]`, `contrast = X[1]`
 - Parameter estimators must be simple heuristics (no scipy.optimize, curve_fit, etc.)
 - JAX versions cannot use boolean indexing, dynamic shapes, or value-dependent control flow
 - Use `jnp.where()` instead of boolean indexing
@@ -157,57 +157,57 @@ def load_and_process_data(data_path, conc_thresh=0.55, activity_thresh=0.4):
     # Filter cells based on your criteria
     good_cells = np.where((response.mean(axis=1) > activity_thresh))[0]
     
-    # Create Predictors object (supports multiple predictors)
+    # Create Inputs object (supports multiple Inputs)
     n_good_cells = len(good_cells)
     n_trials = response.shape[1]
     
-    # Single predictor example: expand stimuli to (n_cells, 1, n_trials)
+    # Single input example: expand stimuli to (n_cells, 1, n_trials)
     if stimuli.ndim == 1:
         stimuli_expanded = np.tile(stimuli.reshape(1, 1, -1), (n_good_cells, 1, 1))
     else:
         stimuli_expanded = stimuli[good_cells][:, np.newaxis, :]
     
-    predictors = Predictors.from_array(
+    inputs = Inputs.from_array(
         stimuli_expanded,
-        names=predictor_names or ['theta']
+        names=input_names or ['theta']
     )
     
     # Return with both new and legacy formats
     return {
         'response': jnp.array(response[good_cells]),
-        'predictors': predictors,  # New format
+        'inputs': inputs,  # New format
         'angles': jnp.array(stimuli_expanded[:, 0, :]),  # Deprecated, for backward compat
         'good_cells': good_cells,
         'n_good_cells': n_good_cells
     }
 ```
 
-#### Multi-Predictor Support
+#### Multi-Input Support
 
-The framework supports models with multiple predictor variables (e.g., orientation + contrast):
+The framework supports models with multiple input variables (e.g., orientation + contrast):
 
 ```python
-# In data_parser.py - create multi-predictor data
+# In data_parser.py - create multi-input data
 theta = data['orientation']  # (n_trials,)
 contrast = data['contrast']  # (n_trials,)
 
 # Stack into (n_cells, n_features, n_trials)
-predictors_array = np.stack([
+inputs_array = np.stack([
     np.tile(theta, (n_cells, 1)),
     np.tile(contrast, (n_cells, 1))
 ], axis=1)
 
-predictors = Predictors.from_array(
-    predictors_array,
+inputs = Inputs.from_array(
+    inputs_array,
     names=['theta', 'contrast']
 )
 ```
 
 ```python
-# In seed_programs.py - access multiple predictors
+# In seed_programs.py - access multiple inputs
 def neuron_model_multi(X, theta_pref=0.0, contrast_gain=1.0, baseline=0.0):
-    theta = X[0]     # First predictor: orientation
-    contrast = X[1]  # Second predictor: contrast
+    theta = X[0]     # First nput: orientation
+    contrast = X[1]  # Second input: contrast
     
     tuning = np.cos(theta - theta_pref)
     return baseline + contrast_gain * contrast * tuning
@@ -276,11 +276,11 @@ data_path: /path/to/your/data.npy
 activity_threshold: 0.4
 conc_threshold: 0.55
 
-# Define predictors (names used in models)
-predictors:
+# Define inputs (names used in models)
+inputs:
   - name: theta
     description: "Stimulus orientation angle in radians"
-  # Add more predictors as needed:
+  # Add more inputs as needed:
   # - name: contrast
   #   description: "Stimulus contrast level"
 ```

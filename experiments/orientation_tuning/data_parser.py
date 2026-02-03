@@ -15,8 +15,8 @@ from typing import Callable, Dict, Any, Optional, Sequence, Union, Tuple, List
 from google import genai
 from google.genai import types
 
-# Import Predictors for multi-predictor support
-from src.data_structures import Predictors
+# Import Inputs for multi-input support
+from src.data_structures import Inputs
 
 
 def circular_distance_rad_np(angle1, angle2) -> np.ndarray:
@@ -85,8 +85,8 @@ def load_and_process_data(
     data_path: str, 
     activity_threshold: float = 0.1, 
     conc_threshold: float = 0.1,
-    predictor_names: Optional[List[str]] = None,
-    **kwargs  # Accept additional config params (e.g., task, predictors) without error
+    input_names: Optional[List[str]] = None,
+    **kwargs  # Accept additional config params (e.g., task, inputs) without error
 ) -> dict:
     """
     Load and preprocess neural data from a specified .npy file.
@@ -99,20 +99,20 @@ def load_and_process_data(
         Threshold for activity to select good cells.
     conc_threshold : float
         Threshold for concentration to select good cells.
-    predictor_names : list of str, optional
-        Names for the predictor variables. If None, defaults to ['theta'].
+    input_names : list of str, optional
+        Names for the input variables. If None, defaults to ['theta'].
 
     Returns
     -------
     data_dict : dict
         Dictionary containing:
           - 'response': Preprocessed neural response. (n_cells, n_trials)
-          - 'predictors': Predictors object with shape (n_cells, n_features, n_trials)
-          - 'angles': (DEPRECATED) Alias for predictors['theta'], for backward compatibility.
+          - 'inputs': Inputs object with shape (n_cells, n_features, n_trials)
+          - 'angles': (DEPRECATED) Alias for inputs['theta'], for backward compatibility.
                       Will be removed in a future version.
     """
-    if predictor_names is None:
-        predictor_names = ['theta']
+    if input_names is None:
+        input_names = ['theta']
     
     # load and preprocess data
     neural_data = np.load(data_path, allow_pickle=True)
@@ -141,13 +141,13 @@ def load_and_process_data(
 
     response_cropped = normalize_response(response_cropped)
     
-    # Create Predictors object with the angles as the first (and currently only) predictor
-    # Shape: (n_cells, 1, n_trials) with predictor name 'theta'
-    predictors = Predictors.from_array(angles_cropped, names=predictor_names)
+    # Create Inputs object with the angles as the first (and currently only) input
+    # Shape: (n_cells, 1, n_trials) with input name 'theta'
+    inputs = Inputs.from_array(angles_cropped, names=input_names)
 
     return {
         "response": response_cropped,
-        "predictors": predictors,
+        "inputs": inputs,
         # Backward compatibility: keep 'angles' as alias (DEPRECATED)
         "trials": angles_cropped,
     }

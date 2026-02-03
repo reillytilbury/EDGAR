@@ -9,15 +9,15 @@ from typing import Optional, Callable, Sequence
 from src import utils
 
 
-def _ensure_predictor_format(x_cell: jnp.ndarray) -> jnp.ndarray:
-    """Convert 1D stimulus array to 2D predictor format (n_features, n_trials)."""
+def _ensure_input_format(x_cell: jnp.ndarray) -> jnp.ndarray:
+    """Convert 1D stimulus array to 2D input format (n_features, n_trials)."""
     if x_cell.ndim == 1:
         return x_cell.reshape(1, -1)  # (n_trials,) -> (1, n_trials)
     return x_cell  # already (n_features, n_trials)
 
 
 def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100, eval_points : Optional[np.ndarray] = None, 
-                               predictor_idx: int = 0, n_features: int = 1) -> jnp.ndarray:
+                               input_idx: int = 0, n_features: int = 1) -> jnp.ndarray:
     """
     Computes the evaluation matrix for a given program and parameters.
     
@@ -33,8 +33,8 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
         params (jnp.ndarray): The parameters for the neuron model. Shape: (n_samples, n_params)
         n_evaluation_points (int): Number of points to evaluate the model at.
         eval_points (np.ndarray, optional): Custom evaluation points. If None, uses linspace(0, 2π).
-        predictor_idx (int): Index of the predictor to vary for evaluation (for n_features > 1).
-        n_features (int): Total number of predictors in the model. Default is 1.
+        input_idx (int): Index of the input to vary for evaluation (for n_features > 1).
+        n_features (int): Total number of inputs in the model. Default is 1.
     Returns:
         jnp.ndarray: The evaluation matrix of shape (n_samples, n_evaluation_points).
     """
@@ -53,18 +53,18 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
         # This is what orientation tuning models expect
         y_eval = program_vmap(trials, params)
     else:
-        # New 2D behavior for multi-predictor models (e.g., grid cells)
-        # Create X with zeros for all predictors, then set the evaluation predictor
+        # New 2D behavior for multi-input models (e.g., grid cells)
+        # Create X with zeros for all inputs, then set the evaluation input
         n_samples = params.shape[0]
         X_eval = jnp.zeros((n_samples, n_features, n_evaluation_points))
         trials_broadcast = jnp.broadcast_to(trials, (n_samples, n_evaluation_points))
-        X_eval = X_eval.at[:, predictor_idx, :].set(trials_broadcast)
+        X_eval = X_eval.at[:, input_idx, :].set(trials_broadcast)
         y_eval = program_vmap(X_eval, params)
     
     return y_eval
 
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
-                    predictors: jnp.ndarray, response: jnp.ndarray, 
+                    inputs: jnp.ndarray, response: jnp.ndarray, 
                     sample_selection: Sequence[int],
                     n_eval: int = 100, n_mean: int = 50,
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
@@ -77,7 +77,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                     legend_fontsize: int = 12,
                     dpi: float = 100.0, 
                     save_path: Optional[str] = None,
-                    predictor_idx: int = 0):
+                    input_idx: int = 0):
     """
     plot fits of all models in programs_df over a subset of cells in x and y, along with the running mean.
     Args:
@@ -89,34 +89,34 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
             - 'params': jnp.ndarray (n_cells, n_params)
         loss_function: 
             - callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
-        predictors: Predictor data. Can be:
+        inputs: Input data. Can be:
            - 2D array (n_cells, n_trials) - will use first axis as theta
            - 3D array (n_cells, n_features, n_trials)
         response: (n_cells x n_trials) - jnp.ndarray
-        predictor_idx (int): Index of the predictor to use for plotting (x-axis). Default is 0.
-                             Must be 0 if predictors is 2D.
+        input_idx (int): Index of the input to use for plotting (x-axis). Default is 0.
+                             Must be 0 if inputs is 2D.
     
     Raises:
-        ValueError: If predictor_idx != 0 when predictors is 2D, or if predictor_idx is out of range.
+        ValueError: If input_idx != 0 when inputs is 2D, or if input_idx is out of range.
     """
     assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, but has {len(programs_df)} rows."
     assert len(sample_selection) > 0, "sample_selection must not be empty."
     assert len(sample_selection) == int(np.sqrt(len(sample_selection)))**2, \
         f"sample_selection must be a square number, but has {len(sample_selection)} elements."
 
-    # Early validation of predictor_idx
-    x_arr = jnp.asarray(predictors)
+    # Early validation of input_idx
+    x_arr = jnp.asarray(inputs)
     y = jnp.asarray(response)
     if x_arr.ndim == 2:
-        if predictor_idx != 0:
+        if input_idx != 0:
             raise ValueError(
-                f"predictor_idx must be 0 for 2D input (single predictor), got {predictor_idx}."
+                f"input_idx must be 0 for 2D input (single input), got {input_idx}."
             )
     else:
         n_features = x_arr.shape[1]
-        if predictor_idx < 0 or predictor_idx >= n_features:
+        if input_idx < 0 or input_idx >= n_features:
             raise ValueError(
-                f"predictor_idx ({predictor_idx}) must be in range [0, {n_features}). "
+                f"input_idx ({input_idx}) must be in range [0, {n_features}). "
                 f"Got n_features={n_features}."
             )
 
@@ -131,11 +131,11 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     if x_arr.ndim == 2:
         # 2D input: (n_samples, n_trials) - expand to (n_samples, 1, n_trials)
         stimuli_3d = x_arr[sample_idx][:, jnp.newaxis, :]
-        stimuli_1d = x_arr[sample_idx]  # for plotting (single predictor)
+        stimuli_1d = x_arr[sample_idx]  # for plotting (single input)
     else:
         # 3D input: (n_cells, n_features, n_trials)
-        stimuli_3d = x_arr[cell_idx]
-        stimuli_1d = x_arr[cell_idx][:, predictor_idx, :]  # use specified predictor for plotting
+        stimuli_3d = x_arr[sample_idx]
+        stimuli_1d = x_arr[sample_idx][:, input_idx, :]  # use specified input for plotting
     
     n_cells, n_features, n_trials = stimuli_3d.shape
     n_models = len(models)
@@ -157,7 +157,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
             predicted_response = model(X_cell, *params_ic)
             point_losses = point_losses.at[i, c].set(loss_function(predicted_response, spike_matrix[c]))
     
-    # compute running mean (using first predictor for binning)
+    # compute running mean (using first input for binning)
     x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False) + 0.5 * (2 * jnp.pi / n_mean)  # Shift to center bins
     binned_mean = jnp.zeros((n_cells, n_mean))
     for c in range(n_cells):
@@ -168,7 +168,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
 
     # compute cell outputs at evaluation points
     x_values_eval = jnp.linspace(0, 2 * jnp.pi, n_eval, endpoint=False)
-    X_eval = x_values_eval.reshape(1, -1)  # (1, n_eval) - single predictor format
+    X_eval = x_values_eval.reshape(1, -1)  # (1, n_eval) - single input format
     model_outputs = jnp.zeros((n_models, n_cells, n_eval))
     for i, model in enumerate(models):
         for c in range(n_cells):
@@ -213,51 +213,51 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
                           n_eval: int = 100, n_mean: int = 50,
                           dpi: float = 100.0, title: str = '', 
                           save_path: Optional[str] = None,
-                          predictor_idx: int = 0):
+                          input_idx: int = 0):
     """
     Plots the fit of a single model to a selection of cells in x and y, along with the running mean.
     Args:
         model: callable (written in JAX): (X: jnp.ndarray, *params) -> jnp.ndarray
                where X has shape (n_features, n_trials)
         loss_function: callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
-        x: Predictor data. Can be:
-           - 2D array (n_cells, n_trials) - will use as single predictor
+        x: Input data. Can be:
+           - 2D array (n_cells, n_trials) - will use as single input
            - 3D array (n_cells, n_features, n_trials)
         y: (n_cells x n_trials) - jnp.ndarray
         params: (n_cells x n_params) - jnp.ndarray
-        predictor_idx (int): Index of the predictor to use for plotting (x-axis). Default is 0.
+        input_idx (int): Index of the input to use for plotting (x-axis). Default is 0.
                              Must be 0 if x is 2D.
     
     Raises:
-        ValueError: If predictor_idx != 0 when x is 2D, or if predictor_idx is out of range.
+        ValueError: If input_idx != 0 when x is 2D, or if input_idx is out of range.
     """
     n_cells = y.shape[0]
     assert n_cells == int(np.sqrt(n_cells))**2, f"n_cells must be a square number, but got {n_cells} cells."
     
-    # Early validation of predictor_idx
+    # Early validation of input_idx
     x_arr = jnp.asarray(x)
     if x_arr.ndim == 2:
-        if predictor_idx != 0:
+        if input_idx != 0:
             raise ValueError(
-                f"predictor_idx must be 0 for 2D input (single predictor), got {predictor_idx}."
+                f"input_idx must be 0 for 2D input (single input), got {input_idx}."
             )
     else:
-        n_preds = x_arr.shape[1]
-        if predictor_idx < 0 or predictor_idx >= n_preds:
+        n_inputs = x_arr.shape[1]
+        if input_idx < 0 or input_idx >= n_inputs:
             raise ValueError(
-                f"predictor_idx ({predictor_idx}) must be in range [0, {n_preds}). "
-                f"Got n_features={n_preds}."
+                f"input_idx ({input_idx}) must be in range [0, {n_inputs}). "
+                f"Got n_features={n_inputs}."
             )
     
     # Handle both 2D and 3D input
     if x_arr.ndim == 2:
         # 2D input: (n_cells, n_trials) - expand to (n_cells, 1, n_trials)
         x_3d = x_arr[:, jnp.newaxis, :]
-        x_1d = x_arr  # for plotting (single predictor)
+        x_1d = x_arr  # for plotting (single input)
     else:
         # 3D input: (n_cells, n_features, n_trials)
         x_3d = x_arr
-        x_1d = x_arr[:, predictor_idx, :]  # use specified predictor for plotting
+        x_1d = x_arr[:, input_idx, :]  # use specified input for plotting
     
     n_cells, n_features, n_trials = x_3d.shape
 
@@ -269,7 +269,7 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
         predicted_response = model(X_cell, *params_c)
         point_losses = point_losses.at[c].set(loss_function(predicted_response, y[c]))
 
-    # compute running mean (using first predictor for binning)
+    # compute running mean (using first input for binning)
     x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False) + 0.5 * (2 * jnp.pi / n_mean)  # Shift to center bins
     binned_mean = jnp.zeros((n_cells, n_mean))
     for c in range(n_cells):
@@ -280,7 +280,7 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
 
     # compute cell outputs at evaluation points
     x_values_eval = jnp.linspace(0, 2 * jnp.pi, n_eval, endpoint=False)
-    X_eval = x_values_eval.reshape(1, -1)  # (1, n_eval) - single predictor format
+    X_eval = x_values_eval.reshape(1, -1)  # (1, n_eval) - single input format
     model_output = jnp.zeros((n_cells, n_eval))
     for c in range(n_cells):
         params_c = params[c]
