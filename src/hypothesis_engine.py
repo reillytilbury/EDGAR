@@ -11,7 +11,7 @@ from pathlib import Path
 from . import utils, loss_functions, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .prompt_manager import PromptManager
-from .data_structures import Inputs, ensure_inputs
+from .data_structures import Inputs, Outputs, ensure_inputs, ensure_outputs
 import experiments.orientation_tuning.seed_programs # delete this once we read seed_programs from experiment.yaml
 from tqdm import tqdm
 from google import genai
@@ -412,12 +412,15 @@ def compute_default_params(model) -> jnp.ndarray:
         return None
         return None    
 
-def objective(model, param_estimator, loss_func, x, y, 
+def objective_legacy(model, param_estimator, loss_func, x, y, 
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
               use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
-    Calculate the loss of the model. 
+    LEGACY: Calculate the loss of the model for scalar (single-target) outputs.
+    
+    This is the original objective function preserved for backward compatibility.
+    For new code, use objective() which handles both scalar and vectorized outputs.
     
     The loss is calculated as the mean over samples and trials of the loss function provided.
     
@@ -434,7 +437,7 @@ def objective(model, param_estimator, loss_func, x, y,
            - 2D array (n_samples, n_trials) - will be auto-expanded to (n_samples, 1, n_trials)
            - 3D array (n_samples, n_features, n_trials)
            - Inputs object
-        y (jnp.ndarray): Response data, shape (n_samples, n_trials).
+        y (jnp.ndarray): Response data, shape (n_samples, n_trials). MUST be 2D for legacy.
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
         random_seed (int or None): Random seed for reproducibility. Default is 0.
@@ -679,6 +682,84 @@ def objective(model, param_estimator, loss_func, x, y,
     t_end = time.time()
     print(f"Time taken for optimization: {t_end - t_start:.4f} seconds")
     return float(initial_loss), initial_params, float(final_loss), params
+
+
+def objective(model, param_estimator, loss_func, x, y, 
+              param_penalty_weight=0.1, fit_params=True, random_seed=0,
+              FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
+              use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+    """
+    Calculate the loss of the model. Always uses vectorized Outputs representation.
+    
+    This is the main entry point for model evaluation. All outputs are normalized
+    to Outputs objects with shape (n_samples, n_targets, n_trials), even for
+    single-target (scalar) cases where n_targets=1.
+    
+    Args:
+        model (function): The model which predicts neural activity from inputs
+                          and free parameters (for a single sample).
+                          Signature: model(X, *params) -> activity
+                          where X has shape (n_features, n_trials) for a single sample.
+                          Output shape: (n_trials,) for scalar, (n_targets, n_trials) for vectorized.
+        param_estimator (function): Function to estimate initial parameters for the model.
+                          Signature: param_estimator(X, response) -> params
+                          where X has shape (n_features, n_trials) for a single sample.
+        loss_func (function): The loss function to use for calculating the loss.
+        x: Input data. Can be:
+           - 2D array (n_samples, n_trials) - will be auto-expanded to (n_samples, 1, n_trials)
+           - 3D array (n_samples, n_features, n_trials)
+           - Inputs object
+        y: Output/response data. Always normalized to Outputs object. Can be:
+           - 2D array (n_samples, n_trials) - auto-expanded to (n_samples, 1, n_trials)
+           - 3D array (n_samples, n_targets, n_trials)
+           - Outputs object
+        param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
+        fit_params (bool): Whether to fit the parameters of the model. Default is True.
+        random_seed (int or None): Random seed for reproducibility. Default is 0.
+        FAILED_PROGRAM_COST (float): Cost assigned to failed models. Default is np.inf.
+        tol (float): Tolerance for optimization convergence. Default is 1e-2.
+        max_iter (int): Maximum number of iterations for optimization. Default is 1_000.
+        use_param_estimator (bool): Whether to use the parameter estimator to compute initial parameters. Default is True.
+        trial_batch_size (int): Number of trials to process per mini-batch to avoid GPU OOM. Default is 5000.
+
+    Returns:
+        tuple[
+            - float: The cross-validated loss of the model with data fit by the parameter estimator,
+            - jnp.ndarray: The parameters fit by the parameter estimator.
+            - float: The average loss (MSE on test set) across all samples. 
+                     Returns FAILED_PROGRAM_COST if the model fails for ANY cell.
+            - jnp.ndarray: The parameters for each sample (n_samples, n_params).
+    """
+    # Normalize y to Outputs format: always (n_samples, n_targets, n_trials)
+    y_outputs = ensure_outputs(y)
+    n_targets = y_outputs.n_targets
+    
+    if n_targets == 1:
+        # Single target: use legacy implementation for now
+        # TODO: Once objective_vectorized is implemented, remove this branch
+        # and handle n_targets=1 as a special case of vectorized
+        y_2d = y_outputs.to_2d(0)  # Extract first (only) target as 2D
+        return objective_legacy(
+            model=model,
+            param_estimator=param_estimator,
+            loss_func=loss_func,
+            x=x,
+            y=y_2d,
+            param_penalty_weight=param_penalty_weight,
+            fit_params=fit_params,
+            random_seed=random_seed,
+            FAILED_PROGRAM_COST=FAILED_PROGRAM_COST,
+            tol=tol,
+            max_iter=max_iter,
+            use_param_estimator=use_param_estimator,
+            trial_batch_size=trial_batch_size,
+        )
+    else:
+        # Multiple targets: vectorized implementation not yet ready
+        raise NotImplementedError(
+            f"Vectorized outputs with n_targets={n_targets} not yet implemented. "
+            f"Currently only n_targets=1 is supported."
+        )
 
 
 async def generate_new_model(current_island, llm_name, client, 
