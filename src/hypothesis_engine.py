@@ -11,7 +11,7 @@ from pathlib import Path
 from . import utils, loss_functions, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .prompt_manager import PromptManager
-from .data_structures import Inputs, ensure_
+from .data_structures import Inputs, ensure_inputs
 import experiments.orientation_tuning.seed_programs # delete this once we read seed_programs from experiment.yaml
 from tqdm import tqdm
 from google import genai
