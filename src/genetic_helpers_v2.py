@@ -1043,7 +1043,7 @@ def compare_programs(program1: pd.Series, program2: pd.Series,
     return float(jnp.mean(cosine_sim)) >= cosine_tol
 
 
-def remove_duplicates(programs_dataframe: pd.DataFrame, mode: str = 'simple',
+def remove_duplicates(programs_dataframe: pd.DataFrame, mode: str = 'complicated',
                       loss_tol: float = 0.01, cosine_tol: float = 0.99,
                       loss_type: str = 'train_loss') -> pd.DataFrame:
     """
@@ -1092,7 +1092,7 @@ def remove_duplicates(programs_dataframe: pd.DataFrame, mode: str = 'simple',
         return pd.Series([programs_dataframe.iloc[i] for i in keep_indices])
 
 
-def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'simple',
+def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'complicated',
                                   loss_tol: float = 0.01, cosine_tol: float = 0.99,
                                   loss_type: str = 'train_loss',
                                   overlap_threshold: int = 6) -> List[pd.DataFrame]:
