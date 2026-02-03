@@ -33,6 +33,317 @@ logging.basicConfig(
 print(jax.default_backend())    # should print "gpu"
 print(jax.devices())
 
+
+def save_data_summary(
+    response: np.ndarray,
+    trials: np.ndarray,
+    training_samples: jnp.ndarray,
+    test_samples: jnp.ndarray,
+    output_dir: str,
+    random_seed: int = 0
+) -> pd.DataFrame:
+    """
+    Save a summary of data splits and matrix sizes to a CSV file.
+    
+    This function documents:
+    1. Sample split (training vs test cells)
+    2. Trial split (training vs test trials within objective function)
+    3. Feature counts and data shapes
+    4. Data types and estimated memory sizes
+    
+    Args:
+        response: Full response matrix, shape (n_samples, n_trials)
+        trials: Full trials/predictors matrix, shape (n_samples, n_trials) or (n_samples, n_features, n_trials)
+        training_samples: Indices of samples used for training
+        test_samples: Indices of samples used for testing
+        output_dir: Directory to save the CSV
+        random_seed: Random seed used for trial split (for verification)
+    
+    Returns:
+        DataFrame with the summary information
+    """
+    n_total_samples, n_trials = response.shape
+    n_train_samples = len(training_samples)
+    n_test_samples = len(test_samples)
+    
+    # Determine trials shape and features
+    if trials.ndim == 2:
+        n_features = 1
+        trials_shape_str = f"({trials.shape[0]}, {trials.shape[1]})"
+    else:
+        n_features = trials.shape[1]
+        trials_shape_str = f"({trials.shape[0]}, {trials.shape[1]}, {trials.shape[2]})"
+    
+    # Calculate trial split (same logic as in objective function)
+    n_trial_splits = 10
+    trials_per_split = n_trials // n_trial_splits
+    n_training_trials = trials_per_split * 5  # odd chunks (5 of 10)
+    n_test_trials = trials_per_split * 5       # even chunks (5 of 10)
+    
+    # Helper to calculate size in bytes
+    def calc_size(shape, dtype):
+        n_elements = np.prod(shape)
+        bytes_per_element = np.dtype(dtype).itemsize
+        return n_elements * bytes_per_element
+    
+    def format_size(size_bytes):
+        if size_bytes >= 1e9:
+            return f"{size_bytes / 1e9:.2f} GB"
+        elif size_bytes >= 1e6:
+            return f"{size_bytes / 1e6:.2f} MB"
+        elif size_bytes >= 1e3:
+            return f"{size_bytes / 1e3:.2f} KB"
+        else:
+            return f"{size_bytes} B"
+    
+    # Build summary rows
+    rows = []
+    
+    # === SAMPLE SPLIT SUMMARY ===
+    rows.append({
+        'category': 'SAMPLE_SPLIT',
+        'matrix_name': 'total_samples',
+        'description': 'Total number of cells/samples in dataset',
+        'shape': f"({n_total_samples},)",
+        'dtype': '-',
+        'size_bytes': '-',
+        'size_human': '-',
+        'n_elements': n_total_samples
+    })
+    rows.append({
+        'category': 'SAMPLE_SPLIT',
+        'matrix_name': 'training_samples',
+        'description': 'Cells used for training (held-in)',
+        'shape': f"({n_train_samples},)",
+        'dtype': str(training_samples.dtype),
+        'size_bytes': calc_size((n_train_samples,), training_samples.dtype),
+        'size_human': format_size(calc_size((n_train_samples,), training_samples.dtype)),
+        'n_elements': n_train_samples
+    })
+    rows.append({
+        'category': 'SAMPLE_SPLIT',
+        'matrix_name': 'test_samples',
+        'description': 'Cells used for testing (held-out)',
+        'shape': f"({n_test_samples},)",
+        'dtype': str(test_samples.dtype),
+        'size_bytes': calc_size((n_test_samples,), test_samples.dtype),
+        'size_human': format_size(calc_size((n_test_samples,), test_samples.dtype)),
+        'n_elements': n_test_samples
+    })
+    
+    # === TRIAL SPLIT SUMMARY (within objective function) ===
+    rows.append({
+        'category': 'TRIAL_SPLIT',
+        'matrix_name': 'total_trials',
+        'description': 'Total number of trials per sample',
+        'shape': f"({n_trials},)",
+        'dtype': '-',
+        'size_bytes': '-',
+        'size_human': '-',
+        'n_elements': n_trials
+    })
+    rows.append({
+        'category': 'TRIAL_SPLIT',
+        'matrix_name': 'training_trials',
+        'description': 'Trials used for param fitting (odd 10-chunks)',
+        'shape': f"({n_training_trials},)",
+        'dtype': 'int32',
+        'size_bytes': calc_size((n_training_trials,), 'int32'),
+        'size_human': format_size(calc_size((n_training_trials,), 'int32')),
+        'n_elements': n_training_trials
+    })
+    rows.append({
+        'category': 'TRIAL_SPLIT',
+        'matrix_name': 'test_trials',
+        'description': 'Trials used for loss evaluation (even 10-chunks)',
+        'shape': f"({n_test_trials},)",
+        'dtype': 'int32',
+        'size_bytes': calc_size((n_test_trials,), 'int32'),
+        'size_human': format_size(calc_size((n_test_trials,), 'int32')),
+        'n_elements': n_test_trials
+    })
+    rows.append({
+        'category': 'TRIAL_SPLIT',
+        'matrix_name': 'trial_split_method',
+        'description': f'Deterministic: 10 equal chunks, odd->train, even->test. Seed={random_seed}',
+        'shape': '-',
+        'dtype': '-',
+        'size_bytes': '-',
+        'size_human': '-',
+        'n_elements': '-'
+    })
+    
+    # === DATA MATRICES ===
+    # Response matrices
+    response_dtype = response.dtype
+    rows.append({
+        'category': 'DATA_MATRIX',
+        'matrix_name': 'response (full)',
+        'description': 'All cells, all trials',
+        'shape': str(response.shape),
+        'dtype': str(response_dtype),
+        'size_bytes': calc_size(response.shape, response_dtype),
+        'size_human': format_size(calc_size(response.shape, response_dtype)),
+        'n_elements': np.prod(response.shape)
+    })
+    
+    response_train_shape = (n_train_samples, n_trials)
+    rows.append({
+        'category': 'DATA_MATRIX',
+        'matrix_name': 'response_train',
+        'description': 'Training cells, all trials',
+        'shape': str(response_train_shape),
+        'dtype': str(response_dtype),
+        'size_bytes': calc_size(response_train_shape, response_dtype),
+        'size_human': format_size(calc_size(response_train_shape, response_dtype)),
+        'n_elements': np.prod(response_train_shape)
+    })
+    
+    response_test_shape = (n_test_samples, n_trials)
+    rows.append({
+        'category': 'DATA_MATRIX',
+        'matrix_name': 'response_test',
+        'description': 'Test cells, all trials',
+        'shape': str(response_test_shape),
+        'dtype': str(response_dtype),
+        'size_bytes': calc_size(response_test_shape, response_dtype),
+        'size_human': format_size(calc_size(response_test_shape, response_dtype)),
+        'n_elements': np.prod(response_test_shape)
+    })
+    
+    # Trials/predictors matrices
+    trials_dtype = trials.dtype
+    rows.append({
+        'category': 'DATA_MATRIX',
+        'matrix_name': 'trials/predictors (full)',
+        'description': f'All cells, {n_features} features, all trials',
+        'shape': trials_shape_str,
+        'dtype': str(trials_dtype),
+        'size_bytes': calc_size(trials.shape, trials_dtype),
+        'size_human': format_size(calc_size(trials.shape, trials_dtype)),
+        'n_elements': np.prod(trials.shape)
+    })
+    
+    if trials.ndim == 2:
+        trials_train_shape = (n_train_samples, n_trials)
+        trials_test_shape = (n_test_samples, n_trials)
+    else:
+        trials_train_shape = (n_train_samples, n_features, n_trials)
+        trials_test_shape = (n_test_samples, n_features, n_trials)
+    
+    rows.append({
+        'category': 'DATA_MATRIX',
+        'matrix_name': 'trials_train',
+        'description': f'Training cells, {n_features} features, all trials',
+        'shape': str(trials_train_shape),
+        'dtype': str(trials_dtype),
+        'size_bytes': calc_size(trials_train_shape, trials_dtype),
+        'size_human': format_size(calc_size(trials_train_shape, trials_dtype)),
+        'n_elements': np.prod(trials_train_shape)
+    })
+    
+    rows.append({
+        'category': 'DATA_MATRIX',
+        'matrix_name': 'trials_test',
+        'description': f'Test cells, {n_features} features, all trials',
+        'shape': str(trials_test_shape),
+        'dtype': str(trials_dtype),
+        'size_bytes': calc_size(trials_test_shape, trials_dtype),
+        'size_human': format_size(calc_size(trials_test_shape, trials_dtype)),
+        'n_elements': np.prod(trials_test_shape)
+    })
+    
+    # === OBJECTIVE FUNCTION SUB-MATRICES (within training samples) ===
+    # These are created inside objective() for the training samples
+    if trials.ndim == 2:
+        x_train_shape = (n_train_samples, 1, n_training_trials)
+        x_test_shape = (n_train_samples, 1, n_test_trials)
+    else:
+        x_train_shape = (n_train_samples, n_features, n_training_trials)
+        x_test_shape = (n_train_samples, n_features, n_test_trials)
+    
+    y_train_shape = (n_train_samples, n_training_trials)
+    y_test_shape = (n_train_samples, n_test_trials)
+    
+    rows.append({
+        'category': 'OBJECTIVE_SUBMATRIX',
+        'matrix_name': 'x_train (in objective)',
+        'description': 'Training samples, training trials (param fitting)',
+        'shape': str(x_train_shape),
+        'dtype': str(trials_dtype),
+        'size_bytes': calc_size(x_train_shape, trials_dtype),
+        'size_human': format_size(calc_size(x_train_shape, trials_dtype)),
+        'n_elements': np.prod(x_train_shape)
+    })
+    
+    rows.append({
+        'category': 'OBJECTIVE_SUBMATRIX',
+        'matrix_name': 'y_train (in objective)',
+        'description': 'Training samples, training trials (param fitting)',
+        'shape': str(y_train_shape),
+        'dtype': str(response_dtype),
+        'size_bytes': calc_size(y_train_shape, response_dtype),
+        'size_human': format_size(calc_size(y_train_shape, response_dtype)),
+        'n_elements': np.prod(y_train_shape)
+    })
+    
+    rows.append({
+        'category': 'OBJECTIVE_SUBMATRIX',
+        'matrix_name': 'x_test (in objective)',
+        'description': 'Training samples, test trials (loss evaluation)',
+        'shape': str(x_test_shape),
+        'dtype': str(trials_dtype),
+        'size_bytes': calc_size(x_test_shape, trials_dtype),
+        'size_human': format_size(calc_size(x_test_shape, trials_dtype)),
+        'n_elements': np.prod(x_test_shape)
+    })
+    
+    rows.append({
+        'category': 'OBJECTIVE_SUBMATRIX',
+        'matrix_name': 'y_test (in objective)',
+        'description': 'Training samples, test trials (loss evaluation)',
+        'shape': str(y_test_shape),
+        'dtype': str(response_dtype),
+        'size_bytes': calc_size(y_test_shape, response_dtype),
+        'size_human': format_size(calc_size(y_test_shape, response_dtype)),
+        'n_elements': np.prod(y_test_shape)
+    })
+    
+    # === FEATURE INFO ===
+    rows.append({
+        'category': 'FEATURES',
+        'matrix_name': 'n_features',
+        'description': 'Number of predictor features per sample',
+        'shape': '-',
+        'dtype': '-',
+        'size_bytes': '-',
+        'size_human': '-',
+        'n_elements': n_features
+    })
+    
+    # Create DataFrame and save
+    df = pd.DataFrame(rows)
+    csv_path = os.path.join(output_dir, 'data_summary.csv')
+    df.to_csv(csv_path, index=False)
+    
+    # Also print a summary
+    print("\n" + "=" * 70)
+    print("DATA SUMMARY")
+    print("=" * 70)
+    print(f"Sample Split: {n_train_samples}/{n_total_samples} train, {n_test_samples}/{n_total_samples} test")
+    print(f"Trial Split:  {n_training_trials}/{n_trials} train, {n_test_trials}/{n_trials} test (per sample, in objective)")
+    print(f"Features:     {n_features} per sample")
+    print(f"Data Types:   response={response_dtype}, trials={trials_dtype}")
+    total_size = sum(r['size_bytes'] for r in rows if isinstance(r['size_bytes'], (int, float)))
+    print(f"Total Data:   {format_size(total_size)}")
+    print(f"Saved to:     {csv_path}")
+    print("=" * 70 + "\n")
+    
+    logging.info(f"Data summary saved to {csv_path}")
+    
+    return df
+
+
 def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
     """
     Compute initial parameters for the model using the provided parameter estimator. 
@@ -248,6 +559,9 @@ def objective(model, param_estimator, loss_func, x, y,
             batch_grad = grad_single_batch(params_2d, x_batch, y_batch)
             
             # Accumulate with proper weighting
+            # We need to batch_weight because loss_single_batch calculates the mean loss per batch. 
+            # An alternative would have been to let loss_single_cell calculate the sum of loss for each cell 
+            # and then divide by n_trials at the end rather than batch_weight.
             total_loss += batch_loss * batch_weight
             total_grad += batch_grad.reshape(-1) * batch_weight
         
@@ -726,6 +1040,16 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     image_feedback_dir = os.path.join(full_dir, 'image_feedback')
     os.makedirs(image_feedback_dir, exist_ok=True)
     print("Created image feedback folder:", image_feedback_dir)
+
+    # Save data summary CSV for inspection
+    save_data_summary(
+        response=response,
+        trials=trials,
+        training_samples=training_samples,
+        test_samples=test_samples,
+        output_dir=full_dir,
+        random_seed=random_seed
+    )
 
     # census[i] = [generation, island, batch_index, llm_name, loss, time, parent1_id, parent2_id, evaluation_matrix, n_free_params]
     census = []
