@@ -1007,9 +1007,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     else:
         inputs = data_dict['trials'].data  # Keep for backward compat during transition
 
-    print(f'DEBUG ************************************')
-    print(f'*************** input shape: {inputs.shape} ******************')
     n_good_samples, n_trials = response.shape
+    if inputs.ndim == 2:
+        n_features = 1
+    else: 
+        n_features = inputs.shape[1]
         
     key = jax.random.PRNGKey(random_seed)
     def create_train_test_split(n_samples, training_ratio):
@@ -1019,7 +1021,6 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         test_samples = shuffled_indices[training_size:]
         return training_samples, test_samples
     training_samples, test_samples = create_train_test_split(n_good_samples, training_ratio)
-    print(f"************DEBUG AGAIN : training_samples shape: {training_samples.shape} & test_samples shape: {test_samples.shape} ***************")
     response_train, response_test = response[training_samples, :], response[test_samples, :]
     inputs_train, inputs_test = inputs[training_samples, :], inputs[test_samples, :]  # has shape (n_samples, n_features, n_trials)
     print(f"Loaded {n_good_samples} samples, {n_trials} trials per sample.")
@@ -1095,7 +1096,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             eval_points = None
         else : 
             eval_points = inputs_train
-        y_eval = diagnostics_module.compute_evaluation_matrix(program_jax, params, eval_points=eval_points, n_evaluation_points=100)
+        y_eval = diagnostics_module.compute_evaluation_matrix(program_jax, params, eval_points=eval_points, n_evaluation_points=100, n_features=n_features)
 
         new_program_df = pd.DataFrame({'program_code_string': program_code_string,
                                     'program': program_jax,
