@@ -88,6 +88,7 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
         params['batch_size'] = 2
         params['exploration_topology'] = [1, 0]
         params['exploitation_topology'] = [1, 0]
+        # params['max_iter'] = 100 --- USE WHEN JUST CHECKING THAT THE SCRIPT RUNS ---
 
     for i in range(params['num_runs']):
         print("running with standard params")
