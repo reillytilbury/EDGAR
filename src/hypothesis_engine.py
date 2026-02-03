@@ -615,7 +615,7 @@ def objective(model, param_estimator, loss_func, x, y,
         if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
             print(f"Initial loss {initial_loss:.2e} exceeds threshold {CATASTROPHIC_LOSS_THRESHOLD:.0e}. Skipping optimization.")
             logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
-            return FAILED_PROGRAM_COST, initial_params
+            return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
         
         best_loss, best_params = initial_loss.copy(), params.copy()
         for step in range(1, max_iter + 1):
@@ -628,7 +628,7 @@ def objective(model, param_estimator, loss_func, x, y,
             if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
                 logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
                 print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
-                return FAILED_PROGRAM_COST, initial_params
+                return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
             if loss_val < best_loss:
                 best_loss = loss_val.copy()
                 best_params = params.copy()
