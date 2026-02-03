@@ -38,12 +38,10 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
     Returns:
         jnp.ndarray: The evaluation matrix of shape (n_samples, n_evaluation_points).
     """
-    # Create evaluation points
-    if eval_points is not None:
-        trials = jnp.asarray(eval_points)
-        n_evaluation_points = trials.shape[0]
-    else:
-        trials = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
+    if eval_points is not None : 
+        print("Custom eval_points is not supported for orientation tuning diagnostics. Using default linspace instead.")
+
+    trials = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
     
     # vmap over samples
     program_vmap = utils.vmap_over_cells(program)
@@ -51,7 +49,11 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
     if n_features == 1:
         # Original 1D behavior: pass trials directly (shape: n_eval,)
         # This is what orientation tuning models expect
-        y_eval = program_vmap(trials, params)
+        n_samples = params.shape[0]
+        X_eval = jnp.zeros((n_samples, n_features, n_evaluation_points))
+        trials_broadcast = jnp.broadcast_to(trials, (n_samples, n_evaluation_points))
+        X_eval = X_eval.at[:, input_idx, :].set(trials_broadcast)
+        y_eval = program_vmap(trials_broadcast, params)
     else:
         # New 2D behavior for multi-input models (e.g., grid cells)
         # Create X with zeros for all inputs, then set the evaluation input
