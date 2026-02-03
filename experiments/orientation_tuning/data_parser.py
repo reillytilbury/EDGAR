@@ -15,8 +15,8 @@ from typing import Callable, Dict, Any, Optional, Sequence, Union, Tuple, List
 from google import genai
 from google.genai import types
 
-# Import Inputs for multi-input support
-from src.data_structures import Inputs
+# Import Inputs/Outputs for multi-input/multi-target support
+from src.data_structures import Inputs, Outputs
 
 
 def circular_distance_rad_np(angle1, angle2) -> np.ndarray:
@@ -106,10 +106,11 @@ def load_and_process_data(
     -------
     data_dict : dict
         Dictionary containing:
-          - 'response': Preprocessed neural response. (n_cells, n_trials)
+          - 'response': (LEGACY) Preprocessed neural response as 2D array (n_cells, n_trials).
+                        Use 'outputs' for new code.
+          - 'outputs': Outputs object with shape (n_cells, 1, n_trials) for scalar outputs.
           - 'inputs': Inputs object with shape (n_cells, n_features, n_trials)
-          - 'angles': (DEPRECATED) Alias for inputs['theta'], for backward compatibility.
-                      Will be removed in a future version.
+          - 'trials': (DEPRECATED) Raw trials array, for backward compatibility.
     """
     if input_names is None:
         input_names = ['theta']
@@ -144,11 +145,16 @@ def load_and_process_data(
     # Create Inputs object with the angles as the first (and currently only) input
     # Shape: (n_cells, 1, n_trials) with input name 'theta'
     inputs = Inputs.from_array(angles_cropped, names=input_names)
+    
+    # Create Outputs object wrapping the response
+    # Shape: (n_cells, 1, n_trials) - scalar output per cell
+    outputs = Outputs.from_array(response_cropped, names=['firing_rate'])
 
     return {
-        "response": response_cropped,
+        "response": response_cropped,  # Legacy 2D array (n_cells, n_trials)
+        "outputs": outputs,  # New Outputs object for vectorized output support
         "inputs": inputs,
-        # Backward compatibility: keep 'angles' as alias (DEPRECATED)
+        # Backward compatibility: keep 'trials' as alias (DEPRECATED)
         "trials": angles_cropped,
     }
 

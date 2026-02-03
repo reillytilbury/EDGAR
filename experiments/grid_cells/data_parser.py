@@ -11,7 +11,7 @@ from scipy.ndimage import gaussian_filter
 from typing import Dict, Any, Optional, List, Tuple
 import time 
 
-from src.data_structures import Inputs
+from src.data_structures import Inputs, Outputs
 
 # How to align spike trains with behavioural time and position
 
@@ -113,8 +113,10 @@ def load_and_process_data(
     -------
     data_dict : dict
         Dictionary containing:
-          - 'response': Firing rate at each position. (n_cells, n_trials) where n_trials = n_time_bins after filtering
-          - 'inputs': Inputs object with x, y, z, azimuth positions. (n_cells, n_features, n_trials) where n_features = len(input_names) and n_trials = n_time_bins after filtering
+          - 'response': (LEGACY) Firing rate as 2D array (n_cells, n_trials). Use 'outputs' for new code.
+          - 'outputs': Outputs object with shape (n_cells, 1, n_trials) for scalar outputs.
+          - 'inputs': Inputs object with x, y positions. (n_cells, n_features, n_trials)
+          - 'trials': (DEPRECATED) Raw trials array for backward compatibility.
           - 'position_data': Dict with raw x, y, t arrays.
     """
     # take note of time for logging purposes 
@@ -340,11 +342,17 @@ def load_and_process_data(
     # =========================================================================
     response = (response - response.mean(axis=1, keepdims=True)) / (response.std(axis=1, keepdims=True) + 1e-6)
     rate_maps = (rate_maps - rate_maps.mean(axis=(1,2), keepdims=True)) / (rate_maps.std(axis=(1,2), keepdims=True) + 1e-6)
+    
+    # Create Outputs object wrapping the response
+    # Shape: (n_cells, 1, n_trials) - scalar output per cell
+    outputs = Outputs.from_array(response, names=['firing_rate'])
 
     return {
-        "response": response, # Firing rates (n_cells, n_trials)
-        "inputs": inputs, # Inputs object
-        "trials": inputs_data,  # (n_cells, n_features, n_trials)
+        # 2026-02-03 - remove legacy 'response' and 'trials' keys in the future
+        "response": response,  # Legacy 2D array (n_cells, n_trials)
+        "outputs": outputs,  # New Outputs object for vectorized output support
+        "inputs": inputs,  # Inputs object
+        "trials": inputs_data,  # (n_cells, n_features, n_trials) - deprecated
         "rate_maps": rate_maps, # (n_cells, n_spatial_bins, n_spatial_bins)
         "position_data": {
             **features,
