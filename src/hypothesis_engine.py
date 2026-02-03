@@ -353,12 +353,14 @@ def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
     Args:
         param_estimator (function): Function to estimate initial parameters for the model.
                                     Signature: param_estimator(X, response) -> params
-                                    where X has shape (n_features, n_trials) for a single sample.
+                                    where X has shape (n_features, n_trials) for a single sample,
+                                    and response has shape (n_trials,) for scalar or (n_targets, n_trials) for vectorized.
         model (function): The model which predicts neural activity from stimuli and free parameters.
                                  Signature: model(X, *params) -> activity
                                  where X has shape (n_features, n_trials) for a single sample.
         x (np.ndarray): Input data, shape (n_samples, n_features, n_trials).
-        y (np.ndarray): Response data, shape (n_samples, n_trials).
+        y (np.ndarray): Response data, shape (n_samples, n_trials) for scalar
+                        or (n_samples, n_targets, n_trials) for vectorized.
     Returns:
         jnp.ndarray: The estimated parameters for each sample, shape (n_samples, n_params).
                      If the parameter estimation fails, returns an array of default parameters based on the model's signature.
@@ -369,7 +371,8 @@ def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
         return pe(xi, yi)
     try:
         # any call taking >5s will raise timeout_decorator.TimeoutError
-        # xi has shape (n_features, n_trials), yi has shape (n_trials,)
+        # xi has shape (n_features, n_trials)
+        # yi has shape (n_trials,) for scalar or (n_targets, n_trials) for vectorized
         return jnp.array([_safe_estimate(param_estimator, x[i], y[i]) for i in range(y.shape[0])])
     except timeout_decorator.TimeoutError:
         logging.warning("param_estimator timed out, falling back to defaults")
@@ -411,6 +414,107 @@ def compute_default_params(model) -> jnp.ndarray:
         logging.info(f"Error while generating default parameters: {e}")
         return None
         return None    
+
+
+def validate_model_output(
+    output: jnp.ndarray,
+    expected_n_trials: int,
+    expected_n_targets: int = 1,
+    allow_1d_for_single_target: bool = True,
+) -> tuple[bool, str]:
+    """
+    Validate that model output has the expected shape.
+    
+    For scalar outputs (n_targets=1):
+        - Expected shape: (n_trials,) - 1D array
+        - If allow_1d_for_single_target=True, also accepts 2D (1, n_trials)
+    
+    For vectorized outputs (n_targets>1):
+        - Expected shape: (n_targets, n_trials) - 2D array
+    
+    Args:
+        output: The model output to validate
+        expected_n_trials: Expected number of trials (last dimension)
+        expected_n_targets: Expected number of targets. Default 1 (scalar output).
+        allow_1d_for_single_target: If True and n_targets=1, accept both 1D and 2D output.
+    
+    Returns:
+        tuple[bool, str]: (is_valid, error_message)
+            - is_valid: True if output shape is correct
+            - error_message: Empty string if valid, otherwise describes the issue
+    """
+    if expected_n_targets == 1:
+        # Scalar output: prefer 1D array of shape (n_trials,)
+        if output.ndim == 1:
+            if output.shape[0] != expected_n_trials:
+                return False, f"Model output n_trials={output.shape[0]} does not match expected {expected_n_trials}"
+            return True, ""
+        elif output.ndim == 2 and allow_1d_for_single_target:
+            # Also accept 2D (1, n_trials) for single target
+            if output.shape[0] != 1:
+                return False, f"For n_targets=1, 2D output should have shape (1, n_trials), got {output.shape}"
+            if output.shape[1] != expected_n_trials:
+                return False, f"Model output n_trials={output.shape[1]} does not match expected {expected_n_trials}"
+            return True, ""
+        else:
+            return False, f"Scalar model output should be 1D (n_trials,), got {output.ndim}D with shape {output.shape}"
+    else:
+        # Vectorized output: expect 2D array of shape (n_targets, n_trials)
+        if output.ndim != 2:
+            return False, f"Vectorized model output should be 2D (n_targets, n_trials), got {output.ndim}D with shape {output.shape}"
+        if output.shape[0] != expected_n_targets:
+            return False, f"Model output n_targets={output.shape[0]} does not match expected {expected_n_targets}"
+        if output.shape[1] != expected_n_trials:
+            return False, f"Model output n_trials={output.shape[1]} does not match expected {expected_n_trials}"
+        return True, ""
+
+
+def validate_model_execution(
+    model,
+    x_data: jnp.ndarray,
+    initial_params: jnp.ndarray,
+    n_samples: int,
+    expected_n_targets: int = 1,
+    n_validation_samples: int = 10,
+) -> tuple[bool, str]:
+    """
+    Validate that a model can execute correctly and produces expected output shapes.
+    
+    Tests the model on a random subset of samples to verify:
+    1. Model runs without exceptions
+    2. Model is compatible with JAX JIT and tracing
+    3. Output shape matches expected (n_trials,) for scalar or (n_targets, n_trials) for vectorized
+    
+    Args:
+        model: The model function to validate
+        x_data: Input data of shape (n_samples, n_features, n_trials)
+        initial_params: Initial parameters of shape (n_samples, n_params)
+        n_samples: Number of samples
+        expected_n_targets: Expected number of output targets (1 for scalar, >1 for vectorized)
+        n_validation_samples: Number of random samples to test (default 10)
+    
+    Returns:
+        tuple[bool, str]: (is_valid, error_message)
+    """
+    try:
+        model_jit = jax.jit(model)
+        test_n_trials = x_data.shape[2]
+        
+        for sample_idx in np.random.choice(n_samples, size=min(n_validation_samples, n_samples), replace=False):
+            # Validate with concrete values: x_data[sample_idx] is (n_features, n_trials)
+            output = model_jit(x_data[sample_idx], *initial_params[sample_idx])
+            
+            is_valid, error_msg = validate_model_output(output, test_n_trials, expected_n_targets)
+            if not is_valid:
+                return False, error_msg
+            
+            # Validate with abstract tracer values
+            jax.eval_shape(model_jit, x_data[sample_idx], *initial_params[sample_idx])
+        
+        return True, ""
+    except Exception as e:
+        return False, f"Model failed to run or is incompatible with JAX tracing: {e}"
+
 
 def objective_legacy(model, param_estimator, loss_func, x, y, 
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
@@ -684,7 +788,283 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-def objective(model, param_estimator, loss_func, x, y, 
+def objective_vectorized(model, param_estimator, loss_func, x, y,
+                         target_weights=None,
+                         param_penalty_weight=0.1, fit_params=True, random_seed=0,
+                         FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
+                         use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+    """
+    Calculate the loss of a model that predicts multiple targets (vectorized outputs).
+    
+    This function handles models where the output has shape (n_targets, n_trials) for
+    each sample, allowing prediction of multiple target cells simultaneously.
+    
+    The loss is computed as a weighted sum of per-target MSE:
+        loss = sum_t(weight[t] * mean((pred[t] - true[t])^2))
+    
+    Args:
+        model (function): The model which predicts neural activity from inputs
+                          and free parameters (for a single sample).
+                          Signature: model(X, *params) -> activity
+                          where X has shape (n_features, n_trials) for a single sample.
+                          Output shape: (n_targets, n_trials) for vectorized.
+                          For n_targets=1, output can be (n_trials,) and will be auto-expanded.
+        param_estimator (function): Function to estimate initial parameters for the model.
+                          Signature: param_estimator(X, response) -> params
+                          where X has shape (n_features, n_trials) for a single sample,
+                          and response has shape (n_trials,) for scalar or (n_targets, n_trials) for vectorized.
+        loss_func (function): Element-wise loss function. Applied to (pred, true) arrays.
+                          Should return array of same shape as inputs.
+        x: Input data. Can be:
+           - 2D array (n_samples, n_trials) - will be auto-expanded to (n_samples, 1, n_trials)
+           - 3D array (n_samples, n_features, n_trials)
+           - Inputs object
+        y: Output/response data. Can be:
+           - 2D array (n_samples, n_trials) - auto-expanded to (n_samples, 1, n_trials)
+           - 3D array (n_samples, n_targets, n_trials)
+           - Outputs object
+        target_weights: Optional weights for each target. Can be:
+           - None: uniform weights (1/n_targets for each target, sums to 1)
+           - 1D array of shape (n_targets,): custom weights (will be normalized to sum to 1)
+        param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
+        fit_params (bool): Whether to fit the parameters of the model. Default is True.
+        random_seed (int or None): Random seed for reproducibility. Default is 0.
+        FAILED_PROGRAM_COST (float): Cost assigned to failed models. Default is np.inf.
+        tol (float): Tolerance for optimization convergence. Default is 1e-2.
+        max_iter (int): Maximum number of iterations for optimization. Default is 1_000.
+        use_param_estimator (bool): Whether to use the parameter estimator to compute initial parameters. Default is True.
+        trial_batch_size (int): Number of trials to process per mini-batch to avoid GPU OOM. Default is 5000.
+
+    Returns:
+        tuple[
+            - float: The cross-validated loss of the model with initial parameters,
+            - jnp.ndarray: The initial parameters (n_samples, n_params).
+            - float: The average loss on test set after optimization.
+                     Returns FAILED_PROGRAM_COST if the model fails.
+            - jnp.ndarray: The optimized parameters (n_samples, n_params).
+    """
+    t_start = time.time()
+    
+    # Normalize inputs to Inputs format: (n_samples, n_features, n_trials)
+    x_inputs = ensure_inputs(x)
+    x_data = x_inputs.to_tensor()  # shape: (n_samples, n_features, n_trials)
+    
+    # Normalize outputs to Outputs format: (n_samples, n_targets, n_trials)
+    y_outputs = ensure_outputs(y)
+    y_data = y_outputs.data  # shape: (n_samples, n_targets, n_trials)
+    
+    n_samples, n_features, n_trials = x_data.shape
+    n_targets = y_outputs.n_targets
+    
+    # Set up target weights (normalize to sum to 1)
+    if target_weights is None:
+        target_weights = jnp.ones(n_targets) / n_targets
+    else:
+        target_weights = jnp.asarray(target_weights)
+        if target_weights.shape != (n_targets,):
+            raise ValueError(f"target_weights shape {target_weights.shape} does not match n_targets={n_targets}")
+        target_weights = target_weights / jnp.sum(target_weights)  # normalize
+    
+    # Train/test split over trials (axis 2)
+    # Split the trials into 10 equal length chunks: odd chunks -> train, even chunks -> test
+    key = jax.random.PRNGKey(random_seed)
+    n_trial_splits = 10
+    trials_per_split = n_trials // n_trial_splits
+    split_indices = [jnp.arange(i * trials_per_split, (i + 1) * trials_per_split) for i in range(n_trial_splits)]
+    training_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 1])
+    test_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 0])
+    
+    # Split inputs and outputs
+    x_train = x_data[:, :, training_trials_idx]  # (n_samples, n_features, training_size)
+    y_train = y_data[:, :, training_trials_idx]  # (n_samples, n_targets, training_size)
+    x_test = x_data[:, :, test_trials_idx]       # (n_samples, n_features, test_size)
+    y_test = y_data[:, :, test_trials_idx]       # (n_samples, n_targets, test_size)
+    
+    # Compute initial parameters
+    # param_estimator receives y as (n_targets, n_trials) for each sample
+    if use_param_estimator:
+        initial_params = compute_initial_params(param_estimator, model, np.asarray(x_train), np.asarray(y_train))
+    else:
+        initial_params = compute_default_params(model)
+        if initial_params is not None:
+            initial_params = jnp.repeat(initial_params, n_samples, axis=0)
+    
+    # Fail immediately if initial_params is None or not a JAX array
+    if initial_params is None or not isinstance(initial_params, jnp.ndarray):
+        logging.info("Error: initial_params should be a JAX array.")
+        return FAILED_PROGRAM_COST, jnp.zeros((n_samples, 0)), FAILED_PROGRAM_COST, jnp.zeros((n_samples, 0))
+    if initial_params.ndim != 2 or initial_params.shape[0] != n_samples:
+        logging.info(f"Error: initial_params should be a 2D array with shape ({n_samples}, n_params).")
+        return FAILED_PROGRAM_COST, jnp.zeros((n_samples, 0)), FAILED_PROGRAM_COST, jnp.zeros((n_samples, 0))
+    
+    # Fail immediately if fit_params is True and non-numeric params
+    n_params = initial_params.shape[1]
+    all_numeric = (initial_params.dtype.kind in 'biufc' and 
+                   jnp.all(jnp.isfinite(initial_params)))
+    if fit_params and not all_numeric:
+        logging.info("Error: Cannot fit non-numeric parameters.")
+        return FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params)), FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params))
+    
+    # Validate model execution and output shape
+    is_valid, error_msg = validate_model_execution(
+        model, x_data, initial_params, n_samples,
+        expected_n_targets=n_targets,
+        n_validation_samples=10
+    )
+    if not is_valid:
+        logging.info(f"Model validation failed: {error_msg}")
+        return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
+    
+    # Helper: normalize model output to 2D (n_targets, n_trials)
+    # This handles n_targets=1 case where model might return 1D
+    def normalize_model_output(output, n_targets):
+        """Ensure model output is 2D: (n_targets, n_trials)."""
+        if output.ndim == 1 and n_targets == 1:
+            return output[None, :]  # (1, n_trials)
+        return output
+    
+    # Wrapped model that normalizes output
+    def model_normalized(x_i, *params):
+        output = model(x_i, *params)
+        return normalize_model_output(output, n_targets)
+    
+    # Loss for a single sample:
+    # x_i: (n_features, n_trials), y_i: (n_targets, n_trials)
+    # model output: (n_targets, n_trials)
+    # Returns: scalar (weighted sum of per-target MSE)
+    def loss_single_sample(params, x_i, y_i):
+        pred = model_normalized(x_i, *params)  # (n_targets, n_trials)
+        # loss_func returns element-wise loss: (n_targets, n_trials)
+        elementwise_loss = loss_func(pred, y_i)  # (n_targets, n_trials)
+        # Mean over trials for each target: (n_targets,)
+        per_target_mse = jnp.mean(elementwise_loss, axis=-1)
+        # Weighted sum over targets: scalar
+        return jnp.sum(target_weights * per_target_mse)
+    
+    # Vectorize over samples
+    # params: (n_samples, n_params), x: (n_samples, n_features, n_trials), y: (n_samples, n_targets, n_trials)
+    # Output: (n_samples,)
+    loss_total = jax.vmap(loss_single_sample, in_axes=(0, 0, 0), out_axes=0)
+    
+    # Mini-batched loss and gradient computation to avoid GPU OOM
+    n_train_trials = x_train.shape[2]
+    
+    @jax.jit
+    def loss_single_batch(params_2d, x_batch, y_batch):
+        """Compute sum of losses for one batch (JIT-compiled)."""
+        batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
+        return jnp.sum(batch_losses)
+    
+    grad_single_batch = jax.jit(jax.grad(loss_single_batch))
+    
+    def loss_and_grad_batched(params):
+        """Compute loss and gradient by accumulating over trial batches."""
+        params_2d = params.reshape(-1, n_params)
+        total_loss = 0.0
+        total_grad = jnp.zeros_like(params)
+        
+        for start_idx in range(0, n_train_trials, trial_batch_size):
+            end_idx = min(start_idx + trial_batch_size, n_train_trials)
+            batch_weight = (end_idx - start_idx) / n_train_trials
+            x_batch = x_train[:, :, start_idx:end_idx]
+            y_batch = y_train[:, :, start_idx:end_idx]  # Note: 3D now
+            
+            batch_loss = loss_single_batch(params_2d, x_batch, y_batch)
+            batch_grad = grad_single_batch(params_2d, x_batch, y_batch)
+            
+            total_loss += batch_loss * batch_weight
+            total_grad += batch_grad.reshape(-1) * batch_weight
+        
+        return total_loss / n_samples, total_grad / n_samples
+    
+    if fit_params:
+        # Adam optimizer with learning rate schedule
+        peak_lr = 0.001
+        schedule = optax.warmup_cosine_decay_schedule(
+            init_value=peak_lr * 0.1,
+            peak_value=peak_lr,
+            warmup_steps=50,
+            decay_steps=max_iter,
+            end_value=peak_lr * 0.01
+        )
+        opt = optax.adam(schedule, b1=0.9, b2=0.999, eps=1e-8)
+        opt_state = opt.init(initial_params.reshape(-1))
+        
+        def train_step(params, opt_state):
+            loss, grad = loss_and_grad_batched(params)
+            updates, new_opt_state = opt.update(grad, opt_state, params)
+            new_params = optax.apply_updates(params, updates)
+            return new_params, new_opt_state, loss
+        
+        print_every = 50
+        params = initial_params.reshape(-1)
+        initial_loss, _ = loss_and_grad_batched(params)
+        
+        CATASTROPHIC_LOSS_THRESHOLD = 1e6
+        if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
+            print(f"Initial loss {initial_loss:.2e} exceeds threshold. Skipping optimization.")
+            logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
+            return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
+        
+        best_loss, best_params = initial_loss.copy(), params.copy()
+        for step in range(1, max_iter + 1):
+            params, opt_state, loss_val = train_step(params, opt_state)
+            if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
+                logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
+                print(f"Final loss: {loss_val:.4f} at step {step}")
+                break
+            if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
+                logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
+                print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
+                return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
+            if loss_val < best_loss:
+                best_loss = loss_val.copy()
+                best_params = params.copy()
+            if step % print_every == 0:
+                print(f"step {step:4d}  loss {loss_val:.4f}")
+        params = best_params.reshape(n_samples, n_params)
+        print(f"params optimized. Loss: {best_loss:.4f}")
+    else:
+        params = compute_initial_params(param_estimator, model, np.asarray(x_train), np.asarray(y_train))
+        if params is None or not isinstance(params, jnp.ndarray):
+            logging.info("Error: params should be a JAX array.")
+            return FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params)), FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params))
+    
+    # Compute final loss on test set
+    n_test_trials = x_test.shape[2]
+    
+    def eval_loss_batched(params_2d, x_eval, y_eval):
+        """Compute loss by iterating over trial batches."""
+        n_eval_trials = x_eval.shape[2]
+        weighted_sum = 0.0
+        for start_idx in range(0, n_eval_trials, trial_batch_size):
+            end_idx = min(start_idx + trial_batch_size, n_eval_trials)
+            batch_size = end_idx - start_idx
+            x_batch = x_eval[:, :, start_idx:end_idx]
+            y_batch = y_eval[:, :, start_idx:end_idx]  # Note: 3D now
+            batch_losses = loss_total(params_2d, x_batch, y_batch)
+            weighted_sum += jnp.nansum(batch_losses) * (batch_size / n_eval_trials)
+        return weighted_sum / n_samples
+    
+    initial_loss = eval_loss_batched(initial_params, x_test, y_test) + param_penalty_weight * n_params
+    n_nans = jnp.sum(jnp.isnan(initial_loss))
+    if n_nans > 0:
+        print(f"Warning: initial loss contains {n_nans} NaNs.")
+    initial_loss = jnp.nan_to_num(initial_loss, nan=FAILED_PROGRAM_COST, posinf=FAILED_PROGRAM_COST, neginf=FAILED_PROGRAM_COST)
+    
+    final_loss = eval_loss_batched(params, x_test, y_test) + param_penalty_weight * n_params
+    n_nans = jnp.sum(jnp.isnan(final_loss))
+    if n_nans > 0:
+        print(f"Warning: final loss contains {n_nans} NaNs.")
+    final_loss = jnp.nan_to_num(final_loss, nan=FAILED_PROGRAM_COST, posinf=FAILED_PROGRAM_COST, neginf=FAILED_PROGRAM_COST)
+    
+    t_end = time.time()
+    print(f"Time taken for optimization: {t_end - t_start:.4f} seconds")
+    return float(initial_loss), initial_params, float(final_loss), params
+
+
+def objective(model, param_estimator, loss_func, x, y,
+              target_weights=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
               use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -694,6 +1074,10 @@ def objective(model, param_estimator, loss_func, x, y,
     This is the main entry point for model evaluation. All outputs are normalized
     to Outputs objects with shape (n_samples, n_targets, n_trials), even for
     single-target (scalar) cases where n_targets=1.
+    
+    For n_targets=1, this currently delegates to objective_legacy for backward
+    compatibility. Once objective_vectorized is fully tested, we can remove this
+    special case and always use objective_vectorized.
     
     Args:
         model (function): The model which predicts neural activity from inputs
@@ -713,6 +1097,9 @@ def objective(model, param_estimator, loss_func, x, y,
            - 2D array (n_samples, n_trials) - auto-expanded to (n_samples, 1, n_trials)
            - 3D array (n_samples, n_targets, n_trials)
            - Outputs object
+        target_weights: Optional weights for each target. Only used for n_targets > 1.
+           - None: uniform weights (1/n_targets for each)
+           - 1D array (n_targets,): custom weights (normalized to sum to 1)
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
         random_seed (int or None): Random seed for reproducibility. Default is 0.
@@ -724,21 +1111,22 @@ def objective(model, param_estimator, loss_func, x, y,
 
     Returns:
         tuple[
-            - float: The cross-validated loss of the model with data fit by the parameter estimator,
-            - jnp.ndarray: The parameters fit by the parameter estimator.
-            - float: The average loss (MSE on test set) across all samples. 
-                     Returns FAILED_PROGRAM_COST if the model fails for ANY cell.
-            - jnp.ndarray: The parameters for each sample (n_samples, n_params).
+            - float: The cross-validated loss with initial parameters,
+            - jnp.ndarray: The initial parameters.
+            - float: The average loss on test set after optimization.
+            - jnp.ndarray: The optimized parameters for each sample (n_samples, n_params).
     """
     # Normalize y to Outputs format: always (n_samples, n_targets, n_trials)
     y_outputs = ensure_outputs(y)
     n_targets = y_outputs.n_targets
     
     if n_targets == 1:
-        # Single target: use legacy implementation for now
-        # TODO: Once objective_vectorized is implemented, remove this branch
-        # and handle n_targets=1 as a special case of vectorized
+        # Single target: use legacy implementation for backward compatibility
+        # TODO: Once objective_vectorized is fully tested with n_targets=1,
+        # remove this branch and always use objective_vectorized
         y_2d = y_outputs.to_2d(0)  # Extract first (only) target as 2D
+        if target_weights is not None:
+            logging.info("Warning: target_weights ignored for single-target outputs.")
         return objective_legacy(
             model=model,
             param_estimator=param_estimator,
@@ -755,10 +1143,22 @@ def objective(model, param_estimator, loss_func, x, y,
             trial_batch_size=trial_batch_size,
         )
     else:
-        # Multiple targets: vectorized implementation not yet ready
-        raise NotImplementedError(
-            f"Vectorized outputs with n_targets={n_targets} not yet implemented. "
-            f"Currently only n_targets=1 is supported."
+        # Multiple targets: use vectorized implementation
+        return objective_vectorized(
+            model=model,
+            param_estimator=param_estimator,
+            loss_func=loss_func,
+            x=x,
+            y=y_outputs,
+            target_weights=target_weights,
+            param_penalty_weight=param_penalty_weight,
+            fit_params=fit_params,
+            random_seed=random_seed,
+            FAILED_PROGRAM_COST=FAILED_PROGRAM_COST,
+            tol=tol,
+            max_iter=max_iter,
+            use_param_estimator=use_param_estimator,
+            trial_batch_size=trial_batch_size,
         )
 
 
