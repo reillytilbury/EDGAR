@@ -87,7 +87,6 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
         params['n_islands'] = 2
         params['k_max'] = 2
         params['batch_size'] = 2
-        params['max_iter'] = 100
         params['exploration_topology'] = [1, 0]
         params['exploitation_topology'] = [1, 0]
 
