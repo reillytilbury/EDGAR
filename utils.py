@@ -1,4 +1,7 @@
 import os
+import importlib
+import json
+from pathlib import Path
 import asyncio
 import diagnostic, hypothesis_engine
 import ast
@@ -30,11 +33,11 @@ logging.getLogger("google.genai").setLevel(logging.ERROR)
 
 def vmap_over_cells(model_fn):
     """Return a version of `model_fn` that accepts
-       (theta, params_matrix) and runs one row per cell."""
-    def _wrapped(theta, params_row):
+       (stimuli, params_matrix) and runs one row per cell."""
+    def _wrapped(stimuli, params_row):
         # params_row shape: (k,)  ← one cell’s parameters
-        return model_fn(theta, *params_row)   # unpack to scalars
-    return jax.vmap(_wrapped, in_axes=(None, 0))   # x shared, params batched
+        return model_fn(stimuli, *params_row)   # unpack to scalars
+    return jax.vmap(_wrapped, in_axes=(None, 0))   # stimuli shared, params batched
 
 def circular_distance_rad_np(angle1, angle2) -> np.ndarray:
     """Shortest distance between two angles (radians) on a circle.
@@ -290,324 +293,89 @@ def str_to_func(code_string: Tuple[str, None], needle: str = 'neuron_model') -> 
             print(f"Function {needle} not found in executed code.")
             return None
 
-def create_linked_prompt(random_programs: pd.DataFrame, mode: str, llm_type: str = 'g') -> str:
-    """
-    Create a prompt to generate a new neuron model and parameter estimator based on k existing models.
+def _load_project_image_diagnostics(project: str):
+    return importlib.import_module(f"projects.{project}.image_diagnostics")
 
-    Args:
-        random_programs (pd.DataFrame): A DataFrame containing the existing models, their losses, and their parameter estimators. (+ more)
-            (Assumes that df is sorted from highest loss to lowest loss)
-        mode (str): The mode of evolution - 'explore' or 'exploit'.
-        llm (str): either 'g' or 'c'. This might be necessary as apparently some models have different word styles. 
 
-    Returns:
-        program_prompt (str): The prompt string for the AI to generate a new neuron model.
-    """
-    # Ensure the mode is valid
+def _load_prompt_config(project: str) -> dict:
+    base_dir = Path(__file__).resolve().parent / "projects"
+    defaults_path = base_dir / "prompts_defaults.json"
+    project_path = base_dir / project / "prompts.json"
+    if not defaults_path.exists():
+        raise FileNotFoundError(f"Missing prompt defaults: {defaults_path}")
+    if not project_path.exists():
+        raise FileNotFoundError(f"Missing project prompt config: {project_path}")
+    with defaults_path.open("r", encoding="utf-8") as f:
+        defaults = json.load(f)
+    with project_path.open("r", encoding="utf-8") as f:
+        overrides = json.load(f)
+    merged = {}
+    for key, default_value in defaults.items():
+        override_value = overrides.get(key, "")
+        if override_value is None:
+            merged[key] = default_value
+        elif isinstance(override_value, str) and override_value.strip() == "":
+            merged[key] = default_value
+        else:
+            merged[key] = override_value
+    return merged
+
+
+def _format_prompt(template: str, **kwargs) -> str:
+    return template.format(**kwargs)
+
+
+def create_program_prompt(random_programs: pd.DataFrame, mode: str, llm_type: str = 'g', use_image: bool = True, project: str = "orientation") -> str:
     assert mode in ['explore', 'exploit'], "Invalid mode. Choose either 'explore' or 'exploit'."
-    # ensure the llm is valid
-    assert llm_type in ['g', 'c'], "Invalid LLM. Choose either 'g' or 'c'."
-
-    # get the number k of models
+    config = _load_prompt_config(project)
+    image_parts = _load_project_image_diagnostics(project)
+    image_fn = f"{image_parts.__name__}.plot_model_prompt_image"
     k = len(random_programs)
-
-    if llm_type == 'g':
-        # generate the program promt from all these models
-        program_prompt = f"""
-You are an AI scientist. The programs below are biological models of neurons (neuron_models) and programs to estimate their free parameters (parameter_estimator). The models are sorted from highest loss to lowest loss.
-
-Your task is to create a new neuron model, neuron_model_v{k+1}, and the associated parameter_estimator, parameter_estimator_v{k+1}, that has a lower loss than the models below.
-
-*Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
-
-"""
-        if mode == 'explore':
-            program_prompt += f"""
-Use the models and parameter estimators below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find those and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
-"""
-        # I thought this would be a good additon: " Which features in the models below correlate with lower loss? Find those and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas."
-        # But it seems like it has made worse models, so I removed it.
-        elif mode == 'exploit':
-            program_prompt += f"""
-Use the models and parameter estimators below as a *template* to create an improved, simpler model.
-Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
-You will be *penalized* for compleity, so make the new model and parameter estimator as *simple* as possible while still being better than the previous models.
-"""
-        
-        
-    else:
-        # Create base prompt with clear structure and specific requirements
-        program_prompt = f"""
-# Neuron Model Optimization Task
-
-I'm working on a genetic algorithm project to evolve neuron models with progressively lower loss. I ned your help to create a new neuron model and an estimator for its free parameters.
-
-## Your Task
-Create a new, improved `neuron_model_v{k+1}` function and `parameter_estimator_v{k+1}` function that perform better than the previous versions below.
-
-
-## Analysis Instructions
-First, carefully analyze the progression of existing models and their parameter estimators:
-- Identify patterns in how models improved over iterations. See which strategies led to lower losses.
-- Note which parameter configurations led to lower losss
-- Look for redundant or inefficient code that could be optimized
-
-"""
-        
-        # Add mode-specific instructions
-        if mode == 'explore':
-            program_prompt += f"""
-## Exploration Mode
-For this iteration, I need you to be creative and innovative:
-- Introduce a novel approach or mechanism not present in previous models
-- Experiment with new ways to estimate parameters from data
-- Consider alternative mathematical formulations
-- Try incorporating different activation functions or computational techniques
-- Balance exploration with maintaining what works from previous models
-- Feel free to restructure the approach while preserving core functionality
-
-"""
-        elif mode == 'exploit':
-            program_prompt += f"""
-## Exploitation Mode
-For this iteration, I need you to refine and optimize the existing approach:
-- Make targeted improvements to the best-performing models
-- Simplify redundant code without losing functionality
-- Fine-tune parameters and functions that show promise
-- Consider merging effective techniques from different models
-- Focus on incremental improvements rather than radical redesigns
-- Models are penalized for complexity, so aim for simplicity while improving accuracy
-
-"""
-    
-
-    program_prompt += f"""
-**Code Generation Guidelines:**
-
-* Import any packages you use.
-* Do not include any text other than the code.
-* Ensure all free parameters are numeric, not strings.
-
-""" 
-    # add models and parameter estimators to the prompt
-    for i in range(k):
-        program_prompt += f"""
-loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
-{random_programs.iloc[i]['program_code_string'].replace('def neuron_model(', f'def neuron_model_v{i+1}(')}
-\n
-"""
-        # add parameter estimator
-        program_prompt += f"""
-{random_programs.iloc[i]['parameter_estimator_code_string'].replace('def parameter_estimator(', f'def parameter_estimator_v{i+1}(')}
-\n
-----------------------------
-\n
-"""
-
-    return program_prompt
-
-def create_program_prompt(random_programs: pd.DataFrame, mode: str, llm_type: str = 'g', use_image: bool = True) -> str:
-    """
-    Create a prompt to generate a new neuron model based on k existing models.
-
-    Args:
-        random_programs (pd.DataFrame): A DataFrame containing the existing models, their losses, and their parameter estimators. (+ more)
-            (Assumes that df is sorted from highest loss to lowest loss)
-        mode (str): The mode of evolution - 'explore' or 'exploit'.
-        llm (str): either 'g' or 'c'. This might be necessary as apparently some models have different word styles. 
-        image_prompt (bool): Whether to include an image prompt in the generated prompt. Defaults to True.
-    Returns:
-        prompt (str): The prompt string for the AI to generate a new neuron model.
-    """
-    # Ensure the mode is valid
-    assert mode in ['explore', 'exploit'], "Invalid mode. Choose either 'explore' or 'exploit'."
-    # ensure the llm is valid
-    assert llm_type in ['g', 'c'], "Invalid LLM. Choose either 'g' or 'c'."
-
-    # get the number k of models
-    k = len(random_programs)
-
-    if llm_type == 'g':
-        # generate the program promt from all these models
-        prompt = f"""
-You are an AI scientist. The programs below are biological models of neurons. The models are sorted from highest to lowest loss.
-
-Your task is to create a new neuron model, neuron_model_v{k+1}, that has a lower loss than the models below.
-
-*Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
-
-"""
-        if mode == 'explore':
-            prompt += f"""
-Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
-"""
-        elif mode == 'exploit':
-            prompt += f"""
-Use the models below as a *template* to create a new model. 
-Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. 
-Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
-Are the parameter ranges correct? If not, adjust them to be more appropriate.
-You will be *penalized* for complexity, so make the new model as *simple* as possible while still being better than the previous models.
-"""
-
-    else:
-        # Create base prompt with clear structure and specific requirements
-        prompt = f"""
-# Neuron Model Optimization Task
-
-I'm working on a genetic algorithm project to evolve neuron models with progressively lower loss. I ned your help to create a new neuron model. The models listed below are listed from worst to best.
-
-## Your Task
-Create a new, improved `neuron_model_v{k+1}` function that has a lower loss than all the models below.
-
-**Code Generation Guidelines:**
-
-* Import any packages you use.
-* Do not include any text other than the code.
-
----
-## Analysis Instructions
-First, carefully analyze the progression of existing models:
-- Identify patterns in how models improved over iterations. See which strategies led to lower losses.
-- Look for redundant or inefficient code that could be optimized
-
-"""
-        
-        # Add mode-specific instructions
-        if mode == 'explore':
-            prompt += f"""
-## Exploration Mode
-For this iteration, I need you to be creative and innovative:
-- Introduce a novel approach or mechanism not present in previous models
-- Consider alternative mathematical formulations
-- Try incorporating different activation functions or computational techniques
-- Balance exploration with maintaining what works from previous models
-- Feel free to restructure the approach while preserving core functionality
-
-"""
-        elif mode == 'exploit':
-            prompt += f"""
-## Exploitation Mode
-For this iteration, I need you to refine and optimize the existing approach:
-- Make targeted improvements to the best-performing models
-- Simplify redundant code without losing functionality
-- Fine-tune parameters and functions that show promise
-- Consider merging effective techniques from different models
-- Focus on incremental improvements rather than radical redesigns
-- Models are penalized for complexity, so aim for simplicity while improving accuracy
-
-"""     
-    #  prompt explaining the image
+    prompt = _format_prompt(config["model_fit_task_description"], k_plus_one=k + 1, project=project)
+    if mode == "explore":
+        prompt += _format_prompt(config["explore_prompt"], k_plus_one=k + 1, project=project)
+    elif mode == "exploit":
+        prompt += _format_prompt(config["exploit_prompt"], k_plus_one=k + 1, project=project)
     if use_image:
-        prompt += f"""
-**Image Analysis Instructions:**
-
-Attached is a scatter plot of the neuron models' performance on top of raw neural data. The binned mean is plotted in **sky-blue**, `neuron_model_v1` is plotted in **green**, and `neuron_model_v2` is plotted in **red**. 
-
-Analyse the models' fits to the data in the image below. Identify systematic weaknesses of the models by observing patterns across multiple cell plots. For instance, consider:
-*   **Model Comparisons:** Which models are better for each cell? That is to say, which models track the blue curve better? Which features of the models are responsible for improving the fit?
-*   **Model Fit:** How well do the models fit the binned data mean? Look for places where even the models (**red** curve for best model, **green** for second best model) deviate most from the binned data mean (**blue** curve). This is where the models are weakest, and where you should focus your improvements.
-*   **Model Shape:** Do the models' shapes (e.g., peak sharpness, width, skewness, amplitude, etc.) align with the binned data mean (**blue**) and raw data scatter points (**black**)? If not, how do they differ? How can you change the model to better match the data shape?
-*   **Parameter Flexibility:** Are there free parameters that could be introduced or modified to better capture the observed response profiles? Utilize your analysis of the shortcomings of the current models' shapes and add free parameters or modify existing ones to address these issues.
-
-Use this analysis to inform the design of a new neuron model, `neuron_model_v{k+1}`, that improves upon the previous models. 
-
-Include your analysis of the image in the docstring of your new model. Point to specific subplots in the image that illustrate the *strengths* and *weaknesses* of the parent models. Explain how you plan to **fix** the weaknesses of the parent models.
-"""
-
-    prompt += f"""
-**Code Generation Guidelines:**
-
-* Import any packages you use.
-* Do not include any text other than the code.
-* Ensure all free parameters are numeric, not strings.
-* At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
-
-**Docstring Guidelines:**
-* Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`, `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
-* Do not refer to the current model as `neuron_model_v{k+1}`. Instead, refer to it as "this model".
-* Provide a simple equation for the model, including all free parameters.
-* Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
-
-""" 
-    # add models to the prompt
+        image_instructions = _format_prompt(config["image_analysis_instructions"], image_diagnostics_fn=image_fn)
+        if image_fn not in image_instructions:
+            header = "**Image Analysis Instructions:**"
+            if header in image_instructions:
+                before, after = image_instructions.split(header, 1)
+                image_instructions = f"{before}{header}\nThe image was generated by `{image_fn}`.{after}"
+            else:
+                image_instructions = f"The image was generated by `{image_fn}`.\n\n{image_instructions}"
+        prompt += image_instructions
+    prompt += _format_prompt(config["coding_instructions"], k_plus_one=k + 1, project=project)
     for i in range(k):
         prompt += f"""
 loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
 {random_programs.iloc[i]['program_code_string'].replace('def neuron_model(', f'def neuron_model_v{i+1}(')}
 \n
 """
-
     return prompt
 
+
 def create_parameter_estimator_prompt(random_programs: pd.DataFrame, neuron_model_code_string: str,
-                                      max_lines: int = 100,llm_type: str = 'g', use_image: bool = True) -> str:
-    """
-    Create a prompt to generate a new parameter estimator based on k existing models.
-    Args:
-        random_programs (pd.DataFrame): A DataFrame containing the existing models, their losses, and their parameter estimators. (+ more)
-            (Assumes that df is sorted from highest loss to lowest loss)
-        llm (str): either 'g' or 'c'. This might be necessary as apparently some models have different word styles. 
-    Returns:
-        prompt (str): The prompt string for the AI to generate a new parameter estimator.
-    """
-    # ensure the llm is valid
-    assert llm_type in ['g', 'c'], "Invalid LLM. Choose either 'g' or 'c'."
-    # get the number k of models
+                                      max_lines: int = 100, llm_type: str = 'g', use_image: bool = True, project: str = "orientation") -> str:
+    config = _load_prompt_config(project)
+    image_parts = _load_project_image_diagnostics(project)
+    image_fn = f"{image_parts.__name__}.plot_param_estimator_prompt_image"
     k = len(random_programs)
-
-    if llm_type == 'g':
-        # generate the program promt from all these models
-        prompt = f"""
-You are an AI scientist. Your task is to create a simple parameter estimator function, parameter_estimator_v{k+1}, to estimate the free parameters of the latest neuron model, neuron_model_v{k+1}.
-
-The parameter should be estimated directly, using statistical principles and knowledge of what the parameters represent biologically. 
-
-*Analyze* the progression of the parameter estimators, *generalize* the improvements, and *create* a new parameter estimator that is better than *all* previous estimators.
-
-"""
-    elif llm_type == 'c':
-        # Create base prompt with clear structure and specific requirements
-        prompt = f"""
-# Neuron Parameter Estimator Optimization Task
-
-I'm working on a genetic algorithm project to evolve neuron models. I need your help to create a rough initial parameter estimator for the latest neuron model, neuron_model_v{k+1}.
-
-## Your Task
-Create a new, improved `parameter_estimator_v{k+1}` function that estimates the free parameters of the neuron model, `neuron_model_v{k+1}`.
-
-## Analysis Instructions
-First, carefully analyze the progression of existing parameter estimators:
-- Identify patterns in how estimators improved over iterations. See which strategies led to lower losses.
-
-"""
-        
-    # ------------------------------------------------------------
-    # 2. Optional image‑analysis section
-    # ------------------------------------------------------------
+    prompt = _format_prompt(config["parameter_estimator_instructions"], k_plus_one=k + 1, max_lines=max_lines, project=project)
     if use_image:
-        prompt += f"""
-**Image Analysis Instructions:**
-
-Attached is a scatter plot where each neuron model curve is drawn **using the parameters produced by its corresponding parameter estimator function**. The binned mean is **sky blue**, `neuron_model_v1` is **green**, and `neuron_model_v2` is **red**.
-
-Focus on how *parameter values* affect model fit:
-* **Mismatch Regions:** Where do the best (red) and worst (green) curves deviate most from the blue mean? Which parameters control those regions?
-* **Sensitivity:** Determine which parameters the output is most sensitive to in poorly fitting zones.
-* **Biological Plausibility:** Keep estimates within realistic biological ranges.
-
-Summarise this analysis **inside the docstring** of `parameter_estimator_v{k+1}` and explain how your estimator addresses identified weaknesses.
-"""
-
-    prompt += f"""
-**Code Generation Guidelines:**
-* Import any packages you use.
-* Do not include any text other than the code.
-* The only arguments to the function should be the stimuli and the spike count.
-* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected. 
-* Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point for the parameter estimation.
-"""
-    # loop through the models, and plot the cost, neuron_model code, and parameter estimator code. Finally, add the neuron model code string to the prompt.
+        image_instructions = _format_prompt(
+            config["param_estimator_image_analysis_instructions"],
+            param_est_image_diagnostics_fn=image_fn,
+        )
+        if image_fn not in image_instructions:
+            header = "**Image Analysis Instructions:**"
+            if header in image_instructions:
+                before, after = image_instructions.split(header, 1)
+                image_instructions = f"{before}{header}\nThe image was generated by `{image_fn}`.{after}"
+            else:
+                image_instructions = f"The image was generated by `{image_fn}`.\n\n{image_instructions}"
+        prompt += image_instructions
     for i in range(k):
         prompt += f"""
 loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
@@ -618,49 +386,34 @@ loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
 ----------------------------
 \n
 """
-    # add the neuron model code string to the prompt
     prompt += f"""
 {neuron_model_code_string.replace('def neuron_model(', f'def neuron_model_v{k+1}(')}
 \n
 """
     return prompt
 
+
 def create_parameter_estimator_image_prompt(neuron_model_code_string: str,
                                             param_estimator_code_string: str,
-                                            max_lines: int = 100) -> str:
-    """
-    Create a prompt to generate a new parameter estimator based on 1 existing neuron model, its parameter estimator, and an image of the model's fit to the data.
-
-    Args:
-        random_programs (pd.DataFrame): A DataFrame containing the existing model, its losses, and its parameter estimator.
-        llm (str): either 'g' or 'c'. This might be necessary as apparently some models have different word styles.
-    Returns:
-        prompt (str): The prompt string for the AI to generate a new parameter estimator.
-    """
-    prompt = f"""
-You are an AI scientist. The program `neuron_model` below is a biological model of a neuron, which takes in a stimulus theta, and some free parameters, and returns the expected firing rate of the neuron.
-
-The program `parameter_estimator` below is a function that estimates the free parameters of the neuron model from the stimulus 'theta' and spike count data 'spike_count'.
-
-The image attached shows the fit of the neuron model to experimental data. The binned mean is plotted in **sky-blue**, while `neuron_model`, with parameters estimated by `parameter_estimator`, is plotted in **red**. 
-
-Your task is to create a new parameter estimator, that estimates the free parameters better than the existing estimator.
-
-**Image Analysis Instructions:**
-Analyze the model's fit to the data in the image below. Identify systematic weaknesses of the model by observing patterns across multiple cell plots. Important notes:
-*   **Parameter Fits:** For each cell, and each parameter, how well does the model fit the data? Look for places where the model (**red** curve) deviates most from the binned data mean (**blue** curve). This is where the model is weakest, and where you should focus your improvements.
-*   **Cell References:** The image contains multiple cells. Identify cells where the fit is poor, and reference them in the docstring of your new parameter estimator. 
-*   **Planning Improvements:** Combine your analysis of the weaknesses observed in the image with the code provided for the parameter estimator to create a new parameter estimator, that improves upon the previous estimator.
-
-**Code Generation Guidelines:**
-* Import any packages you use.
-* Do not include any text other than the code.
-* The only functions in your code should be the parameter estimator function and any helper functions you define.
-* The parameter estimator function should be named `parameter_estimator`.
-* The only arguments to the function should be the stimuli and the spike count.
-* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected. 
-* Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple statistical starting point for gradient descent.
-
+                                            max_lines: int = 100,
+                                            project: str = "orientation") -> str:
+    config = _load_prompt_config(project)
+    image_parts = _load_project_image_diagnostics(project)
+    image_fn = f"{image_parts.__name__}.plot_param_estimator_prompt_image"
+    prompt = _format_prompt(config["parameter_estimator_instructions"], k_plus_one=1, max_lines=max_lines, project=project)
+    image_instructions = _format_prompt(
+        config["param_estimator_image_analysis_instructions"],
+        param_est_image_diagnostics_fn=image_fn,
+    )
+    if image_fn not in image_instructions:
+        header = "**Image Analysis Instructions:**"
+        if header in image_instructions:
+            before, after = image_instructions.split(header, 1)
+            image_instructions = f"{before}{header}\nThe image was generated by `{image_fn}`.{after}"
+        else:
+            image_instructions = f"The image was generated by `{image_fn}`.\n\n{image_instructions}"
+    prompt += image_instructions
+    prompt += f"""
 Here is the code for the neuron model and parameter estimator:
 \n
 {neuron_model_code_string}
@@ -671,93 +424,19 @@ Here is the code for the neuron model and parameter estimator:
     return prompt
 
 def create_jax_translater_prompt(program: str) -> str:
-    """
-    Create a prompt to translate a program to JAX compatible code.
-    Args:
-        program (str): The string containing the code to be translated.
-    Returns:
-        prompt (str): The prompt string for the AI to translate the program.
-    """
-    # Ensure the program is a string
     assert isinstance(program, str), "The program must be a string."
-    # Create the base prompt
-    prompt = f"""Convert the following function to a JAX-compatible function.
+    config = _load_prompt_config("orientation")
+    return _format_prompt(config["jax_translater_instructions"], program=program)
 
-    Include all necessary imports, and ensure that the function is compatible with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.
+def create_meta_learning_prompt(logged_output: str, project: str = "orientation"):
+    config = _load_prompt_config(project)
+    return _format_prompt(config["model_fit_task_description"], k_plus_one=1, project=project) + f"\n{logged_output}"
 
-    Do not include any text other than the code. 
-
-    Here is the code to translate:
-
-    {program}
-    """
-    return prompt
-
-def create_meta_learning_prompt(logged_output: str):
-    """
-    Create a prompt to generate a new neuron_model based on a history of old models and their scores.
-    Args:
-        logged_output (str): The string containing the original neuron model code and its score.
-    
-    Returns:
-        meta_learning_prompt (str): The prompt string for the AI to generate a new neuron model.
-    """
-    return f"""
-You are an AI scientist, trying to understand the response of neurons to visual stimuli. We have some data from a large pool of neurons exposed to a *huge* number of oriented visual stimuli.
-
-I have a *massive* and *diverse* collection of potential models for how neurons might respond to these stimuli and I have given each model a cost based on its cross-validated performance on the data.
-
-Your task is to *analyze* the models, their parameter estimators, and their costs, and *create* a new neuron model that is better than all previous models. I need you to find *patterns* in the models and their costs. *Focus* on which strategies lead to lower costs. 
-
-Once you have found these patterns, *create* a new neuron model and a new parameter estimator that is better than all previous models.
-You will need to create two functions:
-1. A new neuron model, def neuron_model(theta, *params)
-2. A new parameter estimator, def parameter_estimator(theta, spike_count)
-
-Here is the output from the genetic algorithm so far:
-\n
-{logged_output}
-"""
-
-def create_image_prompt(program_df_row: Union[pd.DataFrame, None]) -> Union[str, None]:
-    """
-    Creates a text prompt which will be adjoined to an image to prompt an LLM to create a new and improved model.
-    Args:
-        program_df_row (pd.DataFrame): A DataFrame row containing the neuron model code and other relevant information.
-                                        If the DataFrame is None, returns None.
-    Returns:
-        str: The prompt string for the AI to generate an improved neuron model.
-    """
+def create_image_prompt(program_df_row: Union[pd.DataFrame, None], project: str = "orientation") -> Union[str, None]:
     if program_df_row is None:
         return None
-    
-    text_prompt = f"""
-You are an AI scientist, working to improve a model based on its fit to data. Your task is to analyze the provided image showing the fit of a neuron model to experimental data, as well as the model itself, and then propose a new, improved version of the model.
-
-The current neuron model is defined as follows:
-
-{program_df_row['program_code_string'][0]}
-
-Carefully analyze the provided image showing the neuron model's fit to experimental data across multiple cells.
-
-When analyzing the image, pay close attention to discrepancies and consistencies between the model's prediction (red line), the binned data mean (sky-blue line), and the raw data scatter points (colored by 'Loss'). The color of the scatter points indicates 'Loss'; yellow points signify areas where the current model struggles significantly.
-
-Identify the strengths of the current `neuron_model` in fitting this type of data.
-Then, identify systematic weaknesses of the model by observing patterns across multiple cell plots. For instance, consider:
-*   **High Loss Regions:** What types of discrepancies are common in areas with high loss values (yellow points)?
-*   **Model Shape:** Does the model's shape (e.g., peak sharpness, width, skewness, amplitude, etc.) align with the binned data mean and raw data scatter points? If not, how can it be improved to better match the observed data?
-*   **Parameter Flexibility:** Are there parameters that could be introduced or modified to better capture the observed neural response profiles? Utilize your analysis of the shortcomings of the current model's shape and add free parameters or modify existing ones to address these issues.
-
-Based on these identified strengths and weaknesses, propose and implement improvements directly within the `neuron_model` Python function. The goal is to enhance the model's structure to make it more flexible, accurate and interpetable.
-
-Only return the complete Python code for the improved `neuron_model` function, including any necessary imports.
-Critically, detail all your improvements within the function's docstring. For each change made, clearly explain:
-*   Which specific visual weakness (e.g., "model peaks are often too pointy and narrow compared to flatter, broader data peaks seen in cells X, Y, and Z") your change aims to address.
-*   How the new parameters or modified logic specifically contribute to fixing these weaknesses.
-*   A clear definition of any new parameters introduced (name, type, role, and typical range or interpretation if applicable).
-"""
-    
-    return text_prompt
+    config = _load_prompt_config(project)
+    return _format_prompt(config["model_fit_task_description"], k_plus_one=1, project=project) + f"\n{program_df_row['program_code_string'][0]}"
 
 def unbiased_signal_fraction(R, min_repeats=2):
     """
