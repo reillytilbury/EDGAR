@@ -569,13 +569,19 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
     
     # train/test split over trials (axis 2)
     # split the trials into 10 equal length chunks and allocate all odd chunks to train and even chunks to test 
-    key = jax.random.PRNGKey(random_seed)    
+    key = jax.random.PRNGKey(random_seed)        
     n_trial_splits = 10 
     trials_per_split = n_trials // n_trial_splits
     split_indices = [jnp.arange(i * trials_per_split, (i + 1) * trials_per_split) for i in range(n_trial_splits)]
     training_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 1])
     test_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 0])
-    
+    # # old code 
+    # key = jax.random.PRNGKey(random_seed)
+    # training_size = n_trials // 2
+    # shuffled_indices = jax.random.permutation(key, jnp.arange(n_trials))
+    # training_trials_idx = shuffled_indices[:training_size]
+    # test_trials_idx = shuffled_indices[training_size:]
+
     # Split inputs and response: x has shape (n_samples, n_features, n_trials)
     x_train = x_data[:, :, training_trials_idx]  # (n_samples, n_features, training_size)
     y_train = y[:, training_trials_idx]           # (n_samples, training_size)
@@ -792,7 +798,7 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
                          target_weights=None,
                          param_penalty_weight=0.1, fit_params=True, random_seed=0,
                          FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
-                         use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+                         use_param_estimator=True, trial_batch_size=10000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate the loss of a model that predicts multiple targets (vectorized outputs).
     
