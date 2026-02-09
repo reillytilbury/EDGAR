@@ -96,12 +96,12 @@ class IslandChatManager:
         # Large model configs (with thinking budget for 2.5)
         self.large_explore_config = types.GenerateContentConfig(
             temperature=self.explore_temperature,
-            thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
+            thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget, include_thoughts=True),
             system_instruction=explore_instruction
         )
         self.large_exploit_config = types.GenerateContentConfig(
             temperature=self.exploit_temperature,
-            thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
+            thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget, include_thoughts=True),
             system_instruction=exploit_instruction
         )
         
