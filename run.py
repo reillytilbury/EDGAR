@@ -122,6 +122,7 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
             data_config=data_config,
             diagnostics_module=diagnostics_module,
             prompts_config_path=prompts_config_path,
+            use_large_model_for_param_estimators=params.get('use_large_model_for_param_estimators', False)
         )
 
 if __name__ == "__main__":

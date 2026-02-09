@@ -1201,7 +1201,7 @@ async def generate_new_model(current_island, llm_name, client,
             diagnostics_module.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
                                     inputs=stimuli, response=spike_matrix,
-                                    sample_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
+                                    sample_selection=np.random.choice(spike_matrix.shape[0], size=6, replace=False),
                                     save_path=img_dir,
                                     labels=[f'{model_name}_v_1', f'{model_name}_v_2'],
                                     colours=['tab:green', 'tab:red'],
@@ -1255,7 +1255,7 @@ async def generate_new_parameter_estimator(current_island,
                                            diagnostics_module=None,
                                            use_large_model: bool = False):                                           
     if model_code_string is None:
-        logging.info("No neuron model code string provided, skipping parameter estimator generation.")
+        logging.info("No model code string provided, skipping parameter estimator generation.")
         return None, None
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
@@ -1417,6 +1417,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 use_large_every = 3,
                 training_ratio = 0.5, 
                 max_iter = 1_000,
+                use_large_model_for_param_estimators=False,
                 numpy_programs = None,
                 jax_programs = None,
                 param_estimators = None,
@@ -1623,7 +1624,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         diagnostics_module.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
                                inputs=inputs_train, response=response_train,
-                               sample_selection=np.random.choice(len(inputs_train), size=9, replace=False),
+                               sample_selection=np.random.choice(len(inputs_train), size=6, replace=False),
                                save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
                                labels=['seed_1', 'seed_2'],
                                colours=['tab:green', 'tab:red'],
@@ -1695,7 +1696,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         jax_results = await asyncio.gather(*model_function_translation_tasks)
         model_results = [(model_code_strings[j], model_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
-        # build parameter‑estimator tasks (use small model for param estimators)
+        # build parameter‑estimator tasks
+        if use_large_model_for_param_estimators:
+            img_dir = os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_estimator.png')
+        else:
+            img_dir = None
+
         param_estimation_tasks = [
             generate_new_parameter_estimator(
                 current_island=islands[island_idx],
@@ -1709,12 +1715,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
-                img_dir=None,
+                img_dir=img_dir,
                 island_chat_manager=island_chat_manager,
                 island_id=island_idx,
                 batch_id=j,
                 diagnostics_module=diagnostics_module,
-                use_large_model=False  # Parameter estimators use small model
+                use_large_model=use_large_model_for_param_estimators,
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)
@@ -1849,7 +1855,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                     loss_function=loss_functions.quadratic_loss,
                     inputs=inputs_train,
                     response=response_train,
-                    sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
+                    sample_selection=np.random.choice(response_train.shape[0], size=6, replace=False),
                     title=sup_title,
                     save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
                     dpi=300.0)
@@ -1865,7 +1871,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 loss_function=loss_functions.quadratic_loss,
                 inputs=inputs_train,
                 response=response_train,
-                sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
+                sample_selection=np.random.choice(response_train.shape[0], size=6, replace=False),
                 title=sup_title,
                 save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
                 dpi=300.0)
@@ -1971,7 +1977,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 loss_function=loss_functions.quadratic_loss,
                 inputs=inputs_test,
                 response=response_test,
-                sample_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
+                sample_selection=np.random.choice(response_test.shape[0], size=6, replace=False),
                 title=df_sup,
                 save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
             )
@@ -1980,7 +1986,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 birth_island = df['birth_island'][j]
                 iteration_number = df['iteration_number'][j]
                 batch_index = df['batch_index'][j]
-                sample_selection = np.random.choice(response_test.shape[0], size=9, replace=False)
+                sample_selection = np.random.choice(response_test.shape[0], size=6, replace=False)
                 diagnostics_module.plot_single_model_fit(
                     model=df['program'][j],
                     loss_function=loss_functions.quadratic_loss,

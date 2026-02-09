@@ -42,7 +42,8 @@ experiment_params:
   little_lm_name: gemini-2.0-flash
   large_lm_name: gemini-2.5-flash
   use_large_every: 3
-
+  use_large_model_for_param_estimators: true # Whether parameter estimators should use the large LM (true) or tiny LM (false). 
+  
 # Evolution algorithm parameters (used by EvolutionConfig)
 evolution:
   capacity_per_island: 12        # Max programs per island (same as critical_population_size)
