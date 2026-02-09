@@ -1,6 +1,8 @@
 import os
+import inspect
 import importlib
 import json
+import re
 from pathlib import Path
 import asyncio
 import diagnostic, hypothesis_engine
@@ -31,12 +33,92 @@ logging.getLogger("google.genai").setLevel(logging.ERROR)
 
 
 
+def _model_param_mode(model_fn):
+    sig = inspect.signature(model_fn)
+    param_names = list(sig.parameters.keys())[1:]
+    if len(param_names) == 1:
+        return "vector"
+    return "splat"
+
+def _split_params_for_model(stim, params_row, n_model_params: int):
+    if n_model_params <= 0:
+        return ()
+    if n_model_params == 1:
+        return (params_row,)
+    params_row_arr = params_row
+    try:
+        params_len = int(params_row_arr.shape[0])
+    except Exception:
+        try:
+            params_len = len(params_row_arr)
+        except Exception:
+            params_len = 1
+    try:
+        n_feat = int(stim.shape[-1]) if getattr(stim, "ndim", 0) > 1 else 1
+    except Exception:
+        n_feat = 1
+    if params_len > n_model_params and n_feat > 1 and params_len == n_feat + (n_model_params - 1):
+        return (params_row_arr[:n_feat],) + tuple(params_row_arr[n_feat:])
+    if params_len == 1 and n_model_params > 1:
+        return tuple([params_row_arr] * n_model_params)
+    return tuple(params_row_arr)
+
+
+def call_model_with_params(model_fn, stim, params_row, n_model_params: int | None = None):
+    if n_model_params is None:
+        n_model_params = len(inspect.signature(model_fn).parameters) - 1
+    parts = _split_params_for_model(stim, params_row, n_model_params)
+    if len(parts) == 0:
+        return model_fn(stim)
+    return model_fn(stim, *parts)
+
+
+def _population_param_shapes(n_source: int, n_target: int, n_model_params: int):
+    if n_model_params == 1:
+        return [(n_source, n_target)]
+    if n_model_params == 2:
+        return [(n_source, n_target), (n_target,)]
+    if n_model_params == 4:
+        return [(n_source, n_target), (n_target,), (n_target,), (n_target,)]
+    return [(n_target,)] * max(0, n_model_params)
+
+
+def pack_population_params(params_struct, n_source: int, n_target: int, n_model_params: int) -> np.ndarray:
+    shapes = _population_param_shapes(n_source, n_target, n_model_params)
+    total_size = int(sum(np.prod(shape) for shape in shapes))
+    arr = np.asarray(params_struct)
+    if n_model_params == 1 and arr.size == total_size:
+        return arr.reshape(-1)
+    if isinstance(params_struct, (list, tuple)):
+        parts = list(params_struct)
+        if len(parts) != n_model_params:
+            raise ValueError("Structured params length does not match model signature.")
+        flat_parts = [np.asarray(p).reshape(-1) for p in parts]
+        return np.concatenate(flat_parts) if flat_parts else np.asarray([])
+    if arr.size == total_size:
+        return arr.reshape(-1)
+    raise ValueError("Unable to pack population params: unexpected structure/size.")
+
+
+def unpack_population_params(params_flat, n_source: int, n_target: int, n_model_params: int):
+    shapes = _population_param_shapes(n_source, n_target, n_model_params)
+    params_flat = jnp.asarray(params_flat)
+    parts = []
+    idx = 0
+    for shape in shapes:
+        size = int(np.prod(shape))
+        part = jnp.reshape(params_flat[idx:idx + size], shape)
+        parts.append(part)
+        idx += size
+    return tuple(parts)
+
+
 def vmap_over_cells(model_fn):
     """Return a version of `model_fn` that accepts
        (stimuli, params_matrix) and runs one row per cell."""
+    n_model_params = len(inspect.signature(model_fn).parameters) - 1
     def _wrapped(stimuli, params_row):
-        # params_row shape: (k,)  ← one cell’s parameters
-        return model_fn(stimuli, *params_row)   # unpack to scalars
+        return call_model_with_params(model_fn, stimuli, params_row, n_model_params)
     return jax.vmap(_wrapped, in_axes=(None, 0))   # stimuli shared, params batched
 
 def circular_distance_rad_np(angle1, angle2) -> np.ndarray:
@@ -297,28 +379,64 @@ def _load_project_image_diagnostics(project: str):
     return importlib.import_module(f"projects.{project}.image_diagnostics")
 
 
+_LIST_VALUE_KEYS = {"FEATURE_NAMES", "SEED_MODELS"}
+
+
+def _is_blank_config_value(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, list):
+        return len(value) == 0
+    if isinstance(value, dict):
+        return len(value) == 0
+    return False
+
+
+def _normalize_config_value(key: str, value):
+    if key in _LIST_VALUE_KEYS:
+        return value
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return "\n".join(value)
+    return value
+
+
 def _load_prompt_config(project: str) -> dict:
     base_dir = Path(__file__).resolve().parent / "projects"
-    defaults_path = base_dir / "prompts_defaults.json"
-    project_path = base_dir / project / "prompts.json"
+    defaults_path = base_dir / "config_defaults.json"
+    project_path = base_dir / project / "config.json"
     if not defaults_path.exists():
-        raise FileNotFoundError(f"Missing prompt defaults: {defaults_path}")
+        defaults_path = base_dir / "prompts_defaults.json"
     if not project_path.exists():
-        raise FileNotFoundError(f"Missing project prompt config: {project_path}")
+        project_path = base_dir / project / "prompts.json"
+    if not defaults_path.exists():
+        raise FileNotFoundError(f"Missing config defaults: {defaults_path}")
+    if not project_path.exists():
+        raise FileNotFoundError(f"Missing project config: {project_path}")
     with defaults_path.open("r", encoding="utf-8") as f:
         defaults = json.load(f)
     with project_path.open("r", encoding="utf-8") as f:
         overrides = json.load(f)
     merged = {}
     for key, default_value in defaults.items():
-        override_value = overrides.get(key, "")
-        if override_value is None:
-            merged[key] = default_value
-        elif isinstance(override_value, str) and override_value.strip() == "":
-            merged[key] = default_value
+        override_value = overrides.get(key, None)
+        if _is_blank_config_value(override_value):
+            merged[key] = _normalize_config_value(key, default_value)
         else:
-            merged[key] = override_value
+            merged[key] = _normalize_config_value(key, override_value)
+    for key, override_value in overrides.items():
+        if key not in merged:
+            merged[key] = _normalize_config_value(key, override_value)
     return merged
+
+
+def _get_model_function_name(project: str) -> str:
+    config = _load_prompt_config(project)
+    name = config.get("MODEL_FUNCTION_NAME", "neuron_model")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return "neuron_model"
 
 
 def _format_prompt(template: str, **kwargs) -> str:
@@ -328,8 +446,10 @@ def _format_prompt(template: str, **kwargs) -> str:
 def create_program_prompt(random_programs: pd.DataFrame, mode: str, llm_type: str = 'g', use_image: bool = True, project: str = "orientation") -> str:
     assert mode in ['explore', 'exploit'], "Invalid mode. Choose either 'explore' or 'exploit'."
     config = _load_prompt_config(project)
+    model_fn_name = _get_model_function_name(project)
     image_parts = _load_project_image_diagnostics(project)
-    image_fn = f"{image_parts.__name__}.plot_model_prompt_image"
+    image_fn_name = "plot_rate_maps" if hasattr(image_parts, "plot_rate_maps") else "plot_model_prompt_image"
+    image_fn = f"{image_parts.__name__}.{image_fn_name}"
     k = len(random_programs)
     prompt = _format_prompt(config["model_fit_task_description"], k_plus_one=k + 1, project=project)
     if mode == "explore":
@@ -348,9 +468,11 @@ def create_program_prompt(random_programs: pd.DataFrame, mode: str, llm_type: st
         prompt += image_instructions
     prompt += _format_prompt(config["coding_instructions"], k_plus_one=k + 1, project=project)
     for i in range(k):
+        code_string = random_programs.iloc[i]['program_code_string']
+        code_string = re.sub(rf"def\\s+{re.escape(model_fn_name)}_v\\d+\\s*\\(", f\"def {model_fn_name}(\", code_string)
         prompt += f"""
 loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
-{random_programs.iloc[i]['program_code_string'].replace('def neuron_model(', f'def neuron_model_v{i+1}(')}
+{code_string.replace(f'def {model_fn_name}(', f'def {model_fn_name}_v{i+1}(')}
 \n
 """
     return prompt
@@ -359,14 +481,19 @@ loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
 def create_parameter_estimator_prompt(random_programs: pd.DataFrame, neuron_model_code_string: str,
                                       max_lines: int = 100, llm_type: str = 'g', use_image: bool = True, project: str = "orientation") -> str:
     config = _load_prompt_config(project)
+    model_fn_name = _get_model_function_name(project)
     image_parts = _load_project_image_diagnostics(project)
-    image_fn = f"{image_parts.__name__}.plot_param_estimator_prompt_image"
+    image_fn_name = "plot_rate_maps" if hasattr(image_parts, "plot_rate_maps") else "plot_param_estimator_prompt_image"
+    image_fn = f"{image_parts.__name__}.{image_fn_name}"
     k = len(random_programs)
     prompt = _format_prompt(config["parameter_estimator_instructions"], k_plus_one=k + 1, max_lines=max_lines, project=project)
     if use_image:
         image_instructions = _format_prompt(
             config["param_estimator_image_analysis_instructions"],
             param_est_image_diagnostics_fn=image_fn,
+            k_plus_one=k + 1,
+            max_lines=max_lines,
+            project=project,
         )
         if image_fn not in image_instructions:
             header = "**Image Analysis Instructions:**"
@@ -377,33 +504,89 @@ def create_parameter_estimator_prompt(random_programs: pd.DataFrame, neuron_mode
                 image_instructions = f"The image was generated by `{image_fn}`.\n\n{image_instructions}"
         prompt += image_instructions
     for i in range(k):
+        program_code = random_programs.iloc[i]['program_code_string']
+        program_code = re.sub(rf"def\\s+{re.escape(model_fn_name)}_v\\d+\\s*\\(", f\"def {model_fn_name}(\", program_code)
+        param_code = random_programs.iloc[i]['parameter_estimator_code_string']
+        param_code = re.sub(r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", param_code)
         prompt += f"""
 loss of model {i+1}: {random_programs.iloc[i]['train_loss']: .2f}
-{random_programs.iloc[i]['program_code_string'].replace('def neuron_model(', f'def neuron_model_v{i+1}(')}
+{program_code.replace(f'def {model_fn_name}(', f'def {model_fn_name}_v{i+1}(')}
 \n
-{random_programs.iloc[i]['parameter_estimator_code_string'].replace('def parameter_estimator(', f'def parameter_estimator_v{i+1}(')}
+{param_code.replace('def parameter_estimator(', f'def parameter_estimator_v{i+1}(')}
 \n
 ----------------------------
 \n
 """
     prompt += f"""
-{neuron_model_code_string.replace('def neuron_model(', f'def neuron_model_v{k+1}(')}
+{neuron_model_code_string.replace(f'def {model_fn_name}(', f'def {model_fn_name}_v{k+1}(')}
 \n
 """
     return prompt
 
+
+def create_parameter_estimator_refinement_prompt(neuron_model_code_string: str,
+                                                 param_estimator_code_string: str,
+                                                 current_loss: float,
+                                                 round_idx: int,
+                                                 n_rounds: int,
+                                                 max_lines: int = 100,
+                                                 llm_type: str = 'g',
+                                                 use_image: bool = True,
+                                                 project: str = "orientation") -> str:
+    config = _load_prompt_config(project)
+    model_fn_name = _get_model_function_name(project)
+    image_parts = _load_project_image_diagnostics(project)
+    image_fn_name = "plot_rate_maps" if hasattr(image_parts, "plot_rate_maps") else "plot_param_estimator_prompt_image"
+    image_fn = f"{image_parts.__name__}.{image_fn_name}"
+    prompt = _format_prompt(config["parameter_estimator_instructions"], k_plus_one=1, max_lines=max_lines, project=project)
+    prompt += (
+        f"\n\n**Refinement Round {round_idx}/{n_rounds}**\n"
+        f"Current train loss (no GD): {current_loss:.4f}\n"
+        "Improve the parameter estimator without using gradient descent or external optimizers.\n"
+        "Return only the updated `parameter_estimator` code.\n"
+    )
+    if use_image:
+        image_instructions = _format_prompt(
+            config["param_estimator_image_analysis_instructions"],
+            param_est_image_diagnostics_fn=image_fn,
+            k_plus_one=1,
+            max_lines=max_lines,
+            project=project,
+        )
+        if image_fn not in image_instructions:
+            header = "**Image Analysis Instructions:**"
+            if header in image_instructions:
+                before, after = image_instructions.split(header, 1)
+                image_instructions = f"{before}{header}\nThe image was generated by `{image_fn}`.{after}"
+            else:
+                image_instructions = f"The image was generated by `{image_fn}`.\n\n{image_instructions}"
+        prompt += image_instructions
+    prompt += f"""
+Current neuron model:
+{neuron_model_code_string.replace(f'def {model_fn_name}(', f'def {model_fn_name}_v1(')}
+
+Current parameter estimator:
+{param_estimator_code_string.replace('def parameter_estimator(', 'def parameter_estimator_v1(')}
+
+"""
+    return prompt
 
 def create_parameter_estimator_image_prompt(neuron_model_code_string: str,
                                             param_estimator_code_string: str,
                                             max_lines: int = 100,
                                             project: str = "orientation") -> str:
     config = _load_prompt_config(project)
+    model_fn_name = _get_model_function_name(project)
     image_parts = _load_project_image_diagnostics(project)
-    image_fn = f"{image_parts.__name__}.plot_param_estimator_prompt_image"
+    image_fn_name = "plot_rate_maps" if hasattr(image_parts, "plot_rate_maps") else "plot_param_estimator_prompt_image"
+    image_fn = f"{image_parts.__name__}.{image_fn_name}"
     prompt = _format_prompt(config["parameter_estimator_instructions"], k_plus_one=1, max_lines=max_lines, project=project)
     image_instructions = _format_prompt(
         config["param_estimator_image_analysis_instructions"],
         param_est_image_diagnostics_fn=image_fn,
+        k_plus_one=1,
+        max_lines=max_lines,
+        project=project,
     )
     if image_fn not in image_instructions:
         header = "**Image Analysis Instructions:**"
@@ -416,16 +599,16 @@ def create_parameter_estimator_image_prompt(neuron_model_code_string: str,
     prompt += f"""
 Here is the code for the neuron model and parameter estimator:
 \n
-{neuron_model_code_string}
+{neuron_model_code_string.replace(f'def {model_fn_name}(', f'def {model_fn_name}(')}
 \n
 {param_estimator_code_string}
 \n
 """
     return prompt
 
-def create_jax_translater_prompt(program: str) -> str:
+def create_jax_translater_prompt(program: str, project: str = "orientation") -> str:
     assert isinstance(program, str), "The program must be a string."
-    config = _load_prompt_config("orientation")
+    config = _load_prompt_config(project)
     return _format_prompt(config["jax_translater_instructions"], program=program)
 
 def create_meta_learning_prompt(logged_output: str, project: str = "orientation"):
@@ -726,7 +909,10 @@ def train_with_patience_optimization(
     # ---------------------------
     # Loss helpers
     # ---------------------------
-    loss_single = lambda p, x, y: jnp.nanmean(loss_function(neuron_model(x, *p), y), axis=-1)
+    n_model_params = len(inspect.signature(neuron_model).parameters) - 1
+    def _call_model(x, p):
+        return call_model_with_params(neuron_model, x, p, n_model_params)
+    loss_single = lambda p, x, y: jnp.nanmean(loss_function(_call_model(x, p), y))
     loss_total = jax.vmap(loss_single, in_axes=(0, 0, 0), out_axes=0)
 
     @jax.jit
@@ -822,7 +1008,7 @@ def train_with_patience_optimization(
     patience_per_cell = np.zeros(n_cells, dtype=int)
 
     # Helper for per-cell loss
-    val2_loss_single = jax.jit(lambda p, x, y: jnp.nanmean(loss_function(neuron_model(x, *p), y)))
+    val2_loss_single = jax.jit(lambda p, x, y: jnp.nanmean(loss_function(_call_model(x, p), y)))
 
     if val2_fraction > 0:
         if cellwise_patience:
@@ -924,8 +1110,11 @@ def train_simplified(
     # ---------------------------
     # Loss helpers (per cell + batched)
     # ---------------------------
+    n_model_params = len(inspect.signature(neuron_model).parameters) - 1
+    def _call_model(x, p):
+        return call_model_with_params(neuron_model, x, p, n_model_params)
     # loss for one cell & one param row
-    loss_single = lambda p, x, y: jnp.nanmean(loss_function(neuron_model(x, *p), y), axis=-1)
+    loss_single = lambda p, x, y: jnp.nanmean(loss_function(_call_model(x, p), y))
     # vectorize over cells: (n_cells, params) x (n_cells, ...) -> (n_cells,)
     loss_total = jax.vmap(loss_single, in_axes=(0, 0, 0), out_axes=0)
     # mean over cells

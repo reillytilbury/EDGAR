@@ -1,0 +1,3741 @@
+program_code_string,program,parameter_estimator_code_string,parameter_estimator,iteration_number,birth_island,batch_index,train_loss,test_loss,params,initial_loss,initial_params,llm_name,parent1_id,parent2_id,evaluation_matrix,mean_loss
+"import numpy as np
+
+def neuron_model(stimuli,
+                    baseline=0.0,
+                    center_x1=0.0,
+                    center_y1=0.0,
+                    place_amp1=1.0,
+                    sigma1=1.0,
+                    center_x2=0.0,
+                    center_y2=0.0,
+                    place_amp2=1.0,
+                    sigma2=1.0,
+                    hd_pref=0.0,
+                    hd_amp=0.5,
+                    speed_gain=0.0,
+                    speed_offset=0.0,
+                    speed_exponent=1.0):
+    """"""
+    Parent Models:
+      - neuron_model_v1: Additive dual-Gaussian place field model with multiplicative HD modulation and additive speed modulation.
+      - neuron_model_v2: Additive dual-Gaussian place field model with additive HD and speed modulation.
+
+    This model describes the neuronal firing rate as the sum of two
+    isotropic 2D Gaussian place fields, with head-direction and speed modulation.
+    The head direction term modulates the place field, while the speed
+    term adds to the firing rate, and the speed is raised to a power.
+
+    Equation:
+    rate = baseline
+           + place_amp1 * exp(-0.5 * r1^2 / sigma1^2)
+           + place_amp2 * exp(-0.5 * r2^2 / sigma2^2)
+           + hd_amp * 0.5 * (1 + cos(hd - hd_pref)) * (place_amp1 * exp(-0.5 * r1^2 / sigma1^2)+place_amp2 * exp(-0.5 * r2^2 / sigma2^2))
+           + speed_gain * (speed + speed_offset)**speed_exponent
+    where r1^2 = (x-center_x1)^2 + (y-center_y1)^2
+    and   r2^2 = (x-center_x2)^2 + (y-center_y2)^2
+
+    Image Analysis & Model Improvements:
+    The diagnostic plots for parent models v1 and v2 reveal a systematic
+    failure: they use only a single Gaussian to model the spatial firing rate.
+    However, the empirical rate maps for all displayed cells (e.g., Cell 1,
+    Cell 2, Cell 11) clearly show multiple, distinct firing fields. The
+    single-Gaussian models fail to capture this, typically by fitting only
+    the strongest field and ignoring the others, resulting in high loss.
+    Model v2 used two gaussians. However, its loss was similar to that of v1, 
+    suggesting there are other effects that v2 failed to capture. Looking at the
+    head direction tuning, it looks as if cells are only sensitive to head direction
+    when they are also in the place field. Moreover, most speed data start around a rate of zero
+    until a certain speed and *then* change. That is, it is like the data is being clamped or offset.
+
+    This model improves upon the parents by 1) making the head direction a modulation factor which multiplies
+    by the Gaussian responses, and 2) by adding a speed offset to account for speed activity changes only starting at
+    some speed value and 3) by making the speed a powerlaw to add non-linearity.
+    """"""
+    # Clip parameters to plausible ranges
+    baseline = np.maximum(0.0, baseline)
+    place_amp1 = np.maximum(0.0, place_amp1)
+    sigma1 = np.maximum(1e-6, sigma1)
+    place_amp2 = np.maximum(0.0, place_amp2)
+    sigma2 = np.maximum(1e-6, sigma2)
+    hd_amp = np.maximum(0.0, hd_amp)
+    speed_gain = np.maximum(0.0, speed_gain)
+    speed_offset = np.clip(speed_offset, -10, 10)
+    speed_exponent = np.clip(speed_exponent, 0.1, 5.0)
+
+
+    # Unpack stimuli
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # First Gaussian place field
+    dx1 = x - center_x1
+    dy1 = y - center_y1
+    r2_1 = dx1 ** 2 + dy1 ** 2
+    place1 = place_amp1 * np.exp(-0.5 * r2_1 / (sigma1 ** 2))
+
+    # Second Gaussian place field
+    dx2 = x - center_x2
+    dy2 = y - center_y2
+    r2_2 = dx2 ** 2 + dy2 ** 2
+    place2 = place_amp2 * np.exp(-0.5 * r2_2 / (sigma2 ** 2))
+    
+    # Head-direction modulation
+    hd_term = hd_amp * 0.5 * (1.0 + np.cos(hd - hd_pref)) * (place1+place2)
+
+    # Speed modulation
+    speed_term = speed_gain * (speed + speed_offset)**speed_exponent
+
+    # Combine all components
+    return baseline + place1 + place2 + hd_term + speed_term",<function neuron_model at 0x767bac414360>,"import numpy as np
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""
+    Estimates parameters for neuron_model_v3 (dual-Gaussian with HD modulation and speed exponent).
+    Returns: [baseline, center_x1, center_y1, place_amp1, sigma1, center_x2, center_y2, place_amp2, sigma2,
+              hd_pref, hd_amp, speed_gain, speed_offset, speed_exponent]
+
+    Improvements based on image diagnostics and previous versions:
+    - HD modulation made multiplicative with the place fields, addresses direction effect.
+    - Introduce a speed exponent parameter.
+
+    Implementation details:
+    - Rate map computation used to find place field centers and amplitudes.
+    - Head direction preference is estimated using vector averaging.
+    - Speed offset and gain are estimated via linear regression of speed vs firing rate, with initial bias.
+    - Speed exponent estimated coarsely based on how zero valued vs. postive rates correlate.
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, eps=1e-6, min_occ=3, smoothing_sigma=1.2):
+        def _gaussian_kernel(sigma):
+            if sigma <= 0:
+                return None
+            size = int(max(3, np.ceil(6 * sigma)))
+            if size % 2 == 0:
+                size += 1
+            ax = np.arange(size) - size // 2
+            xx, yy = np.meshgrid(ax, ax)
+            kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+            kernel /= np.sum(kernel)
+            return kernel
+
+        def _fft_convolve2d(a, b):
+            out_shape = (a.shape[0] + b.shape[0] - 1, a.shape[1] + b.shape[1] - 1)
+            fa = np.fft.rfftn(a, s=out_shape)
+            fb = np.fft.rfftn(b, s=out_shape)
+            out = np.fft.irfftn(fa * fb, s=out_shape)
+            start0 = (b.shape[0] - 1) // 2
+            start1 = (b.shape[1] - 1) // 2
+            return out[start0:start0 + a.shape[0], start1:start1 + a.shape[1]]
+
+        occ, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        spk, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+        rate = spk / (occ + eps)
+        rate = np.where(occ >= min_occ, rate, np.nan)
+        kernel = _gaussian_kernel(smoothing_sigma)
+        if kernel is not None:
+            rate_filled = np.nan_to_num(rate, nan=0.0)
+            occ_mask = np.isfinite(rate).astype(float)
+            rate_s = _fft_convolve2d(rate_filled, kernel)
+            norm = _fft_convolve2d(occ_mask, kernel)
+            rate = rate_s / (norm + eps)
+            rate = np.where(norm > 0, rate, np.nan)
+        return rate.T, xedges, yedges
+
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes)
+    finite = np.isfinite(rate)
+
+    baseline = float(np.percentile(spikes, 10)) if len(spikes)>0 else 0
+    if not np.any(finite):
+        center = np.mean(pos, axis=0) if len(pos) > 0 else np.zeros(2)
+        amplitude = float(np.max(spikes) - baseline) if len(spikes)>0 else 1.0
+        sigma = 0.1 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1])) if len(pos) > 0 else 1.0
+
+        return np.array([baseline, center[0], center[1], amplitude, sigma, center[0], center[1], amplitude, sigma, 0.0, 0.0, 0.0, 0.0, 1.0])
+
+    rate_f = rate[finite]
+    rate_nobaseline = rate - baseline
+    peak1_idx = np.nanargmax(rate_nobaseline)
+    rate_nobaseline_copy = rate_nobaseline.copy()
+    rate_nobaseline_copy[np.unravel_index(peak1_idx, rate.shape)] = -np.inf 
+    peak2_idx = np.nanargmax(rate_nobaseline_copy)
+
+    iy1, ix1 = np.unravel_index(peak1_idx, rate.shape)
+    iy2, ix2 = np.unravel_index(peak2_idx, rate.shape)
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+    center1 = np.array([x_centers[ix1], y_centers[iy1]])
+    center2 = np.array([x_centers[ix2], y_centers[iy2]])
+    place_amp1 = float(max(rate[iy1, ix1] - baseline, 1e-6))
+    place_amp2 = float(max(rate[iy2, ix2] - baseline, 1e-6))
+
+    sigma1 = 0.05* np.sqrt(np.sum((pos[:,0] - center1[0])**2 + (pos[:,1] - center1[1])**2)/len(pos)) if len(pos) > 0 else 1
+    sigma2 = 0.05* np.sqrt(np.sum((pos[:,0] - center2[0])**2 + (pos[:,1] - center2[1])**2)/len(pos)) if len(pos) > 0 else 1
+
+    w = np.clip(spikes - baseline, 0.0, None)
+    wsum_s = np.sum(w) + 1e-8
+    c = float(np.sum(w * np.cos(hd)) / wsum_s)
+    s = float(np.sum(w * np.sin(hd)) / wsum_s)
+    hd_pref = float(np.arctan2(s, c))
+    hd_amp = float(max(0.0, np.percentile(spikes, 90) - baseline) * np.sqrt(c * c + s * s))
+
+    # Estimate speed_offset directly
+    speed_offset = -float(np.mean(speed[spikes < 1])) if np.any(spikes < 1) else 0.0
+    speed_var = float(np.var(speed)) + 1e-8
+    speed_gain = float(np.cov(speed, spikes - baseline, bias=True)[0, 1] / speed_var)
+    speed_gain = float(max(0.0, speed_gain))
+
+    # Estimate Speed Exponent (crudely)
+    speed_exponent = 1.0 # Linear by default
+    if len(spikes) > 0 and speed_gain>0:
+      non_zero_speed = speed[speed>0] #only if speed greater than 0 has an effect
+      
+      if(len(non_zero_speed)): #if so... assume rates go by the root of a log-like-curve if enough spiking points
+          speed_exponent = 2.5 # quadratic if positive valued rates
+        
+        
+
+    return np.array([baseline, center1[0], center1[1], place_amp1, sigma1, center2[0], center2[1], place_amp2, sigma2, hd_pref, hd_amp, speed_gain, speed_offset, speed_exponent])",<function parameter_estimator at 0x767b3738d6c0>,2,2,3,29.959409713745117,31.588220596313477,"[[ 0.00000000e+00  8.17645111e+01  1.95177704e+02  3.62832934e-01
+   7.00674963e+00  8.17645111e+01  1.90429474e+02  3.57183486e-01
+   6.86407804e+00  2.58371085e-01  0.00000000e+00  1.34080619e-04
+  -1.78195515e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.86411133e+02  2.42415524e+01  7.39997387e-01
+   5.62312937e+00  1.91167786e+02  2.42415524e+01  6.63811386e-01
+   5.66890097e+00  2.51443791e+00  0.00000000e+00  6.91169917e-05
+  -1.78341084e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.19707764e+02  2.42415524e+01  1.59807146e+00
+   6.13296700e+00  2.19707764e+02  2.89897785e+01  1.47168076e+00
+   5.97049141e+00  2.43638784e-01  0.00000000e+00  1.72099928e-04
+  -1.78218327e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.48357819e+02  6.22273598e+01  8.42217028e-01
+   4.35678959e+00  1.43601135e+02  6.22273598e+01  8.38881791e-01
+   4.41394615e+00  7.95901656e-01  0.00000000e+00  2.39149653e-04
+  -1.78178463e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.62517761e+02  8.59684906e+01  5.70943356e-01
+   6.05746174e+00  2.62517761e+02  8.12202606e+01  5.50056934e-01
+   6.10791492e+00  9.61343229e-01  0.00000000e+00  0.00000000e+00
+  -1.78485069e+01  1.00000000e+00]
+ [ 0.00000000e+00  7.70078506e+01  1.42947205e+02  2.14284956e-01
+   5.96749830e+00  7.70078506e+01  1.47695435e+02  2.12353006e-01
+   6.03843832e+00 -1.96290791e-01  0.00000000e+00  0.00000000e+00
+  -1.78381481e+01  1.00000000e+00]
+ [ 0.00000000e+00  1.10304497e+02  3.37380066e+01  2.99979657e-01
+   5.90890408e+00  1.05547836e+02  3.37380066e+01  2.86233246e-01
+   6.02673101e+00 -2.07587197e-01  0.00000000e+00  1.59483479e-05
+  -1.78353806e+01  2.50000000e+00]
+ [ 0.00000000e+00  7.70078506e+01  2.42415524e+01  9.20684576e-01
+   7.13831663e+00  7.70078506e+01  2.89897785e+01  7.43756473e-01
+   6.99921751e+00  7.82884896e-01  0.00000000e+00  0.00000000e+00
+  -1.78435287e+01  1.00000000e+00]
+ [ 0.00000000e+00  9.60345078e+01  3.84862289e+01  3.58392656e-01
+   6.14267826e+00  1.00791168e+02  3.84862289e+01  3.30224395e-01
+   6.00831890e+00 -8.56299818e-01  0.00000000e+00  6.40612488e-05
+  -1.78325195e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.43491089e+02  2.89897785e+01  2.65506983e-01
+   6.58193445e+00  1.57871155e+02  1.99925919e+02  2.52516061e-01
+   5.76280642e+00 -2.87821150e+00  0.00000000e+00  0.00000000e+00
+  -1.78380470e+01  1.00000000e+00]
+ [ 0.00000000e+00  1.05547836e+02  5.27309113e+01  1.24968968e-01
+   5.48029232e+00  1.00791168e+02  5.27309113e+01  1.16208434e-01
+   5.61721277e+00  1.76025212e+00  0.00000000e+00  9.95768860e-05
+  -1.78312130e+01  2.50000000e+00]
+ [ 0.00000000e+00  9.60345078e+01  2.09422363e+02  6.26769423e-01
+   7.08034134e+00  1.00791168e+02  2.09422363e+02  6.23455822e-01
+   6.96409559e+00 -1.12998211e+00  0.00000000e+00  1.06023974e-04
+  -1.78247204e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.67384460e+02  1.76184784e+02  2.03696251e-01
+   4.86497879e+00  1.62627808e+02  1.76184784e+02  1.80547163e-01
+   4.86999130e+00 -2.40750402e-01  0.00000000e+00  2.07693636e-04
+  -1.78243923e+01  2.50000000e+00]
+ [ 0.00000000e+00  7.70078506e+01  1.71436554e+02  2.71973491e-01
+   6.51245594e+00  1.10304497e+02  2.42415524e+01  2.49023020e-01
+   6.22378159e+00 -5.44491172e-01  0.00000000e+00  7.10744644e-05
+  -1.78348598e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.57871155e+02  7.17238159e+01  5.35944581e-01
+   4.03753996e+00  1.57871155e+02  6.69755859e+01  5.11708021e-01
+   4.15375662e+00  6.01237774e-01  0.00000000e+00  8.45614850e-05
+  -1.78222542e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.67384460e+02  1.61940109e+02  4.51821506e-01
+   4.40704441e+00  1.67384460e+02  1.66688324e+02  4.03457671e-01
+   4.55243206e+00 -6.17602408e-01  0.00000000e+00  0.00000000e+00
+  -1.78397446e+01  1.00000000e+00]
+ [ 0.00000000e+00  2.62517761e+02  1.47695435e+02  5.56660652e-01
+   6.24275303e+00  2.62517761e+02  1.52443665e+02  4.98376608e-01
+   6.31952333e+00  2.80598074e-01  0.00000000e+00  5.44804861e-05
+  -1.78268147e+01  2.50000000e+00]]",29.959409713745117,"[[ 0.00000000e+00  1.86411133e+02  1.61940109e+02  2.88893253e-01
+   4.51200342e+00  1.81654449e+02  1.61940109e+02  2.82041669e-01
+   4.46703959e+00 -7.06032395e-01  0.00000000e+00  2.41776987e-04
+  -1.77879753e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.00791168e+02  5.74791336e+01  3.31849158e-01
+   5.50117493e+00  1.00791168e+02  5.27309113e+01  3.08670253e-01
+   5.61721277e+00 -3.15871127e-02  0.00000000e+00  1.54017980e-04
+  -1.78210869e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.57871155e+02  1.47695435e+02  1.97780102e-01
+   4.04985428e+00  1.53114471e+02  1.47695435e+02  1.86249003e-01
+   4.08367109e+00 -6.65726185e-01  0.00000000e+00  1.18020514e-04
+  -1.78305378e+01  2.50000000e+00]
+ [ 0.00000000e+00  9.60345078e+01  3.84862289e+01  2.70952910e-01
+   6.14267826e+00  1.00791168e+02  3.84862289e+01  2.53374904e-01
+   6.00831890e+00  9.94604707e-01  0.00000000e+00  7.81461567e-05
+  -1.78300858e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.53004425e+02  1.33450745e+02  2.95319706e-01
+   5.69566679e+00  2.53004425e+02  1.38198975e+02  2.89215326e-01
+   5.75037813e+00  2.36458969e+00  0.00000000e+00  6.78219585e-05
+  -1.78322487e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.86411133e+02  1.85681244e+02  3.55831951e-01
+   5.29135656e+00  1.86411133e+02  1.80933014e+02  3.23560536e-01
+   5.12298155e+00 -2.20880842e+00  0.00000000e+00  0.00000000e+00
+  -1.78380718e+01  1.00000000e+00]
+ [ 0.00000000e+00  2.62517761e+02  1.52443665e+02  5.70534647e-01
+   6.31952333e+00  2.62517761e+02  1.47695435e+02  5.69345951e-01
+   6.24275303e+00  1.27270591e+00  0.00000000e+00  8.80131192e-05
+  -1.78262272e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.15061165e+02  2.42415524e+01  3.18260223e-01
+   6.11900711e+00  1.38844482e+02  2.42415524e+01  2.88421482e-01
+   5.71604109e+00  3.79172117e-01  0.00000000e+00  1.21340883e-04
+  -1.78195305e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.53114471e+02  1.42947205e+02  2.23691359e-01
+   3.97802472e+00  1.53114471e+02  1.38198975e+02  2.02087983e-01
+   3.88403440e+00  3.74656498e-01  0.00000000e+00  0.00000000e+00
+  -1.78453178e+01  1.00000000e+00]
+ [ 0.00000000e+00  2.00681122e+02  1.04961395e+02  2.63314068e-01
+   3.92552423e+00  2.00681122e+02  1.09709625e+02  2.46641621e-01
+   3.91913271e+00 -2.64196843e-01  0.00000000e+00  8.77358907e-05
+  -1.78309383e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.38844482e+02  6.22273598e+01  3.48364174e-01
+   4.48300838e+00  1.43601135e+02  6.22273598e+01  3.39738369e-01
+   4.41394615e+00  6.07159734e-01  0.00000000e+00  1.14371032e-04
+  -1.78274384e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.00681122e+02  1.09709625e+02  3.27312171e-01
+   3.91913271e+00  2.05437775e+02  1.09709625e+02  3.19698304e-01
+   4.02688980e+00 -1.15482461e+00  0.00000000e+00  5.12040715e-05
+  -1.78341522e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.10194458e+02  7.17238159e+01  2.34352931e-01
+   4.55441856e+00  2.10194458e+02  7.64720459e+01  2.24694222e-01
+   4.46133280e+00  4.15182769e-01  0.00000000e+00  8.01613351e-05
+  -1.78241024e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.62517761e+02  2.42415524e+01  6.72063947e-01
+   7.31196308e+00  2.62517761e+02  4.32344589e+01  6.20731473e-01
+   6.80257940e+00  1.20597589e+00  0.00000000e+00  1.07306369e-05
+  -1.78349228e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.19707764e+02  4.32344589e+01  5.96872389e-01
+   5.51575661e+00  1.86411133e+02  2.42415524e+01  5.57488918e-01
+   5.62312937e+00  1.13582218e+00  0.00000000e+00  2.10321115e-04
+  -1.78177357e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.48357819e+02  5.74791336e+01  6.81810677e-01
+   4.48988152e+00  1.53114471e+02  5.74791336e+01  6.76799953e-01
+   4.44644308e+00 -9.30738598e-02  0.00000000e+00  1.53133631e-04
+  -1.78261738e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.53004425e+02  1.09709625e+02  1.50158331e-01
+   5.56780005e+00  2.53004425e+02  1.14457848e+02  1.36240691e-01
+   5.57341766e+00 -1.02868938e+00  0.00000000e+00  0.00000000e+00
+  -1.78368759e+01  1.00000000e+00]]",gemini-2.0-flash,"(1, 2, 5)","(1, 2, 3)","[[          nan 1.5111659e-01 1.0039176e-02 ... 1.0434809e+01
+  8.0618277e+00 1.2332306e+01]
+ [          nan 9.6265048e-02 6.3952054e-03 ... 6.6472340e+00
+  5.1355858e+00 7.8559866e+00]
+ [          nan 7.3765740e-02 4.9005020e-03 ... 5.0936255e+00
+  3.9352839e+00 6.0198660e+00]
+ ...
+ [          nan 1.3145597e-01 8.7331664e-03 ... 9.0782337e+00
+  7.0161986e+00 1.0738651e+01]
+ [          nan 9.5712304e-02 6.3584852e-03 ... 6.6090665e+00
+  5.1060982e+00 7.8108788e+00]
+ [2.3225121e-41 1.2835894e-41 1.1933458e-41 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]]",31.588220596313477
+"import numpy as np
+
+
+def neuron_model(stimuli,
+                    # Parameters for Gaussian 1
+                    center_x1=0.25, center_y1=0.25,
+                    amp1=1.0, sigma_x1=1.0, sigma_y1=1.0,
+                    # Parameters for Gaussian 2
+                    center_x2=-0.25, center_y2=-0.25,
+                    amp2=1.0, sigma_x2=1.0, sigma_y2=1.0,
+                    # Baseline and modulation parameters
+                    baseline=0.0,
+                    hd_pref=0.0, hd_kappa=0.5,
+                    speed_exp=1.0
+                    ):
+    """"""
+    Parent Model 1 (neuron_model_v1): Single Anisotropic Gaussian, Additive Modulation.
+    Parent Model 2 (neuron_model_v2): Double Isotropic Gaussian, Multiplicative Modulation.
+
+    Equation:
+    place1 = amp1 * exp(-0.5 * [((x-center_x1)/sigma_x1)^2 + ((y-center_y1)/sigma_y1)^2])
+    place2 = amp2 * exp(-0.5 * [((x-center_x2)/sigma_x2)^2 + ((y-center_y2)/sigma_y2)^2])
+    hd_mod = exp(hd_kappa * cos(hd - hd_pref))
+    speed_mod = speed ^ speed_exp
+    rate = baseline + (place1 + place2) * hd_mod * speed_mod
+
+    Image Analysis and Model Improvements:
+    Analysis of the parent models' fits reveals a clear path for improvement. `neuron_model_v1`
+    fails because it can only model a single place field (see its fits for Cells 1, 4, and 9).
+    `neuron_model_v2` improves on this by introducing a second Gaussian, which allows it
+    to capture multiple fields and results in a lower loss.
+
+    However, `neuron_model_v2` assumes that place fields are isotropic (circular),
+    which is a major limitation. Visual inspection of the empirical data shows that
+    place fields are often elliptical. For instance, in `Cell 1 | data` (row 1), the
+    bottom-left field is clearly wider than it is tall. `neuron_model_v2` fails to capture
+    this shape, fitting a circular field instead (see `v_2` fit for Cell 1). A similar
+    anisotropy is visible in the dominant field of `Cell 2 | data`.
+
+    This model combines the strengths of both parent models. It retains the superior
+    two-component structure and multiplicative modulation from `neuron_model_v2` while
+    re-introducing the anisotropic field property from `neuron_model_v1` for each of
+    the two Gaussians. This allows each place field to have a different width (sigma_x)
+    and height (sigma_y), enabling it to accurately model the elliptical shape of
+    empirically observed place fields and thus achieve a lower loss.
+    """"""
+    # Clip parameters to plausible ranges
+    amp1 = np.clip(amp1, 0.0, None)
+    amp2 = np.clip(amp2, 0.0, None)
+    sigma_x1 = np.clip(sigma_x1, 1e-6, None)
+    sigma_y1 = np.clip(sigma_y1, 1e-6, None)
+    sigma_x2 = np.clip(sigma_x2, 1e-6, None)
+    sigma_y2 = np.clip(sigma_y2, 1e-6, None)
+    baseline = np.clip(baseline, 0.0, None)
+    hd_kappa = np.clip(hd_kappa, 0.0, None)
+    speed_exp = np.clip(speed_exp, 0.0, 5.0)
+
+    # Unpack stimuli
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # First anisotropic Gaussian place field
+    dx1 = x - center_x1
+    dy1 = y - center_y1
+    r2_1 = (dx1 ** 2) / (sigma_x1 ** 2) + (dy1 ** 2) / (sigma_y1 ** 2)
+    place1 = amp1 * np.exp(-0.5 * r2_1)
+
+    # Second anisotropic Gaussian place field
+    dx2 = x - center_x2
+    dy2 = y - center_y2
+    r2_2 = (dx2 ** 2) / (sigma_x2 ** 2) + (dy2 ** 2) / (sigma_y2 ** 2)
+    place2 = amp2 * np.exp(-0.5 * r2_2)
+
+    place_sum = place1 + place2
+
+    # Multiplicative modulation terms from v2
+    hd_mod = np.exp(hd_kappa * np.cos(hd - hd_pref))
+    speed_mod = speed ** speed_exp
+
+    # Combine all components
+    rate = baseline + place_sum * hd_mod * speed_mod
+
+    return rate",<function neuron_model at 0x767b6835d120>,"import numpy as np
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""
+    Estimates parameters for the two-field place cell model (neuron_model_v3).
+
+    This estimator builds upon previous versions by improving the estimates for:
+    1. Place Field Centers: Uses a smoothed rate map and finds the top two peaks
+       as initial estimates for the centers.
+    2. Place Field Amplitudes: Estimates the amplitudes based on the rate map
+       values at the estimated centers, after baseline subtraction.
+    3. Place Field Sigmas: Calculates sigmas from the weighted variance of
+       positions around each peak.
+    4. Head Direction Preference and Gain: Estimates HD preference using a
+       weighted circular mean of the head direction and gain based on correlation.
+    5. Speed Exponent: Regresses the log of firing rate against the log of speed to
+       directly get a data-derived speed exponent.
+
+    Weaknesses of previous estimators: They failed to accurately estimate field shapes due to inaccurate sigma estimates, they lacked data-derived estimate for exponent. This estimator improves both to more precisely estimate neural representations and behavior.
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, eps=1e-6, min_occ=3, smoothing_sigma=1.2):
+        def _gaussian_kernel(sigma):
+            if sigma <= 0:
+                return None
+            size = int(max(3, np.ceil(6 * sigma)))
+            if size % 2 == 0:
+                size += 1
+            ax = np.arange(size) - size // 2
+            xx, yy = np.meshgrid(ax, ax)
+            kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+            kernel /= np.sum(kernel)
+            return kernel
+
+        def _fft_convolve2d(a, b):
+            out_shape = (a.shape[0] + b.shape[0] - 1, a.shape[1] + b.shape[1] - 1)
+            fa = np.fft.rfftn(a, s=out_shape)
+            fb = np.fft.rfftn(b, s=out_shape)
+            out = np.fft.irfftn(fa * fb, s=out_shape)
+            start0 = (b.shape[0] - 1) // 2
+            start1 = (b.shape[1] - 1) // 2
+            return out[start0:start0 + a.shape[0], start1:start1 + a.shape[1]]
+
+        occ, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        spk, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+        rate = spk / (occ + eps)
+        rate = np.where(occ >= min_occ, rate, np.nan)
+        kernel = _gaussian_kernel(smoothing_sigma)
+        if kernel is not None:
+            rate_filled = np.nan_to_num(rate, nan=0.0)
+            occ_mask = np.isfinite(rate).astype(float)
+            rate_s = _fft_convolve2d(rate_filled, kernel)
+            norm = _fft_convolve2d(occ_mask, kernel)
+            rate = rate_s / (norm + eps)
+            rate = np.where(norm > 0, rate, np.nan)
+        return rate.T, xedges, yedges
+
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes)
+    finite = np.isfinite(rate)
+
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+    yy, xx = np.meshgrid(y_centers, x_centers, indexing=""ij"")
+
+    if not np.any(finite):
+        return np.array([0.25, 0.25, 0.5, 0.2, 0.2, -0.25, -0.25, 0.5, 0.2, 0.2, 0.0, 0.0, 0.1, 1.0])
+
+    rate_f = rate[finite]
+    baseline = np.percentile(rate_f, 20)
+    peak_idxs = np.unravel_index(np.argsort(rate.flatten())[-2:], rate.shape)
+    center_1 = np.array([x_centers[peak_idxs[1][0]], y_centers[peak_idxs[0][0]]])
+    center_2 = np.array([x_centers[peak_idxs[1][1]], y_centers[peak_idxs[0][1]]])
+
+    amp1 = rate[peak_idxs[0][0], peak_idxs[1][0]] - baseline
+    amp2 = rate[peak_idxs[0][1], peak_idxs[1][1]] - baseline
+    amp1 = max(amp1, 0.0)
+    amp2 = max(amp2, 0.0)
+
+    def estimate_sigma(center_xy, xx, yy, rate):
+      x_idx = np.argmin(np.abs(x_centers - center_xy[0]))
+      y_idx = np.argmin(np.abs(y_centers - center_xy[1]))
+      x_range = slice(max(0, x_idx - 3), min(len(x_centers), x_idx + 4))
+      y_range = slice(max(0, y_idx - 3), min(len(y_centers), y_idx + 4))
+      local_rate = rate[y_range, x_range]
+      local_xx = xx[y_range, x_range]
+      local_yy = yy[y_range, x_range]
+      weights = np.clip(local_rate - baseline, 0.0, None)
+      wsum = np.sum(weights) + 1e-8
+      var_x = np.sum(((local_xx - center_xy[0]) ** 2) * weights) / wsum
+      var_y = np.sum(((local_yy - center_xy[1]) ** 2) * weights) / wsum
+      sigma_x = np.sqrt(var_x + 1e-12)
+      sigma_y = np.sqrt(var_y + 1e-12)
+      return sigma_x, sigma_y
+    
+    sigma_x1, sigma_y1 = estimate_sigma(center_1, xx, yy, rate)
+    sigma_x2, sigma_y2 = estimate_sigma(center_2, xx, yy, rate)
+    
+    # HD Modulation estimates:
+    w = np.clip(spikes - baseline, 0.0, None)
+    hd_pref = np.arctan2(np.sum(w * np.sin(hd)), np.sum(w * np.cos(hd)))
+    hd_kappa = np.corrcoef(spikes, np.cos(hd - hd_pref))[0, 1]
+
+    # Speed exponent estimation (linear regression of log(spikes) ~ log(speed)):
+    log_spikes = np.log1p(spikes)
+    log_speed = np.log1p(speed)
+
+    if np.std(log_speed) > 0 and np.std(log_spikes) > 0:
+        speed_exp = np.cov(log_speed, log_spikes)[0, 1] / np.var(log_speed)
+        speed_exp = np.clip(speed_exp, 0.1, 5.0)
+    else:
+        speed_exp = 1.0
+
+    return np.array([center_1[0], center_1[1], amp1, sigma_x1, sigma_y1,
+                    center_2[0], center_2[1], amp2, sigma_x2, sigma_y2, baseline,
+                    hd_pref, hd_kappa, speed_exp])",<function parameter_estimator at 0x767d302cf420>,3,4,3,30.049962997436523,29.604347229003906,"[[ 7.94439621e+01  1.91853500e+02  5.21935880e-01  6.12989616e+00
+   4.31837749e+00  8.57957764e+01  1.97596542e+02  3.02860498e-01
+   4.30549192e+00  6.15704203e+00  1.83799565e-02  2.87858456e-01
+  -2.60801129e-02  4.04099971e-02]
+ [ 1.91445068e+02  2.38345490e+01 -3.38214822e-03  6.35798407e+00
+   5.61427498e+00  1.86858826e+02  2.31207714e+01  2.50453234e-01
+   2.22637653e+00  3.90318513e+00  7.12552154e-03  4.05500460e+00
+   4.23084927e+00 -2.05515083e-02]
+ [ 2.24606781e+02  3.30215378e+01  1.19101107e+00  9.71406841e+00
+   7.21930933e+00  2.16186737e+02  2.58532257e+01  3.75841451e+00
+   1.84139740e+00  9.55846500e+00  1.46430014e-02  1.71528071e-01
+  -2.54064947e-02 -2.08213809e-03]
+ [ 1.40648605e+02  5.81689720e+01  8.40450406e-01  7.63455391e+00
+   5.50959015e+00  1.48954895e+02  6.39851418e+01  1.21023357e+00
+   4.81988907e+00  5.22580099e+00 -1.80163868e-02  8.27287495e-01
+  -2.40889192e-02 -1.08278701e-02]
+ [ 2.62327606e+02  7.95431824e+01  6.94613934e-01  5.06981468e+00
+   7.96213818e+00  2.60355713e+02  9.21691132e+01  2.08900332e-01
+   6.51379776e+00  1.31551342e+01  2.31686495e-02  9.78614748e-01
+  -1.59606338e-02 -1.12134153e-02]
+ [ 7.68693008e+01  1.47419861e+02 -7.54102273e-03  5.97815228e+00
+   8.00448895e+00  7.84590378e+01  1.40790604e+02  2.23202676e-01
+   6.07263565e+00  4.73316908e+00  1.13265486e-02  3.81604701e-01
+   1.40961957e+00 -2.42147222e-03]
+ [ 1.05722427e+02  3.44605904e+01  8.25370848e-01  7.15501976e+00
+   1.34322882e+00  1.13508995e+02  3.90777740e+01  3.77250791e-01
+   8.21074772e+00  5.25452948e+00  1.74824204e-02 -2.30852738e-01
+  -2.00352985e-02 -2.15170579e-03]
+ [ 7.68509140e+01  3.08366299e+01  2.88788259e-01  6.64684725e+00
+   6.28142500e+00  7.63449249e+01  2.38406448e+01 -3.27558955e-03
+   5.52739620e+00  6.78034973e+00  1.16262976e-02  8.09028745e-01
+  -2.36523747e-02 -2.15692185e-02]
+ [ 9.98548737e+01  3.95547333e+01 -5.42612234e-03  7.13088799e+00
+   6.95494890e+00  9.66451035e+01  3.78130188e+01  9.50217605e-01
+   4.51018810e+00  4.64750051e+00  1.23442160e-02 -8.85614097e-01
+  -1.94085222e-02 -1.32422836e-03]
+ [ 1.56589890e+02  1.98400070e+02  6.08111024e-01  3.13338351e+00
+   4.64137745e+00  2.45604965e+02  3.17753944e+01  4.26690340e+00
+   8.08966398e-01  4.87422049e-01  1.43239032e-02 -3.58714056e+00
+   7.50342607e-01 -2.11294480e-02]
+ [ 1.02251709e+02  5.98203392e+01  8.13805521e-01  1.80625296e+00
+   5.59311658e-02  1.05099342e+02  5.33943939e+01 -2.14987830e-03
+   7.24108505e+00  7.20500088e+00  8.91459174e-03  2.33392954e+00
+   2.85708690e+00  6.54132187e-01]
+ [ 9.92139740e+01  2.04403595e+02  6.48322880e-01  5.56948471e+00
+   1.28699741e+01  9.61178360e+01  2.05308472e+02  1.90857247e-01
+   6.31969833e+00  1.21719103e+01  1.44288577e-02 -1.14791858e+00
+  -1.53840734e-02 -8.10530689e-03]
+ [ 1.63061890e+02  1.75714447e+02 -1.77747803e-03  8.14031029e+00
+   7.41681290e+00  1.66825592e+02  1.74533813e+02  2.11657330e-01
+   5.13789558e+00  4.40467405e+00  1.04291523e-02  2.75398088e+00
+   2.35418081e-01  3.29780132e-01]
+ [ 1.15745918e+02  3.09946289e+01  9.37692285e-01  4.17880011e+00
+   9.64331701e-02  7.66915512e+01  1.71601334e+02 -2.29569869e-05
+   7.54915094e+00  6.42900133e+00  8.59101303e-03  8.22896361e-01
+   4.05810690e+00 -9.07812640e-03]
+ [ 1.58717560e+02  6.68094635e+01  5.05280495e-01  5.49090719e+00
+   7.24259758e+00  1.56603241e+02  7.14512558e+01  7.40222812e-01
+   7.40811634e+00  3.31256914e+00  1.40882442e-02  5.79282701e-01
+  -2.11391989e-02 -3.77153093e-03]
+ [ 1.64724396e+02  1.65063187e+02  1.32230735e+00  2.02178240e+00
+   2.36704493e+00  1.69746613e+02  1.63665298e+02  2.89396453e+00
+   4.72189569e+00  6.27862453e-01 -2.94107768e-18 -6.17602408e-01
+  -1.46868624e-04 -9.81069263e-03]
+ [ 2.62134705e+02  1.52733475e+02  4.18614060e-01  7.79669285e+00
+   7.03665686e+00  2.64216949e+02  1.45074310e+02  5.43580890e-01
+   5.39306450e+00  7.50093126e+00  1.92624368e-02  2.80325025e-01
+  -2.71106279e-03 -1.25382170e-02]]",30.54847526550293,"[[ 1.81654449e+02  1.61940109e+02  2.76053607e-01  8.15476608e+00
+   8.22752571e+00  1.86411133e+02  1.61940109e+02  2.82905191e-01
+   8.04527283e+00  8.23896599e+00  5.98804560e-03 -7.05957115e-01
+   3.04949097e-03  1.00000001e-01]
+ [ 1.00791168e+02  5.27309113e+01  3.08610857e-01  7.78668308e+00
+   7.72576809e+00  1.00791168e+02  5.74791336e+01  3.31789762e-01
+   7.82682705e+00  7.24768114e+00  5.93990408e-05 -3.15884613e-02
+   2.78336648e-03  1.00000001e-01]
+ [ 1.53114471e+02  1.47695435e+02  1.86249003e-01  7.55594015e+00
+   7.22819710e+00  1.57871155e+02  1.47695435e+02  1.97780102e-01
+   7.52959967e+00  7.23569441e+00  7.75054668e-18 -6.65726185e-01
+   3.23085766e-03  1.00000001e-01]
+ [ 1.00791168e+02  3.84862289e+01  2.53268242e-01  8.56948471e+00
+   8.08090019e+00  9.60345078e+01  3.84862289e+01  2.70846248e-01
+   8.36275196e+00  7.92845535e+00  1.06642292e-04  9.94604945e-01
+   6.29497599e-03  1.00000001e-01]
+ [ 2.53004425e+02  1.38198975e+02  2.89008081e-01  6.75531197e+00
+   8.79826736e+00  2.53004425e+02  1.33450745e+02  2.95112461e-01
+   6.75061083e+00  8.92324162e+00  2.07244419e-04  2.36459613e+00
+   1.34272967e-02  1.00000001e-01]
+ [ 1.86411133e+02  1.80933014e+02  3.23560536e-01  8.11720467e+00
+   8.20828152e+00  1.86411133e+02  1.85681244e+02  3.55831951e-01
+   8.06511402e+00  8.32574940e+00 -1.11130609e-18 -2.20880866e+00
+   2.69535114e-03  1.00000001e-01]
+ [ 2.62517761e+02  1.47695435e+02  5.69299400e-01  7.18098879e+00
+   8.24049759e+00  2.62517761e+02  1.52443665e+02  5.70488155e-01
+   7.18366194e+00  8.20079517e+00  4.65227058e-05  1.27269757e+00
+   4.79695015e-03  1.00000001e-01]
+ [ 1.38844482e+02  2.42415524e+01  2.85053253e-01  8.61711311e+00
+   7.25980043e+00  1.15061165e+02  2.42415524e+01  3.14892024e-01
+   7.80828810e+00  6.27058554e+00  3.36820213e-03  3.79288346e-01
+   1.71054508e-05  1.00000001e-01]
+ [ 1.53114471e+02  1.38198975e+02  2.02087983e-01  6.93847561e+00
+   8.29042053e+00  1.53114471e+02  1.42947205e+02  2.23691359e-01
+   6.98501110e+00  7.79457569e+00 -1.01237281e-18  3.74656498e-01
+   1.25050102e-03  1.00000001e-01]
+ [ 2.00681122e+02  1.09709625e+02  2.46632561e-01  6.80955172e+00
+   7.82074022e+00  2.00681122e+02  1.04961395e+02  2.63305008e-01
+   6.85834694e+00  7.86901283e+00  9.05616525e-06 -2.64196575e-01
+   1.07300701e-02  1.00000001e-01]
+ [ 1.43601135e+02  6.22273598e+01  3.39738369e-01  9.04479790e+00
+   7.76952696e+00  1.38844482e+02  6.22273598e+01  3.48364174e-01
+   9.02921867e+00  7.81018496e+00  2.50969361e-17  6.07159734e-01
+   1.06593668e-02  1.00000001e-01]
+ [ 2.05437775e+02  1.09709625e+02  3.19698304e-01  6.79830742e+00
+   6.82331085e+00  2.00681122e+02  1.09709625e+02  3.27312171e-01
+   6.88137293e+00  6.81299782e+00  1.16835674e-18 -1.15482461e+00
+   8.09760112e-03  1.00000001e-01]
+ [ 2.10194458e+02  7.64720459e+01  2.18743742e-01  7.09417772e+00
+   7.79106998e+00  2.10194458e+02  7.17238159e+01  2.28402451e-01
+   7.25426865e+00  7.46355867e+00  5.95048815e-03  4.14627671e-01
+  -4.83186916e-04  1.00000001e-01]
+ [ 2.62517761e+02  4.32344589e+01  6.20714843e-01  7.26381254e+00
+   8.65335369e+00  2.62517761e+02  2.42415524e+01  6.72047257e-01
+   7.43104887e+00  8.74572182e+00  1.66631344e-05  1.20597672e+00
+   6.91998610e-03  1.00000001e-01]
+ [ 1.86411133e+02  2.42415524e+01  5.57487965e-01  5.92574549e+00
+   5.91875219e+00  2.19707764e+02  4.32344589e+01  5.96871436e-01
+   7.81718540e+00  8.55779648e+00  9.65241270e-07  1.13582206e+00
+   5.90128172e-03  1.00000001e-01]
+ [ 1.53114471e+02  5.74791336e+01  6.76799953e-01  8.06661606e+00
+   7.48339176e+00  1.48357819e+02  5.74791336e+01  6.81810677e-01
+   8.17963505e+00  7.58818674e+00  2.90714347e-17 -9.30738226e-02
+   1.25024309e-02  1.00000001e-01]
+ [ 2.53004425e+02  1.14457848e+02  1.36240691e-01  6.47326469e+00
+   8.56589794e+00  2.53004425e+02  1.09709625e+02  1.50158331e-01
+   6.48076487e+00  8.34867954e+00  0.00000000e+00 -1.02868962e+00
+   9.82216210e-04  1.00000001e-01]]",gemini-2.5-pro,"(-1, -1, 1)","(1, 3, 4)","[[2.2852650e-02 2.2852650e-02 2.2852650e-02 ... 2.2852650e-02
+  2.2852650e-02 2.2852650e-02]
+ [9.8900348e-03 9.8900348e-03 9.8900348e-03 ... 9.8900348e-03
+  9.8900348e-03 9.8900348e-03]
+ [0.0000000e+00 0.0000000e+00 0.0000000e+00 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]
+ ...
+ [1.2681472e-02 1.2686528e-02 1.2690690e-02 ... 2.6991531e-02
+  4.7010176e-02 9.1162592e-02]
+ [2.9708636e-34 5.2185792e-34 8.4087152e-34 ... 1.9094411e-27
+  2.7598678e-26 5.1062710e-25]
+ [5.7742782e-03 5.7742782e-03 5.7742782e-03 ... 5.7742782e-03
+  5.7742782e-03 5.7742782e-03]]",29.604347229003906
+"import numpy as np
+
+def neuron_model(stimuli,
+                    center_x=0.0,
+                    center_y=0.0,
+                    place_amp=1.0,
+                    sigma=1.0,
+                    baseline=0.0,
+                    hd_pref=0.0,
+                    hd_kappa=0.5,
+                    speed_gain=0.0):
+    """"""
+    Parent Model 1 (neuron_model_v1): Single anisotropic Gaussian with additive modulation.
+    Parent Model 2 (neuron_model_v2): Two isotropic Gaussians with multiplicative HD gain and nonlinear speed modulation.
+
+    This model simplifies neuron_model_v2 by using a single isotropic Gaussian place field with multiplicative HD and linear speed modulation.
+
+    Equation:
+    rate = baseline + place_amp * exp(-0.5 * ((x - center_x)^2 + (y - center_y)^2) / sigma^2) * exp(hd_kappa * cos(hd - hd_pref)) * (1 + speed_gain * speed)
+
+    Improvements over previous models (motivated by diagnostic plots):
+    This model reduces complexity and focuses on core components, motivated by the observation
+    that while two Gaussians and non-linear speed helped, they may have overfit the data.  Often,
+    a single, well-placed Gaussian with simple HD and speed modulation can capture the primary
+    response characteristics of place cells.
+
+    1.  Single Place Field: Uses a single Gaussian place field for simplicity and to prevent overfitting
+        in cases where the cell has a single, clear place field (most of the data).
+    2. Multiplicative HD and Speed: Keep the better modulation from v2.
+    """"""
+    place_amp = np.clip(place_amp, 0.0, None)
+    sigma = np.clip(sigma, 1e-6, None)
+    baseline = np.clip(baseline, 0.0, None)
+
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # Gaussian place field
+    dx = x - center_x
+    dy = y - center_y
+    r2 = dx ** 2 + dy ** 2
+    place = place_amp * np.exp(-0.5 * r2 / (sigma ** 2))
+
+    # Multiplicative modulation terms
+    hd_mod = np.exp(hd_kappa * np.cos(hd - hd_pref))
+    speed_mod = 1 + speed_gain * speed
+
+    # Combine all components
+    rate = baseline + place * hd_mod * speed_mod
+
+    return rate",<function neuron_model at 0x767bc01a0220>,"import numpy as np
+from scipy.ndimage import gaussian_filter
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""Estimates parameters for neuron_model_v1 based on rate map analysis and statistical estimation.
+
+    Image Analysis Summary:
+    The images show parameter estimation is often either between two fields. or doesn't modulate firing amplitude adequately.
+    This suggests needs focus towards center_x, center_y, place_amp and better constraint handling.
+
+    Improvements in This Estimator:
+    1. Added rate map baseline percentile increased for baseline estimate.
+    2. Adjusted sigma estimation for tighter rate map focusing to more specific location.
+    3. Hard constraint to avoid the estimation jumping from between location fields for parameter amplitudes, by using stricter outlier clipping to make estimation focused in on max points
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, min_occ=3, smoothing_sigma=1.2):
+        H, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        H_s, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+
+        H_occupancy = H.copy()
+        occupancy_filter = H > min_occ
+        with np.errstate(divide='ignore', invalid='ignore'):
+            H = np.where(H_occupancy>min_occ, H_s / (H+ 1e-12), np.zeros_like(H))
+        H = gaussian_filter(H, sigma=smoothing_sigma)
+        H_occupancy = np.where(occupancy_filter==True,H_occupancy,np.zeros_like(H))
+        return H.T, xedges, yedges
+
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes, bins=40, smoothing_sigma=1.2)
+    finite = np.isfinite(rate)
+    if not np.any(finite): return np.zeros(8)
+
+    baseline = float(np.percentile(rate, 20))
+    rate = np.nan_to_num(rate, nan=baseline)
+
+    max_indices = np.unravel_index(np.argmax(rate), rate.shape)
+    ix = int(max_indices[1])
+    iy = int(max_indices[0])
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+    center_x = float(x_centers[ix])
+    center_y = float(y_centers[iy])
+
+    place_amp = float(rate[iy, ix] - baseline)
+    sigma = 0.05 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1]))
+
+    w = spikes - baseline
+    w[w < 0] = 0
+    wsum = np.sum(w) + 1e-8
+    hd_pref = np.arctan2(np.sum(w * np.sin(hd)) / wsum, np.sum(w * np.cos(hd)) / wsum)
+    hd_kappa = 0.5
+    speed_gain = np.sum((speed - np.mean(speed)) * w) / (np.sum((speed - np.mean(speed))**2) + 0.1)
+    speed_gain = np.clip(speed_gain, -0.1, 0.1)
+
+    return np.array([center_x, center_y, place_amp, sigma, baseline, hd_pref, hd_kappa, speed_gain])",<function parameter_estimator at 0x767d38239260>,4,3,1,30.05467414855957,29.68675422668457,"[[ 8.26405487e+01  1.92955307e+02  6.28196836e-01  5.14762735e+00
+   1.82061009e-02  2.37756181e+00  3.36738765e-01  1.25669371e-02]
+ [ 8.26102753e+01  1.16974060e+02  3.57459881e-03  1.85005331e+00
+   6.72852667e-03  3.94275546e+00  4.58680582e+00  8.44617128e-01]
+ [ 2.19745209e+02  3.44434853e+01  1.66074860e+00  5.31669569e+00
+   1.53089194e-02  1.97118819e+00 -4.59467381e-01  2.59157810e-02]
+ [ 1.45520432e+02  6.18845482e+01  1.29051352e+00  6.11617327e+00
+  -1.80163607e-02  2.30856562e+00  8.18029225e-01  8.54462851e-03]
+ [ 1.64225708e+02  2.76239796e+01  9.05150175e-02  1.04483833e+01
+   1.35681555e-02  2.38766837e+00  2.83151776e-01  1.89878400e-02]
+ [ 7.86893311e+01  1.41812515e+02  1.92506596e-01  6.02175856e+00
+   1.12285623e-02  4.98225778e-01  1.08176053e+00  1.15440758e-02]
+ [ 1.10952988e+02  3.96249161e+01  1.81459412e-01  4.69430590e+00
+   1.86418965e-02 -1.65569353e+00  3.09238529e+00 -5.35611017e-03]
+ [ 7.91498184e+01  3.02498627e+01  1.57383904e-01  5.06891823e+00
+   1.17315091e-02 -4.87452328e-01 -2.26660776e+00 -1.04365572e-02]
+ [ 9.67457428e+01  3.69912834e+01  4.30086344e-01  4.94352293e+00
+   1.25464862e-02 -1.44039333e+00  1.43337703e+00 -5.35390864e-04]
+ [ 1.67650101e+02  1.38258987e+02  2.04202920e-01  8.90437698e+00
+   8.96659493e-03 -3.13673329e+00  5.88981926e-01  2.06915103e-02]
+ [ 1.02067062e+02  6.00393028e+01  1.63057303e+00  1.12276149e+00
+   8.84202588e-03  2.40059590e+00  4.44455624e+00 -3.61455157e-02]
+ [ 9.81013260e+01  2.03466614e+02  6.49401486e-01  8.47818851e+00
+   1.43385325e-02 -1.56335223e+00 -3.96287084e-01  5.08710567e-04]
+ [ 1.66768799e+02  1.74223969e+02  3.29361528e-01  5.54832983e+00
+   1.01818312e-02  1.62160468e+00  1.31968334e-01  1.49747794e-02]
+ [ 7.37828293e+01  1.70209198e+02  2.91517619e-02  4.55226326e+00
+   8.21904000e-03 -4.82451558e-01  2.73319149e+00  3.25834334e-01]
+ [ 1.57651962e+02  7.02516785e+01  9.12388861e-01  6.47730589e+00
+   1.41394185e-02 -4.55426723e-01  1.35705277e-01  1.32926099e-03]
+ [ 1.66290649e+02  1.64535583e+02  2.29882073e+00  3.32654214e+00
+  -1.80163831e-02 -2.71447539e-01 -7.15938449e-01 -1.71837639e-02]
+ [ 2.66349731e+02  1.48594833e+02  1.25877488e+00  8.01308250e+00
+   1.93672627e-02 -1.84659958e+00  1.00396782e-01 -1.29847201e-02]]",30.246475219726562,"[[ 1.86411133e+02  1.61940109e+02  2.83605307e-01  9.51332855e+00
+   5.22830570e-03 -7.05966771e-01  5.00000000e-01  2.41023823e-04]
+ [ 1.00791168e+02  5.74791336e+01  3.31721723e-01  9.51332855e+00
+   5.28251257e-05 -3.15883942e-02  5.00000000e-01  1.54015550e-04]
+ [ 1.57871155e+02  1.47695435e+02  1.97734922e-01  9.51332855e+00
+   9.29069188e-07 -6.65726244e-01  5.00000000e-01  1.18020558e-04]
+ [ 9.60345078e+01  3.84862289e+01  2.66744882e-01  9.51332855e+00
+   9.74512004e-05  9.94604886e-01  5.00000000e-01  7.81442504e-05]
+ [ 2.53004425e+02  1.33450745e+02  2.85057247e-01  9.51332855e+00
+   1.81086085e-04  2.36459541e+00  5.00000000e-01  6.78195429e-05]
+ [ 1.86411133e+02  1.85681244e+02  3.55759919e-01  9.51332855e+00
+   0.00000000e+00 -2.20880842e+00  5.00000000e-01 -3.71621645e-05]
+ [ 2.62517761e+02  1.47695435e+02  4.71212238e-01  9.51332855e+00
+   3.97052245e-05  1.27269876e+00  5.00000000e-01  8.80119624e-05]
+ [ 2.00681122e+02  7.64720459e+01  2.38867849e-01  9.51332855e+00
+   2.96097249e-03  3.79274279e-01  5.00000000e-01  1.21188124e-04]
+ [ 1.53114471e+02  1.42947205e+02  2.23641366e-01  9.51332855e+00
+   0.00000000e+00  3.74656498e-01  5.00000000e-01 -1.42666802e-04]
+ [ 2.00681122e+02  1.04961395e+02  2.63246506e-01  9.51332855e+00
+   9.05743309e-06 -2.64196545e-01  5.00000000e-01  8.77358034e-05]
+ [ 1.38844482e+02  6.22273598e+01  3.48295540e-01  9.51332855e+00
+   3.48649934e-07  6.07159734e-01  5.00000000e-01  1.14371112e-04]
+ [ 2.00681122e+02  1.09709625e+02  3.27238560e-01  9.51332855e+00
+   0.00000000e+00 -1.15482473e+00  5.00000000e-01  5.12041261e-05]
+ [ 2.10194458e+02  7.17238159e+01  2.29017705e-01  9.51332855e+00
+   5.28874667e-03  4.14689571e-01  5.00000000e-01  7.99602785e-05]
+ [ 2.62517761e+02  2.42415524e+01  7.13613212e-01  9.51332855e+00
+   1.63237182e-05  1.20597661e+00  5.00000000e-01  1.07306359e-05]
+ [ 2.19707764e+02  4.79826813e+01  5.19810259e-01  9.51332855e+00
+   2.72481520e-06  1.13582206e+00  5.00000000e-01  2.10321057e-04]
+ [ 1.48357819e+02  5.74791336e+01  6.81668222e-01  9.51332855e+00
+   5.54678763e-07 -9.30738300e-02  5.00000000e-01  1.53133689e-04]
+ [ 2.53004425e+02  1.09709625e+02  1.43659383e-01  9.51332855e+00
+   0.00000000e+00 -1.02868938e+00  5.00000000e-01 -1.15187331e-05]]",gemini-2.0-flash,"(2, 3, 5)","(1, 3, 4)","[[ 2.29145680e-02  2.29145680e-02  2.29145680e-02 ...  2.29145680e-02
+   2.29145680e-02  2.29145680e-02]
+ [ 9.66660026e-03  9.66660026e-03  9.66660026e-03 ...  9.66660026e-03
+   9.66660026e-03  9.66660026e-03]
+ [ 3.86465574e-03  3.86465574e-03  3.86465574e-03 ...  3.86465574e-03
+   3.86465574e-03  3.86465574e-03]
+ ...
+ [ 1.27702150e-02  1.28234485e-02  1.29074426e-02 ...  7.95528200e-03
+   1.01589067e-02 -2.52781976e-02]
+ [ 0.00000000e+00  0.00000000e+00  2.80259693e-45 ...  2.19633727e-34
+   5.40103912e-33  1.57667894e-31]
+ [ 5.85023873e-03  5.85023873e-03  5.85023873e-03 ...  5.85023873e-03
+   5.85023873e-03  5.85023873e-03]]",29.68675422668457
+"import numpy as np
+
+def neuron_model(stimuli,
+                    # Parameters for the first Gaussian field
+                    center_x_1=0.25,
+                    center_y_1=0.25,
+                    place_amp_1=1.0,
+                    sigma_1=1.0,
+                    # Baseline, HD, and Speed parameters
+                    baseline=0.0,
+                    hd_pref=0.0,
+                    hd_amp=0.5,
+                    speed_gain=0.0):
+
+    """"""
+    Parent Models:
+    - neuron_model_v1: Single Gaussian Place Field with Additive HD/Speed.
+    - neuron_model_v2: Two Gaussian Place Fields with Additive HD/Speed.
+
+    Image Analysis:
+    The image reveals the primary weakness of the prior models to be their treatment of HD and speed as independent and additive. Specifically, notice that model v1 uses two guassian place fields. Model v2 shows an overestimation of place field sizes/coverage. HD and speed modulation do not seem to improve results overall. Thus we take inspiration from model v1 (having 2 guassian place fields) and model v2, and reduce HD/Speed.
+
+    Model Improvements:
+    This model builds upon `neuron_model_v2` by incorporating a single Gaussian place field and reducing HD/Speed features. This is motivated by observing how models tend to smear around peaks and lack specific HD features.
+
+    Equation:
+    rate = baseline + place_1 + hd_term + speed_term
+    place_1 = place_amp_1 * exp(-0.5 * ((x-center_x_1)^2 + (y-center_y_1)^2) / sigma_1^2)
+    hd_term = hd_amp * 0.5 * (1 + cos(hd - hd_pref))
+    speed_term = speed_gain * speed
+    """"""
+    baseline = np.clip(baseline, 0.0, None)
+    place_amp_1 = np.clip(place_amp_1, 0.0, None)
+    sigma_1 = np.clip(sigma_1, 1e-6, None)
+    hd_amp = np.clip(hd_amp, 0.0, None)
+    speed_gain = np.clip(speed_gain, 0.0, None)
+
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # Calculate place fields
+    dx_1 = x - center_x_1
+    dy_1 = y - center_y_1
+    r2_1 = dx_1**2 + dy_1**2
+    place_1 = place_amp_1 * np.exp(-0.5 * r2_1 / (sigma_1**2))
+
+    # Calculate head direction and speed modulation
+    hd_term = hd_amp * 0.5 * (1.0 + np.cos(hd - hd_pref))
+    speed_term = speed_gain * speed
+    
+    return baseline + place_1 + hd_term + speed_term",<function neuron_model at 0x767be4323d80>,"import numpy as np
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""
+    Estimates parameters for the single isotropic Gaussian model (neuron_model_v3).
+
+    This estimator is specifically designed to complement neuron_model_v3.
+    By focusing on a simpler place field structure (single isotropic Gaussian).
+
+    Weaknesses and Corrections Based on Image Analysis:
+
+    Previous Parameter Estimators produce larger values over larger regions and
+    tend to result in smearing peaks/HD results: By using one place field, HD
+    can modulate better by having spikes/location to fit to more accurately
+    .""""""
+    def _rate_map(pos_xy, spikes, bins=40, eps=1e-6, min_occ=3, smoothing_sigma=1.2):
+        def _gaussian_kernel(sigma):
+            if sigma <= 0:
+                return None
+            size = int(max(3, np.ceil(6 * sigma)))
+            if size % 2 == 0:
+                size += 1
+            ax = np.arange(size) - size // 2
+            xx, yy = np.meshgrid(ax, ax)
+            kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+            kernel /= np.sum(kernel)
+            return kernel
+
+        def _fft_convolve2d(a, b):
+            out_shape = (a.shape[0] + b.shape[0] - 1, a.shape[1] + b.shape[1] - 1)
+            fa = np.fft.rfftn(a, s=out_shape)
+            fb = np.fft.rfftn(b, s=out_shape)
+            out = np.fft.irfftn(fa * fb, s=out_shape)
+            start0 = (b.shape[0] - 1) // 2
+            start1 = (b.shape[1] - 1) // 2
+            return out[start0:start0 + a.shape[0], start1:start1 + a.shape[1]]
+
+        occ, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        spk, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+        rate = spk / (occ + eps)
+        rate = np.where(occ >= min_occ, rate, np.nan)
+        kernel = _gaussian_kernel(smoothing_sigma)
+        if kernel is not None:
+            rate_filled = np.nan_to_num(rate, nan=0.0)
+            occ_mask = np.isfinite(rate).astype(float)
+            rate_s = _fft_convolve2d(rate_filled, kernel)
+            norm = _fft_convolve2d(occ_mask, kernel)
+            rate = rate_s / (norm + eps)
+            rate = np.where(norm > 0, rate, np.nan)
+        return rate.T, xedges, yedges
+
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes)
+    finite = np.isfinite(rate)
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+    yy, xx = np.meshgrid(y_centers, x_centers, indexing=""ij"")
+
+    if not np.any(finite):
+        return np.array([0.5, 0.5, 0.1, 0.1, 0.0, 0.0, 0.0, 0.0])
+
+    rate_f = rate[finite]
+    baseline = np.percentile(rate_f, 20)
+    peak_idx = np.unravel_index(np.argmax(rate), rate.shape)
+    center_x = x_centers[peak_idx[1]]
+    center_y = y_centers[peak_idx[0]]
+    amp = rate[peak_idx[0], peak_idx[1]] - baseline
+
+    def estimate_sigma(center_xy, xx, yy, rate):
+      x_idx = np.argmin(np.abs(x_centers - center_xy[0]))
+      y_idx = np.argmin(np.abs(y_centers - center_xy[1]))
+      x_range = slice(max(0, x_idx - 3), min(len(x_centers), x_idx + 4))
+      y_range = slice(max(0, y_idx - 3), min(len(y_centers), y_idx + 4))
+      local_rate = rate[y_range, x_range]
+      local_xx = xx[y_range, x_range]
+      local_yy = yy[y_range, x_range]
+      weights = np.clip(local_rate - baseline, 0.0, None)
+      wsum = np.sum(weights) + 1e-8
+      var_x = np.sum(((local_xx - center_xy[0]) ** 2) * weights) / wsum
+      var_y = np.sum(((local_yy - center_xy[1]) ** 2) * weights) / wsum
+      sigma = np.sqrt((var_x + var_y)/2 + 1e-12)
+      return sigma
+
+    sigma = estimate_sigma([center_x, center_y], xx, yy, rate)
+    w = np.clip(spikes - baseline, 0.0, None)
+    hd_pref = np.arctan2(np.sum(w * np.sin(hd)), np.sum(w * np.cos(hd)))
+    hd_amp = np.corrcoef(spikes, np.cos(hd - hd_pref))[0, 1]
+    speed_gain = np.cov(speed, spikes - baseline, bias=True)[0, 1] / (np.var(speed) + 1e-8)
+    speed_gain = max(0.0, speed_gain)
+
+    return np.array([center_x, center_y, amp, sigma, baseline, hd_pref, hd_amp, speed_gain])",<function parameter_estimator at 0x767e8429ff60>,4,4,2,30.071319580078125,29.272186279296875,"[[ 8.38902893e+01  1.93647232e+02  7.99634218e-01  4.90071440e+00
+   1.46781523e-02  6.39975071e-01  6.79765921e-03 -1.60242468e-02]
+ [ 1.87444092e+02  2.35833664e+01  5.50133586e-01  4.96379519e+00
+  -1.64700132e-02  2.53275037e+00 -1.64865311e-02 -1.68332178e-02]
+ [ 2.19737106e+02  2.66458225e+01  2.67909360e+00  9.40493298e+00
+  -1.37275327e-02  3.21520925e-01  2.23238207e-02 -1.58660933e-02]
+ [ 1.46681808e+02  6.20692177e+01  1.54390562e+00  6.06091404e+00
+  -1.80163905e-02  1.76009643e+00  1.00462949e-02 -1.77772418e-02]
+ [ 2.54640076e+02  8.63887253e+01  1.98030663e+00  1.51826990e+00
+   2.22188588e-02  2.20640039e+00  3.53713846e-03 -1.49192866e-02]
+ [ 8.34270477e+01  1.38034805e+02  2.78941178e+00  3.15617234e-01
+  -1.23960832e-02  1.33035690e-01  1.60582177e-02 -1.62059553e-02]
+ [ 1.11029915e+02  3.60618172e+01  4.86383855e-01  7.83249092e+00
+   1.68385357e-02 -2.79829890e-01  1.14042661e-03 -1.51887042e-02]
+ [ 7.68107147e+01  2.60546856e+01  2.56802291e-01  9.31283665e+00
+  -1.35408491e-02  1.09002233e+00  1.71637665e-02 -1.66063849e-02]
+ [ 9.66539459e+01  3.78072891e+01  9.47224140e-01  4.59929419e+00
+  -1.48340492e-02 -1.38805282e+00  1.80708151e-02 -1.63168032e-02]
+ [ 2.43030777e+02  3.24523735e+01  5.57428658e-01  5.65023041e+00
+  -1.28479488e-02 -2.93589997e+00  2.37777550e-02 -1.62547063e-02]
+ [ 1.01407478e+02  5.64062653e+01  2.26370201e-01  5.85559273e+00
+  -1.57376640e-02  1.84146273e+00  1.21138059e-02 -1.65944695e-02]
+ [ 9.80764084e+01  2.04349396e+02  6.28265023e-01  9.51559734e+00
+  -5.26887737e-03 -1.75715399e+00  1.95055567e-02 -1.52206952e-02]
+ [ 1.72035156e+02  1.73224243e+02  1.86064303e-01  1.18729076e+01
+  -1.54023385e-02 -2.16523096e-01 -7.01521942e-03 -1.63888782e-02]
+ [ 7.56499634e+01  1.71049240e+02  1.28963813e-01  5.48907089e+00
+  -1.62869357e-02 -5.87034404e-01  1.22169396e-02 -1.66889783e-02]
+ [ 1.57435150e+02  7.02318420e+01  9.54893887e-01  6.49381018e+00
+  -1.22787952e-02  1.55832005e+00  1.92820914e-02 -1.56043451e-02]
+ [ 1.66977097e+02  1.64920288e+02  1.58189571e+00  4.00187063e+00
+  -2.94107768e-18 -6.17602408e-01 -1.46868624e-04 -1.80163868e-02]
+ [ 2.66323547e+02  1.49497849e+02  9.74346101e-01  8.09506798e+00
+   1.92679185e-02  2.80325025e-01 -2.71106279e-03 -1.44460574e-02]]",30.146162033081055,"[[ 1.86411133e+02  1.61940109e+02  2.82905191e-01  8.14269543e+00
+   5.98804560e-03 -7.05957115e-01  3.04949097e-03  2.41776987e-04]
+ [ 1.00791168e+02  5.74791336e+01  3.31789762e-01  7.54281473e+00
+   5.93990408e-05 -3.15884613e-02  2.78336648e-03  1.54017980e-04]
+ [ 1.57871155e+02  1.47695435e+02  1.97780102e-01  7.38410950e+00
+   7.75054668e-18 -6.65726185e-01  3.23085766e-03  1.18020514e-04]
+ [ 9.60345078e+01  3.84862289e+01  2.70846248e-01  8.14849758e+00
+   1.06642292e-04  9.94604945e-01  6.29497599e-03  7.81461567e-05]
+ [ 2.53004425e+02  1.33450745e+02  2.95112461e-01  7.91185808e+00
+   2.07244419e-04  2.36459613e+00  1.34272967e-02  6.78219585e-05]
+ [ 1.86411133e+02  1.85681244e+02  3.55831951e-01  8.19646740e+00
+  -1.11130609e-18 -2.20880866e+00  2.69535114e-03  0.00000000e+00]
+ [ 2.62517761e+02  1.52443665e+02  5.70488155e-01  7.70902157e+00
+   4.65227058e-05  1.27269757e+00  4.79695015e-03  8.80131192e-05]
+ [ 1.15061165e+02  2.42415524e+01  3.14892024e-01  7.08129978e+00
+   3.36820213e-03  3.79288346e-01  1.71054508e-05  1.21340883e-04]
+ [ 1.53114471e+02  1.42947205e+02  2.23691359e-01  7.40087128e+00
+  -1.01237281e-18  3.74656498e-01  1.25050102e-03  0.00000000e+00]
+ [ 2.00681122e+02  1.04961395e+02  2.63305008e-01  7.38099861e+00
+   9.05616525e-06 -2.64196575e-01  1.07300701e-02  8.77358907e-05]
+ [ 1.38844482e+02  6.22273598e+01  3.48364174e-01  8.44173431e+00
+   2.50969361e-17  6.07159734e-01  1.06593668e-02  1.14371032e-04]
+ [ 2.00681122e+02  1.09709625e+02  3.27312171e-01  6.84727049e+00
+   1.16835674e-18 -1.15482461e+00  8.09760112e-03  5.12040715e-05]
+ [ 2.10194458e+02  7.17238159e+01  2.28402451e-01  7.35965776e+00
+   5.95048815e-03  4.14627671e-01 -4.83186916e-04  8.01613351e-05]
+ [ 2.62517761e+02  2.42415524e+01  6.72047257e-01  8.11505222e+00
+   1.66631344e-05  1.20597672e+00  6.91998610e-03  1.07306369e-05]
+ [ 2.19707764e+02  4.32344589e+01  5.96871436e-01  8.19586086e+00
+   9.65241270e-07  1.13582206e+00  5.90128172e-03  2.10321115e-04]
+ [ 1.48357819e+02  5.74791336e+01  6.81810677e-01  7.88945532e+00
+   2.90714347e-17 -9.30738226e-02  1.25024309e-02  1.53133631e-04]
+ [ 2.53004425e+02  1.09709625e+02  1.50158331e-01  7.47331142e+00
+   0.00000000e+00 -1.02868962e+00  9.82216210e-04  0.00000000e+00]]",gemini-2.0-flash,"(1, 4, 4)","(0, 3, 0)","[[2.2936201e-02 2.3120493e-02 2.2763092e-02 ... 2.2393188e-02
+  2.2177303e-02 2.1956138e-02]
+ [0.0000000e+00 0.0000000e+00 0.0000000e+00 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]
+ [0.0000000e+00 0.0000000e+00 0.0000000e+00 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]
+ ...
+ [1.2686481e-02 3.2350400e-03 6.0538659e-03 ... 1.0296444e-02
+  1.4513235e-02 2.4597788e-02]
+ [8.0584437e-03 2.2595329e-03 1.0586203e-03 ... 2.4040720e-04
+  1.4675455e-05 1.3374290e-04]
+ [0.0000000e+00 0.0000000e+00 0.0000000e+00 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]]",29.272186279296875
+"import numpy as np
+
+def neuron_model(stimuli,
+                    # Field 1 parameters
+                    center_x_1=0.25,
+                    center_y_1=0.25,
+                    place_amp_1=1.0,
+                    sigma_x_1=1.0,
+                    sigma_y_1=1.0,
+                    # Field 2 parameters
+                    center_x_2=0.75,
+                    center_y_2=0.75,
+                    place_amp_2=1.0,
+                    sigma_x_2=1.0,
+                    sigma_y_2=1.0,
+                    # Modulation parameters
+                    baseline=0.0,
+                    hd_pref=0.0,
+                    hd_amp=0.5,
+                    speed_gain=0.0):
+    """"""
+    Parent Model 1 (neuron_model_v1): Single anisotropic Gaussian with additive modulation.
+    Parent Model 2 (neuron_model_v2): Single isotropic Gaussian with additive modulation.
+
+    This model represents the firing rate as a sum of two anisotropic Gaussian place
+    fields, with multiplicative head-direction (HD) gain modulation and additive speed
+    modulation.
+
+    rate = baseline + (G_1 + G_2) * (1 + hd_amp * cos(hd - hd_pref)) + speed_gain * speed
+    where G_i is an anisotropic 2D Gaussian for field i.
+
+    This model improves upon its parents in two main ways, motivated by visual
+    analysis of the data fits:
+    1.  Multiple Place Fields: Parent models use a single Gaussian, which fails for
+        cells with multiple firing locations (e.g., Cell 1, 2, and 8 in the diagnostic
+        plot). The models average over the distinct fields, resulting in a single
+        broad, inaccurate rate map. This model includes two independent Gaussian
+        fields to capture such multi-peaked responses.
+    2.  Multiplicative HD Modulation: Parent models use purely additive modulation,
+        implying a location-independent HD signal. This model implements HD modulation
+        as a multiplicative gain on the place field response, which is more
+        biophysically plausible and allows for HD tuning to be expressed primarily
+        within the cell's firing field.
+    """"""
+    # Clip parameters to plausible ranges
+    place_amp_1 = np.clip(place_amp_1, 0.0, None)
+    sigma_x_1 = np.clip(sigma_x_1, 1e-6, None)
+    sigma_y_1 = np.clip(sigma_y_1, 1e-6, None)
+    place_amp_2 = np.clip(place_amp_2, 0.0, None)
+    sigma_x_2 = np.clip(sigma_x_2, 1e-6, None)
+    sigma_y_2 = np.clip(sigma_y_2, 1e-6, None)
+    baseline = np.clip(baseline, 0.0, None)
+    hd_amp = np.clip(hd_amp, 0.0, 1.0)
+    speed_gain = np.clip(speed_gain, 0.0, None)
+    
+    # Unpack stimuli
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # Calculate place field 1
+    dx1 = x - center_x_1
+    dy1 = y - center_y_1
+    r2_1 = (dx1 ** 2) / (sigma_x_1 ** 2) + (dy1 ** 2) / (sigma_y_1 ** 2)
+    place_1 = place_amp_1 * np.exp(-0.5 * r2_1)
+
+    # Calculate place field 2
+    dx2 = x - center_x_2
+    dy2 = y - center_y_2
+    r2_2 = (dx2 ** 2) / (sigma_x_2 ** 2) + (dy2 ** 2) / (sigma_y_2 ** 2)
+    place_2 = place_amp_2 * np.exp(-0.5 * r2_2)
+
+    total_place = place_1 + place_2
+
+    # Calculate multiplicative HD modulation
+    hd_modulation = 1.0 + hd_amp * np.cos(hd - hd_pref)
+    
+    # Calculate linear speed modulation
+    speed_modulation = speed_gain * speed
+    
+    # Combine terms
+    rate = baseline + total_place * hd_modulation + speed_modulation
+
+    return rate",<function neuron_model at 0x767bc238f420>,"import numpy as np
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""
+    Estimates parameters for the two-field place cell model (neuron_model_v1).
+
+    Based on the rate map visualization, improvements are focused on better place field
+    parameter estimation. Specifically, several cells (e.g., cells 3, 6, 16) exhibit
+    multiple place fields. To improve the fits:
+
+    1. Rate map Smoothing and Peak Detection: Improve rate map smoothing to get accurate amplitude/location for fields.
+    2. Separated Peak Finding : Find 2 fields using sorted args
+    3. Center Calculation Correction : Fixed incorrect indexing and peak search.
+    4. Local Variance for Sigma : Estimated from neighborhood of identified peaks
+
+    This version prioritizes improving place field location and amplitude estimates.
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, eps=1e-6, min_occ=3, smoothing_sigma=1.2):
+        def _gaussian_kernel(sigma):
+            if sigma <= 0:
+                return None
+            size = int(max(3, np.ceil(6 * sigma)))
+            if size % 2 == 0:
+                size += 1
+            ax = np.arange(size) - size // 2
+            xx, yy = np.meshgrid(ax, ax)
+            kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+            kernel /= np.sum(kernel)
+            return kernel
+
+        def _fft_convolve2d(a, b):
+            out_shape = (a.shape[0] + b.shape[0] - 1, a.shape[1] + b.shape[1] - 1)
+            fa = np.fft.rfftn(a, s=out_shape)
+            fb = np.fft.rfftn(b, s=out_shape)
+            out = np.fft.irfftn(fa * fb, s=out_shape)
+            start0 = (b.shape[0] - 1) // 2
+            start1 = (b.shape[1] - 1) // 2
+            return out[start0:start0 + a.shape[0], start1:start1 + a.shape[1]]
+
+        occ, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        spk, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+        rate = spk / (occ + eps)
+        rate = np.where(occ >= min_occ, rate, np.nan)
+        kernel = _gaussian_kernel(smoothing_sigma)
+        if kernel is not None:
+            rate_filled = np.nan_to_num(rate, nan=0.0)
+            occ_mask = np.isfinite(rate).astype(float)
+            rate_s = _fft_convolve2d(rate_filled, kernel)
+            norm = _fft_convolve2d(occ_mask, kernel)
+            rate = rate_s / (norm + eps)
+            rate = np.where(norm > 0, rate, np.nan)
+        return rate.T, xedges, yedges
+    
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes)
+    finite = np.isfinite(rate)
+    if not np.any(finite):
+        center = np.mean(pos, axis=0)
+        baseline = float(np.min(spikes))
+        amplitude = float(np.max(spikes) - baseline)
+        sigma = 0.1 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1]))
+        return np.array([0.25, 0.25, amplitude/2, sigma, sigma,
+                        0.75, 0.75, amplitude/2, sigma, sigma, baseline,
+                        0.0, 0.0, 0.0])
+
+    rate_f = rate[finite]
+    baseline = float(np.percentile(rate_f, 20))
+    
+    peak_idxs = np.unravel_index(np.argsort(rate.flatten())[-2:], rate.shape)
+    
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+
+    center_1 = np.array([x_centers[peak_idxs[1][0]], y_centers[peak_idxs[0][0]]])
+    center_2 = np.array([x_centers[peak_idxs[1][1]], y_centers[peak_idxs[0][1]]])
+    
+    yy, xx = np.meshgrid(y_centers, x_centers, indexing=""ij"")
+
+    # Amplitude Estimate
+    peak = float(np.nanmax(rate))
+    place_amp = max(peak - baseline, 1e-6)/2
+
+    # Sigma Estimation local neighborhood around peaks
+    def estimate_sigma(center_xy, xx, yy, rate):
+        x_idx = np.argmin(np.abs(x_centers - center_xy[0]))
+        y_idx = np.argmin(np.abs(y_centers - center_xy[1]))
+        
+        x_range = slice(max(0, x_idx - 3), min(len(x_centers), x_idx + 4))
+        y_range = slice(max(0, y_idx - 3), min(len(y_centers), y_idx + 4))
+
+        local_rate = rate[y_range, x_range]
+        local_xx = xx[y_range, x_range]
+        local_yy = yy[y_range, x_range]
+
+        weights = np.clip(local_rate - baseline, 0.0, None)
+        wsum = np.sum(weights) + 1e-8
+            
+        var_x = np.sum(((local_xx - center_xy[0]) ** 2) * weights) / wsum
+        var_y = np.sum(((local_yy - center_xy[1]) ** 2) * weights) / wsum
+
+        sigma_x = np.sqrt(var_x + 1e-12)
+        sigma_y = np.sqrt(var_y + 1e-12)
+
+        return sigma_x, sigma_y
+
+    sigma_x1, sigma_y1 = estimate_sigma(center_1, xx, yy, rate)
+    sigma_x2, sigma_y2 = estimate_sigma(center_2, xx, yy, rate)
+    max_sigma = 0.25 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1]))
+    sigma_x1 = float(np.clip(sigma_x1, 1e-3, max_sigma))
+    sigma_y1 = float(np.clip(sigma_y1, 1e-3, max_sigma))
+    sigma_x2 = float(np.clip(sigma_x2, 1e-3, max_sigma))
+    sigma_y2 = float(np.clip(sigma_y2, 1e-3, max_sigma))
+    
+    # HD Modulation estimate:
+    w = np.clip(spikes - baseline, 0.0, None)
+    wsum_s = np.sum(w) + 1e-8
+    c = float(np.sum(w * np.cos(hd)) / wsum_s)
+    s = float(np.sum(w * np.sin(hd)) / wsum_s)
+    hd_pref = float(np.arctan2(s, c))
+
+    hd_amp = float(max(0.0, np.percentile(spikes, 90) - baseline) * np.sqrt(c * c + s * s))
+    hd_amp = min(hd_amp / (place_amp * 2), 1.0)
+
+    # Speed Modulation estimate:
+    speed_var = float(np.var(speed)) + 1e-8
+    speed_gain = float(np.cov(speed, spikes - baseline, bias=True)[0, 1] / speed_var)
+    speed_gain = float(max(0.0, speed_gain))
+    
+    baseline = float(max(baseline, 0.0))
+
+    return np.array([center_1[0], center_1[1], place_amp, sigma_x1, sigma_y1,
+                     center_2[0], center_2[1], place_amp, sigma_x2, sigma_y2, baseline,
+                     hd_pref, hd_amp, speed_gain])",<function parameter_estimator at 0x767bc2617c40>,0,2,5,30.093626022338867,29.34978485107422,"[[ 8.15117569e+01  1.91356979e+02  3.21026415e-01  8.32268238e+00
+   5.20029020e+00  8.42412033e+01  1.95463760e+02  5.73131442e-01
+   3.51330137e+00  4.68744993e+00  1.79834515e-02  2.58423358e-01
+  -1.80156510e-02 -1.52567532e-02]
+ [ 1.90295654e+02  2.43501873e+01  1.11512445e-01  6.29778862e+00
+   6.44069195e+00  1.84945374e+02  2.82974510e+01  3.56398702e+00
+   7.73468381e-03  5.47309113e+00 -1.55154420e-02  3.92662597e+00
+   1.01608741e+00 -1.65463760e-02]
+ [ 2.22604141e+02  3.12608433e+01  1.24870706e+00  1.13075037e+01
+   8.29019165e+00  2.16467346e+02  2.65259533e+01  2.87283468e+00
+   2.01398945e+00  9.83165169e+00 -1.10097248e-02  2.43638784e-01
+  -1.80163085e-02 -1.52072487e-02]
+ [ 1.37852798e+02  5.50312080e+01  3.05300379e+00  2.71737552e+00
+   3.53773117e+00  1.46412048e+02  6.28790741e+01  1.80037260e+00
+   4.81371498e+00  5.94441509e+00 -1.65764634e-02  2.08655500e+00
+   8.24213266e-01 -1.68161970e-02]
+ [ 2.62034149e+02  7.86329346e+01 -4.41698777e-03  6.39403057e+00
+   8.81590939e+00  2.55436066e+02  9.17824020e+01  4.23740327e-01
+   1.32663822e+00  1.24639606e+01  2.34761164e-02  1.94809878e+00
+   1.00584865e+00 -1.46769453e-02]
+ [ 7.69424896e+01  1.47564804e+02 -1.88067034e-02  6.07562160e+00
+   8.16018009e+00  8.04018326e+01  1.40425400e+02  2.30385259e-01
+   6.04923677e+00  7.38210440e+00 -7.41618406e-03  7.83309281e-01
+   8.45907271e-01 -1.60269961e-02]
+ [ 1.08033615e+02  3.54567604e+01  2.21637964e+00  3.08438754e+00
+   1.05546415e+00  1.12065025e+02  3.92025719e+01  3.26072007e-01
+   1.03111925e+01  6.11018133e+00  1.74231231e-02 -1.66738832e+00
+   7.99124599e-01 -1.47278728e-02]
+ [ 7.90801392e+01  3.33112297e+01  3.19084704e-01  9.82784653e+00
+   3.63137174e+00  7.67011032e+01  2.40740623e+01 -6.19357685e-03
+   5.89615965e+00  7.01694870e+00 -7.37045659e-03  7.82885730e-01
+  -1.80160273e-02 -1.62072573e-02]
+ [ 1.00302322e+02  3.93848915e+01 -6.66305190e-03  6.98824739e+00
+   6.97125149e+00  9.68272552e+01  3.77330742e+01  8.14995527e-01
+   4.83539867e+00  5.11015081e+00 -1.21904416e-02 -1.41704297e+00
+   5.54826260e-01 -1.56012541e-02]
+ [ 1.56642654e+02  1.98281509e+02  8.45114112e-01  2.98127341e+00
+   4.68884802e+00  2.44236511e+02  3.30737038e+01  8.34389091e-01
+   4.29220390e+00  3.87113929e+00 -3.35440808e-03 -3.59581518e+00
+   3.34232420e-01 -1.55252796e-02]
+ [ 1.02283379e+02  5.98561630e+01  2.01974607e+00  2.65194607e+00
+   1.85137227e-01  1.04923714e+02  5.36997948e+01 -4.67067398e-03
+   6.73388243e+00  6.87434244e+00 -1.46454945e-02  2.53582835e+00
+   1.00677288e+00 -1.62366200e-02]
+ [ 9.85370026e+01  2.04240250e+02  8.01510274e-01  5.90143204e+00
+   1.29474535e+01  9.56592560e+01  2.06330261e+02 -7.97546376e-03
+   6.38494587e+00  1.13191233e+01  1.43545307e-02 -1.13004756e+00
+  -1.80162732e-02 -1.49746221e-02]
+ [ 1.62864349e+02  1.75865250e+02 -5.10024885e-03  8.31142139e+00
+   7.49221802e+00  1.71688599e+02  1.73226883e+02  2.09664404e-01
+   1.18972788e+01  1.00476799e+01 -1.47007303e-02  1.96478009e+00
+   1.36925668e-01 -1.61855314e-02]
+ [ 1.15361107e+02  3.01928558e+01  1.99975526e+00  3.64056540e+00
+   7.66021550e-01  7.84656906e+01  1.69652420e+02  4.83741617e+00
+   1.31682122e+00  6.90237805e-03 -1.46784736e-02 -3.54141146e-01
+   1.00691867e+00 -1.62094664e-02]
+ [ 1.57961884e+02  6.78626556e+01  5.43408155e-01  6.48678923e+00
+   8.51459694e+00  1.57897812e+02  7.11092606e+01  8.17489684e-01
+   6.56807661e+00  2.47192526e+00 -5.67063130e-03 -1.03588414e+00
+   1.13080427e-01 -1.52737182e-02]
+ [ 1.64728012e+02  1.64647888e+02  1.59321272e+00  1.33368862e+00
+   2.84112978e+00  1.69585495e+02  1.63661789e+02  3.18073034e+00
+   4.59437132e+00  6.00921333e-01 -1.67598426e-02 -6.17602408e-01
+  -1.80162918e-02 -1.72097124e-02]
+ [ 2.59018768e+02  1.51010040e+02  4.52052981e-01  6.07353878e+00
+   7.94570255e+00  2.63617584e+02  1.44859039e+02  8.56576204e-01
+   2.83695221e+00  5.02852297e+00  1.92879587e-02  1.88541293e-01
+  -2.38945168e-02 -1.44220423e-02]]",30.213104248046875,"[[ 1.81654449e+02  1.61940109e+02  1.41452596e-01  8.15476608e+00
+   8.22752571e+00  1.86411133e+02  1.61940109e+02  1.41452596e-01
+   8.04527283e+00  8.23896599e+00  5.98804560e-03 -7.05957055e-01
+   0.00000000e+00  2.41777001e-04]
+ [ 1.00791168e+02  5.27309113e+01  1.65894881e-01  7.78668308e+00
+   7.72576809e+00  1.00791168e+02  5.74791336e+01  1.65894881e-01
+   7.82682705e+00  7.24768114e+00  5.93990408e-05 -3.15885060e-02
+   0.00000000e+00  1.54017980e-04]
+ [ 1.53114471e+02  1.47695435e+02  9.88900512e-02  7.55594015e+00
+   7.22819710e+00  1.57871155e+02  1.47695435e+02  9.88900512e-02
+   7.52959967e+00  7.23569441e+00  7.75054668e-18 -6.65726185e-01
+   0.00000000e+00  1.18020514e-04]
+ [ 1.00791168e+02  3.84862289e+01  1.35423124e-01  8.56948471e+00
+   8.08090019e+00  9.60345078e+01  3.84862289e+01  1.35423124e-01
+   8.36275196e+00  7.92845535e+00  1.06642292e-04  9.94605005e-01
+   0.00000000e+00  7.81461567e-05]
+ [ 2.53004425e+02  1.38198975e+02  1.47556230e-01  6.75531197e+00
+   8.79826736e+00  2.53004425e+02  1.33450745e+02  1.47556230e-01
+   6.75061083e+00  8.92324162e+00  2.07244419e-04  2.36459613e+00
+   0.00000000e+00  6.78219585e-05]
+ [ 1.86411133e+02  1.80933014e+02  1.77915975e-01  8.11720467e+00
+   8.20828152e+00  1.86411133e+02  1.85681244e+02  1.77915975e-01
+   8.06511402e+00  8.32574940e+00  0.00000000e+00 -2.20880842e+00
+   1.69168090e-19  0.00000000e+00]
+ [ 2.62517761e+02  1.47695435e+02  2.85244077e-01  7.18098879e+00
+   8.24049759e+00  2.62517761e+02  1.52443665e+02  2.85244077e-01
+   7.18366194e+00  8.20079517e+00  4.65227058e-05  1.27269757e+00
+   0.00000000e+00  8.80131192e-05]
+ [ 1.38844482e+02  2.42415524e+01  1.57446012e-01  8.61711311e+00
+   7.25980043e+00  1.15061165e+02  2.42415524e+01  1.57446012e-01
+   7.80828810e+00  6.27058554e+00  3.36820213e-03  3.79288226e-01
+   0.00000000e+00  1.21340883e-04]
+ [ 1.53114471e+02  1.38198975e+02  1.11845680e-01  6.93847561e+00
+   8.29042053e+00  1.53114471e+02  1.42947205e+02  1.11845680e-01
+   6.98501110e+00  7.79457569e+00  0.00000000e+00  3.74656498e-01
+   2.18231726e-19  0.00000000e+00]
+ [ 2.00681122e+02  1.09709625e+02  1.31652504e-01  6.80955172e+00
+   7.82074022e+00  2.00681122e+02  1.04961395e+02  1.31652504e-01
+   6.85834694e+00  7.86901283e+00  9.05616525e-06 -2.64196575e-01
+   0.00000000e+00  8.77358907e-05]
+ [ 1.43601135e+02  6.22273598e+01  1.74182087e-01  9.04479790e+00
+   7.76952696e+00  1.38844482e+02  6.22273598e+01  1.74182087e-01
+   9.02921867e+00  7.81018496e+00  2.50969361e-17  6.07159734e-01
+   0.00000000e+00  1.14371032e-04]
+ [ 2.05437775e+02  1.09709625e+02  1.63656086e-01  6.79830742e+00
+   6.82331085e+00  2.00681122e+02  1.09709625e+02  1.63656086e-01
+   6.88137293e+00  6.81299782e+00  1.16835674e-18 -1.15482461e+00
+   0.00000000e+00  5.12040715e-05]
+ [ 2.10194458e+02  7.64720459e+01  1.14201225e-01  7.09417772e+00
+   7.79106998e+00  2.10194458e+02  7.17238159e+01  1.14201225e-01
+   7.25426865e+00  7.46355867e+00  5.95048815e-03  4.14627641e-01
+   0.00000000e+00  8.01613351e-05]
+ [ 2.62517761e+02  4.32344589e+01  3.36023629e-01  7.26381254e+00
+   8.65335369e+00  2.62517761e+02  2.42415524e+01  3.36023629e-01
+   7.43104887e+00  8.74572182e+00  1.66631344e-05  1.20597661e+00
+   0.00000000e+00  1.07306369e-05]
+ [ 1.86411133e+02  2.42415524e+01  2.98435718e-01  5.92574549e+00
+   5.91875219e+00  2.19707764e+02  4.32344589e+01  2.98435718e-01
+   7.81718540e+00  8.55779648e+00  9.65241270e-07  1.13582218e+00
+   0.00000000e+00  2.10321115e-04]
+ [ 1.53114471e+02  5.74791336e+01  3.40905339e-01  8.06661606e+00
+   7.48339176e+00  1.48357819e+02  5.74791336e+01  3.40905339e-01
+   8.17963505e+00  7.58818674e+00  2.90714347e-17 -9.30738598e-02
+   0.00000000e+00  1.53133631e-04]
+ [ 2.53004425e+02  1.14457848e+02  7.50791654e-02  6.47326469e+00
+   8.56589794e+00  2.53004425e+02  1.09709625e+02  7.50791654e-02
+   6.48076487e+00  8.34867954e+00  0.00000000e+00 -1.02868938e+00
+   0.00000000e+00  0.00000000e+00]]",gemini-2.5-pro,"(-1, -1, 1)","(-1, -1, 0)","[[2.2860089e-02 2.2860089e-02 2.2860089e-02 ... 2.2860089e-02
+  2.2860089e-02 2.2860089e-02]
+ [0.0000000e+00 0.0000000e+00 0.0000000e+00 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]
+ [0.0000000e+00 0.0000000e+00 0.0000000e+00 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]
+ ...
+ [3.7586531e-07 5.1238167e-06 7.7600307e-06 ... 9.2424843e-03
+  2.2840006e-02 5.7199959e-02]
+ [1.6447769e-37 2.7370825e-37 4.6297798e-37 ... 5.5615995e-31
+  1.4974811e-29 6.6966789e-28]
+ [4.3440252e-44 1.9618179e-44 1.6815582e-44 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]]",29.34978485107422
+"import numpy as np
+
+
+def neuron_model(stimuli,
+                    center_x1=0.25,
+                    center_y1=0.25,
+                    amp1=1.0,
+                    sigma1=1.0,
+                    center_x2=-0.25,
+                    center_y2=-0.25,
+                    amp2=1.0,
+                    sigma2=1.0,
+                    baseline=0.0,
+                    hd_pref=0.0,
+                    hd_kappa=0.5,
+                    speed_gain=0.0,
+                    speed_exp=1.0
+                    ):
+    """"""
+    Parent Model 1 (neuron_model_v1): Anisotropic Single Gaussian Place Field (additive HD/Speed).
+    Parent Model 2 (neuron_model_v2): Isotropic Double Gaussian Place Field (multiplicative HD/Speed).
+
+    Equation:
+    place1 = amp1 * exp(-0.5 * ((x - center_x1)^2 + (y - center_y1)^2) / sigma1^2)
+    place2 = amp2 * exp(-0.5 * ((x - center_x2)^2 + (y - center_y2)^2) / sigma2^2)
+    hd_mod = exp(hd_kappa * cos(hd - hd_pref))
+    speed_mod = speed ** speed_exp
+    rate = baseline + (place1 + place2) * hd_mod * speed_mod
+
+    Image Analysis and Model Improvements:
+    Analysis of the parent models reveals several key weaknesses:
+    1. **Multiple Fields:** Both v1 and v2 fail to capture cells with multiple distinct
+       place fields (e.g., Cell 15, Cell 6). v2 improves on v1 by using two gaussians to model place fields.
+    2. **Speed Modulation:** Speed modulation has a non-linear impact on activity, in both
+        additive (v1) and multiplicative(v2) models, it has a linear impact which fails
+        to capture real data.
+
+    This model improves upon the parents in the following ways:
+    1. This model is a combination of both models, with two Guassian spatial rate maps as in v2, and
+       multiplicative speed and heading rate modulation, as in v2.
+    2. The multiplicative model improves the fitting to 0 values because there is no spiking when out of the spatial region
+    3. The speed dependence term now includes an exponential dependence with free parameter 'speed_exp',
+       as the image analysis above seems to indicate. The model contains one exponential speed dependence as an exponent factor.
+    """"""
+    baseline = np.clip(baseline, 0.0, None)
+    amp1 = np.clip(amp1, 0.0, None)
+    sigma1 = np.clip(sigma1, 1e-6, None)
+    amp2 = np.clip(amp2, 0.0, None)
+    sigma2 = np.clip(sigma2, 1e-6, None)
+    speed_exp = np.clip(speed_exp, 0.0, 5.0) # biologically plausible
+
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # First Gaussian place field
+    dx1 = x - center_x1
+    dy1 = y - center_y1
+    r2_1 = dx1 ** 2 + dy1 ** 2
+    place1 = amp1 * np.exp(-0.5 * r2_1 / (sigma1 ** 2))
+
+    # Second Gaussian place field
+    dx2 = x - center_x2
+    dy2 = y - center_y2
+    r2_2 = dx2 ** 2 + dy2 ** 2
+    place2 = amp2 * np.exp(-0.5 * r2_2 / (sigma2 ** 2))
+    
+    place_sum = place1 + place2
+
+    # Multiplicative modulation terms
+    hd_mod = np.exp(hd_kappa * np.cos(hd - hd_pref))
+    speed_mod = speed ** speed_exp
+    
+
+    # Combine all components
+    rate = baseline + place_sum * hd_mod * speed_mod
+
+    return rate",<function neuron_model at 0x767bec13b7e0>,"import numpy as np
+from scipy.ndimage import gaussian_filter, maximum_filter
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""Estimates parameters for neuron_model_v3 based on rate map analysis.
+
+    Returns: [center_x1, center_y1, amp1, sigma1, center_x2, center_y2, amp2, sigma2, baseline, hd_pref, hd_kappa, speed_gain, speed_exp]
+    Image Analysis Summary:
+        The estimators' weaknesses in parent models, as shown in the images, include inaccuracies in
+        identifying and positioning multiple place fields, properly modelling head direction modulation and capturing
+        speed relationships in general.
+    Improvements in This Estimator:
+    1. Spatial Peaks Identification: Improves accuracy for aligning multiple place field through post processing and reweighting.
+    2. Biased Parameter Estimator: Attempts to address correlations
+    3. Speed Estimation via Robust Regression
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, min_occ=3, smoothing_sigma=1.2):
+        H, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        H_s, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+        
+        # Dwell Time & Min Occupation Mask
+        H_occupancy = H.copy()
+        occupancy_filter = H > min_occ
+        
+        # Replace values with their counts, with safety value for inf/NaN division
+        with np.errstate(divide='ignore', invalid='ignore'):  # Handle inf/NaN cases
+            H = np.where(H_occupancy>min_occ, H_s / (H+ 1e-12), np.zeros_like(H))
+        # Apply Smoothing/blurr (helps make Gauss fit, also removes jitter and over counts for low rates in sparse data sets)
+        H = gaussian_filter(H, sigma=smoothing_sigma)
+        
+        H_occupancy = np.where(occupancy_filter==True,H_occupancy,np.zeros_like(H))
+        return H.T, xedges, yedges
+        
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes, bins=40, smoothing_sigma=1.2)
+    finite = np.isfinite(rate)
+    if not np.any(finite): return np.zeros(13)
+
+    baseline = float(np.percentile(rate, 10))
+    rate = np.nan_to_num(rate, nan=baseline)
+    
+    neighborhood_size = 3
+    threshold = baseline
+    peak_local_max = lambda x: x > threshold
+
+    
+    maxima = maximum_filter(rate, footprint=np.ones((neighborhood_size, neighborhood_size)), mode='constant', cval=0.0)
+    peaks = (maxima == rate) & peak_local_max(maxima) #
+
+    peaks_indices = np.argwhere(peaks)
+
+    if peaks_indices.shape[0] >= 2:
+
+        # Take only top 2 rate mapped indices to use for our guassian locations, take absolute
+        peaks_abs = np.array([abs(rate[x[0],x[1]]) for x in peaks_indices], dtype=float)
+        peaks_argsorted = np.argsort(peaks_abs)[::-1][:2] 
+    
+    
+        ix1 = int(peaks_indices[peaks_argsorted[0]][1])
+        iy1 = int(peaks_indices[peaks_argsorted[0]][0])
+
+        ix2 = int(peaks_indices[peaks_argsorted[1]][1])
+        iy2 = int(peaks_indices[peaks_argsorted[1]][0])
+    
+    
+    else: 
+        # In the case there is one/zero location of rate coding activity make defaults
+        max_indices = np.unravel_index(np.argmax(rate), rate.shape)
+        ix1 = int(max_indices[1])
+        iy1 = int(max_indices[0])
+        
+        ix2 = int(ix1) #Set place 1 location to position 2
+        iy2 = int(iy1)
+
+
+    # Bin Conversion  xedges[0,1]  # x/yedges[:-1] + xedges[1:]) / 2  Convert
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+
+    # Position (x,y) Locations to build gaussians for fitting: xy indexing used
+    center1 = np.array([x_centers[ix1], y_centers[iy1]]) #Position/ location peak firing rate is.
+    center2 = np.array([x_centers[ix2], y_centers[iy2]])
+
+    amp1 = float(rate[iy1, ix1] - baseline) 
+    amp2 = float(rate[iy2, ix2] - baseline)
+    sigma = 0.075 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1]))
+
+    w = np.clip(spikes - baseline, 0.0, None)
+    wsum_s = np.sum(w) + 1e-8 #add l1 bias
+
+
+    # -- Estimate HD preference --
+    c = float(np.sum(w * np.cos(hd)) / wsum_s) #calculate angular moments 
+    s = float(np.sum(w * np.sin(hd)) / wsum_s) 
+    hd_pref = float(np.arctan2(s, c))
+    hd_kappa = 0.5 # head_direction modulation
+    
+    # -speed mod-, (L1 BIAS added), #Linear least squares, L1 to stabilize & allow
+    
+    
+    # Linear regression - l2 bias - penalize values from reaching high extreme vals.  (Linear) or  - Speed_Gain - # 
+    speed_gain = np.cov(speed, spikes, bias=True)[0, 1] / (np.var(speed) + 1e-8)  #BIASED Variance = L1 (no change).  Can revert no change!
+    
+    # Estimating speed_exp
+    speed_exp = 1.0
+    if np.any(speed > 0) and np.any(spikes > 0):
+      # Only consider times when the cell fired and the animal moved.
+      active_times = (spikes > baseline) & (speed > 0.1)
+      if np.sum(active_times) > 10:  # Need some active data
+          log_speed = np.log(speed[active_times])
+          log_spikes = np.log(spikes[active_times] - baseline)
+          #Simple speed exponent regression with clip on max spike value as that indicates rate is not position sensitive
+          speed_exp = float(np.cov(log_speed, log_spikes, bias=True)[0, 1] / (np.var(log_speed) + 1e-8))
+          speed_exp = np.clip(speed_exp, 0.1, 2.0)
+
+
+    
+    return np.array([center1[0], center1[1], amp1, sigma, center2[0], center2[1], amp2, sigma, baseline, hd_pref, hd_kappa, speed_gain, speed_exp])",<function parameter_estimator at 0x767be44574c0>,1,3,4,30.096647262573242,29.182212829589844,"[[ 8.18344116e+01  1.93188721e+02  3.68130416e-01  8.54684067e+00
+   1.79855667e+02  6.00657463e+01  1.21981032e-01  1.20700941e+01
+  -1.70652848e-02  2.06621814e+00  2.22514972e-01  1.34080619e-04
+   1.03153020e-01]
+ [ 7.65388031e+01  1.16645119e+02  1.03009143e-03  1.37440748e+01
+   2.24014679e+02  2.94285774e+01  3.18520695e-01  7.75524187e+00
+  -1.24222366e-02  1.37658262e+00  2.39266849e+00  6.91169917e-05
+  -6.72730245e-03]
+ [ 2.20115173e+02  3.32745056e+01  1.28877389e+00  9.48655319e+00
+   1.14256187e+02  2.10032410e+02  7.07439363e-01  8.51256561e+00
+   1.15540158e-02  9.24311876e-01 -1.40694618e-01  1.72099928e-04
+  -4.17037914e-03]
+ [ 1.45013962e+02  6.38397179e+01  6.27747118e-01  1.11536665e+01
+   7.65836334e+01  1.77009369e+02  2.19342466e-02  1.38223209e+01
+  -1.80163924e-02  1.81146526e+00  4.99194175e-01  2.39149653e-04
+  -1.81302913e-02]
+ [ 1.64119858e+02  2.45422688e+01  1.26594409e-01  1.38344526e+01
+   2.64106812e+02  1.69796890e+02  6.68197498e-02  1.68466167e+01
+  -1.78953484e-02  2.71284628e+00  2.09865913e-01 -7.62522905e-05
+  -3.20793100e-04]
+ [ 7.54605713e+01  1.42737885e+02  9.96262282e-02  1.16105232e+01
+   1.64614746e+02  1.77501419e+02  4.49757986e-02  1.02266922e+01
+   1.00667160e-02  2.47462586e-01  9.20267642e-01 -1.59523770e-05
+  -3.02326679e-03]
+ [ 1.11075935e+02  3.37884407e+01  4.06544417e-01  9.82585621e+00
+   1.12814453e+02  1.38932419e+02  3.14673901e-01  8.80798054e+00
+   1.20210247e-02 -7.34169185e-01  2.05213830e-01  1.59483479e-05
+  -1.29045011e-03]
+ [ 8.12004852e+01  2.88208008e+01  1.74515426e-01  8.52199554e+00
+   1.72076706e+02  1.49687546e+02  8.00147206e-02  9.25775146e+00
+   9.09500476e-03  2.68965507e+00  6.29917502e-01 -8.44829628e-05
+   6.15465008e-02]
+ [ 9.75049896e+01  3.63862000e+01  3.46392334e-01  9.39894581e+00
+   1.00226028e+02  1.56954132e+02  1.99529842e-01  9.61444759e+00
+  -1.80163421e-02 -1.36627769e+00  4.12548482e-01  6.40612488e-05
+  -6.50939951e-03]
+ [ 1.68150223e+02  1.36520508e+02  1.99225038e-01  1.07257652e+01
+   1.54520050e+02  1.98404282e+02  2.25738540e-01  8.47258949e+00
+  -1.80163905e-02 -3.08356094e+00  3.66132855e-01 -4.65805488e-06
+   1.29985496e-01]
+ [ 1.01442856e+02  5.64972649e+01  6.96334392e-02  7.43710089e+00
+   1.67137527e+02  8.71704407e+01  1.99711546e-02  1.39138908e+01
+   5.92406560e-03  2.26560736e+00  7.96273828e-01  9.95768860e-05
+   3.32616955e-01]
+ [ 9.81869507e+01  2.04585953e+02  5.97217917e-01  1.03530893e+01
+   1.81879913e+02  1.64718216e+02  3.44424725e-01  9.99562740e+00
+  -1.79598276e-02 -1.25644493e+00 -2.00048745e-01  1.06023974e-04
+  -6.99017104e-03]
+ [ 1.71177582e+02  1.72427505e+02  1.59683317e-01  1.21340046e+01
+   1.92273041e+02  1.76080566e+02  2.82429047e-02  1.54122410e+01
+  -1.80163700e-02 -1.05449367e+00 -1.46898404e-01  2.07693636e-04
+  -5.15420048e-04]
+ [ 7.68450928e+01  1.71597992e+02 -1.52640732e-03  1.41205969e+01
+   1.01608231e+02  1.67938004e+02  1.11611284e-01  1.21509228e+01
+  -1.80163868e-02 -3.19863528e-01 -2.46537775e-01  7.10744644e-05
+  -1.11173373e-02]
+ [ 1.57312057e+02  7.00922852e+01  6.26064658e-01  9.81635952e+00
+   2.23364548e+02  2.03489609e+02  3.71285886e-01  1.14140778e+01
+  -1.80162471e-02 -6.20745003e-01  1.19012013e-01  8.45614850e-05
+  -1.23260524e-02]
+ [ 1.67844421e+02  1.64500031e+02  3.83127362e-01  1.01559258e+01
+   2.57787811e+02  1.19178688e+02 -2.02648398e-02  1.42432671e+01
+  -1.80163905e-02  1.66818008e-01 -2.01745167e-01 -7.12859473e-05
+  -1.77017562e-02]
+ [ 2.65438049e+02  1.49008224e+02  5.29623330e-01  1.05948448e+01
+   2.01158936e+02  1.85349197e+02  2.60502934e-01  8.86538887e+00
+   1.62302088e-02  2.34643292e+00  3.26332487e-02  5.44804861e-05
+  -1.43341031e-02]]",31.576244354248047,"[[ 1.86411133e+02  1.61940109e+02  2.87652224e-01  1.42699938e+01
+   9.12778397e+01  2.09422363e+02  1.17451236e-01  1.42699938e+01
+   1.18141295e-03 -7.06017733e-01  5.00000000e-01  2.41776987e-04
+   1.00000001e-01]
+ [ 1.00791168e+02  5.74791336e+01  3.31772655e-01  1.42699938e+01
+   1.91167786e+02  1.61940109e+02  2.67838418e-01  1.42699938e+01
+   1.87404760e-06 -3.15871723e-02  5.00000000e-01  1.54017980e-04
+   1.00000001e-01]
+ [ 1.57871155e+02  1.47695435e+02  1.97735846e-01  1.42699938e+01
+   9.12778397e+01  1.00213173e+02  1.24206334e-01  1.42699938e+01
+   0.00000000e+00 -6.65726185e-01  5.00000000e-01  1.18020514e-04
+   1.00000001e-01]
+ [ 9.60345078e+01  3.84862289e+01  2.66840905e-01  1.42699938e+01
+   1.00791168e+02  1.52443665e+02  2.21715152e-01  1.42699938e+01
+   1.43120167e-06  9.94604707e-01  5.00000000e-01  7.81461567e-05
+   1.00000001e-01]
+ [ 2.53004425e+02  1.33450745e+02  2.85216749e-01  1.42699938e+01
+   1.62627808e+02  7.64720459e+01  2.52288699e-01  1.42699938e+01
+   2.15733471e-05  2.36459041e+00  5.00000000e-01  6.78219585e-05
+   1.00000001e-01]
+ [ 1.86411133e+02  1.85681244e+02  3.55759919e-01  1.42699938e+01
+   2.48247772e+02  6.69755859e+01  9.77137834e-02  1.42699938e+01
+   0.00000000e+00 -2.20880842e+00  5.00000000e-01 -3.71622045e-05
+   1.00000001e-01]
+ [ 2.62517761e+02  1.47695435e+02  4.71250474e-01  1.42699938e+01
+   2.62517761e+02  1.14457848e+02  2.42597982e-01  1.42699938e+01
+   1.45041963e-06  1.27270567e+00  5.00000000e-01  8.80131192e-05
+   1.00000001e-01]
+ [ 2.00681122e+02  7.64720459e+01  2.40986466e-01  1.42699938e+01
+   2.33977783e+02  2.09422363e+02  2.30605304e-01  1.42699938e+01
+   8.42355599e-04  3.79201174e-01  5.00000000e-01  1.21340883e-04
+   1.00000001e-01]
+ [ 1.53114471e+02  1.42947205e+02  2.23641366e-01  1.42699938e+01
+   9.60345078e+01  1.14457848e+02  1.70194492e-01  1.42699938e+01
+   0.00000000e+00  3.74656498e-01  5.00000000e-01 -1.42666875e-04
+   1.00000001e-01]
+ [ 2.00681122e+02  1.04961395e+02  2.63255566e-01  1.42699938e+01
+   1.05547836e+02  3.84862289e+01  1.67934403e-01  1.42699938e+01
+   0.00000000e+00 -2.64196843e-01  5.00000000e-01  8.77358907e-05
+   1.00000001e-01]
+ [ 1.38844482e+02  6.22273598e+01  3.48295897e-01  1.42699938e+01
+   1.53114471e+02  5.74791336e+01  3.24697942e-01  1.42699938e+01
+   0.00000000e+00  6.07159734e-01  5.00000000e-01  1.14371032e-04
+   1.00000001e-01]
+ [ 2.00681122e+02  1.09709625e+02  3.27238560e-01  1.42699938e+01
+   1.91167786e+02  1.90429474e+02  2.05041170e-01  1.42699938e+01
+   0.00000000e+00 -1.15482461e+00  5.00000000e-01  5.12040715e-05
+   1.00000001e-01]
+ [ 2.10194458e+02  7.17238159e+01  2.31785238e-01  1.42699938e+01
+   2.48247772e+02  9.54649429e+01  1.32980272e-01  1.42699938e+01
+   2.52121780e-03  4.14947867e-01  5.00000000e-01  8.01613351e-05
+   1.00000001e-01]
+ [ 2.62517761e+02  2.42415524e+01  7.13628829e-01  1.42699938e+01
+   1.38844482e+02  3.84862289e+01  1.95092008e-01  1.42699938e+01
+   7.23918845e-07  1.20597589e+00  5.00000000e-01  1.07306369e-05
+   1.00000001e-01]
+ [ 2.19707764e+02  4.79826813e+01  5.19813001e-01  1.42699938e+01
+   2.38734436e+02  2.89897785e+01  2.67400801e-01  1.42699938e+01
+   0.00000000e+00  1.13582218e+00  5.00000000e-01  2.10321115e-04
+   1.00000001e-01]
+ [ 1.48357819e+02  5.74791336e+01  6.81668758e-01  1.42699938e+01
+   2.43491089e+02  1.52443665e+02  1.53385848e-01  1.42699938e+01
+   0.00000000e+00 -9.30738598e-02  5.00000000e-01  1.53133631e-04
+   1.00000001e-01]
+ [ 2.53004425e+02  1.09709625e+02  1.43659383e-01  1.42699938e+01
+   1.86411133e+02  5.74791336e+01  1.22663088e-01  1.42699938e+01
+   0.00000000e+00 -1.02868938e+00  5.00000000e-01 -1.15187786e-05
+   1.00000001e-01]]",gemini-2.0-flash,"(-1, -1, 1)","(0, 3, 3)","[[1.9577414e-02 1.9577414e-02 1.9577414e-02 ... 1.9577414e-02
+  1.9577414e-02 1.9577414e-02]
+ [1.9308354e-30 1.6858635e-30 2.0119000e-30 ... 9.4819503e-26
+  4.1790069e-25 1.6789459e-24]
+ [0.0000000e+00 5.4524254e-37 5.3787140e-37 ... 5.7520878e-34
+  3.7430330e-33 4.5222105e-32]
+ ...
+ [3.4032043e-02 1.1552892e-01 1.5574808e-01 ... 4.5121375e-01
+  5.2629989e-01 5.7837945e-01]
+ [9.0382253e-15 6.1757918e-15 7.7820695e-15 ... 1.3295079e-11
+  3.6228458e-11 9.9928919e-11]
+ [1.3922686e-07 2.4507872e-07 3.3890518e-07 ... 1.9654162e-05
+  3.7474911e-05 7.1292103e-05]]",29.182212829589844
+"import numpy as np
+
+def neuron_model(stimuli,
+                    baseline=0.0,
+                    center_x1=0.0,
+                    center_y1=0.0,
+                    place_amp1=1.0,
+                    sigma1=1.0,
+                    center_x2=0.0,
+                    center_y2=0.0,
+                    place_amp2=1.0,
+                    sigma2=1.0,
+                    hd_pref=0.0,
+                    hd_amp=0.5,
+                    speed_gain=0.0,
+                    speed_offset=0.0):
+    """"""
+    Parent Models:
+      - neuron_model_v1: Additive dual-Gaussian place field model with multiplicative HD modulation and additive speed modulation.
+      - neuron_model_v2: Additive dual-Gaussian place field model with additive HD and speed modulation.
+
+    This model describes the neuronal firing rate as the sum of two
+    isotropic 2D Gaussian place fields, with head-direction and speed modulation.
+    The head direction term modulates the place field, while the speed
+    term adds to the firing rate, after shifting by an offset.
+
+    Equation:
+    rate = baseline
+           + place_amp1 * exp(-0.5 * r1^2 / sigma1^2)
+           + place_amp2 * exp(-0.5 * r2^2 / sigma2^2)
+           + hd_amp * 0.5 * (1 + cos(hd - hd_pref)) * (place_amp1 * exp(-0.5 * r1^2 / sigma1^2) + place_amp2 * exp(-0.5 * r2^2 / sigma2^2))
+           + speed_gain * max(0, speed + speed_offset)
+    where r1^2 = (x-center_x1)^2 + (y-center_y1)^2
+    and   r2^2 = (x-center_x2)^2 + (y-center_y2)^2
+
+    Image Analysis & Model Improvements:
+    The diagnostic plots for parent models v1 and v2 reveal a systematic
+    failure: they use only a single Gaussian to model the spatial firing rate.
+    However, the empirical rate maps for all displayed cells (e.g., Cell 1,
+    Cell 2, Cell 11) clearly show multiple, distinct firing fields. The
+    single-Gaussian models fail to capture this, typically by fitting only
+    the strongest field and ignoring the others, resulting in high loss.
+    Model v2 used two gaussians. However, its loss was similar to that of v1,
+    suggesting there are other effects that v2 failed to capture. Looking at the
+    head direction tuning, it looks as if cells are only sensitive to head direction
+    when they are also in the place field. Moreover, most speed data start around a rate of zero
+    until a certain speed and *then* change. That is, it is like the data is being clamped or offset.
+
+    This model improves upon the parents by:
+    1) keeping the dual gaussian implementation of v2.
+    2) Head direction is still used to modulate the output of the Gaussian place fields
+    3) Speed activity is assumed to begin only after some offset is surpassed. To accomplish this
+       the rectified speed is added as a linear term to account for speed activity changes only starting at
+       some speed value. We assume any negative contribution to speed activity is not valid, and thus clamp
+       that portion to zero. The speed exponent of v2 has been removed in favor of simplicity.
+    """"""
+    # Clip parameters to plausible ranges
+    baseline = np.maximum(0.0, baseline)
+    place_amp1 = np.maximum(0.0, place_amp1)
+    sigma1 = np.maximum(1e-6, sigma1)
+    place_amp2 = np.maximum(0.0, place_amp2)
+    sigma2 = np.maximum(1e-6, sigma2)
+    hd_amp = np.maximum(0.0, hd_amp)
+    speed_gain = np.maximum(0.0, speed_gain)
+    speed_offset = np.clip(speed_offset, -10, 10)
+
+    # Unpack stimuli
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # First Gaussian place field
+    dx1 = x - center_x1
+    dy1 = y - center_y1
+    r2_1 = dx1 ** 2 + dy1 ** 2
+    place1 = place_amp1 * np.exp(-0.5 * r2_1 / (sigma1 ** 2))
+
+    # Second Gaussian place field
+    dx2 = x - center_x2
+    dy2 = y - center_y2
+    r2_2 = dx2 ** 2 + dy2 ** 2
+    place2 = place_amp2 * np.exp(-0.5 * r2_2 / (sigma2 ** 2))
+
+    # Head-direction modulation
+    hd_term = hd_amp * 0.5 * (1.0 + np.cos(hd - hd_pref)) * (place1 + place2)
+
+    # Speed modulation (rectified linear)
+    speed_term = speed_gain * np.maximum(0, speed + speed_offset)
+
+    # Combine all components
+    return baseline + place1 + place2 + hd_term + speed_term",<function neuron_model at 0x767b686aa3e0>,"import numpy as np
+from scipy.ndimage import gaussian_filter
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""Estimates parameters for neuron_model_v3 based on rate map analysis and statistical estimation.
+
+    Image Analysis Summary:
+    The previous rate maps produced by `parameter_estimator_v1` had place fields that were not always
+    well-aligned with the true underlying fields in data. Specifically the rate maps were smooth,
+    and would estimate parameters corresponding to between to nearby peaks. Thus place field amplitudes were often
+    lower, and sigmas appeared broadened. Head-direction and speed estimates are often inaccurate.
+    Often rate maps had peaks on edge cells because they'd only seen once -- min_occ=1 solves.
+    Fixes applied by this estimator:
+        1. Adjusted minimum occupancy.
+        2. Adjust Gaussian sigma by estimating field radius more accurately, increasing sharpness of Gaussian.
+        3. Increased baseline estimates so rate map more closely matches spatial location.
+        4. Constrained estimates.
+
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, min_occ=5, smoothing_sigma=1.2):
+        H, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        H_s, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+
+        H_occupancy = H.copy()
+        occupancy_filter = H > min_occ
+        with np.errstate(divide='ignore', invalid='ignore'):
+            H = np.where(H_occupancy>min_occ, H_s / (H+ 1e-12), np.zeros_like(H))
+        H = gaussian_filter(H, sigma=smoothing_sigma)
+        return H.T, xedges, yedges
+
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes, bins=40, smoothing_sigma=1.2)
+    finite = np.isfinite(rate)
+    if not np.any(finite): return np.zeros(13)
+
+    baseline = float(np.percentile(rate[finite], 15)) #Changed percentile here
+    rate = np.nan_to_num(rate, nan=baseline)
+
+    max_indices = np.unravel_index(np.argmax(rate), rate.shape)
+    rate_copy = rate.copy()
+    rate_copy[max_indices[0], max_indices[1]] = -np.inf
+    second_max_indices = np.unravel_index(np.argmax(rate_copy), rate_copy.shape)
+
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+
+    center_x1 = float(x_centers[max_indices[1]])
+    center_y1 = float(y_centers[max_indices[0]])
+    center_x2 = float(x_centers[second_max_indices[1]])
+    center_y2 = float(y_centers[second_max_indices[0]])
+
+    place_amp1 = float(rate[max_indices[0], max_indices[1]] - baseline)
+    place_amp2 = float(rate[second_max_indices[0], second_max_indices[1]] - baseline)
+
+    sigma1 = sigma2 = 0.05 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1])) #Reduced the size estimate
+
+    w = spikes - baseline
+    w[w < 0] = 0
+    wsum = np.sum(w) + 1e-8
+    hd_pref = np.arctan2(np.sum(w * np.sin(hd)) / wsum, np.sum(w * np.cos(hd)) / wsum)
+    hd_amp = float(max(0.0, np.percentile(spikes, 90) - baseline))
+
+    #Estimate speed offset for the piecewise linear model.
+    speed_offset = -float(np.mean(speed))
+    speed_gain = np.sum((speed + speed_offset) * w) / (np.sum((speed+speed_offset)**2) + 0.1)
+    return np.array([baseline, center_x1, center_y1, place_amp1, sigma1, center_x2, center_y2, place_amp2, sigma2, hd_pref, hd_amp, speed_gain,speed_offset])",<function parameter_estimator at 0x767bc02c7600>,5,4,2,30.11269187927246,29.252126693725586,"[[ 1.81419309e-02  8.56185760e+01  1.94667618e+02 -1.85608852e-03
+   8.42388821e+00  8.38847733e+01  1.93642792e+02  7.97438264e-01
+   4.91260004e+00  2.58397311e-01 -1.80163477e-02 -1.53815672e-02
+  -1.78369732e+01]
+ [-1.32574281e-02  7.81374054e+01  1.15917999e+02  1.24649596e+00
+   1.94851208e+00  2.28166611e+02  3.54699821e+01  3.05809379e+00
+   1.46093857e+00  2.51443887e+00 -1.80110950e-02 -1.66739989e-02
+  -1.78369732e+01]
+ [ 1.51006728e-02  2.15501328e+02  3.80130081e+01 -1.45768262e-02
+   9.16519737e+00  2.19627426e+02  3.15839081e+01  2.64046192e+00
+   6.77264118e+00  2.43638784e-01 -1.80157460e-02 -1.56953912e-02
+  -1.78369732e+01]
+ [-1.80163886e-02  1.48350967e+02  6.30955887e+01  7.93705046e-01
+   6.37784529e+00  1.43133362e+02  6.08693886e+01  6.52150452e-01
+   7.11067247e+00  7.95901597e-01 -1.80163868e-02 -1.77772418e-02
+  -1.78369732e+01]
+ [ 1.33698285e-02  1.64073471e+02  2.77793312e+01  1.13558933e-01
+   1.03103628e+01  2.66253021e+02  1.74445923e+02  3.78579319e-01
+   4.85098076e+00  9.61439490e-01 -1.80162955e-02 -7.62387936e-05
+  -1.78369732e+01]
+ [ 1.16396230e-02  1.61161179e+02  1.76029587e+02  1.27824926e+00
+   1.05999410e+00  1.62767426e+02  1.71613144e+02 -3.18742055e-03
+   9.42098808e+00 -1.96290299e-01 -1.80160459e-02 -1.59519768e-05
+  -1.78369732e+01]
+ [ 1.76013727e-02  1.06078796e+02  3.45138016e+01  5.53317547e-01
+   4.51017714e+00  1.16511246e+02  4.04755974e+01  4.66690093e-01
+   4.87447739e+00 -2.07578257e-01 -1.80162452e-02 -1.53164370e-02
+  -1.78369732e+01]
+ [ 1.15371477e-02  8.62167587e+01  3.33981285e+01 -3.53862299e-03
+   9.21669865e+00  8.35855408e+01  3.39218445e+01  2.88555533e-01
+   4.42265844e+00  7.82885313e-01 -1.80160105e-02 -8.44803581e-05
+  -1.78369732e+01]
+ [-5.02456864e-03  9.66206512e+01  3.79593811e+01  9.21938777e-01
+   4.80586958e+00  9.92463608e+01  3.81296959e+01 -4.68915608e-03
+   8.37577152e+00 -8.56299758e-01 -1.80163551e-02 -1.63331833e-02
+  -1.78369732e+01]
+ [ 6.08347030e-03  1.68437042e+02  1.36649826e+02  1.86409533e-01
+   9.76857471e+00  1.56527710e+02  1.98298996e+02  5.32923162e-01
+   3.55578232e+00 -3.12616587e+00  1.15098166e+00 -4.65794528e-06
+  -1.78369732e+01]
+ [-1.28317215e-02  1.05061882e+02  5.34081154e+01 -2.04185187e-03
+   9.18425465e+00  1.01154488e+02  5.64559364e+01  2.26539910e-01
+   6.09027433e+00  1.76025212e+00 -1.80154908e-02 -1.66298691e-02
+  -1.78369732e+01]
+ [ 1.42025407e-02  9.78320847e+01  1.98799576e+02  2.83937365e-01
+   7.76489162e+00  9.87220230e+01  1.94615921e+02  4.56664532e-01
+   6.55926704e+00 -1.13000643e+00 -1.80163700e-02 -1.60490908e-02
+  -1.78369732e+01]
+ [-1.32614011e-02  1.71342758e+02  1.73222504e+02  1.93809271e-01
+   1.14436951e+01  1.62970337e+02  1.75809250e+02 -4.61094500e-03
+   9.36941433e+00 -2.40750521e-01 -1.80162955e-02 -1.63884740e-02
+  -1.78369732e+01]
+ [-1.54029569e-02  7.70484085e+01  1.71697037e+02  5.14818840e-02
+   9.93720055e+00  7.68588638e+01  1.66531876e+02 -6.11833623e-03
+   9.36836910e+00 -5.44491172e-01 -1.80163682e-02 -1.66255757e-02
+  -1.78369732e+01]
+ [-1.14677846e-02  1.56822189e+02  7.09043884e+01  6.58978820e-01
+   6.43548775e+00  1.58748718e+02  6.84644318e+01  2.99995869e-01
+   7.46780157e+00  6.01237595e-01 -1.80163737e-02 -1.64042879e-02
+  -1.78369732e+01]
+ [-1.80163924e-02  1.68721970e+02  1.64152313e+02  3.52355599e-01
+   5.80700541e+00  1.66418228e+02  1.65135406e+02  1.00294662e+00
+   4.15768385e+00 -6.17602408e-01 -1.80163831e-02 -7.12858964e-05
+  -1.78369732e+01]
+ [ 1.92874204e-02  2.64980927e+02  1.48400513e+02  8.30156028e-01
+   7.81910610e+00  2.58282745e+02  1.43646759e+02 -4.76396549e-03
+   9.24009132e+00  2.80467063e-01 -1.80163477e-02 -1.54368291e-02
+  -1.78369732e+01]]",30.633832931518555,"[[ 2.99293455e-03  1.86411133e+02  1.61940109e+02  2.85840690e-01
+   9.51332855e+00  1.81654449e+02  1.61940109e+02  2.78990865e-01
+   9.51332855e+00 -7.05994844e-01  0.00000000e+00  2.41345944e-04
+  -1.78369732e+01]
+ [ 1.55270773e-05  1.00791168e+02  5.74791336e+01  3.31759006e-01
+   9.51332855e+00  1.00791168e+02  5.27309113e+01  3.08585316e-01
+   9.51332855e+00 -3.15875113e-02  0.00000000e+00  1.54017325e-04
+  -1.78369732e+01]
+ [ 1.10185132e-08  1.57871155e+02  1.47695435e+02  1.97735846e-01
+   9.51332855e+00  1.53114471e+02  1.47695435e+02  1.86207160e-01
+   9.51332855e+00 -6.65726185e-01  0.00000000e+00  1.18020565e-04
+  -1.78369732e+01]
+ [ 2.04329262e-05  9.60345078e+01  3.84862289e+01  2.66821891e-01
+   9.51332855e+00  1.00791168e+02  3.84862289e+01  2.49332562e-01
+   9.51332855e+00  9.94604886e-01  0.00000000e+00  7.81458366e-05
+  -1.78369732e+01]
+ [ 6.89823937e-05  2.53004425e+02  1.33450745e+02  2.85169333e-01
+   9.51332855e+00  2.53004425e+02  1.38198975e+02  2.82516897e-01
+   9.51332855e+00  2.36459184e+00  0.00000000e+00  6.78211218e-05
+  -1.78369732e+01]
+ [ 0.00000000e+00  1.86411133e+02  1.85681244e+02  3.55759919e-01
+   9.51332855e+00  1.86411133e+02  1.80933014e+02  3.23493838e-01
+   9.51332855e+00 -2.20880842e+00  0.00000000e+00 -3.71621645e-05
+  -1.78369732e+01]
+ [ 9.48254183e-06  2.62517761e+02  1.38198975e+02  3.54223967e-01
+   9.51332855e+00  2.62517761e+02  1.42947205e+02  3.43649000e-01
+   9.51332855e+00  1.27270412e+00  0.00000000e+00  8.80129155e-05
+  -1.78369732e+01]
+ [ 1.82303519e-03  2.00681122e+02  7.64720459e+01  2.40005791e-01
+   9.51332855e+00  2.33977783e+02  2.09422363e+02  2.29624614e-01
+   9.51332855e+00  3.79235119e-01  0.00000000e+00  1.21246885e-04
+  -1.78369732e+01]
+ [ 0.00000000e+00  1.53114471e+02  1.42947205e+02  2.23641366e-01
+   9.51332855e+00  1.53114471e+02  1.38198975e+02  2.02042535e-01
+   9.51332855e+00  3.74656498e-01  0.00000000e+00 -1.42666802e-04
+  -1.78369732e+01]
+ [ 9.12955102e-07  2.00681122e+02  1.04961395e+02  2.63254672e-01
+   9.51332855e+00  2.00681122e+02  1.09709625e+02  2.46586233e-01
+   9.51332855e+00 -2.64196813e-01  0.00000000e+00  8.77359562e-05
+  -1.78369732e+01]
+ [ 5.40541745e-09  1.38844482e+02  6.22273598e+01  3.48295897e-01
+   9.51332855e+00  1.43601135e+02  6.22273598e+01  3.39672357e-01
+   9.51332855e+00  6.07159734e-01  0.00000000e+00  1.14371112e-04
+  -1.78369732e+01]
+ [ 0.00000000e+00  2.00681122e+02  1.09709625e+02  3.27238560e-01
+   9.51332855e+00  2.05437775e+02  1.09709625e+02  3.19626421e-01
+   9.51332855e+00 -1.15482473e+00  0.00000000e+00  5.12041261e-05
+  -1.78369732e+01]
+ [ 3.93580552e-03  2.10194458e+02  7.17238159e+01  2.30370641e-01
+   9.51332855e+00  2.10194458e+02  7.64720459e+01  2.20713824e-01
+   9.51332855e+00  4.14815903e-01  0.00000000e+00  8.00117487e-05
+  -1.78369732e+01]
+ [ 4.24524069e-06  2.62517761e+02  2.42415524e+01  7.13447571e-01
+   9.51332855e+00  2.62517761e+02  2.89897785e+01  5.28030515e-01
+   9.51332855e+00  1.20597613e+00  0.00000000e+00  1.07307051e-05
+  -1.78369732e+01]
+ [ 2.97990084e-07  2.19707764e+02  4.79826813e+01  5.19810200e-01
+   9.51332855e+00  2.19707764e+02  4.32344589e+01  4.96237129e-01
+   9.51332855e+00  1.13582194e+00  0.00000000e+00  2.10321203e-04
+  -1.78369732e+01]
+ [ 5.27766097e-09  1.48357819e+02  5.74791336e+01  6.81668758e-01
+   9.51332855e+00  1.53114471e+02  5.74791336e+01  6.76658511e-01
+   9.51332855e+00 -9.30738524e-02  0.00000000e+00  1.53133689e-04
+  -1.78369732e+01]
+ [ 0.00000000e+00  2.53004425e+02  1.09709625e+02  1.43659383e-01
+   9.51332855e+00  2.53004425e+02  1.14457848e+02  1.32864892e-01
+   9.51332855e+00 -1.02868938e+00  0.00000000e+00 -1.15187331e-05
+  -1.78369732e+01]]",gemini-2.0-flash,"(0, 3, 3)","(2, 2, 3)","[[2.2753220e-02 2.2753220e-02 2.2753220e-02 ... 2.2753220e-02
+  2.2753220e-02 2.2753220e-02]
+ [9.5315287e-03 9.5315287e-03 9.5315287e-03 ... 9.5315287e-03
+  9.5315287e-03 9.5315287e-03]
+ [0.0000000e+00 0.0000000e+00 0.0000000e+00 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]
+ ...
+ [1.6181462e-04 2.1027392e-04 2.5508075e-04 ... 3.7551064e-02
+  6.9344677e-02 1.3085724e-01]
+ [1.3142736e-31 2.5407760e-31 4.1295262e-31 ... 8.5027925e-24
+  7.4170798e-23 6.1773822e-22]
+ [5.5760616e-03 5.5760616e-03 5.5760616e-03 ... 5.5760616e-03
+  5.5760616e-03 5.5760616e-03]]",29.252126693725586
+"import numpy as np
+
+def neuron_model(stimuli,
+                    # Field 1 parameters
+                    center_x_1=0.2, center_y_1=0.2, place_amp_1=1.0,
+                    sigma_x_1=1.0, sigma_y_1=0.5, rot_1=0.0,
+                    # Field 2 parameters
+                    center_x_2=0.8, center_y_2=0.2, place_amp_2=1.0,
+                    sigma_x_2=1.0, sigma_y_2=0.5, rot_2=0.0,
+                    # Field 3 parameters
+                    center_x_3=0.5, center_y_3=0.8, place_amp_3=0.5,
+                    sigma_x_3=1.0, sigma_y_3=0.5, rot_3=0.0,
+                    # Modulation parameters
+                    baseline=0.0, hd_pref=0.0, hd_amp=0.5, speed_gain=0.1):
+    """"""
+    Parent Model 1 (neuron_model_v1): Single isotropic Gaussian with additive modulation.
+    Parent Model 2 (neuron_model_v2): Sum of two axis-aligned anisotropic Gaussians
+                                       with multiplicative HD and additive speed modulation.
+
+    This model represents the firing rate as a sum of three rotated, anisotropic
+    Gaussian place fields, with fully multiplicative head-direction (HD) and speed
+    gain modulation.
+
+    Equation:
+    rate = baseline + (G_1 + G_2 + G_3) * (1 + hd_amp*cos(hd-hd_pref)) * (1 + speed_gain*speed)
+    where G_i is a rotated, anisotropic 2D Gaussian for field i.
+
+    This model improves upon its parents based on a visual analysis of their systematic failures:
+
+    1.  **Increased Spatial Complexity:** Parent models use one or two Gaussians, which
+        is insufficient for cells with multiple firing fields like grid cells
+        (see Cells 10 and 12, column 1). Those models either average across fields
+        (v1) or capture only a subset (v2). This model uses three Gaussians to provide
+        the necessary flexibility to capture these multi-peaked spatial rate maps.
+
+    2.  **Rotated Place Fields:** Parent model v2 introduced anisotropic (elliptical)
+        fields but constrained them to be axis-aligned. This model adds a rotation
+        parameter (`rot_i`) to each Gaussian, allowing it to better match field shapes
+        that may be oriented off-axis (e.g., potentially Cell 11).
+
+    3.  **Multiplicative Speed Modulation:** A key, consistent failure of both parent
+        models is their inability to capture the strong positive speed modulation evident
+        in the data (see Speed data vs. Speed model plots for nearly all cells, which
+        are flat). This model replaces the ineffective additive speed term with a
+        multiplicative gain, analogous to the HD modulation. This ensures that speed
+        modulates the firing rate primarily within the place fields, a more
+        biologically plausible and computationally powerful interaction.
+    """"""
+    # Clip parameters to plausible ranges
+    place_amp_1 = np.clip(place_amp_1, 0.0, None)
+    sigma_x_1 = np.clip(sigma_x_1, 1e-6, None)
+    sigma_y_1 = np.clip(sigma_y_1, 1e-6, None)
+    place_amp_2 = np.clip(place_amp_2, 0.0, None)
+    sigma_x_2 = np.clip(sigma_x_2, 1e-6, None)
+    sigma_y_2 = np.clip(sigma_y_2, 1e-6, None)
+    place_amp_3 = np.clip(place_amp_3, 0.0, None)
+    sigma_x_3 = np.clip(sigma_x_3, 1e-6, None)
+    sigma_y_3 = np.clip(sigma_y_3, 1e-6, None)
+    baseline = np.clip(baseline, 0.0, None)
+    hd_amp = np.clip(hd_amp, 0.0, 1.0)
+    speed_gain = np.clip(speed_gain, 0.0, None)
+
+    # Unpack stimuli
+    stim = np.asarray(stimuli)
+    x, y = stim[:, 0], stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # --- Helper for rotated Gaussian ---
+    def rotated_gaussian(x, y, cx, cy, amp, sx, sy, rot):
+        dx, dy = x - cx, y - cy
+        cos_rot, sin_rot = np.cos(rot), np.sin(rot)
+        dx_rot = dx * cos_rot + dy * sin_rot
+        dy_rot = -dx * sin_rot + dy * cos_rot
+        r2 = (dx_rot / sx)**2 + (dy_rot / sy)**2
+        return amp * np.exp(-0.5 * r2)
+
+    # --- Calculate total place field response ---
+    place_1 = rotated_gaussian(x, y, center_x_1, center_y_1, place_amp_1, sigma_x_1, sigma_y_1, rot_1)
+    place_2 = rotated_gaussian(x, y, center_x_2, center_y_2, place_amp_2, sigma_x_2, sigma_y_2, rot_2)
+    place_3 = rotated_gaussian(x, y, center_x_3, center_y_3, place_amp_3, sigma_x_3, sigma_y_3, rot_3)
+    total_place = place_1 + place_2 + place_3
+
+    # --- Calculate multiplicative modulations ---
+    hd_modulation = 1.0 + hd_amp * np.cos(hd - hd_pref)
+    speed_modulation = 1.0 + speed_gain * speed
+
+    # --- Combine all terms ---
+    rate = baseline + total_place * hd_modulation * speed_modulation
+
+    return rate",<function neuron_model at 0x767b782999e0>,"import numpy as np
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""
+    Estimates parameters for the three-field place cell model (neuron_model_v3).
+
+    Based on the rate map visualization, and failure modes of previous estimators:
+
+    1. Place Field Coverage : Improved estimators used multiple place fields in prior estimators,
+       Here three fields allow adequate coverage (cell 10, 12 show 3 peaks).
+
+    2. Orientation: Previous estimators were axis-aligned. Introduce a estimation for field orientation
+       for anisotropic place cells. Uses covariance matrix principal eigenvector direction to calculate rotation.
+
+    3. Refined Speed Estimation: Both multiplicative estimation + regression. Prior methods poorly
+       captured speed modulation. Directly fit the slope of (rate map average - baseline)
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, eps=1e-6, min_occ=3, smoothing_sigma=1.2):
+        def _gaussian_kernel(sigma):
+            if sigma <= 0:
+                return None
+            size = int(max(3, np.ceil(6 * sigma)))
+            if size % 2 == 0:
+                size += 1
+            ax = np.arange(size) - size // 2
+            xx, yy = np.meshgrid(ax, ax)
+            kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+            kernel /= np.sum(kernel)
+            return kernel
+
+        def _fft_convolve2d(a, b):
+            out_shape = (a.shape[0] + b.shape[0] - 1, a.shape[1] + b.shape[1] - 1)
+            fa = np.fft.rfftn(a, s=out_shape)
+            fb = np.fft.rfftn(b, s=out_shape)
+            out = np.fft.irfftn(fa * fb, s=out_shape)
+            start0 = (b.shape[0] - 1) // 2
+            start1 = (b.shape[1] - 1) // 2
+            return out[start0:start0 + a.shape[0], start1:start1 + a.shape[1]]
+
+        occ, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        spk, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+        rate = spk / (occ + eps)
+        rate = np.where(occ >= min_occ, rate, np.nan)
+        kernel = _gaussian_kernel(smoothing_sigma)
+        if kernel is not None:
+            rate_filled = np.nan_to_num(rate, nan=0.0)
+            occ_mask = np.isfinite(rate).astype(float)
+            rate_s = _fft_convolve2d(rate_filled, kernel)
+            norm = _fft_convolve2d(occ_mask, kernel)
+            rate = rate_s / (norm + eps)
+            rate = np.where(norm > 0, rate, np.nan)
+        return rate.T, xedges, yedges
+
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes)
+    finite = np.isfinite(rate)
+    if not np.any(finite):
+        return np.array([0.2, 0.2, 0.3, 1, 0.5, 0,
+                         0.8, 0.2, 0.3, 1, 0.5, 0,
+                         0.5, 0.8, 0.3, 1, 0.5, 0,
+                         0, 0, 0.5, 0.1])
+        
+    rate_f = rate[finite]
+    baseline = float(np.percentile(rate_f, 20))
+    
+    peak_idxs = np.unravel_index(np.argsort(rate.flatten())[-3:], rate.shape)    
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+
+    centers = np.array([[x_centers[peak_idxs[1][i]], y_centers[peak_idxs[0][i]]] for i in range(3)])
+    peak_amp = (np.max(rate)-baseline)/3
+        
+    yy, xx = np.meshgrid(y_centers, x_centers, indexing=""ij"")
+
+    def estimate_field_params(center_xy, xx, yy, rate):
+        x_idx = np.argmin(np.abs(x_centers - center_xy[0]))
+        y_idx = np.argmin(np.abs(y_centers - center_xy[1]))
+        x_range = slice(max(0, x_idx - 3), min(len(x_centers), x_idx + 4))
+        y_range = slice(max(0, y_idx - 3), min(len(y_centers), y_idx + 4))
+        local_rate = rate[y_range, x_range]
+        local_xx = xx[y_range, x_range]
+        local_yy = yy[y_range, x_range]
+        weights = np.clip(local_rate - baseline, 0.0, None)
+
+        if np.sum(weights) <= 0.0: return 1.0, 0.5, 0.0
+        
+        wsum = np.sum(weights) + 1e-8        
+        var_x = np.sum(((local_xx - center_xy[0]) ** 2) * weights) / wsum
+        var_y = np.sum(((local_yy - center_xy[1]) ** 2) * weights) / wsum
+
+        sigma_x = np.sqrt(var_x + 1e-12)
+        sigma_y = np.sqrt(var_y + 1e-12)
+
+        centered_x = local_xx.flatten() - np.mean(local_xx)
+        centered_y = local_yy.flatten() - np.mean(local_yy)
+        covariance_matrix = np.cov(centered_x, centered_y, aweights=weights.flatten())
+        eigenvalues, eigenvectors = np.linalg.eig(covariance_matrix)
+        rotation_angle = np.arctan2(*eigenvectors[:,0][::-1])
+            
+        max_sigma = 0.25 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1]))
+        sigma_x = float(np.clip(sigma_x, 1e-3, max_sigma))
+        sigma_y = float(np.clip(sigma_y, 1e-3, max_sigma))            
+        return sigma_x, sigma_y, rotation_angle
+
+    sigmas = [estimate_field_params(c, xx, yy, rate) for c in centers]
+
+    w = np.clip(spikes - baseline, 0.0, None)
+    wsum_s = np.sum(w) + 1e-8
+    c = float(np.sum(w * np.cos(hd)) / wsum_s)
+    s = float(np.sum(w * np.sin(hd)) / wsum_s)
+    hd_pref = float(np.arctan2(s, c))
+    hd_amp = float(max(0.0, np.percentile(spikes, 90) - baseline) * np.sqrt(c * c + s * s))
+    hd_amp = min(hd_amp / (peak_amp * 3), 1.0)
+
+    speed_gain = np.cov(speed, spikes - baseline, bias=True)[0, 1] / np.var(speed)
+    
+    baseline = float(max(baseline, 0.0))
+
+    return np.array([centers[0][0], centers[0][1], peak_amp, sigmas[0][0], sigmas[0][1], sigmas[0][2],
+                     centers[1][0], centers[1][1], peak_amp, sigmas[1][0], sigmas[1][1], sigmas[1][2],
+                     centers[2][0], centers[2][1], peak_amp, sigmas[2][0], sigmas[2][1], sigmas[2][2],
+                     baseline, hd_pref, hd_amp, max(0.0, speed_gain)])",<function parameter_estimator at 0x767be42d6de0>,3,4,2,30.12856674194336,29.554750442504883,"[[ 7.69827881e+01  1.90665756e+02 -7.43025774e-03  7.67435598e+00
+   7.97895908e+00  2.62648201e+00  8.02092438e+01  1.90654022e+02
+   5.46384037e-01  3.63149333e+00  9.41239166e+00  2.24422145e+00
+   8.18592758e+01  1.95285110e+02  2.61425167e-01  2.33272672e+00
+   1.25923300e+01  2.85920167e+00  1.80065278e-02  2.58423358e-01
+  -1.80156473e-02  9.52197518e-03]
+ [ 2.38439117e+02  2.93801537e+01  6.09023049e-02  1.17095585e+01
+   4.63967234e-01 -5.47578990e-01  1.90739609e+02  2.40578556e+01
+  -1.29224649e-02  6.07298422e+00  5.68348312e+00  4.87933785e-01
+   1.88108078e+02  2.52178974e+01  1.18098748e+00  3.24216914e+00
+   5.11219315e-02  2.18127561e+00  6.81950012e-03  2.22357750e+00
+   1.01762247e+00  1.09893405e+00]
+ [ 2.13804871e+02  2.80879288e+01  3.28032446e+00  1.01096976e+00
+   9.70996666e+00 -2.28876069e-01  2.22571213e+02  3.22126694e+01
+   1.06303334e+00  1.19250183e+01  3.50156116e+00  4.42647129e-01
+   2.24477539e+02  2.65200844e+01  2.39067793e+00  2.51195788e+00
+   9.03328037e+00  3.76157254e-01  1.49588203e-02  2.43638784e-01
+  -1.80163011e-02  1.16431126e-02]
+ [ 1.42764542e+02  5.78831940e+01 -5.42586297e-03  8.41217041e+00
+   7.15181446e+00  8.16439509e-01  1.39379929e+02  5.63131561e+01
+   2.78041768e+00  4.28687954e+00  3.14109802e+00  7.32146204e-01
+   1.47693939e+02  6.42458649e+01  1.16243660e+00  4.40918446e+00
+   6.35927916e+00  2.24123403e-01  6.50777295e-03  2.07719660e+00
+   9.34311688e-01  6.74849655e-03]
+ [ 2.56895813e+02  9.03753738e+01  4.61250067e+00  2.81979349e-02
+   1.48797588e+01 -3.02795315e+00  2.63698486e+02  8.27067337e+01
+   3.71684575e+00  1.03388834e+00  6.34422874e+00 -1.89688718e+00
+   2.62776245e+02  8.65968857e+01 -2.58627199e-02  6.25112677e+00
+   8.23112583e+00 -2.91681910e+00  2.37380620e-02  1.53421760e+00
+   1.00683260e+00 -1.73332542e-02]
+ [ 7.75237350e+01  1.38576294e+02 -1.27999727e-02  6.19330072e+00
+   8.37798691e+00 -2.43000221e+00  7.69301300e+01  1.47614716e+02
+  -2.57034618e-02  6.03391409e+00  8.06533432e+00 -2.99563694e+00
+   7.75234451e+01  1.46417419e+02  2.08197093e+00  3.21978703e-02
+   4.57774544e+00 -2.53000164e+00  1.16961338e-02  9.67628658e-01
+   1.03370464e+00  1.33789325e+00]
+ [ 1.13077522e+02  4.06596260e+01  3.40989113e-01  1.05396385e+01
+   3.94816661e+00  2.46001676e-01  1.07051712e+02  3.47129593e+01
+   2.13930058e+00  3.68055654e+00  9.34099197e-01  2.59531379e-01
+   1.11337540e+02  3.86342735e+01  1.03367269e-01  1.11891880e+01
+   1.67671478e+00  7.25584269e-01  1.76059157e-02 -1.45405221e+00
+   8.38402212e-01 -1.23613235e-02]
+ [ 8.16917725e+01  2.41489658e+01 -4.06715646e-03  5.93592405e+00
+   7.08928061e+00  2.77263343e-01  7.77633896e+01  2.93345242e+01
+   5.03364682e-01  1.52042246e+00  8.79294491e+00  2.09733677e+00
+   7.67695770e+01  2.42808876e+01 -6.16422249e-03  5.74198341e+00
+   7.19955921e+00  2.56261158e+00  1.16650490e-02  7.82885730e-01
+  -1.80160590e-02 -1.80163868e-02]
+ [ 9.60891266e+01  3.40779533e+01 -9.33294836e-03  6.79067373e+00
+   7.34529638e+00  6.44015968e-02  1.00458328e+02  3.87676125e+01
+  -1.01327263e-02  7.37367725e+00  7.31006384e+00  2.94074297e+00
+   9.73706818e+01  3.80031815e+01  8.18170607e-01  4.26406527e+00
+   5.88720560e+00  2.58469653e+00  1.22641595e-02 -1.58978224e+00
+   5.14524937e-01  1.38240238e-03]
+ [ 1.57837601e+02  1.94906616e+02  2.41583034e-01  3.79333282e+00
+   5.75167084e+00 -2.92136455e+00  1.56429291e+02  1.99301346e+02
+   4.78521258e-01  3.07060099e+00  3.65110970e+00 -3.26843834e+00
+   2.45352570e+02  3.27099838e+01  2.23628783e+00  4.15179491e+00
+   8.84690702e-01 -1.42249405e+00  1.42014083e-02 -3.97012544e+00
+   8.04166138e-01 -1.10784415e-02]
+ [ 9.75240555e+01  5.95449066e+01  2.81169582e-02  1.31218338e+01
+   3.19062233e+00 -3.61268580e-01  1.01296906e+02  5.30870972e+01
+  -6.07104413e-03  7.72938871e+00  7.31192732e+00 -8.64933372e-01
+   1.04007401e+02  5.90257072e+01  1.82090950e+00  3.18413448e+00
+   1.67618040e-02 -4.15906811e+00  8.06999113e-03  2.75708580e+00
+   1.00820220e+00  1.37866542e-01]
+ [ 9.80290451e+01  2.00657959e+02  7.59121537e-01  1.20145311e+01
+   5.68591404e+00 -1.36085939e+00  1.00295235e+02  2.08686890e+02
+  -1.64519716e-02  6.59295273e+00  9.23820686e+00 -4.64931093e-02
+   9.64575958e+01  2.09012573e+02 -1.74560640e-02  7.15202856e+00
+   8.81072330e+00  1.31905764e-01  1.42437536e-02 -1.13004756e+00
+  -1.80162881e-02 -4.80300328e-03]
+ [ 1.67485153e+02  1.80832687e+02 -1.65139660e-02  8.36414528e+00
+   8.16875076e+00  5.93490124e-01  1.62821335e+02  1.75988327e+02
+  -2.35234923e-03  8.21974945e+00  7.51000834e+00  2.57075453e+00
+   1.69928467e+02  1.72472855e+02  2.81606406e-01  1.08205194e+01
+   5.75368357e+00 -5.15491188e-01  9.38718300e-03  1.91172028e+00
+   2.83581972e-01 -1.04569001e-04]
+ [ 1.14090065e+02  2.24404526e+01  1.40838492e+00  3.38062239e+00
+   2.78317809e+00 -3.61300856e-01  1.03024864e+02  2.13208332e+01
+   7.57708494e-03  1.49402952e+01  4.89966631e+00 -7.17481256e-01
+   7.43909836e+01  1.65908386e+02  1.22993469e+00  3.42219782e+00
+   9.90232900e-02  3.88336182e+00  8.14305060e-03  1.76249877e-01
+   1.01316011e+00  8.31430435e-01]
+ [ 1.62271194e+02  7.13948441e+01 -4.11370117e-03  7.91770458e+00
+   7.42116022e+00 -3.17164946e+00  1.59180725e+02  6.64277191e+01
+   5.66534221e-01  3.67717457e+00  7.68984699e+00 -5.74359596e-01
+   1.55975632e+02  7.16122894e+01  9.32214379e-01  6.93283415e+00
+   2.79848886e+00 -5.97649030e-02  1.43393269e-02 -7.83391058e-01
+   1.32598117e-01  5.08167723e-04]
+ [ 1.62868546e+02  1.62205124e+02 -9.04255733e-03  7.63313580e+00
+   6.73576307e+00 -2.63571405e+00  1.69038712e+02  1.63645111e+02
+   3.35766125e+00  5.84971845e-01  4.78506327e+00 -1.59040034e+00
+   1.66204514e+02  1.64710785e+02  1.53551793e+00  4.10675496e-01
+   6.47569275e+00 -8.72425199e-01 -1.17762722e-02 -6.17602408e-01
+  -1.80163011e-02 -1.80163756e-02]
+ [ 2.67546509e+02  1.37394531e+02  3.98661226e-01  3.92954302e+00
+   1.48813677e+01  2.73552346e+00  2.60483093e+02  1.53146057e+02
+   7.49275088e-01  2.05209708e+00  7.10240173e+00 -2.32772636e+00
+   2.63154449e+02  1.43096085e+02  7.65044987e-01  3.16215873e+00
+   8.02127647e+00 -1.93424582e+00  1.86204538e-02  2.80325323e-01
+  -1.80130638e-02 -1.68740824e-02]]",30.29477882385254,"[[ 1.86411133e+02  1.66688324e+02  9.43017304e-02  7.99633503e+00
+   8.62949562e+00  2.77563572e+00  1.81654449e+02  1.61940109e+02
+   9.43017304e-02  8.15476608e+00  8.22752571e+00  2.72109008e+00
+   1.86411133e+02  1.61940109e+02  9.43017304e-02  8.04527283e+00
+   8.23896599e+00 -3.09358978e+00  5.98804560e-03 -7.05957055e-01
+   0.00000000e+00  2.41777001e-04]
+ [ 9.60345078e+01  5.74791336e+01  1.10596582e-01  8.26156807e+00
+   7.18766928e+00  7.80461073e-01  1.00791168e+02  5.27309113e+01
+   1.10596582e-01  7.78668308e+00  7.72576809e+00  2.41388947e-01
+   1.00791168e+02  5.74791336e+01  1.10596582e-01  7.82682705e+00
+   7.24768114e+00  3.70921552e-01  5.93990408e-05 -3.15885060e-02
+   0.00000000e+00  1.54017980e-04]
+ [ 1.57871155e+02  1.52443665e+02  6.59267008e-02  7.49948263e+00
+   7.95169878e+00 -1.24556318e-01  1.53114471e+02  1.47695435e+02
+   6.59267008e-02  7.55594015e+00  7.22819710e+00  1.18878502e-02
+   1.57871155e+02  1.47695435e+02  6.59267008e-02  7.52959967e+00
+   7.23569441e+00 -4.82425511e-01  7.75054668e-18 -6.65726185e-01
+   0.00000000e+00  1.18020514e-04]
+ [ 9.60345078e+01  3.37380066e+01  9.02820826e-02  8.30034256e+00
+   7.10338783e+00 -2.06971139e-01  1.00791168e+02  3.84862289e+01
+   9.02820826e-02  8.56948471e+00  8.08090019e+00  9.21286568e-02
+   9.60345078e+01  3.84862289e+01  9.02820826e-02  8.36275196e+00
+   7.92845535e+00  2.46861987e-02  1.06642292e-04  9.94605005e-01
+   0.00000000e+00  7.81461567e-05]
+ [ 2.53004425e+02  1.28702515e+02  9.83708203e-02  6.73884535e+00
+   9.15912342e+00 -3.01492834e+00  2.53004425e+02  1.38198975e+02
+   9.83708203e-02  6.75531197e+00  8.79826736e+00 -3.12897348e+00
+   2.53004425e+02  1.33450745e+02  9.83708203e-02  6.75061083e+00
+   8.92324162e+00 -3.05748224e+00  2.07244419e-04  2.36459613e+00
+   0.00000000e+00  6.78219585e-05]
+ [ 1.91167786e+02  1.85681244e+02  1.18610650e-01  8.32328224e+00
+   8.31178856e+00  3.73781085e-01  1.86411133e+02  1.80933014e+02
+   1.18610650e-01  8.11720467e+00  8.20828152e+00  2.82746935e+00
+   1.86411133e+02  1.85681244e+02  1.18610650e-01  8.06511402e+00
+   8.32574940e+00  2.77949190e+00  0.00000000e+00 -2.20880842e+00
+   1.69168090e-19  0.00000000e+00]
+ [ 2.62517761e+02  1.42947205e+02  1.90162718e-01  7.15955639e+00
+   8.73898983e+00  3.12574577e+00  2.62517761e+02  1.47695435e+02
+   1.90162718e-01  7.18098879e+00  8.24049759e+00  3.13458729e+00
+   2.62517761e+02  1.52443665e+02  1.90162718e-01  7.18366194e+00
+   8.20079517e+00 -3.13684893e+00  4.65227058e-05  1.27269757e+00
+   0.00000000e+00  8.80131192e-05]
+ [ 1.19817825e+02  2.42415524e+01  1.04964010e-01  8.79777813e+00
+   6.35442352e+00  3.34676914e-02  1.38844482e+02  2.42415524e+01
+   1.04964010e-01  8.61711311e+00  7.25980043e+00  1.07267797e-01
+   1.15061165e+02  2.42415524e+01  1.04964010e-01  7.80828810e+00
+   6.27058554e+00  4.34115864e-02  3.36820213e-03  3.79288226e-01
+   0.00000000e+00  1.21340883e-04]
+ [ 1.57871155e+02  1.42947205e+02  7.45637864e-02  7.63741016e+00
+   7.78983879e+00  2.91178036e+00  1.53114471e+02  1.38198975e+02
+   7.45637864e-02  6.93847561e+00  8.29042053e+00  2.99931264e+00
+   1.53114471e+02  1.42947205e+02  7.45637864e-02  6.98501110e+00
+   7.79457569e+00  3.05969572e+00  0.00000000e+00  3.74656498e-01
+   2.18231726e-19  0.00000000e+00]
+ [ 1.95924469e+02  1.04961395e+02  8.77683386e-02  7.97177458e+00
+   7.80651188e+00 -2.91542578e+00  2.00681122e+02  1.09709625e+02
+   8.77683386e-02  6.80955172e+00  7.82074022e+00 -2.77910948e+00
+   2.00681122e+02  1.04961395e+02  8.77683386e-02  6.85834694e+00
+   7.86901283e+00 -2.78788972e+00  9.05616525e-06 -2.64196575e-01
+   0.00000000e+00  8.77358907e-05]
+ [ 1.53114471e+02  5.74791336e+01  1.16121389e-01  8.98660469e+00
+   7.68073988e+00 -4.18681651e-01  1.43601135e+02  6.22273598e+01
+   1.16121389e-01  9.04479790e+00  7.76952696e+00 -2.69573033e-01
+   1.38844482e+02  6.22273598e+01  1.16121389e-01  9.02921867e+00
+   7.81018496e+00  2.32980158e-02  2.50969361e-17  6.07159734e-01
+   0.00000000e+00  1.14371032e-04]
+ [ 2.00681122e+02  1.04961395e+02  1.09104052e-01  6.85206842e+00
+   7.40334463e+00  6.91350281e-01  2.05437775e+02  1.09709625e+02
+   1.09104052e-01  6.79830742e+00  6.82331085e+00  2.52403021e+00
+   2.00681122e+02  1.09709625e+02  1.09104052e-01  6.88137293e+00
+   6.81299782e+00  2.52523851e+00  1.16835674e-18 -1.15482461e+00
+   0.00000000e+00  5.12040715e-05]
+ [ 7.70078506e+01  2.42415524e+01  7.61341453e-02  4.90770912e+00
+   6.21185732e+00  2.88958812e+00  2.10194458e+02  7.64720459e+01
+   7.61341453e-02  7.09417772e+00  7.79106998e+00  2.89390588e+00
+   2.10194458e+02  7.17238159e+01  7.61341453e-02  7.25426865e+00
+   7.46355867e+00  2.44431257e+00  5.95048815e-03  4.14627641e-01
+   0.00000000e+00  8.01613351e-05]
+ [ 2.62517761e+02  3.84862289e+01  2.24015757e-01  7.23469734e+00
+   8.94711494e+00  3.10391235e+00  2.62517761e+02  4.32344589e+01
+   2.24015757e-01  7.26381254e+00  8.65335369e+00  3.06271148e+00
+   2.62517761e+02  2.42415524e+01  2.24015757e-01  7.43104887e+00
+   8.74572182e+00 -2.80855584e+00  1.66631344e-05  1.20597661e+00
+   0.00000000e+00  1.07306369e-05]
+ [ 2.19707764e+02  4.79826813e+01  1.98957145e-01  7.66706800e+00
+   8.52520275e+00 -2.88805819e+00  1.86411133e+02  2.42415524e+01
+   1.98957145e-01  5.92574549e+00  5.91875219e+00 -4.28639650e-02
+   2.19707764e+02  4.32344589e+01  1.98957145e-01  7.81718540e+00
+   8.55779648e+00 -2.65858293e+00  9.65241270e-07  1.13582218e+00
+   0.00000000e+00  2.10321115e-04]
+ [ 1.53114471e+02  6.22273598e+01  2.27270231e-01  8.04992390e+00
+   7.64873362e+00 -3.79598677e-01  1.53114471e+02  5.74791336e+01
+   2.27270231e-01  8.06661606e+00  7.48339176e+00  4.49185193e-01
+   1.48357819e+02  5.74791336e+01  2.27270231e-01  8.17963505e+00
+   7.58818674e+00  2.41858006e-01  2.90714347e-17 -9.30738598e-02
+   0.00000000e+00  1.53133631e-04]
+ [ 2.48247772e+02  1.09709625e+02  5.00527769e-02  8.14650249e+00
+   8.34623909e+00 -2.91432953e+00  2.53004425e+02  1.14457848e+02
+   5.00527769e-02  6.47326469e+00  8.56589794e+00 -3.07439137e+00
+   2.53004425e+02  1.09709625e+02  5.00527769e-02  6.48076487e+00
+   8.34867954e+00 -2.93562412e+00  0.00000000e+00 -1.02868938e+00
+   0.00000000e+00  0.00000000e+00]]",gemini-2.5-pro,"(-1, -1, 0)","(0, 2, 5)","[[2.2572814e-02 2.2572814e-02 2.2572814e-02 ... 2.2572814e-02
+  2.2572814e-02 2.2572814e-02]
+ [1.0152567e-02 1.0152567e-02 1.0152567e-02 ... 1.0152567e-02
+  1.0152567e-02 1.0152567e-02]
+ [0.0000000e+00 0.0000000e+00 0.0000000e+00 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]
+ ...
+ [1.2761359e-02 1.2807005e-02 1.2830493e-02 ... 1.9004622e-01
+  2.7183425e-01 3.5453936e-01]
+ [0.0000000e+00 0.0000000e+00 0.0000000e+00 ... 1.1350518e-43
+  1.2519200e-41 4.1511771e-39]
+ [5.8013047e-03 5.8013047e-03 5.8013047e-03 ... 5.8013047e-03
+  5.8013047e-03 5.8013047e-03]]",29.554750442504883
+"import numpy as np
+
+def neuron_model(stimuli,
+                    baseline=0.0,
+                    center_x1=0.0,
+                    center_y1=0.0,
+                    place_amp1=1.0,
+                    sigma1=1.0,
+                    center_x2=0.0,
+                    center_y2=0.0,
+                    place_amp2=1.0,
+                    sigma2=1.0,
+                    hd_pref=0.0,
+                    hd_amp=0.5):
+    """"""
+    Parent Models:
+      - neuron_model_v1: Single Gaussian Place Field with Additive HD/Speed.
+      - neuron_model_v2: Two Gaussian Place Fields with Additive HD/Speed.
+
+    Image Analysis:
+    The image reveals that dual gaussian is important. Speed effects are ambiguous at best and not well estimated across cells. HD does not appear well-represented.
+
+    Model Improvements:
+    This model builds upon `neuron_model_v2` by incorporating two Gaussian place field and removing Speed features. Further, HD modulation is *multiplicative*. This is motivated by observing how HD correlates with Gaussian activation but can fail alone.
+
+    Equation:
+    rate = baseline
+           + place_amp1 * exp(-0.5 * r1^2 / sigma1^2)
+           + place_amp2 * exp(-0.5 * r2^2 / sigma2^2)
+           * (hd_amp * 0.5 * (1 + cos(hd - hd_pref)))
+    where r1^2 = (x-center_x1)^2 + (y-center_y1)^2
+    and   r2^2 = (x-center_x2)^2 + (y-center_y2)^2
+    """"""
+    # Clip parameters to plausible ranges
+    baseline = np.maximum(0.0, baseline)
+    place_amp1 = np.maximum(0.0, place_amp1)
+    sigma1 = np.maximum(1e-6, sigma1)
+    place_amp2 = np.maximum(0.0, place_amp2)
+    sigma2 = np.maximum(1e-6, sigma2)
+    hd_amp = np.maximum(0.0, hd_amp)
+
+    # Unpack stimuli
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+
+    # First Gaussian place field
+    dx1 = x - center_x1
+    dy1 = y - center_y1
+    r2_1 = dx1 ** 2 + dy1 ** 2
+    place1 = place_amp1 * np.exp(-0.5 * r2_1 / (sigma1 ** 2))
+
+    # Second Gaussian place field
+    dx2 = x - center_x2
+    dy2 = y - center_y2
+    r2_2 = dx2 ** 2 + dy2 ** 2
+    place2 = place_amp2 * np.exp(-0.5 * r2_2 / (sigma2 ** 2))
+    
+    # Head-direction modulation
+    hd_term = hd_amp * 0.5 * (1.0 + np.cos(hd - hd_pref)) * (place1+place2)
+
+    # Combine all components
+    return baseline + (place1 + place2) * (hd_amp * 0.5 * (1.0 + np.cos(hd - hd_pref)))",<function neuron_model at 0x767b587f5440>,"import numpy as np
+
+def neuron_model_v3(stimuli,
+                    baseline=0.0,
+                    center_x1=0.0,
+                    center_y1=0.0,
+                    place_amp1=1.0,
+                    sigma1=1.0,
+                    center_x2=0.0,
+                    center_y2=0.0,
+                    place_amp2=1.0,
+                    sigma2=1.0,
+                    hd_pref=0.0,
+                    hd_amp=0.5):
+    """"""
+    Parent Models:
+      - neuron_model_v1: Single Gaussian Place Field with Additive HD/Speed.
+      - neuron_model_v2: Two Gaussian Place Fields with Additive HD/Speed.
+
+    Image Analysis:
+    The image reveals that dual gaussian is important. Speed effects are ambiguous at best and not well estimated across cells. HD does not appear well-represented.
+
+    Model Improvements:
+    This model builds upon `neuron_model_v2` by incorporating two Gaussian place field and removing Speed features. Further, HD modulation is *multiplicative*. This is motivated by observing how HD correlates with Gaussian activation but can fail alone.
+
+    Equation:
+    rate = baseline
+           + place_amp1 * exp(-0.5 * r1^2 / sigma1^2)
+           + place_amp2 * exp(-0.5 * r2^2 / sigma2^2)
+           * (hd_amp * 0.5 * (1 + cos(hd - hd_pref)))
+    where r1^2 = (x-center_x1)^2 + (y-center_y1)^2
+    and   r2^2 = (x-center_x2)^2 + (y-center_y2)^2
+    """"""
+    # Clip parameters to plausible ranges
+    baseline = np.maximum(0.0, baseline)
+    place_amp1 = np.maximum(0.0, place_amp1)
+    sigma1 = np.maximum(1e-6, sigma1)
+    place_amp2 = np.maximum(0.0, place_amp2)
+    sigma2 = np.maximum(1e-6, sigma2)
+    hd_amp = np.maximum(0.0, hd_amp)
+
+    # Unpack stimuli
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+
+    # First Gaussian place field
+    dx1 = x - center_x1
+    dy1 = y - center_y1
+    r2_1 = dx1 ** 2 + dy1 ** 2
+    place1 = place_amp1 * np.exp(-0.5 * r2_1 / (sigma1 ** 2))
+
+    # Second Gaussian place field
+    dx2 = x - center_x2
+    dy2 = y - center_y2
+    r2_2 = dx2 ** 2 + dy2 ** 2
+    place2 = place_amp2 * np.exp(-0.5 * r2_2 / (sigma2 ** 2))
+    
+    # Head-direction modulation
+    hd_term = (hd_amp * 0.5 * (1.0 + np.cos(hd - hd_pref))) * (place1+place2)
+
+    # Combine all components
+    return baseline + hd_term
+
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""
+    Estimates the parameters for neuron_model_v3.
+    Returns: [baseline, center_x1, center_y1, place_amp1, sigma1, center_x2, center_y2, place_amp2, sigma2, hd_pref, hd_amp]
+
+    Image Analysis & Model Improvements:
+    Based on the provided images and descriptions of parent models, the primary improvement comes from using two Gaussian place fields
+    and removing the Speed modulation, focusing on Place and HD coding. HD modulation is made multiplicative.
+
+    Implementation Details:
+    - Place field centers are estimated using a rate map. The x/y location that contributes to the highest spiking rates are identified for two fields.
+    - Place field amplitudes are estimated as the peak firing rate in the rate map minus the baseline firing rate.
+    - Place field sigmas are a proportion of total pos spread
+    - Head direction preference is estimated by vector averaging of head directions weighted by spike counts.
+    - HD amplitude is a percentile above baseline for the weights*cosine mean.
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, eps=1e-6, min_occ=3, smoothing_sigma=1.2):
+        occ, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        spk, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+        rate = spk / (occ + eps)
+        rate = np.where(occ >= min_occ, rate, np.nan)
+        return rate.T, xedges, yedges
+
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes)
+    finite = np.isfinite(rate)
+
+    baseline = float(np.percentile(spikes, 10)) if len(spikes)>0 else 0
+
+    if not np.any(finite): #Degenerate scenario handling.
+        center = np.mean(pos, axis=0) if len(pos) > 0 else np.zeros(2)
+        amplitude = float(np.max(spikes) - baseline) if len(spikes)>0 else 1.0
+        sigma = 0.1 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1])) if len(pos) > 0 else 1.0
+        return np.array([baseline, center[0], center[1], amplitude, sigma, center[0], center[1], amplitude, sigma, 0.0, 0.5])
+
+    rate_f = rate[finite]
+    rate_nobaseline = rate - baseline
+    peak1_idx = np.nanargmax(rate_nobaseline)
+    rate_nobaseline_copy = rate_nobaseline.copy()
+    rate_nobaseline_copy[np.unravel_index(peak1_idx, rate.shape)] = -np.inf
+    peak2_idx = np.nanargmax(rate_nobaseline_copy)
+
+    iy1, ix1 = np.unravel_index(peak1_idx, rate.shape)
+    iy2, ix2 = np.unravel_index(peak2_idx, rate.shape)
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+    center1 = np.array([x_centers[ix1], y_centers[iy1]])
+    center2 = np.array([x_centers[ix2], y_centers[iy2]])
+    place_amp1 = float(max(rate[iy1, ix1] - baseline, 1e-6))
+    place_amp2 = float(max(rate[iy2, ix2] - baseline, 1e-6))
+    
+    sigma1 = 0.05 * np.sqrt(np.sum((pos[:,0] - center1[0])**2 + (pos[:,1] - center1[1])**2)/len(pos)) if len(pos) > 0 else 1
+    sigma2 = 0.05 * np.sqrt(np.sum((pos[:,0] - center2[0])**2 + (pos[:,1] - center2[1])**2)/len(pos)) if len(pos) > 0 else 1
+
+    w = np.clip(spikes - baseline, 0.0, None)
+    wsum_s = np.sum(w) + 1e-8
+    c = float(np.sum(w * np.cos(hd)) / wsum_s)
+    s = float(np.sum(w * np.sin(hd)) / wsum_s)
+    hd_pref = float(np.arctan2(s, c))
+    hd_amp = float(max(0.0, np.percentile(spikes, 90) - baseline) * np.sqrt(c * c + s * s))
+        
+    return np.array([baseline, center1[0], center1[1], place_amp1, sigma1, center2[0], center2[1], place_amp2, sigma2, hd_pref, hd_amp])",<function parameter_estimator at 0x767d30788ae0>,5,4,1,30.164094924926758,29.455232620239258,"[[ 1.89051386e-02  2.36237045e+02  3.81011353e+01  7.36616755e+00
+   1.74957454e-01  8.30014191e+01  1.93174194e+02  1.46725106e+00
+   4.92944479e+00  1.45987427e+00  8.30704451e-01]
+ [ 7.10197771e-03  1.85089813e+02  2.98464413e+01  5.31126547e+00
+   2.32394174e-01  2.40048248e+02  2.86101360e+01  4.76479530e+00
+   5.33426285e-01  3.23469996e+00  2.18139410e+00]
+ [ 1.42310308e-02  2.19054672e+02  3.18408909e+01  3.46966076e+00
+   6.09807777e+00  1.11684731e+02  2.12509048e+02  5.41167212e+00
+   5.22413111e+00  2.61194587e+00  1.01414549e+00]
+ [ 6.67551067e-03  1.37832062e+02  5.44220352e+01  6.20046902e+00
+   2.74340343e+00  1.45750366e+02  6.26510925e+01  2.73063803e+00
+   5.54367733e+00  2.01770020e+00  1.23140574e+00]
+ [ 1.68926064e-02  2.54629684e+02  8.63716583e+01  5.49680471e+00
+   1.01346922e+00  1.64866791e+02  2.85413456e+01  1.60142273e-01
+   8.84550762e+00  2.27670336e+00  1.07658875e+00]
+ [ 1.13625517e-02  7.76391830e+01  1.45817444e+02  4.74881983e+00
+   5.91523707e-01  8.64318924e+01  1.34594269e+02  3.22051436e-01
+   2.41979790e+00  1.35850573e+00  1.37708735e+00]
+ [ 1.81821845e-02  1.07010124e+02  3.61367912e+01  2.85269785e+00
+   2.74677134e+00  1.16388710e+02  4.16741180e+01  1.18548489e+00
+   3.32328725e+00 -1.62424314e+00  9.69779015e-01]
+ [ 1.18431747e-02  7.86962891e+01  2.90780659e+01  7.30625629e+00
+   1.13022633e-01  8.65722656e+01  3.12139244e+01  4.19345713e+00
+   6.24177232e-02  3.01192045e+00  2.45634675e+00]
+ [ 1.28542306e-02  1.94363907e+02  1.05522644e+02  6.97496843e+00
+   6.35279119e-01  9.83455048e+01  3.95851517e+01  7.11132944e-01
+   4.85418510e+00 -2.87222552e+00  2.24991226e+00]
+ [ 1.45005221e-02  1.56644226e+02  1.98533813e+02  7.17948437e-01
+   3.54091048e+00  2.45799927e+02  3.18120022e+01  5.51569843e+00
+   5.77689171e-01 -3.59356856e+00  1.76381469e+00]
+ [ 7.77121540e-03  1.75395401e+02  1.04920547e+02  3.90156293e+00
+   6.07881248e-01  1.01555855e+02  5.46297302e+01  2.96652645e-01
+   5.89785480e+00  1.81022394e+00  1.83408964e+00]
+ [ 1.22314738e-02  9.81647949e+01  2.04060150e+02  2.20663667e+00
+   8.14017010e+00  1.82262543e+02  1.65728073e+02  1.01461232e+00
+   8.68755531e+00  1.59017003e+00  5.24411440e-01]
+ [ 1.02576287e-02  1.65679520e+02  1.74582657e+02  3.16596538e-01
+   6.81728172e+00  1.98423508e+02  1.81819366e+02  4.70776558e+00
+   4.41050112e-01  3.73225093e-01  1.31957304e+00]
+ [ 7.90886208e-03  7.57289276e+01  1.71650955e+02 -3.47294426e-03
+   5.10888147e+00  1.02207710e+02  1.62821487e+02  1.75481188e+00
+   4.87883329e+00  1.91574895e+00  2.80831963e-01]
+ [ 1.49911614e-02  1.59090027e+02  6.95330582e+01  2.32808137e+00
+   5.61294127e+00  1.48252853e+02  7.68536987e+01  8.64363670e-01
+   4.26471806e+00  3.47758055e-01  5.70627868e-01]
+ [ 3.94893764e-03  1.73874786e+02  1.64228806e+02  2.78320289e+00
+   6.06437922e-01  1.65350739e+02  1.63231491e+02  7.37714052e+00
+   7.68347859e-01 -4.01346350e+00  3.22755289e+00]
+ [ 1.99858323e-02  2.60764648e+02  1.51297226e+02  1.55867040e+00
+   6.90841341e+00  2.62218872e+02  1.42797943e+02  2.04628944e+00
+   2.70848870e+00  2.00726196e-01  5.02408683e-01]]",30.573972702026367,"[[ 0.00000000e+00  1.86411133e+02  1.66688324e+02  6.20565593e-01
+   4.65411329e+00  1.86411133e+02  1.76184784e+02  5.98867476e-01
+   4.96025801e+00 -7.06032395e-01  0.00000000e+00]
+ [ 0.00000000e+00  1.00791168e+02  5.74791336e+01  1.16614318e+00
+   5.50117493e+00  1.86411133e+02  1.61940109e+02  7.80065954e-01
+   4.51200342e+00 -3.15871127e-02  0.00000000e+00]
+ [ 0.00000000e+00  1.57871155e+02  1.47695435e+02  6.35151803e-01
+   4.04985428e+00  8.17645111e+01  1.00213173e+02  4.47863430e-01
+   5.56179142e+00 -6.65726185e-01  0.00000000e+00]
+ [ 0.00000000e+00  9.12778397e+01  3.84862289e+01  7.01060236e-01
+   6.28317022e+00  9.60345078e+01  1.52443665e+02  6.81586325e-01
+   5.45577240e+00  9.94604707e-01  0.00000000e+00]
+ [ 0.00000000e+00  1.62627808e+02  7.64720459e+01  7.20188975e-01
+   3.91159439e+00  2.62517761e+02  1.76184784e+02  7.20188916e-01
+   6.81537724e+00  2.36458969e+00  0.00000000e+00]
+ [ 0.00000000e+00  2.00681122e+02  1.76184784e+02  1.16066909e+00
+   5.14724302e+00  1.81654449e+02  1.85681244e+02  9.58813608e-01
+   5.25306845e+00 -2.20880842e+00  0.00000000e+00]
+ [ 0.00000000e+00  7.70078506e+01  1.04961395e+02  1.23119438e+00
+   5.73199511e+00  2.62517761e+02  1.47695435e+02  9.23395872e-01
+   6.24275303e+00  1.27270591e+00  0.00000000e+00]
+ [ 0.00000000e+00  1.15061165e+02  2.89897785e+01  1.17534125e+00
+   5.95615053e+00  2.57761078e+02  1.71436554e+02  9.79451120e-01
+   6.53509855e+00  3.79172117e-01  0.00000000e+00]
+ [ 0.00000000e+00  1.00791168e+02  1.14457848e+02  8.46811712e-01
+   4.85529852e+00  1.53114471e+02  1.38198975e+02  6.56421185e-01
+   3.88403440e+00  3.74656498e-01  0.00000000e+00]
+ [ 0.00000000e+00  2.00681122e+02  1.04961395e+02  1.33401537e+00
+   3.92552423e+00  1.05547836e+02  3.84862289e+01  9.63455617e-01
+   5.88051271e+00 -2.64196843e-01  0.00000000e+00]
+ [ 0.00000000e+00  1.57871155e+02  5.27309113e+01  1.04270625e+00
+   4.55916214e+00  1.57871155e+02  5.74791336e+01  1.02142644e+00
+   4.41540623e+00  6.07159734e-01  0.00000000e+00]
+ [ 0.00000000e+00  2.00681122e+02  1.04961395e+02  1.35512352e+00
+   3.92552423e+00  2.00681122e+02  1.09709625e+02  9.21129763e-01
+   3.91913271e+00 -1.15482461e+00  0.00000000e+00]
+ [ 0.00000000e+00  2.10194458e+02  7.17238159e+01  7.75385439e-01
+   4.55441856e+00  2.10194458e+02  7.64720459e+01  6.38552666e-01
+   4.46133280e+00  4.15182769e-01  0.00000000e+00]
+ [ 0.00000000e+00  2.62517761e+02  4.32344589e+01  1.87663114e+00
+   6.80257940e+00  2.62517761e+02  2.42415524e+01  1.40747356e+00
+   7.31196308e+00  1.20597589e+00  0.00000000e+00]
+ [ 0.00000000e+00  1.86411133e+02  2.89897785e+01  1.98761535e+00
+   5.44546270e+00  2.19707764e+02  4.79826813e+01  1.91662967e+00
+   5.37661314e+00  1.13582218e+00  0.00000000e+00]
+ [ 0.00000000e+00  1.48357819e+02  5.74791336e+01  1.89780331e+00
+   4.48988152e+00  1.53114471e+02  5.74791336e+01  1.59693205e+00
+   4.44644308e+00 -9.30738598e-02  0.00000000e+00]
+ [ 0.00000000e+00  2.48247772e+02  1.99925919e+02  1.03164077e+00
+   7.03410101e+00  1.81654449e+02  5.74791336e+01  8.25312555e-01
+   4.45168591e+00 -1.02868938e+00  0.00000000e+00]]",gemini-2.0-flash,"(4, 4, 2)","(2, 2, 3)","[[0.02536    0.02536    0.02536    ... 0.02536    0.02536    0.02536   ]
+ [0.007729   0.007729   0.007729   ... 0.007729   0.007729   0.007729  ]
+ [0.00559343 0.00559343 0.00559343 ... 0.00559343 0.00559343 0.00559343]
+ ...
+ [0.01316689 0.01316689 0.01316689 ... 0.01318384 0.01326992 0.01390123]
+ [0.0074826  0.0074826  0.0074826  ... 0.0074826  0.0074826  0.0074826 ]
+ [0.00666352 0.00666352 0.00666352 ... 0.00666352 0.00666352 0.00666352]]",29.455232620239258
+"import numpy as np
+
+def neuron_model(stimuli,
+                    # Field 1 parameters
+                    center_x_1=0.2, center_y_1=0.2, place_amp_1=1.0,
+                    sigma_x_1=1.0, sigma_y_1=0.5, rot_1=0.0,
+                    # Field 2 parameters
+                    center_x_2=0.8, center_y_2=0.2, place_amp_2=1.0,
+                    sigma_x_2=1.0, sigma_y_2=0.5, rot_2=0.0,
+                    # Modulation parameters
+                    baseline=0.0, hd_pref=0.0, hd_amp=0.5, speed_gain=0.1):
+    """"""
+    Parent Model 1 (neuron_model_v1): Single isotropic Gaussian with additive modulation.
+    Parent Model 2 (neuron_model_v2): Sum of two axis-aligned anisotropic Gaussians
+                                       with multiplicative HD and additive speed modulation.
+    This model represents the firing rate as a sum of two rotated, anisotropic
+    Gaussian place fields, with fully multiplicative head-direction (HD) and speed
+    gain modulation.
+    Equation:
+    rate = baseline + (G_1 + G_2) * (1 + hd_amp*cos(hd-hd_pref)) * (1 + speed_gain*speed)
+    where G_i is a rotated, anisotropic 2D Gaussian for field i.
+    This model improves upon its parents based on a visual analysis of their systematic failures:
+    1.  **Fewer Parameters**: Parent model neuron_model_v2 was already showing reduced loss relative to neuron_model_v1. The goal here is to simply parameters rather than include potentially redundant features. By reducing the number of Gaussian place fields from three to two, this new model may reduce the number of free parameters, possibly preventing overfitting.
+    """"""
+    # Clip parameters to plausible ranges
+    place_amp_1 = np.clip(place_amp_1, 0.0, None)
+    sigma_x_1 = np.clip(sigma_x_1, 1e-6, None)
+    sigma_y_1 = np.clip(sigma_y_1, 1e-6, None)
+    place_amp_2 = np.clip(place_amp_2, 0.0, None)
+    sigma_x_2 = np.clip(sigma_x_2, 1e-6, None)
+    sigma_y_2 = np.clip(sigma_y_2, 1e-6, None)
+    baseline = np.clip(baseline, 0.0, None)
+    hd_amp = np.clip(hd_amp, 0.0, 1.0)
+    speed_gain = np.clip(speed_gain, 0.0, None)
+
+    # Unpack stimuli
+    stim = np.asarray(stimuli)
+    x, y = stim[:, 0], stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # --- Helper for rotated Gaussian ---
+    def rotated_gaussian(x, y, cx, cy, amp, sx, sy, rot):
+        dx, dy = x - cx, y - cy
+        cos_rot, sin_rot = np.cos(rot), np.sin(rot)
+        dx_rot = dx * cos_rot + dy * sin_rot
+        dy_rot = -dx * sin_rot + dy * cos_rot
+        r2 = (dx_rot / sx)**2 + (dy_rot / sy)**2
+        return amp * np.exp(-0.5 * r2)
+
+    # --- Calculate total place field response ---
+    place_1 = rotated_gaussian(x, y, center_x_1, center_y_1, place_amp_1, sigma_x_1, sigma_y_1, rot_1)
+    place_2 = rotated_gaussian(x, y, center_x_2, center_y_2, place_amp_2, sigma_x_2, sigma_y_2, rot_2)
+    total_place = place_1 + place_2
+
+    # --- Calculate multiplicative modulations ---
+    hd_modulation = 1.0 + hd_amp * np.cos(hd - hd_pref)
+    speed_modulation = 1.0 + speed_gain * speed
+
+    # --- Combine all terms ---
+    rate = baseline + total_place * hd_modulation * speed_modulation
+
+    return rate",<function neuron_model at 0x767b781a5300>,"import numpy as np
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""
+    Estimate parameters for neuron_model_v3.
+
+    Addresses limitations of prior models by estimating parameters
+    for rotated, anisotropic Gaussians and multiplicative HD/speed
+    modulation.
+
+    Image Analysis Summary:
+    The previous estimator generally finds place field centers and sets an appropriate baseline, but struggles with modulation amplitude. 
+    HD and Speed plots do correlate with position, and the fitted parameters need to be adjusted to improve fidelity to the HD and Speed plots.
+    This estimator attempts to do so by improving the HD and Speed parameter calculations. It sets speed gain to the maximum
+    difference between percentiles of the high and low stimuli values, such that speed gain does the maximal possible.
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, eps=1e-6, min_occ=3, smoothing_sigma=1.2):
+        def _gaussian_kernel(sigma):
+            if sigma <= 0:
+                return None
+            size = int(max(3, np.ceil(6 * sigma)))
+            if size % 2 == 0:
+                size += 1
+            ax = np.arange(size) - size // 2
+            xx, yy = np.meshgrid(ax, ax)
+            kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+            kernel /= np.sum(kernel)
+            return kernel
+
+        def _fft_convolve2d(a, b):
+            out_shape = (a.shape[0] + b.shape[0] - 1, a.shape[1] + b.shape[1] - 1)
+            fa = np.fft.rfftn(a, s=out_shape)
+            fb = np.fft.rfftn(b, s=out_shape)
+            out = np.fft.irfftn(fa * fb, s=out_shape)
+            start0 = (b.shape[0] - 1) // 2
+            start1 = (b.shape[1] - 1) // 2
+            return out[start0:start0 + a.shape[0], start1:start1 + a.shape[1]]
+
+        occ, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        spk, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+        rate = spk / (occ + eps)
+        rate = np.where(occ >= min_occ, rate, np.nan)
+        kernel = _gaussian_kernel(smoothing_sigma)
+        if kernel is not None:
+            rate_filled = np.nan_to_num(rate, nan=0.0)
+            occ_mask = np.isfinite(rate).astype(float)
+            rate_s = _fft_convolve2d(rate_filled, kernel)
+            norm = _fft_convolve2d(occ_mask, kernel)
+            rate = rate_s / (norm + eps)
+            rate = np.where(norm > 0, rate, np.nan)
+        return rate.T, xedges, yedges
+
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes)
+    finite = np.isfinite(rate)
+
+    if not np.any(finite):
+        center = np.mean(pos, axis=0)
+        baseline = float(np.min(spikes))
+        amplitude = float(np.max(spikes) - baseline)
+        sigma = 0.1 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1]))
+        return np.array([center[0], center[1], amplitude, sigma, sigma/2.0, 0.0,
+                         center[0], center[1], amplitude, sigma, sigma/2.0, 0.0,
+                         baseline, 0.0, 0.0, 0.0])
+
+    rate_f = rate[finite]
+    baseline = float(np.percentile(rate_f, 20))
+    peak1 = float(np.nanmax(rate))
+    rate_copy = rate.copy()
+    peak1_idx = np.nanargmax(rate_copy)
+    rate_copy[np.unravel_index(peak1_idx, rate.shape)] = np.nan
+    peak2 = float(np.nanmax(rate_copy))
+    place_amp1 = max(peak1 - baseline, 1e-6)
+    place_amp2 = max(peak2 - baseline, 1e-6)
+
+    peak1_idx = np.nanargmax(rate)
+    iy1, ix1 = np.unravel_index(peak1_idx, rate.shape)
+
+    rate_copy = rate.copy()
+    rate_copy[np.unravel_index(peak1_idx, rate.shape)] = np.nan
+    peak2_idx = np.nanargmax(rate_copy)
+    iy2, ix2 = np.unravel_index(peak2_idx, rate_copy.shape)
+
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+    center1 = np.array([x_centers[ix1], y_centers[iy1]])
+    center2 = np.array([x_centers[ix2], y_centers[iy2]])
+    sigma_x = 0.1 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1]))
+    sigma_y = sigma_x / 2.0 # Arbitrary anisotropy
+    rot = 0.0
+
+    w = np.clip(spikes - baseline, 0.0, None)
+    wsum_s = np.sum(w) + 1e-8
+    c = float(np.sum(w * np.cos(hd)) / wsum_s)
+    s = float(np.sum(w * np.sin(hd)) / wsum_s)
+    hd_pref = float(np.arctan2(s, c))
+    hd_amp = float(max(0.0, np.percentile(spikes, 90) - baseline) * np.sqrt(c * c + s * s)) / max(place_amp1+place_amp2, 1e-6)
+    hd_amp = min(1.0, hd_amp)
+
+    speed_high = np.percentile(spikes[speed > np.median(speed)], 90)
+    speed_low = np.percentile(spikes[speed <= np.median(speed)], 10)
+    speed_gain = float(max(0.0, (speed_high - speed_low) / np.std(spikes))) / max(place_amp1+place_amp2, 1e-6)
+    speed_gain = float(max(0.0, speed_gain))
+
+    return np.array([center1[0], center1[1], place_amp1, sigma_x, sigma_y, rot,
+                     center2[0], center2[1], place_amp2, sigma_x, sigma_y, rot,
+                     baseline, hd_pref, hd_amp, speed_gain])",<function parameter_estimator at 0x767b685a63e0>,4,4,1,30.17268943786621,29.34645652770996,"[[ 8.04423141e+01  1.91331558e+02  5.35392940e-01  1.60743923e+01
+   3.69387913e+00  9.65233207e-01  8.08739166e+01  1.91027847e+02
+   1.21068276e-01  1.80227146e+01  6.68774748e+00 -1.49383917e-01
+   1.73202157e-02  2.58423358e-01 -1.80162285e-02 -1.80163886e-02]
+ [ 1.86956451e+02  2.37798157e+01  2.51678284e-02  1.87363663e+01
+   8.99621868e+00  3.75249475e-01  1.91645187e+02  2.38130150e+01
+   4.61929180e-02  1.87546654e+01  9.01263905e+00  3.74124885e-01
+  -1.77853219e-02  3.34060454e+00  3.39443594e-01 -1.80163905e-02]
+ [ 2.21895935e+02  2.38938770e+01  6.90543592e-01  1.75614796e+01
+   8.97016144e+00 -1.15083098e+00  2.18126862e+02  2.79043121e+01
+   1.11019862e+00  1.74073544e+01  6.17404556e+00  5.18888831e-01
+  -1.80163831e-02 -1.96530938e+00  6.48202479e-01 -1.80163905e-02]
+ [ 1.46015289e+02  6.19076729e+01  3.46287936e-01  1.68412361e+01
+   7.39287806e+00  3.61469872e-02  1.44120331e+02  6.15881767e+01
+   4.62846220e-01  1.67446423e+01  7.16371679e+00  9.61956620e-01
+  -1.80163924e-02  7.95901656e-01 -1.80163831e-02 -1.80163905e-02]
+ [ 2.62953339e+02  8.62460022e+01  2.21114308e-01  1.87141991e+01
+   8.61161900e+00 -1.44643950e+00  2.62917114e+02  8.08810577e+01
+  -3.58290737e-04  1.86310444e+01  9.11458778e+00  5.42370141e-01
+   2.28153057e-02  1.42519188e+00  7.68723726e-01 -1.80163905e-02]
+ [ 7.59968033e+01  1.44269897e+02  2.00383708e-01  1.55066576e+01
+   5.23337460e+00 -8.69823515e-01  7.68586502e+01  1.47427689e+02
+  -2.52703414e-03  1.88680477e+01  9.38251495e+00  1.11183554e-01
+   1.09461062e-02  8.92250001e-01  8.47212553e-01 -1.80163886e-02]
+ [ 1.10077538e+02  3.55571175e+01  3.61386120e-01  1.54343195e+01
+   3.25630999e+00  7.41160274e-01  1.08055977e+02  3.66550598e+01
+   1.98463395e-01  1.68802357e+01  4.74570417e+00 -2.16562375e-02
+   1.68350171e-02 -2.07567066e-01 -1.80163458e-02 -1.80163905e-02]
+ [ 7.63952103e+01  2.37614479e+01  1.44807234e-01  1.86292706e+01
+   9.07137966e+00 -4.61929381e-01  7.65468826e+01  2.85806541e+01
+   8.55302066e-02  1.86555977e+01  9.11129189e+00 -4.18129683e-01
+   1.14707146e-02  7.82885730e-01 -1.80163607e-02 -1.80163905e-02]
+ [ 9.68256454e+01  3.69399757e+01  4.37171787e-01  1.47972841e+01
+   4.91059542e+00  8.69625449e-01  9.85885773e+01  3.81333008e+01
+  -2.13783327e-03  1.81510715e+01  8.18106937e+00  6.73958540e-01
+   1.17435884e-02 -8.56299758e-01 -1.80163514e-02 -1.80163905e-02]
+ [ 2.39107010e+02  2.76614571e+01  3.36838543e-01  1.29280968e+01
+   6.78938484e+00  3.81980330e-01  1.55072922e+02  2.03876221e+02
+   7.91915715e-01  1.29249001e+01  2.49701142e+00 -1.31824660e+00
+   1.33653497e-02 -2.74469900e+00  2.61244148e-01 -1.80163886e-02]
+ [ 1.04595245e+02  5.40473900e+01 -3.49587598e-03  1.87545547e+01
+   8.01894951e+00 -5.51591992e-01  9.96168823e+01  5.85983047e+01
+   2.25350812e-01  1.58245087e+01  3.41614771e+00 -4.82286721e-01
+   7.42752664e-03  2.16314054e+00  9.71358716e-01 -1.80163868e-02]
+ [ 9.64908676e+01  2.09506851e+02  1.95483774e-01  1.80839977e+01
+   7.13350534e+00  1.70772409e+00  9.76635818e+01  2.09218292e+02
+   6.25755429e-01  1.83453865e+01  5.59069967e+00 -1.45912230e+00
+   1.38606504e-02 -1.13004756e+00 -1.80163607e-02 -1.80163905e-02]
+ [ 1.70328674e+02  1.72216064e+02  2.01748669e-01  1.46792421e+01
+   6.66614723e+00 -5.65508842e-01  1.62986908e+02  1.75636978e+02
+  -1.20578741e-03  1.88309364e+01  9.34978485e+00 -2.27958962e-01
+   8.77720863e-03 -2.40752727e-01 -1.80155337e-02 -1.80163868e-02]
+ [ 7.91716461e+01  1.71307373e+02  5.42979538e-02  2.38114700e+01
+   8.23925972e+00 -1.99434683e-01  1.13030746e+02  2.73270397e+01
+   2.05868155e-01  2.34952412e+01  3.85820699e+00 -2.42286503e-01
+   6.86333328e-03  3.06196153e-01  6.24156535e-01 -1.80163868e-02]
+ [ 1.57465973e+02  6.94893646e+01  4.38691407e-01  1.53743553e+01
+   5.78701544e+00 -5.19076526e-01  1.57054855e+02  6.97294235e+01
+   2.38497168e-01  1.60146255e+01  6.73351097e+00  9.24347579e-01
+  -1.79610327e-02  6.01236999e-01 -1.80163682e-02 -1.80163886e-02]
+ [ 1.68713898e+02  1.64830231e+02  2.44467214e-01  1.65548668e+01
+   5.98161888e+00  5.01141965e-01  1.66968887e+02  1.65989212e+02
+   1.99609950e-01  1.67159348e+01  6.45553255e+00 -1.12270045e+00
+  -2.94107768e-18 -6.17602408e-01 -1.80163700e-02 -1.80163905e-02]
+ [ 2.64157440e+02  1.46646988e+02  3.46712679e-01  1.78845482e+01
+   7.89846897e+00  1.51179552e+00  2.63031189e+02  1.50636597e+02
+   1.04805306e-01  1.75808754e+01  8.16749001e+00 -6.79811418e-01
+   1.78000126e-02  9.57471788e-01 -1.15172483e-03 -1.80163886e-02]]",31.812997817993164,"[[ 1.86411133e+02  1.61940109e+02  2.82905191e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  1.81654449e+02  1.61940109e+02
+   2.76053607e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   5.98804560e-03 -7.05957055e-01  0.00000000e+00  0.00000000e+00]
+ [ 1.00791168e+02  5.74791336e+01  3.31789762e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  1.00791168e+02  5.27309113e+01
+   3.08610857e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   5.93990408e-05 -3.15885060e-02  0.00000000e+00  0.00000000e+00]
+ [ 1.57871155e+02  1.47695435e+02  1.97780102e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  1.53114471e+02  1.47695435e+02
+   1.86249003e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   7.75054668e-18 -6.65726185e-01  0.00000000e+00  0.00000000e+00]
+ [ 9.60345078e+01  3.84862289e+01  2.70846248e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  1.00791168e+02  3.84862289e+01
+   2.53268242e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   1.06642292e-04  9.94605005e-01  0.00000000e+00  0.00000000e+00]
+ [ 2.53004425e+02  1.33450745e+02  2.95112461e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  2.53004425e+02  1.38198975e+02
+   2.89008081e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   2.07244419e-04  2.36459613e+00  0.00000000e+00  0.00000000e+00]
+ [ 1.86411133e+02  1.85681244e+02  3.55831951e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  1.86411133e+02  1.80933014e+02
+   3.23560536e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+  -1.11130609e-18 -2.20880842e+00  8.86018163e-20  0.00000000e+00]
+ [ 2.62517761e+02  1.52443665e+02  5.70488155e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  2.62517761e+02  1.47695435e+02
+   5.69299400e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   4.65227058e-05  1.27269757e+00  0.00000000e+00  0.00000000e+00]
+ [ 1.15061165e+02  2.42415524e+01  3.14892024e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  1.38844482e+02  2.42415524e+01
+   2.85053253e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   3.36820213e-03  3.79288226e-01  0.00000000e+00  0.00000000e+00]
+ [ 1.53114471e+02  1.42947205e+02  2.23691359e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  1.53114471e+02  1.38198975e+02
+   2.02087983e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+  -1.01237281e-18  3.74656498e-01  1.14652235e-19  0.00000000e+00]
+ [ 2.00681122e+02  1.04961395e+02  2.63305008e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  2.00681122e+02  1.09709625e+02
+   2.46632561e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   9.05616525e-06 -2.64196575e-01  0.00000000e+00  0.00000000e+00]
+ [ 1.38844482e+02  6.22273598e+01  3.48364174e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  1.43601135e+02  6.22273598e+01
+   3.39738369e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   2.50969361e-17  6.07159734e-01  0.00000000e+00  0.00000000e+00]
+ [ 2.00681122e+02  1.09709625e+02  3.27312171e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  2.05437775e+02  1.09709625e+02
+   3.19698304e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   1.16835674e-18 -1.15482461e+00  0.00000000e+00  0.00000000e+00]
+ [ 2.10194458e+02  7.17238159e+01  2.28402451e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  2.10194458e+02  7.64720459e+01
+   2.18743742e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   5.95048815e-03  4.14627641e-01  0.00000000e+00  0.00000000e+00]
+ [ 2.62517761e+02  2.42415524e+01  6.72047257e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  2.62517761e+02  4.32344589e+01
+   6.20714843e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   1.66631344e-05  1.20597661e+00  0.00000000e+00  0.00000000e+00]
+ [ 2.19707764e+02  4.32344589e+01  5.96871436e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  1.86411133e+02  2.42415524e+01
+   5.57487965e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   9.65241270e-07  1.13582218e+00  0.00000000e+00  0.00000000e+00]
+ [ 1.48357819e+02  5.74791336e+01  6.81810677e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  1.53114471e+02  5.74791336e+01
+   6.76799953e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   2.90714347e-17 -9.30738598e-02  0.00000000e+00  0.00000000e+00]
+ [ 2.53004425e+02  1.09709625e+02  1.50158331e-01  1.90266571e+01
+   9.51332855e+00  0.00000000e+00  2.53004425e+02  1.14457848e+02
+   1.36240691e-01  1.90266571e+01  9.51332855e+00  0.00000000e+00
+   0.00000000e+00 -1.02868938e+00  0.00000000e+00  0.00000000e+00]]",gemini-2.0-flash,"(1, 4, 4)","(3, 4, 2)","[[2.0142213e-02 2.0142213e-02 2.0142213e-02 ... 2.0142213e-02
+  2.0142213e-02 2.0142213e-02]
+ [1.8419966e-20 2.8157790e-20 3.5722922e-20 ... 9.5087230e-16
+  1.7788026e-15 2.4807175e-15]
+ [2.3341046e-16 1.1737657e-16 1.5524931e-16 ... 1.6542578e-15
+  3.7350549e-15 1.1080348e-14]
+ ...
+ [2.9525891e-02 3.4424718e-02 3.7512600e-02 ... 3.6155733e-01
+  3.9909825e-01 4.3943298e-01]
+ [3.3697219e-11 3.6928557e-11 4.1656491e-11 ... 6.1431349e-10
+  1.6076712e-09 5.2057616e-09]
+ [8.5148386e-08 6.3150729e-08 5.4194835e-08 ... 1.3564285e-12
+  6.9651235e-13 5.7058758e-13]]",29.34645652770996
+"import numpy as np
+
+def neuron_model(stimuli,
+                    baseline=0.0,
+                    center_x1=0.0,
+                    center_y1=0.0,
+                    place_amp1=1.0,
+                    sigma1=1.0,
+                    center_x2=0.0,
+                    center_y2=0.0,
+                    place_amp2=1.0,
+                    sigma2=1.0,
+                    hd_pref=0.0,
+                    hd_amp=0.5,
+                    speed_gain=0.0,
+                    speed_offset=0.0,
+                    speed_exponent=1.0):
+    """"""
+    Parent Models:
+      - neuron_model_v1: Additive dual-Gaussian place field model with multiplicative HD modulation and additive speed modulation.
+      - neuron_model_v2: Additive dual-Gaussian place field model with additive HD and speed modulation.
+
+    This model describes the neuronal firing rate as the sum of two
+    isotropic 2D Gaussian place fields, with head-direction and speed modulation.
+    The head direction term modulates the place field, while the speed
+    term adds to the firing rate, and the speed is raised to a power.
+
+    Equation:
+    rate = baseline
+           + place_amp1 * exp(-0.5 * r1^2 / sigma1^2)
+           + place_amp2 * exp(-0.5 * r2^2 / sigma2^2)
+           + hd_amp * 0.5 * (1 + cos(hd - hd_pref)) * (place_amp1 * exp(-0.5 * r1^2 / sigma1^2)+place_amp2 * exp(-0.5 * r2^2 / sigma2^2))
+           + speed_gain * (speed + speed_offset)**speed_exponent
+    where r1^2 = (x-center_x1)^2 + (y-center_y1)^2
+    and   r2^2 = (x-center_x2)^2 + (y-center_y2)^2
+
+    Image Analysis & Model Improvements:
+    The diagnostic plots for parent models v1 and v2 reveal a systematic
+    failure: they use only a single Gaussian to model the spatial firing rate.
+    However, the empirical rate maps for all displayed cells (e.g., Cell 1,
+    Cell 2, Cell 11) clearly show multiple, distinct firing fields. The
+    single-Gaussian models fail to capture this, typically by fitting only
+    the strongest field and ignoring the others, resulting in high loss.
+    Model v2 used two gaussians. However, its loss was similar to that of v1, 
+    suggesting there are other effects that v2 failed to capture. Looking at the
+    head direction tuning, it looks as if cells are only sensitive to head direction
+    when they are also in the place field. Moreover, most speed data start around a rate of zero
+    until a certain speed and *then* change. That is, it is like the data is being clamped or offset.
+
+    This model improves upon the parents by 1) making the head direction a modulation factor which multiplies
+    by the Gaussian responses, and 2) by adding a speed offset to account for speed activity changes only starting at
+    some speed value and 3) by making the speed a powerlaw to add non-linearity.
+    """"""
+    # Clip parameters to plausible ranges
+    baseline = np.maximum(0.0, baseline)
+    place_amp1 = np.maximum(0.0, place_amp1)
+    sigma1 = np.maximum(1e-6, sigma1)
+    place_amp2 = np.maximum(0.0, place_amp2)
+    sigma2 = np.maximum(1e-6, sigma2)
+    hd_amp = np.maximum(0.0, hd_amp)
+    speed_gain = np.maximum(0.0, speed_gain)
+    speed_offset = np.clip(speed_offset, -10, 10)
+    speed_exponent = np.clip(speed_exponent, 0.1, 5.0)
+
+
+    # Unpack stimuli
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # First Gaussian place field
+    dx1 = x - center_x1
+    dy1 = y - center_y1
+    r2_1 = dx1 ** 2 + dy1 ** 2
+    place1 = place_amp1 * np.exp(-0.5 * r2_1 / (sigma1 ** 2))
+
+    # Second Gaussian place field
+    dx2 = x - center_x2
+    dy2 = y - center_y2
+    r2_2 = dx2 ** 2 + dy2 ** 2
+    place2 = place_amp2 * np.exp(-0.5 * r2_2 / (sigma2 ** 2))
+    
+    # Head-direction modulation
+    hd_term = hd_amp * 0.5 * (1.0 + np.cos(hd - hd_pref)) * (place1+place2)
+
+    # Speed modulation
+    speed_term = speed_gain * (speed + speed_offset)**speed_exponent
+
+    # Combine all components
+    return baseline + place1 + place2 + hd_term + speed_term",<function neuron_model at 0x767bac414360>,"import numpy as np
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""
+    Estimates parameters for neuron_model_v3 (dual-Gaussian with HD modulation and speed exponent).
+    Returns: [baseline, center_x1, center_y1, place_amp1, sigma1, center_x2, center_y2, place_amp2, sigma2,
+              hd_pref, hd_amp, speed_gain, speed_offset, speed_exponent]
+
+    Improvements based on image diagnostics and previous versions:
+    - HD modulation made multiplicative with the place fields, addresses direction effect.
+    - Introduce a speed exponent parameter.
+
+    Implementation details:
+    - Rate map computation used to find place field centers and amplitudes.
+    - Head direction preference is estimated using vector averaging.
+    - Speed offset and gain are estimated via linear regression of speed vs firing rate, with initial bias.
+    - Speed exponent estimated coarsely based on how zero valued vs. postive rates correlate.
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, eps=1e-6, min_occ=3, smoothing_sigma=1.2):
+        def _gaussian_kernel(sigma):
+            if sigma <= 0:
+                return None
+            size = int(max(3, np.ceil(6 * sigma)))
+            if size % 2 == 0:
+                size += 1
+            ax = np.arange(size) - size // 2
+            xx, yy = np.meshgrid(ax, ax)
+            kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+            kernel /= np.sum(kernel)
+            return kernel
+
+        def _fft_convolve2d(a, b):
+            out_shape = (a.shape[0] + b.shape[0] - 1, a.shape[1] + b.shape[1] - 1)
+            fa = np.fft.rfftn(a, s=out_shape)
+            fb = np.fft.rfftn(b, s=out_shape)
+            out = np.fft.irfftn(fa * fb, s=out_shape)
+            start0 = (b.shape[0] - 1) // 2
+            start1 = (b.shape[1] - 1) // 2
+            return out[start0:start0 + a.shape[0], start1:start1 + a.shape[1]]
+
+        occ, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        spk, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+        rate = spk / (occ + eps)
+        rate = np.where(occ >= min_occ, rate, np.nan)
+        kernel = _gaussian_kernel(smoothing_sigma)
+        if kernel is not None:
+            rate_filled = np.nan_to_num(rate, nan=0.0)
+            occ_mask = np.isfinite(rate).astype(float)
+            rate_s = _fft_convolve2d(rate_filled, kernel)
+            norm = _fft_convolve2d(occ_mask, kernel)
+            rate = rate_s / (norm + eps)
+            rate = np.where(norm > 0, rate, np.nan)
+        return rate.T, xedges, yedges
+
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes)
+    finite = np.isfinite(rate)
+
+    baseline = float(np.percentile(spikes, 10)) if len(spikes)>0 else 0
+    if not np.any(finite):
+        center = np.mean(pos, axis=0) if len(pos) > 0 else np.zeros(2)
+        amplitude = float(np.max(spikes) - baseline) if len(spikes)>0 else 1.0
+        sigma = 0.1 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1])) if len(pos) > 0 else 1.0
+
+        return np.array([baseline, center[0], center[1], amplitude, sigma, center[0], center[1], amplitude, sigma, 0.0, 0.0, 0.0, 0.0, 1.0])
+
+    rate_f = rate[finite]
+    rate_nobaseline = rate - baseline
+    peak1_idx = np.nanargmax(rate_nobaseline)
+    rate_nobaseline_copy = rate_nobaseline.copy()
+    rate_nobaseline_copy[np.unravel_index(peak1_idx, rate.shape)] = -np.inf 
+    peak2_idx = np.nanargmax(rate_nobaseline_copy)
+
+    iy1, ix1 = np.unravel_index(peak1_idx, rate.shape)
+    iy2, ix2 = np.unravel_index(peak2_idx, rate.shape)
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+    center1 = np.array([x_centers[ix1], y_centers[iy1]])
+    center2 = np.array([x_centers[ix2], y_centers[iy2]])
+    place_amp1 = float(max(rate[iy1, ix1] - baseline, 1e-6))
+    place_amp2 = float(max(rate[iy2, ix2] - baseline, 1e-6))
+
+    sigma1 = 0.05* np.sqrt(np.sum((pos[:,0] - center1[0])**2 + (pos[:,1] - center1[1])**2)/len(pos)) if len(pos) > 0 else 1
+    sigma2 = 0.05* np.sqrt(np.sum((pos[:,0] - center2[0])**2 + (pos[:,1] - center2[1])**2)/len(pos)) if len(pos) > 0 else 1
+
+    w = np.clip(spikes - baseline, 0.0, None)
+    wsum_s = np.sum(w) + 1e-8
+    c = float(np.sum(w * np.cos(hd)) / wsum_s)
+    s = float(np.sum(w * np.sin(hd)) / wsum_s)
+    hd_pref = float(np.arctan2(s, c))
+    hd_amp = float(max(0.0, np.percentile(spikes, 90) - baseline) * np.sqrt(c * c + s * s))
+
+    # Estimate speed_offset directly
+    speed_offset = -float(np.mean(speed[spikes < 1])) if np.any(spikes < 1) else 0.0
+    speed_var = float(np.var(speed)) + 1e-8
+    speed_gain = float(np.cov(speed, spikes - baseline, bias=True)[0, 1] / speed_var)
+    speed_gain = float(max(0.0, speed_gain))
+
+    # Estimate Speed Exponent (crudely)
+    speed_exponent = 1.0 # Linear by default
+    if len(spikes) > 0 and speed_gain>0:
+      non_zero_speed = speed[speed>0] #only if speed greater than 0 has an effect
+      
+      if(len(non_zero_speed)): #if so... assume rates go by the root of a log-like-curve if enough spiking points
+          speed_exponent = 2.5 # quadratic if positive valued rates
+        
+        
+
+    return np.array([baseline, center1[0], center1[1], place_amp1, sigma1, center2[0], center2[1], place_amp2, sigma2, hd_pref, hd_amp, speed_gain, speed_offset, speed_exponent])",<function parameter_estimator at 0x767b3738d6c0>,2,2,3,29.959409713745117,31.588220596313477,"[[ 0.00000000e+00  8.17645111e+01  1.95177704e+02  3.62832934e-01
+   7.00674963e+00  8.17645111e+01  1.90429474e+02  3.57183486e-01
+   6.86407804e+00  2.58371085e-01  0.00000000e+00  1.34080619e-04
+  -1.78195515e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.86411133e+02  2.42415524e+01  7.39997387e-01
+   5.62312937e+00  1.91167786e+02  2.42415524e+01  6.63811386e-01
+   5.66890097e+00  2.51443791e+00  0.00000000e+00  6.91169917e-05
+  -1.78341084e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.19707764e+02  2.42415524e+01  1.59807146e+00
+   6.13296700e+00  2.19707764e+02  2.89897785e+01  1.47168076e+00
+   5.97049141e+00  2.43638784e-01  0.00000000e+00  1.72099928e-04
+  -1.78218327e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.48357819e+02  6.22273598e+01  8.42217028e-01
+   4.35678959e+00  1.43601135e+02  6.22273598e+01  8.38881791e-01
+   4.41394615e+00  7.95901656e-01  0.00000000e+00  2.39149653e-04
+  -1.78178463e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.62517761e+02  8.59684906e+01  5.70943356e-01
+   6.05746174e+00  2.62517761e+02  8.12202606e+01  5.50056934e-01
+   6.10791492e+00  9.61343229e-01  0.00000000e+00  0.00000000e+00
+  -1.78485069e+01  1.00000000e+00]
+ [ 0.00000000e+00  7.70078506e+01  1.42947205e+02  2.14284956e-01
+   5.96749830e+00  7.70078506e+01  1.47695435e+02  2.12353006e-01
+   6.03843832e+00 -1.96290791e-01  0.00000000e+00  0.00000000e+00
+  -1.78381481e+01  1.00000000e+00]
+ [ 0.00000000e+00  1.10304497e+02  3.37380066e+01  2.99979657e-01
+   5.90890408e+00  1.05547836e+02  3.37380066e+01  2.86233246e-01
+   6.02673101e+00 -2.07587197e-01  0.00000000e+00  1.59483479e-05
+  -1.78353806e+01  2.50000000e+00]
+ [ 0.00000000e+00  7.70078506e+01  2.42415524e+01  9.20684576e-01
+   7.13831663e+00  7.70078506e+01  2.89897785e+01  7.43756473e-01
+   6.99921751e+00  7.82884896e-01  0.00000000e+00  0.00000000e+00
+  -1.78435287e+01  1.00000000e+00]
+ [ 0.00000000e+00  9.60345078e+01  3.84862289e+01  3.58392656e-01
+   6.14267826e+00  1.00791168e+02  3.84862289e+01  3.30224395e-01
+   6.00831890e+00 -8.56299818e-01  0.00000000e+00  6.40612488e-05
+  -1.78325195e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.43491089e+02  2.89897785e+01  2.65506983e-01
+   6.58193445e+00  1.57871155e+02  1.99925919e+02  2.52516061e-01
+   5.76280642e+00 -2.87821150e+00  0.00000000e+00  0.00000000e+00
+  -1.78380470e+01  1.00000000e+00]
+ [ 0.00000000e+00  1.05547836e+02  5.27309113e+01  1.24968968e-01
+   5.48029232e+00  1.00791168e+02  5.27309113e+01  1.16208434e-01
+   5.61721277e+00  1.76025212e+00  0.00000000e+00  9.95768860e-05
+  -1.78312130e+01  2.50000000e+00]
+ [ 0.00000000e+00  9.60345078e+01  2.09422363e+02  6.26769423e-01
+   7.08034134e+00  1.00791168e+02  2.09422363e+02  6.23455822e-01
+   6.96409559e+00 -1.12998211e+00  0.00000000e+00  1.06023974e-04
+  -1.78247204e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.67384460e+02  1.76184784e+02  2.03696251e-01
+   4.86497879e+00  1.62627808e+02  1.76184784e+02  1.80547163e-01
+   4.86999130e+00 -2.40750402e-01  0.00000000e+00  2.07693636e-04
+  -1.78243923e+01  2.50000000e+00]
+ [ 0.00000000e+00  7.70078506e+01  1.71436554e+02  2.71973491e-01
+   6.51245594e+00  1.10304497e+02  2.42415524e+01  2.49023020e-01
+   6.22378159e+00 -5.44491172e-01  0.00000000e+00  7.10744644e-05
+  -1.78348598e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.57871155e+02  7.17238159e+01  5.35944581e-01
+   4.03753996e+00  1.57871155e+02  6.69755859e+01  5.11708021e-01
+   4.15375662e+00  6.01237774e-01  0.00000000e+00  8.45614850e-05
+  -1.78222542e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.67384460e+02  1.61940109e+02  4.51821506e-01
+   4.40704441e+00  1.67384460e+02  1.66688324e+02  4.03457671e-01
+   4.55243206e+00 -6.17602408e-01  0.00000000e+00  0.00000000e+00
+  -1.78397446e+01  1.00000000e+00]
+ [ 0.00000000e+00  2.62517761e+02  1.47695435e+02  5.56660652e-01
+   6.24275303e+00  2.62517761e+02  1.52443665e+02  4.98376608e-01
+   6.31952333e+00  2.80598074e-01  0.00000000e+00  5.44804861e-05
+  -1.78268147e+01  2.50000000e+00]]",29.959409713745117,"[[ 0.00000000e+00  1.86411133e+02  1.61940109e+02  2.88893253e-01
+   4.51200342e+00  1.81654449e+02  1.61940109e+02  2.82041669e-01
+   4.46703959e+00 -7.06032395e-01  0.00000000e+00  2.41776987e-04
+  -1.77879753e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.00791168e+02  5.74791336e+01  3.31849158e-01
+   5.50117493e+00  1.00791168e+02  5.27309113e+01  3.08670253e-01
+   5.61721277e+00 -3.15871127e-02  0.00000000e+00  1.54017980e-04
+  -1.78210869e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.57871155e+02  1.47695435e+02  1.97780102e-01
+   4.04985428e+00  1.53114471e+02  1.47695435e+02  1.86249003e-01
+   4.08367109e+00 -6.65726185e-01  0.00000000e+00  1.18020514e-04
+  -1.78305378e+01  2.50000000e+00]
+ [ 0.00000000e+00  9.60345078e+01  3.84862289e+01  2.70952910e-01
+   6.14267826e+00  1.00791168e+02  3.84862289e+01  2.53374904e-01
+   6.00831890e+00  9.94604707e-01  0.00000000e+00  7.81461567e-05
+  -1.78300858e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.53004425e+02  1.33450745e+02  2.95319706e-01
+   5.69566679e+00  2.53004425e+02  1.38198975e+02  2.89215326e-01
+   5.75037813e+00  2.36458969e+00  0.00000000e+00  6.78219585e-05
+  -1.78322487e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.86411133e+02  1.85681244e+02  3.55831951e-01
+   5.29135656e+00  1.86411133e+02  1.80933014e+02  3.23560536e-01
+   5.12298155e+00 -2.20880842e+00  0.00000000e+00  0.00000000e+00
+  -1.78380718e+01  1.00000000e+00]
+ [ 0.00000000e+00  2.62517761e+02  1.52443665e+02  5.70534647e-01
+   6.31952333e+00  2.62517761e+02  1.47695435e+02  5.69345951e-01
+   6.24275303e+00  1.27270591e+00  0.00000000e+00  8.80131192e-05
+  -1.78262272e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.15061165e+02  2.42415524e+01  3.18260223e-01
+   6.11900711e+00  1.38844482e+02  2.42415524e+01  2.88421482e-01
+   5.71604109e+00  3.79172117e-01  0.00000000e+00  1.21340883e-04
+  -1.78195305e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.53114471e+02  1.42947205e+02  2.23691359e-01
+   3.97802472e+00  1.53114471e+02  1.38198975e+02  2.02087983e-01
+   3.88403440e+00  3.74656498e-01  0.00000000e+00  0.00000000e+00
+  -1.78453178e+01  1.00000000e+00]
+ [ 0.00000000e+00  2.00681122e+02  1.04961395e+02  2.63314068e-01
+   3.92552423e+00  2.00681122e+02  1.09709625e+02  2.46641621e-01
+   3.91913271e+00 -2.64196843e-01  0.00000000e+00  8.77358907e-05
+  -1.78309383e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.38844482e+02  6.22273598e+01  3.48364174e-01
+   4.48300838e+00  1.43601135e+02  6.22273598e+01  3.39738369e-01
+   4.41394615e+00  6.07159734e-01  0.00000000e+00  1.14371032e-04
+  -1.78274384e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.00681122e+02  1.09709625e+02  3.27312171e-01
+   3.91913271e+00  2.05437775e+02  1.09709625e+02  3.19698304e-01
+   4.02688980e+00 -1.15482461e+00  0.00000000e+00  5.12040715e-05
+  -1.78341522e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.10194458e+02  7.17238159e+01  2.34352931e-01
+   4.55441856e+00  2.10194458e+02  7.64720459e+01  2.24694222e-01
+   4.46133280e+00  4.15182769e-01  0.00000000e+00  8.01613351e-05
+  -1.78241024e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.62517761e+02  2.42415524e+01  6.72063947e-01
+   7.31196308e+00  2.62517761e+02  4.32344589e+01  6.20731473e-01
+   6.80257940e+00  1.20597589e+00  0.00000000e+00  1.07306369e-05
+  -1.78349228e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.19707764e+02  4.32344589e+01  5.96872389e-01
+   5.51575661e+00  1.86411133e+02  2.42415524e+01  5.57488918e-01
+   5.62312937e+00  1.13582218e+00  0.00000000e+00  2.10321115e-04
+  -1.78177357e+01  2.50000000e+00]
+ [ 0.00000000e+00  1.48357819e+02  5.74791336e+01  6.81810677e-01
+   4.48988152e+00  1.53114471e+02  5.74791336e+01  6.76799953e-01
+   4.44644308e+00 -9.30738598e-02  0.00000000e+00  1.53133631e-04
+  -1.78261738e+01  2.50000000e+00]
+ [ 0.00000000e+00  2.53004425e+02  1.09709625e+02  1.50158331e-01
+   5.56780005e+00  2.53004425e+02  1.14457848e+02  1.36240691e-01
+   5.57341766e+00 -1.02868938e+00  0.00000000e+00  0.00000000e+00
+  -1.78368759e+01  1.00000000e+00]]",gemini-2.0-flash,"(1, 2, 5)","(1, 2, 3)","[[          nan 1.5111659e-01 1.0039176e-02 ... 1.0434809e+01
+  8.0618277e+00 1.2332306e+01]
+ [          nan 9.6265048e-02 6.3952054e-03 ... 6.6472340e+00
+  5.1355858e+00 7.8559866e+00]
+ [          nan 7.3765740e-02 4.9005020e-03 ... 5.0936255e+00
+  3.9352839e+00 6.0198660e+00]
+ ...
+ [          nan 1.3145597e-01 8.7331664e-03 ... 9.0782337e+00
+  7.0161986e+00 1.0738651e+01]
+ [          nan 9.5712304e-02 6.3584852e-03 ... 6.6090665e+00
+  5.1060982e+00 7.8108788e+00]
+ [2.3225121e-41 1.2835894e-41 1.1933458e-41 ... 0.0000000e+00
+  0.0000000e+00 0.0000000e+00]]",31.588220596313477
+"import numpy as np
+
+def neuron_model(stimuli,
+                    center_x=0.0,
+                    center_y=0.0,
+                    place_amp=1.0,
+                    sigma=1.0,
+                    baseline=0.0,
+                    hd_pref=0.0,
+                    hd_kappa=0.5,
+                    speed_gain=0.0):
+    """"""
+    Parent Model 1 (neuron_model_v1): Single anisotropic Gaussian with additive modulation.
+    Parent Model 2 (neuron_model_v2): Two isotropic Gaussians with multiplicative HD gain and nonlinear speed modulation.
+
+    This model simplifies neuron_model_v2 by using a single isotropic Gaussian place field with multiplicative HD and linear speed modulation.
+
+    Equation:
+    rate = baseline + place_amp * exp(-0.5 * ((x - center_x)^2 + (y - center_y)^2) / sigma^2) * exp(hd_kappa * cos(hd - hd_pref)) * (1 + speed_gain * speed)
+
+    Improvements over previous models (motivated by diagnostic plots):
+    This model reduces complexity and focuses on core components, motivated by the observation
+    that while two Gaussians and non-linear speed helped, they may have overfit the data.  Often,
+    a single, well-placed Gaussian with simple HD and speed modulation can capture the primary
+    response characteristics of place cells.
+
+    1.  Single Place Field: Uses a single Gaussian place field for simplicity and to prevent overfitting
+        in cases where the cell has a single, clear place field (most of the data).
+    2. Multiplicative HD and Speed: Keep the better modulation from v2.
+    """"""
+    place_amp = np.clip(place_amp, 0.0, None)
+    sigma = np.clip(sigma, 1e-6, None)
+    baseline = np.clip(baseline, 0.0, None)
+
+    stim = np.asarray(stimuli)
+    x = stim[:, 0]
+    y = stim[:, 1]
+    hd = stim[:, 2] if stim.shape[1] > 2 else 0.0
+    speed = stim[:, 3] if stim.shape[1] > 3 else 0.0
+
+    # Gaussian place field
+    dx = x - center_x
+    dy = y - center_y
+    r2 = dx ** 2 + dy ** 2
+    place = place_amp * np.exp(-0.5 * r2 / (sigma ** 2))
+
+    # Multiplicative modulation terms
+    hd_mod = np.exp(hd_kappa * np.cos(hd - hd_pref))
+    speed_mod = 1 + speed_gain * speed
+
+    # Combine all components
+    rate = baseline + place * hd_mod * speed_mod
+
+    return rate",<function neuron_model at 0x767bc01a0220>,"import numpy as np
+from scipy.ndimage import gaussian_filter
+
+def parameter_estimator(stimuli, spike_counts):
+    """"""Estimates parameters for neuron_model_v1 based on rate map analysis and statistical estimation.
+
+    Image Analysis Summary:
+    The images show parameter estimation is often either between two fields. or doesn't modulate firing amplitude adequately.
+    This suggests needs focus towards center_x, center_y, place_amp and better constraint handling.
+
+    Improvements in This Estimator:
+    1. Added rate map baseline percentile increased for baseline estimate.
+    2. Adjusted sigma estimation for tighter rate map focusing to more specific location.
+    3. Hard constraint to avoid the estimation jumping from between location fields for parameter amplitudes, by using stricter outlier clipping to make estimation focused in on max points
+    """"""
+    def _rate_map(pos_xy, spikes, bins=40, min_occ=3, smoothing_sigma=1.2):
+        H, xedges, yedges = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=bins)
+        H_s, _, _ = np.histogram2d(pos_xy[:, 0], pos_xy[:, 1], bins=[xedges, yedges], weights=spikes)
+
+        H_occupancy = H.copy()
+        occupancy_filter = H > min_occ
+        with np.errstate(divide='ignore', invalid='ignore'):
+            H = np.where(H_occupancy>min_occ, H_s / (H+ 1e-12), np.zeros_like(H))
+        H = gaussian_filter(H, sigma=smoothing_sigma)
+        H_occupancy = np.where(occupancy_filter==True,H_occupancy,np.zeros_like(H))
+        return H.T, xedges, yedges
+
+    stim = np.asarray(stimuli)
+    pos = stim[:, :2]
+    hd = stim[:, 2] if stim.shape[1] > 2 else np.zeros(len(stim))
+    speed = stim[:, 3] if stim.shape[1] > 3 else np.zeros(len(stim))
+    spikes = np.asarray(spike_counts)
+
+    rate, xedges, yedges = _rate_map(pos, spikes, bins=40, smoothing_sigma=1.2)
+    finite = np.isfinite(rate)
+    if not np.any(finite): return np.zeros(8)
+
+    baseline = float(np.percentile(rate, 20))
+    rate = np.nan_to_num(rate, nan=baseline)
+
+    max_indices = np.unravel_index(np.argmax(rate), rate.shape)
+    ix = int(max_indices[1])
+    iy = int(max_indices[0])
+    x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+    y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+    center_x = float(x_centers[ix])
+    center_y = float(y_centers[iy])
+
+    place_amp = float(rate[iy, ix] - baseline)
+    sigma = 0.05 * max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1]))
+
+    w = spikes - baseline
+    w[w < 0] = 0
+    wsum = np.sum(w) + 1e-8
+    hd_pref = np.arctan2(np.sum(w * np.sin(hd)) / wsum, np.sum(w * np.cos(hd)) / wsum)
+    hd_kappa = 0.5
+    speed_gain = np.sum((speed - np.mean(speed)) * w) / (np.sum((speed - np.mean(speed))**2) + 0.1)
+    speed_gain = np.clip(speed_gain, -0.1, 0.1)
+
+    return np.array([center_x, center_y, place_amp, sigma, baseline, hd_pref, hd_kappa, speed_gain])",<function parameter_estimator at 0x767d38239260>,4,3,1,30.05467414855957,29.68675422668457,"[[ 8.26405487e+01  1.92955307e+02  6.28196836e-01  5.14762735e+00
+   1.82061009e-02  2.37756181e+00  3.36738765e-01  1.25669371e-02]
+ [ 8.26102753e+01  1.16974060e+02  3.57459881e-03  1.85005331e+00
+   6.72852667e-03  3.94275546e+00  4.58680582e+00  8.44617128e-01]
+ [ 2.19745209e+02  3.44434853e+01  1.66074860e+00  5.31669569e+00
+   1.53089194e-02  1.97118819e+00 -4.59467381e-01  2.59157810e-02]
+ [ 1.45520432e+02  6.18845482e+01  1.29051352e+00  6.11617327e+00
+  -1.80163607e-02  2.30856562e+00  8.18029225e-01  8.54462851e-03]
+ [ 1.64225708e+02  2.76239796e+01  9.05150175e-02  1.04483833e+01
+   1.35681555e-02  2.38766837e+00  2.83151776e-01  1.89878400e-02]
+ [ 7.86893311e+01  1.41812515e+02  1.92506596e-01  6.02175856e+00
+   1.12285623e-02  4.98225778e-01  1.08176053e+00  1.15440758e-02]
+ [ 1.10952988e+02  3.96249161e+01  1.81459412e-01  4.69430590e+00
+   1.86418965e-02 -1.65569353e+00  3.09238529e+00 -5.35611017e-03]
+ [ 7.91498184e+01  3.02498627e+01  1.57383904e-01  5.06891823e+00
+   1.17315091e-02 -4.87452328e-01 -2.26660776e+00 -1.04365572e-02]
+ [ 9.67457428e+01  3.69912834e+01  4.30086344e-01  4.94352293e+00
+   1.25464862e-02 -1.44039333e+00  1.43337703e+00 -5.35390864e-04]
+ [ 1.67650101e+02  1.38258987e+02  2.04202920e-01  8.90437698e+00
+   8.96659493e-03 -3.13673329e+00  5.88981926e-01  2.06915103e-02]
+ [ 1.02067062e+02  6.00393028e+01  1.63057303e+00  1.12276149e+00
+   8.84202588e-03  2.40059590e+00  4.44455624e+00 -3.61455157e-02]
+ [ 9.81013260e+01  2.03466614e+02  6.49401486e-01  8.47818851e+00
+   1.43385325e-02 -1.56335223e+00 -3.96287084e-01  5.08710567e-04]
+ [ 1.66768799e+02  1.74223969e+02  3.29361528e-01  5.54832983e+00
+   1.01818312e-02  1.62160468e+00  1.31968334e-01  1.49747794e-02]
+ [ 7.37828293e+01  1.70209198e+02  2.91517619e-02  4.55226326e+00
+   8.21904000e-03 -4.82451558e-01  2.73319149e+00  3.25834334e-01]
+ [ 1.57651962e+02  7.02516785e+01  9.12388861e-01  6.47730589e+00
+   1.41394185e-02 -4.55426723e-01  1.35705277e-01  1.32926099e-03]
+ [ 1.66290649e+02  1.64535583e+02  2.29882073e+00  3.32654214e+00
+  -1.80163831e-02 -2.71447539e-01 -7.15938449e-01 -1.71837639e-02]
+ [ 2.66349731e+02  1.48594833e+02  1.25877488e+00  8.01308250e+00
+   1.93672627e-02 -1.84659958e+00  1.00396782e-01 -1.29847201e-02]]",30.246475219726562,"[[ 1.86411133e+02  1.61940109e+02  2.83605307e-01  9.51332855e+00
+   5.22830570e-03 -7.05966771e-01  5.00000000e-01  2.41023823e-04]
+ [ 1.00791168e+02  5.74791336e+01  3.31721723e-01  9.51332855e+00
+   5.28251257e-05 -3.15883942e-02  5.00000000e-01  1.54015550e-04]
+ [ 1.57871155e+02  1.47695435e+02  1.97734922e-01  9.51332855e+00
+   9.29069188e-07 -6.65726244e-01  5.00000000e-01  1.18020558e-04]
+ [ 9.60345078e+01  3.84862289e+01  2.66744882e-01  9.51332855e+00
+   9.74512004e-05  9.94604886e-01  5.00000000e-01  7.81442504e-05]
+ [ 2.53004425e+02  1.33450745e+02  2.85057247e-01  9.51332855e+00
+   1.81086085e-04  2.36459541e+00  5.00000000e-01  6.78195429e-05]
+ [ 1.86411133e+02  1.85681244e+02  3.55759919e-01  9.51332855e+00
+   0.00000000e+00 -2.20880842e+00  5.00000000e-01 -3.71621645e-05]
+ [ 2.62517761e+02  1.47695435e+02  4.71212238e-01  9.51332855e+00
+   3.97052245e-05  1.27269876e+00  5.00000000e-01  8.80119624e-05]
+ [ 2.00681122e+02  7.64720459e+01  2.38867849e-01  9.51332855e+00
+   2.96097249e-03  3.79274279e-01  5.00000000e-01  1.21188124e-04]
+ [ 1.53114471e+02  1.42947205e+02  2.23641366e-01  9.51332855e+00
+   0.00000000e+00  3.74656498e-01  5.00000000e-01 -1.42666802e-04]
+ [ 2.00681122e+02  1.04961395e+02  2.63246506e-01  9.51332855e+00
+   9.05743309e-06 -2.64196545e-01  5.00000000e-01  8.77358034e-05]
+ [ 1.38844482e+02  6.22273598e+01  3.48295540e-01  9.51332855e+00
+   3.48649934e-07  6.07159734e-01  5.00000000e-01  1.14371112e-04]
+ [ 2.00681122e+02  1.09709625e+02  3.27238560e-01  9.51332855e+00
+   0.00000000e+00 -1.15482473e+00  5.00000000e-01  5.12041261e-05]
+ [ 2.10194458e+02  7.17238159e+01  2.29017705e-01  9.51332855e+00
+   5.28874667e-03  4.14689571e-01  5.00000000e-01  7.99602785e-05]
+ [ 2.62517761e+02  2.42415524e+01  7.13613212e-01  9.51332855e+00
+   1.63237182e-05  1.20597661e+00  5.00000000e-01  1.07306359e-05]
+ [ 2.19707764e+02  4.79826813e+01  5.19810259e-01  9.51332855e+00
+   2.72481520e-06  1.13582206e+00  5.00000000e-01  2.10321057e-04]
+ [ 1.48357819e+02  5.74791336e+01  6.81668222e-01  9.51332855e+00
+   5.54678763e-07 -9.30738300e-02  5.00000000e-01  1.53133689e-04]
+ [ 2.53004425e+02  1.09709625e+02  1.43659383e-01  9.51332855e+00
+   0.00000000e+00 -1.02868938e+00  5.00000000e-01 -1.15187331e-05]]",gemini-2.0-flash,"(2, 3, 5)","(1, 3, 4)","[[ 2.29145680e-02  2.29145680e-02  2.29145680e-02 ...  2.29145680e-02
+   2.29145680e-02  2.29145680e-02]
+ [ 9.66660026e-03  9.66660026e-03  9.66660026e-03 ...  9.66660026e-03
+   9.66660026e-03  9.66660026e-03]
+ [ 3.86465574e-03  3.86465574e-03  3.86465574e-03 ...  3.86465574e-03
+   3.86465574e-03  3.86465574e-03]
+ ...
+ [ 1.27702150e-02  1.28234485e-02  1.29074426e-02 ...  7.95528200e-03
+   1.01589067e-02 -2.52781976e-02]
+ [ 0.00000000e+00  0.00000000e+00  2.80259693e-45 ...  2.19633727e-34
+   5.40103912e-33  1.57667894e-31]
+ [ 5.85023873e-03  5.85023873e-03  5.85023873e-03 ...  5.85023873e-03
+   5.85023873e-03  5.85023873e-03]]",29.68675422668457

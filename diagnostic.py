@@ -4,6 +4,14 @@ import matplotlib.pyplot as plt
 import jax.numpy as jnp
 from typing import Optional, Callable, Sequence
 
+
+def _collapse_vector(arr: jnp.ndarray) -> jnp.ndarray:
+    """Collapse vector outputs to scalars by averaging over the last axis."""
+    arr = jnp.asarray(arr)
+    if arr.ndim <= 1:
+        return arr
+    return jnp.mean(arr, axis=-1)
+
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
                     x: jnp.ndarray, y: jnp.ndarray, 
                     cell_selection: Sequence[int],
@@ -40,7 +48,8 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     models = programs_df['program'].tolist()
     params = programs_df['params'].tolist()
     params = [p[cell_selection] for p in params]
-    spike_matrix = y[cell_selection]
+    spike_matrix_raw = y[cell_selection]
+    spike_matrix = _collapse_vector(spike_matrix_raw)
     stimuli = x[cell_selection]
     n_cells, n_trials = spike_matrix.shape
     n_models = len(models)
@@ -59,7 +68,8 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         for c in range(n_cells):
             params_ic = params[i][c]
             predicted_response = model(stimuli[c], *params_ic)
-            point_losses = point_losses.at[i, c].set(loss_function(predicted_response, spike_matrix[c]))
+            loss_val = loss_function(predicted_response, spike_matrix_raw[c])
+            point_losses = point_losses.at[i, c].set(_collapse_vector(loss_val))
     
     # compute running mean
     x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False) + 0.5 * (2 * jnp.pi / n_mean)  # Shift to center bins
@@ -76,7 +86,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     for i, model in enumerate(models):
         for c in range(n_cells):
             params_ic = params[i][c]
-            model_outputs = model_outputs.at[i, c].set(model(x_values_eval, *params_ic))
+            model_outputs = model_outputs.at[i, c].set(_collapse_vector(model(x_values_eval, *params_ic)))
 
     for c in range(n_cells):
         row, col = divmod(c, n_row_cols)
@@ -125,23 +135,28 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
         y: (n_cells x n_trials) - jnp.ndarray
         params: (n_cells x n_params) - jnp.ndarray
     """
+    assert y.ndim >= 2, f"y must be at least 2D (n_cells, n_trials, ...), got {y.shape}."
     assert y.shape[0] == int(np.sqrt(y.shape[0]))**2, f"n_cells must be a square number, but got {y.shape[0]} cells."
-    assert x.shape == y.shape, f"x and y must have the same shape, but got {x.shape} and {y.shape}."
-    n_cells, n_trials = y.shape
+    if x.shape[0] != y.shape[0] or x.shape[1] != y.shape[1]:
+        raise AssertionError(f"x and y must share (n_cells, n_trials). Got x {x.shape}, y {y.shape}.")
+    n_cells, n_trials = y.shape[0], y.shape[1]
 
     # Calculate loss for each cell and trial
     point_losses = jnp.zeros((n_cells, n_trials))
     for c in range(n_cells):
         params_c = params[c]
         predicted_response = model(x[c], *params_c)
-        point_losses = point_losses.at[c].set(loss_function(predicted_response, y[c]))
+        loss_val = loss_function(predicted_response, y[c])
+        point_losses = point_losses.at[c].set(_collapse_vector(loss_val))
+
+    y_plot = _collapse_vector(y)
 
     # compute running mean
     x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False) + 0.5 * (2 * jnp.pi / n_mean)  # Shift to center bins
     binned_mean = jnp.zeros((n_cells, n_mean))
     for c in range(n_cells):
         bin_idx = jnp.clip(((x[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
-        sums = jnp.bincount(bin_idx, weights=y[c], minlength=n_mean)
+        sums = jnp.bincount(bin_idx, weights=y_plot[c], minlength=n_mean)
         counts = jnp.bincount(bin_idx, minlength=n_mean)
         binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))  # Avoid division by zero
 
@@ -150,7 +165,7 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
     model_output = jnp.zeros((n_cells, n_eval))
     for c in range(n_cells):
         params_c = params[c]
-        model_output = model_output.at[c].set(model(x_values_eval, *params_c))
+        model_output = model_output.at[c].set(_collapse_vector(model(x_values_eval, *params_c)))
 
     n_row_cols = int(np.sqrt(n_cells))
     fig, ax = plt.subplots(n_row_cols, n_row_cols, figsize=(20, 20))
@@ -162,7 +177,7 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
 
         # data scatter
         vmin, vmax = np.percentile(point_losses[c], [1,99])
-        sc = ax[row, col].scatter(x[c], y[c], c=point_losses[c], cmap='viridis', vmin=vmin, vmax=vmax, alpha=0.5)
+        sc = ax[row, col].scatter(x[c], y_plot[c], c=point_losses[c], cmap='viridis', vmin=vmin, vmax=vmax, alpha=0.5)
         plt.colorbar(sc, ax=ax[row, col], label='Loss')
 
         # running mean
@@ -274,19 +289,22 @@ def plot_train_vs_test_loss(programs_df: pd.DataFrame,
         raise ValueError("DataFrame must contain 'train_loss' and 'test_loss' columns.")
     
     # define variables
-    train_loss = programs_df['train_loss'].to_numpy()
-    test_loss = programs_df['test_loss'].to_numpy()
+    train_loss = pd.to_numeric(programs_df['train_loss'], errors='coerce').to_numpy()
+    test_loss = pd.to_numeric(programs_df['test_loss'], errors='coerce').to_numpy()
     birth_island = programs_df['birth_island'].to_numpy()
 
     # turn nan to num
     train_loss = np.nan_to_num(train_loss, nan=np.inf)
     test_loss = np.nan_to_num(test_loss, nan=np.inf)
 
-    # only take loss < 100
-    mask = (train_loss < 100) & (test_loss < 100)
+    # only keep finite values
+    mask = np.isfinite(train_loss) & np.isfinite(test_loss)
     train_loss = train_loss[mask]
     test_loss = test_loss[mask]
     birth_island = birth_island[mask]
+    if train_loss.size == 0 or test_loss.size == 0:
+        logging.warning("No finite train/test losses; skipping train-vs-test plot.")
+        return
     cmap = plt.get_cmap('tab10')
 
     # plot the train vs test loss
@@ -297,11 +315,15 @@ def plot_train_vs_test_loss(programs_df: pd.DataFrame,
                     label=island_labels[island_id], color=cmap(island_id), alpha=1.0)
     plt.xlabel('Train Loss')
     plt.ylabel('Test Loss')
-    plt.xlim(0.9 * min(np.min(train_loss), np.min(test_loss)), 
-             1.1 * max(np.median(train_loss), np.median(test_loss)))
-    plt.ylim(0.9 * min(np.min(train_loss), np.min(test_loss)),
-             1.1 * max(np.median(train_loss), np.median(test_loss)))
-    plt.plot([0, 100], [0, 100], color='black', linestyle='--', alpha=0.5)  # diagonal line
+    lower = min(np.percentile(train_loss, 5), np.percentile(test_loss, 5))
+    upper = max(np.percentile(train_loss, 95), np.percentile(test_loss, 95))
+    if not np.isfinite(lower) or not np.isfinite(upper) or lower == upper:
+        lower = min(np.min(train_loss), np.min(test_loss))
+        upper = max(np.max(train_loss), np.max(test_loss))
+    pad = 0.1 * (upper - lower if upper > lower else max(upper, 1.0))
+    plt.xlim(lower - pad, upper + pad)
+    plt.ylim(lower - pad, upper + pad)
+    plt.plot([lower - pad, upper + pad], [lower - pad, upper + pad], color='black', linestyle='--', alpha=0.5)
     plt.title('Train vs Test Loss')
     plt.legend()
     

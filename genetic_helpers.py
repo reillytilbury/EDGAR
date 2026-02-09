@@ -161,9 +161,21 @@ def perform_population_pruning_old(islands: list[pd.DataFrame], critical_populat
 
 def perform_probabilistic_migration(islands, n_migrants, destination_islands:list[int], temperature=1.0):
     n_islands = len(islands)
+    if n_islands <= 1 or n_migrants <= 0:
+        logging.info("Skipping migration because n_islands <= 1 or n_migrants <= 0.")
+        return islands
     if destination_islands is None:
         logging.info("No destination islands provided, using default migration strategy.")
         destination_islands = [(i + 1) % n_islands for i in range(n_islands)]
+    else:
+        destination_islands = [int(i) for i in destination_islands]
+        if len(destination_islands) < n_islands:
+            logging.warning("destination_islands shorter than n_islands; truncating migration.")
+            n_islands = len(destination_islands)
+        destination_islands = [i for i in destination_islands if 0 <= i < len(islands)]
+        if len(destination_islands) == 0:
+            logging.info("No valid destination islands after filtering; skipping migration.")
+            return islands
 
     # calculate migration probabilities based on relative losses
     temp = max(temperature, 1e-3)
