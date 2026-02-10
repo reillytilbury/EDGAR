@@ -56,7 +56,7 @@ def quadratic_loss(y_est, y):
     Returns:
         jnp.ndarray: The quadratic loss.
     """
-    return (y_est - y) ** 2 
+    return 10 * (y_est - y) ** 2 
 
 def abs_loss(y_est, y):
     """

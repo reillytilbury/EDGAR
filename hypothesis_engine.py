@@ -463,7 +463,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 large_lm_name = 'gemini-2.5-flash',
                 use_large_every = 3,
                 conc_thresh = 0.55, activity_thresh = 0.4,
-                data_path = '/home/reilly/Downloads/8279387/gratings_drifting_GT1_2019_04_12_1.npy'):
+                data_path = '/home/reilly/Desktop/8279387/gratings_drifting_GT1_2019_04_12_1.npy'):
     """ 
     Main function to run the hypothesis engine.
     """
@@ -917,6 +917,6 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
 if __name__ == "__main__":
     for i in range(4):
         print("running with standard params")
-        asyncio.run(main(n_iterations=9, time_limit=60, use_image_feedback=True, use_large_every=0,
+        asyncio.run(main(n_iterations=12, time_limit=60, use_image_feedback=True, use_large_every=3,
                          param_penalty_weight=0.01,
-                         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.7))
+                         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5))
