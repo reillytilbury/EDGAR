@@ -518,8 +518,8 @@ def validate_model_execution(
 
 def objective_legacy(model, param_estimator, loss_func, x, y, 
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
-              FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
-              use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+              FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
+              use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     LEGACY: Calculate the loss of the model for scalar (single-target) outputs.
     
@@ -683,41 +683,60 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
         return total_loss / n_samples, total_grad / n_samples
 
     if fit_params:
-        # solver = jaxopt.ScipyMinimize(
-        #     fun=loss_param_and_grad,
-        #     value_and_grad=True,
-        #     method='L-BFGS-B',
-        #     maxiter=max_iter,
-        #     tol=tol,
-        #     jit=True)
-        # try:
-        #     result = solver.run(initial_params.reshape(-1))
-        #     params = jnp.asarray(result.params).reshape(n_samples, n_params)
-        #     print(f"Optimization success: {result.state.success}, iterations: {result.state.iter_num}")
-        # except Exception as e:
-        #     params = initial_params
-        #     logging.info(f"Error during optimization: {e}")
-        # 
+        if trial_batch_size is None:
+            # define the loss function wrt params. This will have input shape n_cells * n_params (note that params is flattened) and output shape (1,)
+            loss_param = lambda params: jnp.mean(loss_total(params.reshape(-1, n_params), x_train, y_train))
+            loss_param_and_grad = jax.value_and_grad(loss_param)
 
-        # 1.  build adam with learning rate schedule for better convergence
-        #     Higher initial LR helps parameters with different scales converge
-        peak_lr = 0.001
-        schedule = optax.warmup_cosine_decay_schedule(
-            init_value=peak_lr * 0.1,
-            peak_value=peak_lr,
-            warmup_steps=50,
-            decay_steps=max_iter,
-            end_value=peak_lr * 0.01
-        )
-        opt = optax.adam(schedule, b1=0.9, b2=0.999, eps=1e-8)
-        opt_state = opt.init(initial_params.reshape(-1))
-        
-        # 2. Define update step (NOT jit-compiled because loss_and_grad_batched has Python loop)
-        def train_step(params, opt_state):
-            loss, grad = loss_and_grad_batched(params)
-            updates, new_opt_state = opt.update(grad, opt_state, params)
-            new_params = optax.apply_updates(params, updates)
-            return new_params, new_opt_state, loss
+            # solver = jaxopt.ScipyMinimize(
+            #     fun=loss_param_and_grad,
+            #     value_and_grad=True,
+            #     method='L-BFGS-B',
+            #     maxiter=max_iter,
+            #     tol=tol,
+            #     jit=True)
+            # try:
+            #     result = solver.run(initial_params.reshape(-1))
+            #     params = jnp.asarray(result.params).reshape(n_cells, n_params)
+            #     print(f"Optimization success: {result.state.success}, iterations: {result.state.iter_num}")
+            # except Exception as e:
+            #     params = initial_params
+            #     logging.info(f"Error during optimization: {e}")
+
+            # 1.  build adam
+            # learning_rate = 3e-3
+            beta1, beta2  = 0.9, 0.999
+            opt = optax.adam(learning_rate, b1=beta1, b2=beta2, eps=1e-8)
+            opt_state = opt.init(initial_params.reshape(-1))
+            
+            # 2. jit single step
+            @jax.jit
+            def train_step(params, opt_state):
+                loss, grad = loss_param_and_grad(params)
+                updates, opt_state = opt.update(grad, opt_state, params)
+                params = optax.apply_updates(params, updates)
+                return params, opt_state, loss
+
+        else: 
+            # 1.  build adam with learning rate schedule for better convergence
+            #     Higher initial LR helps parameters with different scales converge
+            peak_lr = 0.001
+            schedule = optax.warmup_cosine_decay_schedule(
+                init_value=peak_lr * 0.1,
+                peak_value=peak_lr,
+                warmup_steps=50,
+                decay_steps=max_iter,
+                end_value=peak_lr * 0.01
+            )
+            opt = optax.adam(schedule, b1=0.9, b2=0.999, eps=1e-8)
+            opt_state = opt.init(initial_params.reshape(-1))
+            
+            # 2. Define update step (NOT jit-compiled because loss_and_grad_batched has Python loop)
+            def train_step(params, opt_state):
+                loss, grad = loss_and_grad_batched(params)
+                updates, new_opt_state = opt.update(grad, opt_state, params)
+                new_params = optax.apply_updates(params, updates)
+                return new_params, new_opt_state, loss
         
         # 3.  iterate
         print_every = 50
@@ -775,14 +794,21 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
             weighted_sum += jnp.nansum(batch_losses) * (batch_size / n_eval_trials)
         # Divide by n_samples to get mean over samples  
         return weighted_sum / n_samples
-    
-    initial_loss = eval_loss_batched(initial_params, x_test, y_test) + param_penalty_weight * n_params
+
+    if trial_batch_size is None: 
+        initial_loss = jnp.nanmean(loss_total(initial_params, x_test, y_test)) + param_penalty_weight * n_params
+    else:   
+        initial_loss = eval_loss_batched(initial_params, x_test, y_test) + param_penalty_weight * n_params
     # print number of nans in initial_loss
     n_nans = jnp.sum(jnp.isnan(initial_loss))
     if n_nans > 0:
         print(f"Warning: initial loss contains {n_nans} NaNs. This may indicate a problem with the model or data.")
     initial_loss = jnp.nan_to_num(initial_loss, nan=FAILED_PROGRAM_COST, posinf=FAILED_PROGRAM_COST, neginf=FAILED_PROGRAM_COST)
-    final_loss = eval_loss_batched(params, x_test, y_test) + param_penalty_weight * n_params
+
+    if trial_batch_size is None:
+        final_loss = jnp.nanmean(loss_total(params, x_test, y_test)) + param_penalty_weight * n_params
+    else:
+        final_loss = eval_loss_batched(params, x_test, y_test) + param_penalty_weight * n_params
     # print number of nans in final_loss
     n_nans = jnp.sum(jnp.isnan(final_loss))
     if n_nans > 0:
@@ -798,7 +824,7 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
 def objective_vectorized(model, param_estimator, loss_func, x, y,
                          target_weights=None,
                          param_penalty_weight=0.1, fit_params=True, random_seed=0,
-                         FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
+                         FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
                          use_param_estimator=True, trial_batch_size=10000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate the loss of a model that predicts multiple targets (vectorized outputs).
@@ -986,7 +1012,7 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
     
     if fit_params:
         # Adam optimizer with learning rate schedule
-        peak_lr = 0.001
+        peak_lr = learning_rate
         schedule = optax.warmup_cosine_decay_schedule(
             init_value=peak_lr * 0.1,
             peak_value=peak_lr,
@@ -1073,7 +1099,7 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
 def objective(model, param_estimator, loss_func, x, y,
               target_weights=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
-              FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
+              FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate the loss of the model. Always uses vectorized Outputs representation.
@@ -1146,6 +1172,7 @@ def objective(model, param_estimator, loss_func, x, y,
             FAILED_PROGRAM_COST=FAILED_PROGRAM_COST,
             tol=tol,
             max_iter=max_iter,
+            learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
             trial_batch_size=trial_batch_size,
         )
@@ -1164,6 +1191,7 @@ def objective(model, param_estimator, loss_func, x, y,
             FAILED_PROGRAM_COST=FAILED_PROGRAM_COST,
             tol=tol,
             max_iter=max_iter,
+            learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
             trial_batch_size=trial_batch_size,
         )
@@ -1418,6 +1446,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 use_large_every = 3,
                 training_ratio = 0.5, 
                 max_iter = 1_000,
+                learning_rate = 3e-3,
                 use_large_model_for_param_estimators=False,
                 numpy_programs = None,
                 jax_programs = None,
@@ -1565,7 +1594,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         loss_init, params_init, loss, params = objective(program_jax, param_est, 
                                         loss_func=loss_functions.quadratic_loss, 
                                         x=inputs_train, y=response_train, 
-                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol,
+                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol, learning_rate=learning_rate,
                                         use_param_estimator=use_param_estimator, max_iter=max_iter)
         seed_losses[i] = loss
         # format strings

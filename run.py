@@ -109,6 +109,7 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
             n_migrants=params['n_migrants'],
             fit_params=params['fit_params'],
             tol=params['tol'],
+            learning_rate=params['learning_rate'],
             FAILED_PROGRAM_COST=params['FAILED_PROGRAM_COST'],
             tiny_lm_name=params['tiny_lm_name'],
             little_lm_name=params['little_lm_name'],

@@ -30,6 +30,7 @@ experiment_params:
   fit_params: true
   tol: 1e-6
   exploit_point: 0.5
+  learning_rate: 3e-3
   param_penalty_weight: 0.01
   FAILED_PROGRAM_COST: .inf
   use_image_feedback: true
