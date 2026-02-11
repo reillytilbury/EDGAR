@@ -458,8 +458,6 @@ def parameter_estimator_1_v2(X, firing_rates):
     
     return np.array([lam, theta, phi_x, phi_y, baseline, amplitude])
 
-# def parameter_estimator_1(X, firing_rates):
-
 def grid_model_2(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, 
                  amplitude=1.0, sigma=0.08):
     """
