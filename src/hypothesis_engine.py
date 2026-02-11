@@ -1848,7 +1848,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                     loss_function=loss_functions.quadratic_loss,
                     inputs=inputs_train,
                     response=response_train,
-                    sample_selection=np.random.choice(response_train.shape[0], size=6, replace=False),
+                    sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                     title=sup_title,
                     save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
                     dpi=300.0)
@@ -1864,7 +1864,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 loss_function=loss_functions.quadratic_loss,
                 inputs=inputs_train,
                 response=response_train,
-                sample_selection=np.random.choice(response_train.shape[0], size=6, replace=False),
+                sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                 title=sup_title,
                 save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
                 dpi=300.0)
@@ -1970,7 +1970,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 loss_function=loss_functions.quadratic_loss,
                 inputs=inputs_test,
                 response=response_test,
-                sample_selection=np.random.choice(response_test.shape[0], size=6, replace=False),
+                sample_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
                 title=df_sup,
                 save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
             )
@@ -1979,7 +1979,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 birth_island = df['birth_island'][j]
                 iteration_number = df['iteration_number'][j]
                 batch_index = df['batch_index'][j]
-                sample_selection = np.random.choice(response_test.shape[0], size=6, replace=False)
+                sample_selection = np.random.choice(response_test.shape[0], size=9, replace=False)
                 diagnostics_module.plot_single_model_fit(
                     model=df['program'][j],
                     loss_function=loss_functions.quadratic_loss,
