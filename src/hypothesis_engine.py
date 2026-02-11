@@ -1201,7 +1201,7 @@ async def generate_new_model(current_island, llm_name, client,
             diagnostics_module.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
                                     inputs=stimuli, response=spike_matrix,
-                                    sample_selection=np.random.choice(spike_matrix.shape[0], size=6, replace=False),
+                                    sample_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
                                     save_path=img_dir,
                                     labels=[f'{model_name}_v_1', f'{model_name}_v_2'],
                                     colours=['tab:green', 'tab:red'],
@@ -1431,7 +1431,6 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     Main function to run the hypothesis engine.
     
     Args:
-        ...
         data_config: Dict containing all data loading parameters. This is passed
                      directly to load_and_process_data_fn, which extracts whatever
                      parameters it needs. This allows different experiments to have
@@ -1439,7 +1438,6 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         log_best_loss: If True, logs the best loss at each iteration to a CSV file
                        for live monitoring. The file is saved to the experiment
                        output directory as 'best_loss_log.csv'.
-        ...
     """
     if data_config is None:
         data_config = {}
@@ -1624,7 +1622,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         diagnostics_module.plot_model_fits(programs_df=initial_programs,
                                loss_function=loss_functions.quadratic_loss,
                                inputs=inputs_train, response=response_train,
-                               sample_selection=np.random.choice(len(inputs_train), size=6, replace=False),
+                               sample_selection=np.random.choice(len(inputs_train), size=9, replace=False),
                                save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
                                labels=['seed_1', 'seed_2'],
                                colours=['tab:green', 'tab:red'],
@@ -1697,11 +1695,6 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         model_results = [(model_code_strings[j], model_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
         # build parameter‑estimator tasks
-        if use_large_model_for_param_estimators:
-            img_dir = os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_estimator.png')
-        else:
-            img_dir = None
-
         param_estimation_tasks = [
             generate_new_parameter_estimator(
                 current_island=islands[island_idx],
@@ -1715,7 +1708,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
-                img_dir=img_dir,
+                img_dir=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_estimator.png') if use_large_model_for_param_estimators else None,
                 island_chat_manager=island_chat_manager,
                 island_id=island_idx,
                 batch_id=j,
