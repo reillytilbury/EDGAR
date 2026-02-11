@@ -18,7 +18,7 @@ seed_programs:
 
 experiment_params:
   num_runs: 1
-  n_iterations : 9
+  n_iterations : 12
   time_limit : 60  # in minutes
   k_max : 2
   n_islands : 8
