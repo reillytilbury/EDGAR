@@ -389,9 +389,9 @@ def plot_model_fit(
     plt.close(fig)
     return png_bytes
 
-seed_model = grid_seed_programs.grid_model_2
-seed_model_jax = grid_seed_programs.grid_model_2_jax
-parameter_estimator = grid_seed_programs.parameter_estimator_2
+seed_model = grid_seed_programs.grid_model_1
+seed_model_jax = grid_seed_programs.grid_model_1_jax
+parameter_estimator = grid_seed_programs.parameter_estimator_1
 
 seed_model_code_string = utils.format_function_source(seed_model, new_name="grid_model_seed_2")
 parameter_estimator_code_string = utils.format_function_source(parameter_estimator, new_name="parameter_estimator_seed_2")
@@ -498,8 +498,8 @@ async def main(n_iter=4, output_dir=None):
             prompt = lambda next_version : f"""You are an AI scientist, and your task is to analyze and improve parameter estimation for a grid cell firing model.
             Grid cells fire in a hexagonal pattern as an animal navigates through space. Grid cell firing rates are bounded, typically 0-50 Hz. 
 
-            Here is seed_2 grid_model and its corresponding parameter_estimator. Can you try to come up with a better parameter estimator? 
-            Here is also a corresponding image diagnostic of the model. Note this image contains the evaluation of both seed_1 and seed_2, but I have only given you the code for seed_2. Ignore seed_1 for now.
+            Here is seed_1 grid_model and its corresponding parameter_estimator. Can you try to come up with a better parameter estimator? 
+            Here is also a corresponding image diagnostic of the model. Note this image contains the evaluation of both seed_1 and seed_1, but I have only given you the code for seed_1. Ignore seed_1 for now.
             The parameters should be estimated directly using statistical principles and knowledge of what the parameters represent (receptive field positions, amplitudes, sheer, etc). 
             Analyze the progression of the estimators, generalize improvements, and create a new estimator better than all previous estimators. 
 

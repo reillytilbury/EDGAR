@@ -92,7 +92,7 @@ def grid_model_1_jax(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, 
     return baseline + amplitude * s
 
 
-def parameter_estimator_1_old(X, firing_rates):
+def parameter_estimator_1_v2(X, firing_rates):
     """
     Estimate parameters for grid_model_1 from firing rate data.
     
@@ -131,7 +131,173 @@ def parameter_estimator_1_old(X, firing_rates):
     
     return np.array([lam, theta, phi_x, phi_y, baseline, amplitude])
 
-def parameter_estimator_1(X, firing_rates):
+def _make_ratemap(X, firing_rates, nbins=60, sigma=1.5):
+    x, y = X[0], X[1]
+    rng = [[-1, 1], [-1, 1]]
+
+    heat, xe, ye = np.histogram2d(x, y, bins=nbins, range=rng, weights=firing_rates)
+    occ, _, _ = np.histogram2d(x, y, bins=nbins, range=rng)
+
+    rm = np.divide(heat, occ, out=np.zeros_like(heat), where=occ > 0).T  # [y,x]
+    rm_s = ndimage.gaussian_filter(rm, sigma=sigma)
+
+    return rm_s, occ.T
+
+def _fft_peaks(rm, occ=None, occ_q=20, kmin_frac=0.05, kmax_frac=0.45):
+    """
+    Return dominant ring peaks in FFT magnitude.
+    kmin_frac/kmax_frac are fractions of Nyquist radius to ignore DC/edge.
+    """
+    H, W = rm.shape
+    # mask low-occupancy bins (optional)
+    if occ is not None:
+        thr = np.percentile(occ[occ > 0], occ_q) if np.any(occ > 0) else 0
+        mask = (occ >= thr).astype(float)
+    else:
+        mask = np.ones_like(rm)
+
+    # window to reduce edge artefacts
+    wy = np.hanning(H)
+    wx = np.hanning(W)
+    window = wy[:, None] * wx[None, :]
+
+    z = (rm - np.nanmean(rm[mask > 0])) * mask * window
+    F = np.fft.fftshift(np.fft.fft2(z))
+    M = np.abs(F)
+
+    cy, cx = H // 2, W // 2
+    yy, xx = np.indices((H, W))
+    rr = np.sqrt((yy - cy)**2 + (xx - cx)**2)
+
+    rmax = np.max(rr)
+    rmin = kmin_frac * rmax
+    rmax_use = kmax_frac * rmax
+
+    # suppress DC and very high freq
+    band = (rr >= rmin) & (rr <= rmax_use)
+    M_band = np.where(band, M, 0.0)
+
+    # find top peaks (take more than 6 then prune by angle)
+    flat_idx = np.argpartition(M_band.ravel(), -50)[-50:]
+    py, px = np.unravel_index(flat_idx, (H, W))
+
+    # sort by magnitude descending
+    order = np.argsort(M_band[py, px])[::-1]
+    py, px = py[order], px[order]
+
+    # compute angles/radii
+    dy = py - cy
+    dx = px - cx
+    ang = np.arctan2(dy, dx)  # [-pi, pi]
+    rad = np.sqrt(dx*dx + dy*dy)
+
+    return F, M, py, px, ang, rad, (cy, cx)
+
+def parameter_estimator_1(X, firing_rates, nbins=60, sigma=1.5):
+    rm, occ = _make_ratemap(X, firing_rates, nbins=nbins, sigma=sigma)
+
+    F, M, py, px, ang, rad, (cy, cx) = _fft_peaks(rm, occ=occ)
+
+    if len(py) < 6:
+        # fallback
+        return np.array([0.5, 0.0, 0.0, 0.0, max(0.0, np.percentile(rm, 5)), 1.0])
+
+    # --- Select a dominant radius (ring) robustly ---
+    # Use median radius of the strongest few peaks
+    r0 = np.median(rad[:10])
+
+    # Keep candidates near r0
+    cand = np.where(np.abs(rad - r0) < 0.15 * r0)[0]
+    if len(cand) < 6:
+        cand = np.arange(min(len(rad), 20))
+
+    ang_c = ang[cand]
+    py_c, px_c = py[cand], px[cand]
+    rad_c = rad[cand]
+
+    # Pick one "fundamental" direction, then enforce 60° symmetry.
+    # We only need theta modulo pi/3.
+    a0 = ang_c[0]  # strongest
+    # reduce to [0, pi/3)
+    theta = (a0 % (np.pi/3))
+
+    # --- Convert radius in FFT bins to lambda in spatial units ---
+    # frequency step: cycles per arena-length (2 units) per FFT index.
+    # A shift of 1 in FFT index corresponds to 1/(arena_length) cycles per unit.
+    # Here arena length is 2 (from -1 to 1). For discrete grid:
+    arena = 2.0
+    fx = (px_c[0] - cx) / arena  # rough; same scale for x/y
+    fy = (py_c[0] - cy) / arena
+    k_mag = 2*np.pi*np.sqrt(fx*fx + fy*fy)  # radians per unit
+
+    # Your model uses q = 4*pi/(sqrt(3)*lam)
+    # and wavevectors have magnitude q.
+    q = k_mag if k_mag > 1e-6 else 4*np.pi/(np.sqrt(3)*0.5)
+    lam = 4.0 * np.pi / (np.sqrt(3.0) * q)
+    lam = float(np.clip(lam, 0.1, 2.0))
+
+    # --- Phase (phi_x, phi_y) from two directions ---
+    # Build two unit vectors at theta and theta+60deg
+    angles = theta + 2*np.pi*np.arange(2)/3.0
+    u = np.stack([np.cos(angles), np.sin(angles)], axis=1)  # (2,2)
+
+    # Find FFT bins closest to those directions at radius r0
+    # Use dot-product with direction in frequency space
+    dy = py_c - cy
+    dx = px_c - cx
+    rr = np.sqrt(dx*dx + dy*dy) + 1e-9
+    vx = dx / rr
+    vy = dy / rr
+
+    # direction matching
+    phi_eq = []
+    A = []
+    for j in range(2):
+        djx, djy = u[j,0], u[j,1]
+        # pick candidate with max alignment and near r0
+        align = vx*djx + vy*djy
+        idx = np.argmax(align)
+        ky, kx = py_c[idx], px_c[idx]
+
+        # phase of Fourier coefficient
+        phase = np.angle(F[ky, kx])
+
+        # For cos(k·x - delta), Fourier phase relates to delta up to conventions.
+        # Use delta = -phase as a practical convention; you can flip sign if needed.
+        delta = -phase
+
+        # constraint: q * (u_j · phi) ≈ delta  (mod 2π)
+        A.append(q * u[j])
+        # wrap delta to [-pi, pi] is fine; the solve picks one branch
+        phi_eq.append(((delta + np.pi) % (2*np.pi)) - np.pi)
+
+    A = np.stack(A, axis=0)  # (2,2)
+    b = np.array(phi_eq)
+
+    try:
+        phi = np.linalg.solve(A, b)
+        phi_x, phi_y = float(phi[0]), float(phi[1])
+    except np.linalg.LinAlgError:
+        phi_x, phi_y = 0.0, 0.0
+
+    # Keep phi in arena
+    phi_x = float(np.clip(phi_x, -1.0, 1.0))
+    phi_y = float(np.clip(phi_y, -1.0, 1.0))
+
+    # --- baseline/amplitude via regression on raw samples ---
+    s = grid_model_1(X, lam=lam, theta=theta, phi_x=phi_x, phi_y=phi_y,
+                    baseline=0.0, amplitude=1.0)  # = sum cos
+    r = firing_rates
+
+    # Solve r ≈ b + a*s
+    S = np.vstack([np.ones_like(s), s]).T
+    coef, *_ = np.linalg.lstsq(S, r, rcond=None)
+    baseline = float(max(0.0, coef[0]))
+    amplitude = float(max(0.0, coef[1]))
+
+    return np.array([lam, theta, phi_x, phi_y, baseline, amplitude])
+
+def parameter_estimator_1_v2(X, firing_rates):
     """
     Robust parameter estimator for Cosine Grid Model using Triangulation.
     
@@ -291,6 +457,8 @@ def parameter_estimator_1(X, firing_rates):
     amplitude = (peak_rate - baseline) / 3.0
     
     return np.array([lam, theta, phi_x, phi_y, baseline, amplitude])
+
+# def parameter_estimator_1(X, firing_rates):
 
 def grid_model_2(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, 
                  amplitude=1.0, sigma=0.08):

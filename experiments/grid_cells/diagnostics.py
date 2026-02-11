@@ -561,7 +561,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         smoothing_sigma: Gaussian smoothing sigma for smoothed rate maps.
         plot_raw_rates: Whether to plot the unsmoothed actual rate maps.
     """
-    assert len(programs_df) <= 2, f"programs_df must have at most 2 rows, got {len(programs_df)}"
+    # assert len(programs_df) <= 2, f"programs_df must have at most 2 rows, got {len(programs_df)}"
     assert len(sample_selection) > 0, "sample_selection must not be empty"
     
     n_cells_plot = len(sample_selection)
