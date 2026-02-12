@@ -1,5 +1,4 @@
 import numpy as np
-import jax.numpy as jnp
 
 def neuron_model_1(X, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=1.0):
     """
@@ -24,15 +23,6 @@ def neuron_model_1(X, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=
     dist = circ_dist_rad(theta, theta_pref)
     return baseline + amplitude * np.exp(-0.5 * (dist / tuning_width) ** 2)
 
-def neuron_model_1_jax(X, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=1.0):
-    theta = X[0]  # Extract theta from first input
-    theta_pref = jnp.clip(theta_pref, 0, 2 * jnp.pi)
-    baseline = jnp.clip(baseline, 0, None)
-    amplitude = jnp.clip(amplitude, 0, None)
-    tuning_width = jnp.clip(tuning_width, 0.01, None)
-    circ_dist_rad = lambda theta1, theta2: jnp.abs(jnp.arctan2(jnp.sin(theta1 - theta2), jnp.cos(theta1 - theta2)))
-    dist = circ_dist_rad(theta, theta_pref)
-    return baseline + amplitude * jnp.exp(-0.5 * (dist / tuning_width) ** 2)
 
 def parameter_estimator_1(X, spike_counts):
     """
@@ -89,18 +79,6 @@ def neuron_model_2(X, theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2
     dist_2 = circ_dist_rad(theta, (theta_pref + np.pi) % (2 * np.pi))
     return baseline + amplitude_1 * np.exp(-0.5 * (dist_1 / tuning_width) ** 2) + amplitude_2 * np.exp(-0.5 * (dist_2 / tuning_width) ** 2)
 
-def neuron_model_2_jax(X, theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2=0.0, tuning_width=1.0):
-    theta = X[0]  # Extract theta from first input
-    theta_pref = jnp.clip(theta_pref, 0, 2 * jnp.pi)
-    baseline = jnp.clip(baseline, 0, None)
-    amplitude_1 = jnp.clip(amplitude_1, 0, None)
-    amplitude_2 = jnp.clip(amplitude_2, 0, None)
-    tuning_width = jnp.clip(tuning_width, 0.01, None)
-    
-    circ_dist_rad = lambda theta1, theta2: jnp.abs(jnp.arctan2(jnp.sin(theta1 - theta2), jnp.cos(theta1 - theta2)))
-    dist_1 = circ_dist_rad(theta, theta_pref)
-    dist_2 = circ_dist_rad(theta, (theta_pref + jnp.pi) % (2 * jnp.pi))
-    return baseline + amplitude_1 * jnp.exp(-0.5 * (dist_1 / tuning_width) ** 2) + amplitude_2 * jnp.exp(-0.5 * (dist_2 / tuning_width) ** 2)
 
 def parameter_estimator_2(X, spike_counts):
     """
@@ -155,19 +133,6 @@ def neuron_model_3(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_wi
     """
     return baseline + amplitude * np.exp(tuning_width * (np.cos(theta - theta_pref) - 1))
 
-def neuron_model_3_jax(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0, kappa=1.0):
-    """
-    A JAX implementation of the neuron model that computes the response based on a von Mises tuning curve.
-    Args:
-        theta (jnp.ndarray): Input angles in radians.
-        theta_pref (float): Preferred angle in radians.
-        baseline (float): Baseline firing rate.
-        amplitude (float): Maximum firing rate above baseline.
-        kappa (float): Concentration parameter of the von Mises distribution.
-    Returns:
-        jnp.ndarray: The firing rate of the neuron at angle theta.
-    """
-    return baseline + amplitude * jnp.exp(kappa * (jnp.cos(theta - theta_pref) - 1))
 
 def parameter_estimator_3(theta, spike_counts):
     """
@@ -212,27 +177,6 @@ def neuron_model_4(theta, theta_pref=0.0, baseline=0.0, amplitude1=1.0, amplitud
     return rate
 
 
-def neuron_model_4_jax(theta, theta_pref=0.0, baseline=0.0, amplitude1=1.0, amplitude2=0.0, kappa_1=1.0, kappa_2=1.0):
-    """
-    A JAX implementation of the neuron model that computes the response based on a double peaked von Mises tuning curve.
-    Args:
-        theta (jnp.ndarray): Input angles in radians.
-        theta_pref (float): Preferred angle in radians.
-        baseline (float): Baseline firing rate.
-        amplitude1 (float): Amplitude of the first peak.
-        amplitude2 (float): Amplitude of the second peak.
-        kappa_1 (float): Concentration parameter of the first peak.
-        kappa_2 (float): Concentration parameter of the second peak.
-    Returns:
-        jnp.ndarray: The firing rate of the neuron at angle theta.
-    """
-    kappa1 = jnp.clip(kappa_1, 1e-8, None)  # Avoid division by zero
-    kappa2 = jnp.clip(kappa_2, 1e-8, None)  # Avoid division by zero
-    # f(theta) = baseline + amplitude1 * exp(kappa_1 * (cos(theta - theta_pref) - 1)) + amplitude2 * exp(kappa_2 * (cos(theta - (theta_pref + pi)) - 1))
-    rate = (baseline +
-            amplitude1 * jnp.exp(kappa_1 * (jnp.cos(theta - theta_pref) - 1)) +
-            amplitude2 * jnp.exp(kappa_2 * (jnp.cos(theta - (theta_pref + jnp.pi)) - 1)))
-    return rate
 
 
 def parameter_estimator_4(theta, spike_counts):
@@ -285,16 +229,6 @@ def neuron_model_trivial(theta, baseline=0.0):
     """
     return baseline
 
-def neuron_model_trivial_jax(theta, baseline=0.0):
-    """
-    A trivial neuron model that returns a constant firing rate.
-    Args:
-        theta (jnp.ndarray): Input angles in radians
-        baseline (float): Baseline firing rate.
-    Returns:
-        jnp.ndarray: The firing rate of the neuron, which is constant.
-    """
-    return baseline * jnp.ones_like(theta)
 
 def parameter_estimator_trivial(theta, spike_counts):
     """
@@ -321,18 +255,6 @@ def neuron_model_delta(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0):
     """
     return baseline + amplitude * (theta == theta_pref).astype(np.float32)
 
-def neuron_model_delta_jax(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0):
-    """
-    A JAX implementation of the neuron model that returns a delta function response at the preferred angle.
-    Args:
-        theta (jnp.ndarray): Input angles in radians.
-        theta_pref (float): Preferred angle in radians.
-        baseline (float): Baseline firing rate.
-        amplitude (float): Amplitude of the response at the preferred angle.
-    Returns:
-        jnp.ndarray: The firing rate of the neuron, which is zero everywhere except at the preferred angle.
-    """
-    return baseline + amplitude * (theta == theta_pref).astype(jnp.float32)
 
 def parameter_estimator_delta(theta, spike_counts):
     """

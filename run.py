@@ -41,7 +41,10 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
     numpy_programs = [getattr(seed_module, name) for name in function_seed_names]
 
     jax_function_seed_names = seed_programs.get('jax_function_seeds', [])
-    jax_programs = [getattr(seed_module, name) for name in jax_function_seed_names]
+    if jax_function_seed_names:
+        jax_programs = [getattr(seed_module, name) for name in jax_function_seed_names]
+    else:
+        jax_programs = None
     
     # Get parameter estimator seeds
     param_estimator_names = seed_programs.get('parameter_estimator_seeds', [])
@@ -50,8 +53,8 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
     # assert that we have exactly 2 of each
     if len(numpy_programs) != 2:
         raise ValueError("There must be exactly 2 numpy function seeds.")
-    if len(jax_programs) != 2:
-        raise ValueError("There must be exactly 2 jax function seeds.")
+    if jax_programs is not None and len(jax_programs) != 2:
+        raise ValueError("There must be exactly 2 jax function seeds when provided.")
     if len(param_estimators) != 2:  
         raise ValueError("There must be exactly 2 parameter estimator seeds.")
 

@@ -9,9 +9,6 @@ seed_programs:
   function_seeds:
     - neuron_model_1
     - neuron_model_2
-  jax_function_seeds:
-    - neuron_model_1_jax
-    - neuron_model_2_jax
   parameter_estimator_seeds:
     - parameter_estimator_1
     - parameter_estimator_2

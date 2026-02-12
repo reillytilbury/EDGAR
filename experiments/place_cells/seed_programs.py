@@ -8,7 +8,6 @@ We provide two simple parametric models:
 """
 
 import numpy as np
-import jax.numpy as jnp
 
 
 def place_model_1(
@@ -48,28 +47,6 @@ def place_model_1(
     return baseline + amplitude * np.exp(-0.5 * dist2 / (sigma ** 2))
 
 
-def place_model_1_jax(
-    X,
-    x0=0.0,
-    y0=0.0,
-    sigma=0.25,
-    amplitude=1.0,
-    baseline=0.0,
-):
-    """JAX version of place_model_1."""
-    x = X[0]
-    y = X[1]
-
-    x0 = jnp.clip(x0, -1.0, 1.0)
-    y0 = jnp.clip(y0, -1.0, 1.0)
-    sigma = jnp.clip(sigma, 0.05, 1.0)
-    amplitude = jnp.clip(amplitude, 0.0, 50.0)
-    baseline = jnp.clip(baseline, 0.0, 20.0)
-
-    dx = x - x0
-    dy = y - y0
-    dist2 = dx * dx + dy * dy
-    return baseline + amplitude * jnp.exp(-0.5 * dist2 / (sigma ** 2))
 
 
 def parameter_estimator_1(X, firing_rates):
@@ -152,39 +129,6 @@ def place_model_2(
     return baseline + amplitude * np.exp(-0.5 * dist2)
 
 
-def place_model_2_jax(
-    X,
-    x0=0.0,
-    y0=0.0,
-    sigma_x=0.3,
-    sigma_y=0.2,
-    theta=0.0,
-    amplitude=1.0,
-    baseline=0.0,
-):
-    """JAX version of place_model_2."""
-    x = X[0]
-    y = X[1]
-
-    x0 = jnp.clip(x0, -1.0, 1.0)
-    y0 = jnp.clip(y0, -1.0, 1.0)
-    sigma_x = jnp.clip(sigma_x, 0.05, 1.0)
-    sigma_y = jnp.clip(sigma_y, 0.05, 1.0)
-    theta = jnp.clip(theta, 0.0, jnp.pi)
-    amplitude = jnp.clip(amplitude, 0.0, 50.0)
-    baseline = jnp.clip(baseline, 0.0, 20.0)
-
-    cos_t = jnp.cos(theta)
-    sin_t = jnp.sin(theta)
-
-    dx = x - x0
-    dy = y - y0
-
-    xr = cos_t * dx + sin_t * dy
-    yr = -sin_t * dx + cos_t * dy
-
-    dist2 = (xr * xr) / (sigma_x ** 2) + (yr * yr) / (sigma_y ** 2)
-    return baseline + amplitude * jnp.exp(-0.5 * dist2)
 
 
 def parameter_estimator_2(X, firing_rates):

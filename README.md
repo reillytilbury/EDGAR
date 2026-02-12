@@ -66,11 +66,10 @@ mkdir -p experiments/your_task_name
 
 ### 2. Implement Seed Programs (`experiments/your_task_name/seed_programs.py`)
 
-You need to provide 2 seed models with corresponding parameter estimators:
+You need to provide 2 seed models with corresponding parameter estimators (NumPy only):
 
 ```python
 import numpy as np
-import jax.numpy as jnp
 
 # NumPy version (used for parameter estimation)
 def neuron_model_1(X, amplitude=1.0, baseline=0.0):
@@ -88,12 +87,6 @@ def neuron_model_1(X, amplitude=1.0, baseline=0.0):
     """
     theta = X[0]  # Extract first input
     return amplitude * np.cos(theta) + baseline
-
-# JAX version (used for gradient-based optimization)
-def neuron_model_1_jax(X, amplitude=1.0, baseline=0.0):
-    """Same as neuron_model_1 but using JAX."""
-    theta = X[0]  # Extract first input
-    return amplitude * jnp.cos(theta) + baseline
 
 # Parameter estimator
 def parameter_estimator_1(X, response):
@@ -113,7 +106,7 @@ def parameter_estimator_1(X, response):
     amplitude = np.std(response)
     return np.array([amplitude, baseline])
 
-# Implement neuron_model_2, neuron_model_2_jax, parameter_estimator_2
+# Implement neuron_model_2, parameter_estimator_2
 # ...
 ```
 
@@ -121,8 +114,7 @@ def parameter_estimator_1(X, response):
 - **Function signature**: Models must accept `X` as first argument with shape `(n_features, n_trials)`
 - **Input access**: Use index-based access like `theta = X[0]`, `contrast = X[1]`
 - Parameter estimators must be simple heuristics (no scipy.optimize, curve_fit, etc.)
-- JAX versions cannot use boolean indexing, dynamic shapes, or value-dependent control flow
-- Use `jnp.where()` instead of boolean indexing
+- Seed JAX versions are generated automatically via the JAX translator prompt when optimization starts
 - All parameters must have default values
 
 ### 3. Implement Data Loader (`experiments/your_task_name/data_parser.py`)
@@ -224,9 +216,6 @@ seed_programs:
   function_seeds:
     - neuron_model_1
     - neuron_model_2
-  jax_function_seeds:
-    - neuron_model_1_jax
-    - neuron_model_2_jax
   parameter_estimator_seeds:
     - parameter_estimator_1
     - parameter_estimator_2

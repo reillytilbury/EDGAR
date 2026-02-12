@@ -1420,6 +1420,52 @@ async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='g
     func = utils.str_to_func(jax_code_string, model_name)
     return jax_code_string, func
 
+
+def _prepare_seed_translation_check_data(inputs, response, sample_idx=0, max_trials=32):
+    if inputs.ndim == 2:
+        x_full = np.asarray(inputs[sample_idx])[None, :]
+    else:
+        x_full = np.asarray(inputs[sample_idx])
+
+    if response.ndim == 3:
+        y_full = np.asarray(response[sample_idx, 0])
+    else:
+        y_full = np.asarray(response[sample_idx])
+
+    n_trials = x_full.shape[-1]
+    if max_trials is not None and n_trials > max_trials:
+        trial_idx = np.linspace(0, n_trials - 1, num=max_trials, dtype=int)
+        x_check = x_full[..., trial_idx]
+    else:
+        trial_idx = None
+        x_check = x_full
+
+    return x_full, y_full, x_check, trial_idx
+
+
+def _check_jax_translation(np_func, jax_func, param_estimator, inputs, response,
+                           max_trials=32, rtol=1e-4, atol=1e-4) -> None:
+    x_full, y_full, x_check, _ = _prepare_seed_translation_check_data(
+        inputs, response, sample_idx=0, max_trials=max_trials
+    )
+    params = param_estimator(x_full, y_full)
+    params = np.asarray(params).reshape(-1)
+
+    np_pred = np.asarray(np_func(x_check, *params))
+    jax_pred = np.asarray(jax_func(jnp.asarray(x_check), *params))
+
+    if np_pred.shape != jax_pred.shape:
+        raise ValueError(
+            f"JAX translation shape mismatch: numpy={np_pred.shape}, jax={jax_pred.shape}."
+        )
+
+    if not np.allclose(np_pred, jax_pred, rtol=rtol, atol=atol):
+        max_abs_diff = float(np.max(np.abs(np_pred - jax_pred)))
+        raise ValueError(
+            "JAX translation failed numeric check for seed program. "
+            f"max_abs_diff={max_abs_diff:.6g}, rtol={rtol}, atol={atol}."
+        )
+
 async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
                 critical_population_size=12, min_wise_population_size=0, 
                 n_migrants=2, fit_params=True, tol=1e-6, exploit_point=0.5,
@@ -1497,13 +1543,13 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         logging.info("Chat mode disabled: using independent LLM queries")
         print("Chat mode disabled: using independent LLM queries")
 
-    # raise error if numpy_programs, jax_programs, or param_estimators are None or have length /= 2
+    # raise error if numpy_programs or param_estimators are invalid
     if numpy_programs is None or len(numpy_programs) != 2:
         raise ValueError("numpy_programs must be a list of 2 functions.")
-    if jax_programs is None or len(jax_programs) != 2:
-        raise ValueError("jax_programs must be a list of 2 functions.")
     if param_estimators is None or len(param_estimators) != 2:
         raise ValueError("param_estimators must be a list of 2 functions.")
+    if jax_programs is not None and len(jax_programs) != 2:
+        raise ValueError("jax_programs must be a list of 2 functions when provided.")
 
     data_dict = load_and_process_data_fn(**data_config)
     response = data_dict['response']
@@ -1531,6 +1577,35 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     inputs_train, inputs_test = inputs[training_samples, :], inputs[test_samples, :]  # has shape (n_samples, n_features, n_trials)
     print(f"Loaded {n_good_samples} samples, {n_trials} trials per sample.")
     print(f"Using {len(training_samples)} samples for training and {len(test_samples)} samples for testing.")
+
+    jax_program_code_strings = None
+    if jax_programs is None:
+        logging.info("No JAX seed programs provided; translating NumPy seeds to JAX via LLM.")
+        model_name = prompt_manager.get_model_name()
+        seed_code_strings = [
+            utils.format_function_source(program, f'{model_name}_v{i+1}', 'import numpy as np')
+            for i, program in enumerate(numpy_programs)
+        ]
+        translation_tasks = [
+            translate_to_jax(code_string, client, prompt_manager, tiny_lm_name)
+            for code_string in seed_code_strings
+        ]
+        jax_results = await asyncio.gather(*translation_tasks)
+
+        jax_programs = []
+        jax_program_code_strings = []
+        for i, (jax_code_string, jax_func) in enumerate(jax_results):
+            if jax_func is None or jax_code_string is None:
+                raise ValueError(f"JAX translation failed for seed program {i + 1}.")
+            _check_jax_translation(
+                numpy_programs[i],
+                jax_func,
+                param_estimators[i],
+                inputs_train,
+                response_train,
+            )
+            jax_programs.append(jax_func)
+            jax_program_code_strings.append(jax_code_string)
 
     # create a dataframe to store the programs in each island
     islands = []
@@ -1597,9 +1672,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         parameter_estimator_code_string = utils.format_function_source(
             param_est, f'parameter_estimator_v{i+1}', 'import numpy as np'
         )
-        program_jax_code_string = utils.format_function_source(
-            program_jax, f'{model_name}_v{i+1}', 'import jax.numpy as jnp'
-        )
+        if jax_program_code_strings is not None:
+            program_jax_code_string = jax_program_code_strings[i]
+        else:
+            program_jax_code_string = utils.format_function_source(
+                program_jax, f'{model_name}_v{i+1}', 'import jax.numpy as jnp'
+            )
         if inputs_train.shape[1] == 1 : 
             # evenly spaced evaluation points for 1D inputs
             eval_points = None
@@ -1759,6 +1837,29 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
             if model_new is None or param_est_new is None:
                 logging.info(f"Skipping island {island_idx}, batch {j} due to LLM generation failure.")
+                logging.info('-' * 50)
+                continue
+
+            model_name = prompt_manager.get_model_name()
+            model_np = utils.str_to_func(model_code_string, model_name)
+            if model_np is None:
+                logging.info(
+                    f"Skipping island {island_idx}, batch {j}: failed to parse NumPy model."
+                )
+                logging.info('-' * 50)
+                continue
+            try:
+                _check_jax_translation(
+                    model_np,
+                    model_new,
+                    param_est_new,
+                    inputs_train,
+                    response_train,
+                )
+            except Exception as e:
+                logging.info(
+                    f"Skipping island {island_idx}, batch {j}: JAX translation check failed: {e}"
+                )
                 logging.info('-' * 50)
                 continue
             

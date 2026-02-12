@@ -22,7 +22,8 @@ from src.loss_functions import quadratic_loss
 from experiments.grid_cells.diagnostics import _bin_to_rate_map
 
 import src.utils as utils
-from src.hypothesis_engine import compute_initial_params
+from src.hypothesis_engine import compute_initial_params, translate_to_jax
+from src.prompt_manager import PromptManager
 # get the python functions in the experiments/grid_cells/seed_programs.py 
 import experiments.grid_cells.seed_programs as grid_seed_programs
 from experiments.grid_cells.data_parser import compute_rate_map, load_and_process_data
@@ -390,7 +391,7 @@ def plot_model_fit(
     return png_bytes
 
 seed_model = grid_seed_programs.grid_model_1
-seed_model_jax = grid_seed_programs.grid_model_1_jax
+seed_model_jax = None
 parameter_estimator = grid_seed_programs.parameter_estimator_1
 
 seed_model_code_string = utils.format_function_source(seed_model, new_name="grid_model_seed_2")
@@ -489,8 +490,16 @@ async def main(n_iter=4, output_dir=None):
         log_file.write(text + "\n")
     
     seed_model = grid_seed_programs.grid_model_2
-    seed_model_jax = grid_seed_programs.grid_model_2_jax
     seed_parameter_estimator = grid_seed_programs.parameter_estimator_2
+    prompt_manager = PromptManager(config_path="experiments/grid_cells/configs/prompts.yaml")
+    seed_model_code_string = utils.format_function_source(
+        seed_model, new_name=prompt_manager.get_model_name(), import_statement="import numpy as np"
+    )
+    _, seed_model_jax = await translate_to_jax(
+        seed_model_code_string, client, prompt_manager, llm_name="gemini-2.0-flash-lite"
+    )
+    if seed_model_jax is None:
+        raise ValueError("Failed to translate seed model to JAX.")
 
     current_param_estimator = seed_parameter_estimator
     for i_iter in range(n_iter):    

@@ -10,7 +10,6 @@ Two main approaches:
 """
 
 import numpy as np
-import jax.numpy as jnp
 from scipy import signal, ndimage, spatial
 
 def grid_model_1(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, amplitude=1.0):
@@ -66,30 +65,6 @@ def grid_model_1(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, ampl
     return baseline + amplitude * s
 
 
-def grid_model_1_jax(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, amplitude=1.0):
-    """JAX-compatible version of grid_model_1."""
-    x = X[0]
-    y = X[1]
-    
-    lam = jnp.clip(lam, 0.1, 2.0)
-    theta = jnp.clip(theta, 0, jnp.pi / 3)
-    baseline = jnp.clip(baseline, 0, None)
-    amplitude = jnp.clip(amplitude, 0, None)
-    
-    q = 4.0 * jnp.pi / (jnp.sqrt(3.0) * lam)
-    
-    angles = theta + 2.0 * jnp.pi * jnp.arange(3) / 3.0
-    ux = jnp.cos(angles)
-    uy = jnp.sin(angles)
-    
-    dx = x - phi_x
-    dy = y - phi_y
-    
-    # Vectorized sum using JAX operations
-    proj = ux[:, None] * dx[None, :] + uy[:, None] * dy[None, :]  # (3, n_trials)
-    s = jnp.sum(jnp.cos(q * proj), axis=0)  # (n_trials,)
-    
-    return baseline + amplitude * s
 
 
 def parameter_estimator_1_v2(X, firing_rates):
@@ -523,54 +498,6 @@ def grid_model_2(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0,
     return r
 
 
-def grid_model_2_jax(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0,
-                     amplitude=1.0, sigma=0.08):
-    """
-    JAX-compatible version of grid_model_2.
-    
-    Uses a fixed range of lattice points for JIT compatibility.
-    """
-    x = X[0]
-    y = X[1]
-    
-    lam = jnp.clip(lam, 0.1, 2.0)
-    theta = jnp.clip(theta, 0, jnp.pi / 3)
-    sigma = jnp.clip(sigma, 0.01, 0.5)
-    baseline = jnp.clip(baseline, 0, None)
-    amplitude = jnp.clip(amplitude, 0, None)
-    
-    # Hexagonal lattice basis vectors
-    v1_x = lam * jnp.cos(theta)
-    v1_y = lam * jnp.sin(theta)
-    v2_x = 0.5 * lam * jnp.cos(theta) - 0.5 * jnp.sqrt(3.0) * lam * jnp.sin(theta)
-    v2_y = 0.5 * lam * jnp.sin(theta) + 0.5 * jnp.sqrt(3.0) * lam * jnp.cos(theta)
-    
-    dx = x - phi_x
-    dy = y - phi_y
-    
-    inv2sig2 = 1.0 / (2.0 * sigma * sigma)
-    
-    # Fixed lattice range for JIT compatibility (reduced for memory efficiency)
-    n_range = 5
-    n_vals = jnp.arange(-n_range, n_range + 1)
-    m_vals = jnp.arange(-n_range, n_range + 1)
-    N, M = jnp.meshgrid(n_vals, m_vals, indexing='ij')
-    N = N.ravel()
-    M = M.ravel()
-    
-    # Lattice centers
-    cx = N * v1_x + M * v2_x  # (n_lattice,)
-    cy = N * v1_y + M * v2_y  # (n_lattice,)
-    
-    # Distances from each lattice point
-    ddx = dx[None, :] - cx[:, None]  # (n_lattice, n_trials)
-    ddy = dy[None, :] - cy[:, None]
-    
-    # Sum of Gaussians
-    bumps = amplitude * jnp.exp(-(ddx * ddx + ddy * ddy) * inv2sig2)
-    r = baseline + jnp.sum(bumps, axis=0)
-    
-    return r
 
 
 def parameter_estimator_2_old(X, firing_rates):

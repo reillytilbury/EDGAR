@@ -9,9 +9,6 @@ seed_programs:
   function_seeds:
     - place_model_1
     - place_model_2
-  jax_function_seeds:
-    - place_model_1_jax
-    - place_model_2_jax
   parameter_estimator_seeds:
     - parameter_estimator_1
     - parameter_estimator_2
