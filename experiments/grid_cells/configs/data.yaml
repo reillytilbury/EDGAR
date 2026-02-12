@@ -1,6 +1,7 @@
 task: grid_cells  # name of the sub directory under experiments
 load_and_process_data_fn: experiments.grid_cells.data_parser.load_and_process_data
-data_path: /home/dabin/data/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
+# data_path: /home/dabin/data/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
+data_path: /home/reilly/Desktop/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
 
 # some details on the data : 
 # spikes_mod1
