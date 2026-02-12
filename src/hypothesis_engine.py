@@ -653,24 +653,24 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
         batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
         return jnp.sum(batch_losses)
     
-    # Gradient of per-batch loss
-    grad_single_batch = jax.jit(jax.grad(loss_single_batch))
+    # Combined loss and gradient computation - more efficient than separate calls
+    # because it reuses forward pass intermediate values during backprop
+    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
     
     def loss_and_grad_batched(params):
         """Compute loss and gradient by accumulating over trial batches (not JIT-compiled)."""
         params_2d = params.reshape(-1, n_params)
         total_loss = 0.0
         total_grad = jnp.zeros_like(params)
-        
+
         for start_idx in range(0, n_train_trials, trial_batch_size):
             end_idx = min(start_idx + trial_batch_size, n_train_trials)
             batch_weight = (end_idx - start_idx) / n_train_trials
             x_batch = x_train[:, :, start_idx:end_idx]
             y_batch = y_train[:, start_idx:end_idx]
             
-            # Compute loss and gradient for this batch
-            batch_loss = loss_single_batch(params_2d, x_batch, y_batch)
-            batch_grad = grad_single_batch(params_2d, x_batch, y_batch)
+            # Compute loss and gradient together in one pass (more efficient)
+            batch_loss, batch_grad = loss_and_grad_single_batch(params_2d, x_batch, y_batch)
             
             # Accumulate with proper weighting
             # We need to batch_weight because loss_single_batch calculates the mean loss per batch. 
@@ -995,7 +995,8 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
         batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
         return jnp.sum(batch_losses)
     
-    grad_single_batch = jax.jit(jax.grad(loss_single_batch))
+    # Combined loss and gradient computation - more efficient than separate calls
+    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
     
     def loss_and_grad_batched(params):
         """Compute loss and gradient by accumulating over trial batches."""
@@ -1009,8 +1010,8 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
             x_batch = x_train[:, :, start_idx:end_idx]
             y_batch = y_train[:, :, start_idx:end_idx]  # Note: 3D now
             
-            batch_loss = loss_single_batch(params_2d, x_batch, y_batch)
-            batch_grad = grad_single_batch(params_2d, x_batch, y_batch)
+            # Compute loss and gradient together in one pass (more efficient)
+            batch_loss, batch_grad = loss_and_grad_single_batch(params_2d, x_batch, y_batch)
             
             total_loss += batch_loss * batch_weight
             total_grad += batch_grad.reshape(-1) * batch_weight
@@ -1182,7 +1183,8 @@ def objective(model, param_estimator, loss_func, x, y,
             max_iter=max_iter,
             learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
-            trial_batch_size=10000,
+            trial_batch_size=10000, # Consider setting this if you OOM with legacy implementation (which doesn't do mini-batching)
+
         )
     else:
         # Multiple targets: use vectorized implementation
