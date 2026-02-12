@@ -516,10 +516,10 @@ def validate_model_execution(
         return False, f"Model failed to run or is incompatible with JAX tracing: {e}"
 
 
-def objective_legacy(model, param_estimator, loss_func, x, y, 
+def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
-              FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
-              use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+              FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
+              use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     LEGACY: Calculate the loss of the model for scalar (single-target) outputs.
     
@@ -567,20 +567,7 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
     
     n_samples, n_features, n_trials = x_data.shape
     
-    # train/test split over trials (axis 2)
-    # split the trials into 10 equal length chunks and allocate all odd chunks to train and even chunks to test 
-    key = jax.random.PRNGKey(random_seed)        
-    n_trial_splits = 10 
-    trials_per_split = n_trials // n_trial_splits
-    split_indices = [jnp.arange(i * trials_per_split, (i + 1) * trials_per_split) for i in range(n_trial_splits)]
-    training_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 1])
-    test_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 0])
-    # # old code 
-    # key = jax.random.PRNGKey(random_seed)
-    # training_size = n_trials // 2
-    # shuffled_indices = jax.random.permutation(key, jnp.arange(n_trials))
-    # training_trials_idx = shuffled_indices[:training_size]
-    # test_trials_idx = shuffled_indices[training_size:]
+    training_trials_idx, test_trials_idx = create_train_test_trial_split_fn(n_trials, random_seed)
 
     # Split inputs and response: x has shape (n_samples, n_features, n_trials)
     x_train = x_data[:, :, training_trials_idx]  # (n_samples, n_features, training_size)
@@ -652,24 +639,24 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
         batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
         return jnp.sum(batch_losses)
     
-    # Gradient of per-batch loss
-    grad_single_batch = jax.jit(jax.grad(loss_single_batch))
+    # Combined loss and gradient computation - more efficient than separate calls
+    # because it reuses forward pass intermediate values during backprop
+    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
     
     def loss_and_grad_batched(params):
         """Compute loss and gradient by accumulating over trial batches (not JIT-compiled)."""
         params_2d = params.reshape(-1, n_params)
         total_loss = 0.0
         total_grad = jnp.zeros_like(params)
-        
+
         for start_idx in range(0, n_train_trials, trial_batch_size):
             end_idx = min(start_idx + trial_batch_size, n_train_trials)
             batch_weight = (end_idx - start_idx) / n_train_trials
             x_batch = x_train[:, :, start_idx:end_idx]
             y_batch = y_train[:, start_idx:end_idx]
             
-            # Compute loss and gradient for this batch
-            batch_loss = loss_single_batch(params_2d, x_batch, y_batch)
-            batch_grad = grad_single_batch(params_2d, x_batch, y_batch)
+            # Compute loss and gradient together in one pass (more efficient)
+            batch_loss, batch_grad = loss_and_grad_single_batch(params_2d, x_batch, y_batch)
             
             # Accumulate with proper weighting
             # We need to batch_weight because loss_single_batch calculates the mean loss per batch. 
@@ -682,73 +669,99 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
         return total_loss / n_samples, total_grad / n_samples
 
     if fit_params:
-        # solver = jaxopt.ScipyMinimize(
-        #     fun=loss_param_and_grad,
-        #     value_and_grad=True,
-        #     method='L-BFGS-B',
-        #     maxiter=max_iter,
-        #     tol=tol,
-        #     jit=True)
-        # try:
-        #     result = solver.run(initial_params.reshape(-1))
-        #     params = jnp.asarray(result.params).reshape(n_samples, n_params)
-        #     print(f"Optimization success: {result.state.success}, iterations: {result.state.iter_num}")
-        # except Exception as e:
-        #     params = initial_params
-        #     logging.info(f"Error during optimization: {e}")
-        # 
-
-        # 1.  build adam with learning rate schedule for better convergence
-        #     Higher initial LR helps parameters with different scales converge
-        peak_lr = 0.001
-        schedule = optax.warmup_cosine_decay_schedule(
-            init_value=peak_lr * 0.1,
-            peak_value=peak_lr,
-            warmup_steps=50,
-            decay_steps=max_iter,
-            end_value=peak_lr * 0.01
-        )
-        opt = optax.adam(schedule, b1=0.9, b2=0.999, eps=1e-8)
+        # 1.  build adam
+        beta1, beta2  = 0.9, 0.999
+        lr = float(learning_rate)
+        opt = optax.adam(lr, b1=beta1, b2=beta2, eps=1e-8)
         opt_state = opt.init(initial_params.reshape(-1))
+
+        if trial_batch_size is None:
+            # define the loss function wrt params. This will have input shape n_cells * n_params (note that params is flattened) and output shape (1,)
+            loss_param = lambda params: jnp.mean(loss_total(params.reshape(-1, n_params), x_train, y_train))
+            loss_param_and_grad = jax.value_and_grad(loss_param)
+
+            # solver = jaxopt.ScipyMinimize(
+            #     fun=loss_param_and_grad,
+            #     value_and_grad=True,
+            #     method='L-BFGS-B',
+            #     maxiter=max_iter,
+            #     tol=tol,
+            #     jit=True)
+            # try:
+            #     result = solver.run(initial_params.reshape(-1))
+            #     params = jnp.asarray(result.params).reshape(n_cells, n_params)
+            #     print(f"Optimization success: {result.state.success}, iterations: {result.state.iter_num}")
+            # except Exception as e:
+            #     params = initial_params
+            #     logging.info(f"Error during optimization: {e}")
+
+            
+            # 2. jit single step
+            @jax.jit
+            def train_step(params, opt_state):
+                loss, grad = loss_param_and_grad(params)
+                updates, opt_state = opt.update(grad, opt_state, params)
+                params = optax.apply_updates(params, updates)
+                return params, opt_state, loss
+
+            # 3.  iterate
+            print_every = 50
+            params = initial_params.reshape(-1)  # Flatten params for the optimizer
+            initial_loss = loss_param(params)
+            best_loss, best_params = initial_loss.copy(), params.copy()
+            for step in range(1, max_iter + 1):
+                params, opt_state, loss_val = train_step(params, opt_state)
+                if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
+                    logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
+                    print(f"Final loss: {loss_val:.4f} at step {step}")
+                    break
+                if loss_val < best_loss:
+                    best_loss = loss_val.copy()
+                    best_params = params.copy()
+                if step % print_every == 0:
+                    print(f"step {step:4d}  loss {loss_val:.4f}")
+            params = best_params.reshape(n_samples, n_params)
+            print(f"params optimized. Loss: {best_loss:.4f}")
+
+        else:             
+            # 2. Define update step (NOT jit-compiled because loss_and_grad_batched has Python loop)
+            def train_step(params, opt_state):
+                loss, grad = loss_and_grad_batched(params)
+                updates, new_opt_state = opt.update(grad, opt_state, params)
+                new_params = optax.apply_updates(params, updates)
+                return new_params, new_opt_state, loss
         
-        # 2. Define update step (NOT jit-compiled because loss_and_grad_batched has Python loop)
-        def train_step(params, opt_state):
-            loss, grad = loss_and_grad_batched(params)
-            updates, new_opt_state = opt.update(grad, opt_state, params)
-            new_params = optax.apply_updates(params, updates)
-            return new_params, new_opt_state, loss
+            # 3.  iterate
+            print_every = 50
+            params = initial_params.reshape(-1)  # Flatten params for the optimizer
+            initial_loss, _ = loss_and_grad_batched(params)
         
-        # 3.  iterate
-        print_every = 50
-        params = initial_params.reshape(-1)  # Flatten params for the optimizer
-        initial_loss, _ = loss_and_grad_batched(params)
-        
-        # Early exit for catastrophically bad programs (loss > 1e10 suggests garbage outputs)
-        CATASTROPHIC_LOSS_THRESHOLD = 1e6
-        if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
-            print(f"Initial loss {initial_loss:.2e} exceeds threshold {CATASTROPHIC_LOSS_THRESHOLD:.0e}. Skipping optimization.")
-            logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
-            return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
-        
-        best_loss, best_params = initial_loss.copy(), params.copy()
-        for step in range(1, max_iter + 1):
-            params, opt_state, loss_val = train_step(params, opt_state)
-            if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
-                logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
-                print(f"Final loss: {loss_val:.4f} at step {step}")
-                break
-            # Also exit early if loss explodes during training
-            if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
-                logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
-                print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
+            # Early exit for catastrophically bad programs (loss > 1e10 suggests garbage outputs)
+            CATASTROPHIC_LOSS_THRESHOLD = 1e6
+            if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
+                print(f"Initial loss {initial_loss:.2e} exceeds threshold {CATASTROPHIC_LOSS_THRESHOLD:.0e}. Skipping optimization.")
+                logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
                 return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
-            if loss_val < best_loss:
-                best_loss = loss_val.copy()
-                best_params = params.copy()
-            if step % print_every == 0:
-                print(f"step {step:4d}  loss {loss_val:.4f}")
-        params = best_params.reshape(n_samples, n_params)
-        print(f"params optimized. Loss: {best_loss:.4f}")
+            
+            best_loss, best_params = initial_loss.copy(), params.copy()
+            for step in range(1, max_iter + 1):
+                params, opt_state, loss_val = train_step(params, opt_state)
+                if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
+                    logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
+                    print(f"Final loss: {loss_val:.4f} at step {step}")
+                    break
+                # Also exit early if loss explodes during training
+                if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
+                    logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
+                    print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
+                    return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
+                if loss_val < best_loss:
+                    best_loss = loss_val.copy()
+                    best_params = params.copy()
+                if step % print_every == 0:
+                    print(f"step {step:4d}  loss {loss_val:.4f}")
+            params = best_params.reshape(n_samples, n_params)
+            print(f"params optimized. Loss: {best_loss:.4f}")
     else:
         params = compute_initial_params(param_estimator, model, np.asarray(x_train), np.asarray(y_train))
         if params is None or not isinstance(params, jnp.ndarray):
@@ -774,14 +787,21 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
             weighted_sum += jnp.nansum(batch_losses) * (batch_size / n_eval_trials)
         # Divide by n_samples to get mean over samples  
         return weighted_sum / n_samples
-    
-    initial_loss = eval_loss_batched(initial_params, x_test, y_test) + param_penalty_weight * n_params
+
+    if trial_batch_size is None: 
+        initial_loss = jnp.nanmean(loss_total(initial_params, x_test, y_test)) + param_penalty_weight * n_params
+    else:   
+        initial_loss = eval_loss_batched(initial_params, x_test, y_test) + param_penalty_weight * n_params
     # print number of nans in initial_loss
     n_nans = jnp.sum(jnp.isnan(initial_loss))
     if n_nans > 0:
         print(f"Warning: initial loss contains {n_nans} NaNs. This may indicate a problem with the model or data.")
     initial_loss = jnp.nan_to_num(initial_loss, nan=FAILED_PROGRAM_COST, posinf=FAILED_PROGRAM_COST, neginf=FAILED_PROGRAM_COST)
-    final_loss = eval_loss_batched(params, x_test, y_test) + param_penalty_weight * n_params
+
+    if trial_batch_size is None:
+        final_loss = jnp.nanmean(loss_total(params, x_test, y_test)) + param_penalty_weight * n_params
+    else:
+        final_loss = eval_loss_batched(params, x_test, y_test) + param_penalty_weight * n_params
     # print number of nans in final_loss
     n_nans = jnp.sum(jnp.isnan(final_loss))
     if n_nans > 0:
@@ -794,10 +814,10 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-def objective_vectorized(model, param_estimator, loss_func, x, y,
+def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn,
                          target_weights=None,
                          param_penalty_weight=0.1, fit_params=True, random_seed=0,
-                         FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
+                         FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
                          use_param_estimator=True, trial_batch_size=10000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate the loss of a model that predicts multiple targets (vectorized outputs).
@@ -871,15 +891,8 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
             raise ValueError(f"target_weights shape {target_weights.shape} does not match n_targets={n_targets}")
         target_weights = target_weights / jnp.sum(target_weights)  # normalize
     
-    # Train/test split over trials (axis 2)
-    # Split the trials into 10 equal length chunks: odd chunks -> train, even chunks -> test
-    key = jax.random.PRNGKey(random_seed)
-    n_trial_splits = 10
-    trials_per_split = n_trials // n_trial_splits
-    split_indices = [jnp.arange(i * trials_per_split, (i + 1) * trials_per_split) for i in range(n_trial_splits)]
-    training_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 1])
-    test_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 0])
-    
+    training_trials_idx, test_trials_idx = create_train_test_trial_split_fn(n_trials, random_seed=random_seed)    
+
     # Split inputs and outputs
     x_train = x_data[:, :, training_trials_idx]  # (n_samples, n_features, training_size)
     y_train = y_data[:, :, training_trials_idx]  # (n_samples, n_targets, training_size)
@@ -961,7 +974,8 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
         batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
         return jnp.sum(batch_losses)
     
-    grad_single_batch = jax.jit(jax.grad(loss_single_batch))
+    # Combined loss and gradient computation - more efficient than separate calls
+    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
     
     def loss_and_grad_batched(params):
         """Compute loss and gradient by accumulating over trial batches."""
@@ -975,8 +989,8 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
             x_batch = x_train[:, :, start_idx:end_idx]
             y_batch = y_train[:, :, start_idx:end_idx]  # Note: 3D now
             
-            batch_loss = loss_single_batch(params_2d, x_batch, y_batch)
-            batch_grad = grad_single_batch(params_2d, x_batch, y_batch)
+            # Compute loss and gradient together in one pass (more efficient)
+            batch_loss, batch_grad = loss_and_grad_single_batch(params_2d, x_batch, y_batch)
             
             total_loss += batch_loss * batch_weight
             total_grad += batch_grad.reshape(-1) * batch_weight
@@ -985,7 +999,8 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
     
     if fit_params:
         # Adam optimizer with learning rate schedule
-        peak_lr = 0.001
+        # Ensure learning_rate is a Python float (not JAX array) for optax
+        peak_lr = float(learning_rate)
         schedule = optax.warmup_cosine_decay_schedule(
             init_value=peak_lr * 0.1,
             peak_value=peak_lr,
@@ -1069,10 +1084,10 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-def objective(model, param_estimator, loss_func, x, y,
+def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn,
               target_weights=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
-              FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000,
+              FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate the loss of the model. Always uses vectorized Outputs representation.
@@ -1139,14 +1154,16 @@ def objective(model, param_estimator, loss_func, x, y,
             loss_func=loss_func,
             x=x,
             y=y_2d,
+            create_train_test_trial_split_fn=create_train_test_trial_split_fn,
             param_penalty_weight=param_penalty_weight,
             fit_params=fit_params,
             random_seed=random_seed,
             FAILED_PROGRAM_COST=FAILED_PROGRAM_COST,
             tol=tol,
             max_iter=max_iter,
+            learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
-            trial_batch_size=trial_batch_size,
+            trial_batch_size=None, # Consider setting this if you OOM with legacy implementation (which doesn't do mini-batching)
         )
     else:
         # Multiple targets: use vectorized implementation
@@ -1156,6 +1173,7 @@ def objective(model, param_estimator, loss_func, x, y,
             loss_func=loss_func,
             x=x,
             y=y_outputs,
+            create_train_test_trial_split_fn=create_train_test_trial_split_fn,
             target_weights=target_weights,
             param_penalty_weight=param_penalty_weight,
             fit_params=fit_params,
@@ -1163,10 +1181,10 @@ def objective(model, param_estimator, loss_func, x, y,
             FAILED_PROGRAM_COST=FAILED_PROGRAM_COST,
             tol=tol,
             max_iter=max_iter,
+            learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
             trial_batch_size=trial_batch_size,
         )
-
 
 async def generate_new_model(current_island, llm_name, client, 
                                     spike_matrix, stimuli, prompt_manager,
@@ -1255,7 +1273,7 @@ async def generate_new_parameter_estimator(current_island,
                                            diagnostics_module=None,
                                            use_large_model: bool = False):                                           
     if model_code_string is None:
-        logging.info("No neuron model code string provided, skipping parameter estimator generation.")
+        logging.info("No model code string provided, skipping parameter estimator generation.")
         return None, None
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
@@ -1417,10 +1435,13 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 use_large_every = 3,
                 training_ratio = 0.5, 
                 max_iter = 1_000,
+                learning_rate = 3e-3,
+                use_large_model_for_param_estimators=False,
                 numpy_programs = None,
                 jax_programs = None,
                 param_estimators = None,
                 load_and_process_data_fn = None,
+                create_train_test_trial_split_fn = None,
                 data_config = None,
                 diagnostics_module = None,
                 prompts_config_path = None,
@@ -1430,7 +1451,6 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     Main function to run the hypothesis engine.
     
     Args:
-        ...
         data_config: Dict containing all data loading parameters. This is passed
                      directly to load_and_process_data_fn, which extracts whatever
                      parameters it needs. This allows different experiments to have
@@ -1438,7 +1458,6 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         log_best_loss: If True, logs the best loss at each iteration to a CSV file
                        for live monitoring. The file is saved to the experiment
                        output directory as 'best_loss_log.csv'.
-        ...
     """
     if data_config is None:
         data_config = {}
@@ -1565,8 +1584,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         loss_init, params_init, loss, params = objective(program_jax, param_est, 
                                         loss_func=loss_functions.quadratic_loss, 
                                         x=inputs_train, y=response_train, 
-                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol,
+                                        create_train_test_trial_split_fn=create_train_test_trial_split_fn,
+                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol, learning_rate=learning_rate,
                                         use_param_estimator=use_param_estimator, max_iter=max_iter)
+        print(f"Initial program {i + 1} loss before parameter fitting: {loss_init:.2f} and loss after fitting: {loss:.2f}")
+
         seed_losses[i] = loss
         # format strings
         program_code_string = utils.format_function_source(
@@ -1695,7 +1717,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         jax_results = await asyncio.gather(*model_function_translation_tasks)
         model_results = [(model_code_strings[j], model_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
-        # build parameter‑estimator tasks (use small model for param estimators)
+        # build parameter‑estimator tasks
         param_estimation_tasks = [
             generate_new_parameter_estimator(
                 current_island=islands[island_idx],
@@ -1709,12 +1731,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 k_max=2,
                 temp=temperature,
                 param_estimator_max_lines=100,
-                img_dir=None,
+                img_dir=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_estimator.png') if use_large_model_for_param_estimators else None,
                 island_chat_manager=island_chat_manager,
                 island_id=island_idx,
                 batch_id=j,
                 diagnostics_module=diagnostics_module,
-                use_large_model=False  # Parameter estimators use small model
+                use_large_model=use_large_model_for_param_estimators,
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)
@@ -1743,6 +1765,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             initial_loss, initial_params, loss, optimized_params = objective(model_new, param_est_new, 
                                                                                 loss_func=loss_functions.quadratic_loss,
                                                                                 x=inputs_train, y=response_train,
+                                                                                create_train_test_trial_split_fn=create_train_test_trial_split_fn,
                                                                                 param_penalty_weight=param_penalty_weight,
                                                                                 fit_params=fit_params, tol=tol, 
                                                                                 use_param_estimator=use_param_estimator, 
@@ -1906,7 +1929,9 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             # compute the test loss
             _, _, test_loss, optimized_params = objective(model, param_estimator,
                                                           loss_func=loss_functions.quadratic_loss,
-                                                          x=inputs_test, y=response_test, fit_params=fit_params,
+                                                          x=inputs_test, y=response_test, 
+                                                          create_train_test_trial_split_fn=create_train_test_trial_split_fn,
+                                                          fit_params=fit_params,
                                                           max_iter=max_iter, 
                                                           param_penalty_weight=param_penalty_weight, tol=tol,
                                                           use_param_estimator=use_param_estimator, 

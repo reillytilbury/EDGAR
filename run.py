@@ -74,6 +74,14 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
     else:
         raise ValueError("load_and_process_data_fn must be specified in data.yaml")
     
+    create_train_test_trial_split_fn_path = data_config.pop('create_train_test_trial_split_fn', None)
+    if create_train_test_trial_split_fn_path:
+        module_path, function_name = create_train_test_trial_split_fn_path.rsplit('.', 1)
+        data_module = importlib.import_module(module_path)
+        create_train_test_trial_split_fn = getattr(data_module, function_name)
+    else:
+        create_train_test_trial_split_fn = None
+    
     # Extract input names from config (for multi-input support)
     # These stay in data_config for the data loading function to use
     inputs_config = data_config.get('inputs', [])
@@ -109,6 +117,7 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
             n_migrants=params['n_migrants'],
             fit_params=params['fit_params'],
             tol=params['tol'],
+            learning_rate=params['learning_rate'],
             FAILED_PROGRAM_COST=params['FAILED_PROGRAM_COST'],
             tiny_lm_name=params['tiny_lm_name'],
             little_lm_name=params['little_lm_name'],
@@ -119,9 +128,11 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
             jax_programs=jax_programs,
             param_estimators=param_estimators,
             load_and_process_data_fn=load_and_process_data_fn,
+            create_train_test_trial_split_fn=create_train_test_trial_split_fn,
             data_config=data_config,
             diagnostics_module=diagnostics_module,
             prompts_config_path=prompts_config_path,
+            use_large_model_for_param_estimators=params.get('use_large_model_for_param_estimators', False)
         )
 
 if __name__ == "__main__":

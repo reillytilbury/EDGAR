@@ -18,18 +18,19 @@ seed_programs:
 
 experiment_params:
   num_runs: 1
-  n_iterations: 3
+  n_iterations: 2
   time_limit: 60          # in minutes
   k_max: 2
   n_islands: 8
   batch_size: 6
-  max_iter: 1000
+  max_iter: 100
   critical_population_size: 12
   min_wise_population_size: 0
   n_migrants: 2
   fit_params: true
   tol: 1e-6
   exploit_point: 0.5
+  learning_rate: 1e-3
   param_penalty_weight: 0.01
   FAILED_PROGRAM_COST: .inf
   use_image_feedback: true
@@ -42,8 +43,9 @@ experiment_params:
   little_lm_name: gemini-2.0-flash
   large_lm_name: gemini-2.5-flash
   use_large_every: 3
+  use_large_model_for_param_estimators: true # Whether parameter estimators should use the large LM (true) or tiny LM (false). 
 
-# Evolution algorithm parameters (used by EvolutionConfig)
+  # Evolution algorithm parameters (used by EvolutionConfig)
 evolution:
   capacity_per_island: 12        # Max programs per island (same as critical_population_size)
   n_migrants: 2                  # Programs to migrate each round

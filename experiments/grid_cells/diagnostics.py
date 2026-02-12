@@ -384,7 +384,7 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
     y_eval = program_vmap(X_eval, params)
     return y_eval
 
-def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
+def plot_model_fits_old(programs_df: pd.DataFrame, loss_function: Callable,
                     inputs: jnp.ndarray, response: jnp.ndarray,
                     sample_selection: Sequence[int],
                     rate_maps: Optional[np.ndarray] = None,
@@ -504,6 +504,179 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     
     if save_path:
         plt.savefig(save_path, dpi=dpi)
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
+                        inputs: jnp.ndarray, response: jnp.ndarray,
+                        sample_selection: Sequence[int],
+                        rate_maps: Optional[np.ndarray] = None,
+                        n_eval: int = 50,
+                        colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
+                        labels: Optional[list] = None,
+                        title: str = '',
+                        line_width=4.0,
+                        line_alpha=1.0,
+                        point_alpha=0.1,
+                        point_size: int = 80,
+                        legend_fontsize: int = 12,
+                        dpi: float = 100.0,
+                        save_path: Optional[str] = None,
+                        input_idx: int = 0,
+                        smoothing_sigma: float = 1.5,
+                        plot_raw_rates: bool = True):
+    """
+    Plot 2D rate map fits for grid cell models with detailed diagnostics.
+    
+    Shows for each cell:
+    - Unsmoothed actual rate map (if plot_raw_rates=True)
+    - Smoothed actual rate map
+    - For each model: predicted rate map and overlay (red=smoothed actual, green=pred)
+    
+    This creates a layout with 2 + 2*n_models columns:
+    [Unsmoothed Actual | Smoothed Actual | Model1 Pred | Model1 Overlay | Model2 Pred | Model2 Overlay | ...]
+    
+    Args:
+        programs_df: DataFrame with 'program' and 'params' columns. Max 2 models supported.
+        loss_function: Loss function (y_est, y_true) -> loss.
+        inputs: Input data of shape (n_cells, n_features, n_trials) where n_features=2 (x, y).
+        response: Response data of shape (n_cells, n_trials).
+        rate_maps: Precomputed rate maps of shape (n_cells, n_bins, n_bins). If None,
+            rate maps are computed from inputs and response.
+        sample_selection: Indices of cells to plot.
+        n_eval: Number of bins for rate map computation (default 50).
+        colours: Colors for each model (unused, kept for signature compatibility).
+        labels: Labels for each model. If None, uses 'Model 1', 'Model 2', etc.
+        title: Plot title.
+        line_width: Unused, kept for signature compatibility.
+        line_alpha: Unused, kept for signature compatibility.
+        point_alpha: Unused, kept for signature compatibility.
+        point_size: Unused, kept for signature compatibility.
+        legend_fontsize: Unused, kept for signature compatibility.
+        dpi: Figure DPI for saving.
+        save_path: Path to save figure. If None, displays the figure.
+        input_idx: Ignored for grid cells (uses both x and y).
+        smoothing_sigma: Gaussian smoothing sigma for smoothed rate maps.
+        plot_raw_rates: Whether to plot the unsmoothed actual rate maps.
+    """
+    # assert len(programs_df) <= 2, f"programs_df must have at most 2 rows, got {len(programs_df)}"
+    assert len(sample_selection) > 0, "sample_selection must not be empty"
+    
+    n_cells_plot = len(sample_selection)
+    n_models = len(programs_df)
+    
+    models = programs_df['program'].tolist()
+    params = programs_df['params'].tolist()
+    sample_idx = jnp.array(sample_selection)
+    
+    # Subset params and data for selected cells
+    params = [p[sample_idx] for p in params]
+    response_subset = response[sample_idx]
+    inputs_subset = inputs[sample_idx]  # (n_cells_plot, n_features, n_trials)
+    
+    if labels is None:
+        labels = [f'Model {i+1}' for i in range(n_models)]
+    
+    # Figure layout: rows = cells, cols = [unsmoothed, smoothed, (pred, overlay) per model]
+    n_cols = 2 + 2 * n_models if plot_raw_rates else 1 + 2 * n_models
+    fig, axes = plt.subplots(n_cells_plot, n_cols, figsize=(4 * n_cols, 4 * n_cells_plot))
+    if n_cells_plot == 1:
+        axes = axes.reshape(1, -1)
+    
+    for c_idx in range(n_cells_plot):
+        cell_idx = sample_selection[c_idx]
+        
+        # Get position data for this cell
+        x_pos = np.array(inputs_subset[c_idx, 0, :])
+        y_pos = np.array(inputs_subset[c_idx, 1, :])
+        response_cell = np.array(response_subset[c_idx])
+        
+        # Compute unsmoothed and smoothed actual rate maps
+        unsmoothed_rate_map = _bin_to_rate_map(x_pos, y_pos, response_cell, 
+                                                n_bins=n_eval, smoothing_sigma=0.0)
+        smoothed_rate_map = _bin_to_rate_map(x_pos, y_pos, response_cell, 
+                                              n_bins=n_eval, smoothing_sigma=smoothing_sigma)
+        
+        if plot_raw_rates:
+            # Column 0: Unsmoothed actual rate map
+            ax = axes[c_idx, 0]
+            im = ax.imshow(unsmoothed_rate_map.T, origin='lower', extent=[-1, 1, -1, 1],
+                        cmap='viridis', aspect='equal')
+            ax.set_title(f'Unsmoothed Actual (cell {cell_idx})')
+            ax.set_xlabel('X Position (normalized)')
+            ax.set_ylabel('Y Position (normalized)')
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        
+        # Column 1: Smoothed actual rate map
+        ax = axes[c_idx, 1 if plot_raw_rates else 0]
+        im = ax.imshow(smoothed_rate_map.T, origin='lower', extent=[-1, 1, -1, 1],
+                       cmap='viridis', aspect='equal')
+        ax.set_title(f'Smoothed Actual (sigma={smoothing_sigma}, cell {cell_idx})')
+        ax.set_xlabel('X Position (normalized)')
+        ax.set_ylabel('Y Position (normalized)')
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        
+        # For each model: prediction and overlay
+        for m_idx, model in enumerate(models):
+            params_c = params[m_idx][c_idx]
+            
+            # Compute model predictions for this cell
+            X_cell = inputs_subset[c_idx, :, :]  # (n_features, n_trials)
+            pred = model(X_cell, *params_c)
+            pred_np = np.array(pred)
+            
+            # Compute loss
+            loss_val = float(jnp.mean(loss_function(pred, response_subset[c_idx])))
+            
+            # Bin model predictions into rate map (no smoothing for model predictions)
+            pred_rate_map = _bin_to_rate_map(x_pos, y_pos, pred_np, 
+                                             n_bins=n_eval, smoothing_sigma=0.0)
+            
+            # Column for model prediction
+            pred_col = (2 if plot_raw_rates else 1) + m_idx * 2
+            ax = axes[c_idx, pred_col]
+            im = ax.imshow(pred_rate_map.T, origin='lower', extent=[-1, 1, -1, 1],
+                           cmap='viridis', aspect='equal')
+            ax.set_title(f'Predicted | Loss: {loss_val:.4f}')
+            ax.set_xlabel('X Position (normalized)')
+            ax.set_ylabel('Y Position (normalized)')
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            
+            # Column for overlay (red=smoothed actual, green=pred)
+            overlay_col = (2 if plot_raw_rates else 1) + m_idx * 2 + 1
+            ax = axes[c_idx, overlay_col]
+            
+            # Normalize both maps to shared scale for overlay
+            vmin = 0.0
+            vmax = max(float(np.nanmax(smoothed_rate_map)), float(np.nanmax(pred_rate_map)))
+            vmax = max(vmax, 1e-8)  # avoid divide-by-zero
+            
+            def scale_shared(m):
+                m = np.asarray(m, dtype=float)
+                m = (m - vmin) / (vmax - vmin)
+                return np.clip(m, 0.0, 1.0)
+            
+            actual_s = scale_shared(smoothed_rate_map).T
+            pred_s = scale_shared(pred_rate_map).T
+            
+            # Create RGB overlay: red=actual, green=pred
+            overlay = np.zeros((*actual_s.shape, 3))
+            overlay[..., 0] = actual_s  # red channel
+            overlay[..., 1] = pred_s    # green channel
+            
+            ax.imshow(overlay, origin='lower', extent=[-1, 1, -1, 1])
+            ax.set_title(f'Overlay (red=smoothed actual, green=pred), vmax={vmax:.2f}')
+            ax.set_xlabel('X Position (normalized)')
+            ax.set_ylabel('Y Position (normalized)')
+    
+    if title:
+        plt.suptitle(title, fontsize=16)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95] if title else None)
+    
+    if save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     else:
         plt.show()
     plt.close(fig)

@@ -77,12 +77,13 @@ prompts:
     image_analysis: |
       **Image Analysis Instructions:**
 
-      Attached are 2D rate maps showing actual firing rate data (left) and model predictions (right) for several grid cells.
-      The model predictions are generated using parameters estimated by the corresponding parameter estimator.
+      Attached are 2D rate maps where each row corresponds to a cell. The first left column shows the actual firing rate data and the second column shows the actual firing rate but smoothed. 
+      There are two additional columns for each model where we first show the firing rate from model prediction and then an overlap between the data and model prediction where the model is in green and the actual data (smoothed) is in red.
 
-      Analyse the models' fits to the data in the images below. Identify systematic weaknesses by observing patterns across multiple cells:
+      Analyse the models' fits to the data in the images below. Identify systematic weaknesses by observing patterns across multiple cells: 
       *   **Grid Pattern:** Do the hexagonal firing fields align correctly in terms of spacing, orientation, and phase?
       *   **Field Shape:** Are the individual firing fields (bumps) the right size and shape? Too sharp or too diffuse?
+      *   **Amplitude Modulation:** Are the peak firing rates captured correctly? Is there a consistent bias in over- or under-predicting firing rates?
       *   **Baseline:** Is the baseline firing rate captured correctly between fields?
       *   **Edge Effects:** How do the models behave near arena boundaries?
 

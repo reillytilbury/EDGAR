@@ -158,6 +158,14 @@ def load_and_process_data(
         "trials": angles_cropped,
     }
 
+def create_train_test_trial_split(n_trials: int, random_seed : int = 0) -> Tuple[jnp.ndarray, jnp.ndarray]:    
+    key = jax.random.PRNGKey(random_seed)
+    training_size = n_trials // 2
+    shuffled_indices = jax.random.permutation(key, jnp.arange(n_trials))
+    training_trials_idx = shuffled_indices[:training_size]
+    test_trials_idx = shuffled_indices[training_size:]
+    return training_trials_idx, test_trials_idx
+
 def unbiased_signal_fraction(R, min_repeats=2):
     """
     Compute unbiased fraction of stimulus-related variance (Sahani & Linden, 2003)
