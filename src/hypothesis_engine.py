@@ -706,7 +706,9 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
             # 1.  build adam
             # learning_rate = 3e-3
             beta1, beta2  = 0.9, 0.999
-            opt = optax.adam(learning_rate, b1=beta1, b2=beta2, eps=1e-8)
+            # Ensure learning_rate is a Python float (not JAX array) for optax
+            lr = float(learning_rate)
+            opt = optax.adam(lr, b1=beta1, b2=beta2, eps=1e-8)
             opt_state = opt.init(initial_params.reshape(-1))
             
             # 2. jit single step
@@ -717,10 +719,30 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
                 params = optax.apply_updates(params, updates)
                 return params, opt_state, loss
 
+            # 3.  iterate
+            print_every = 50
+            params = initial_params.reshape(-1)  # Flatten params for the optimizer
+            initial_loss = loss_param(params)
+            best_loss, best_params = initial_loss.copy(), params.copy()
+            for step in range(1, max_iter + 1):
+                params, opt_state, loss_val = train_step(params, opt_state)
+                if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
+                    logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
+                    print(f"Final loss: {loss_val:.4f} at step {step}")
+                    break
+                if loss_val < best_loss:
+                    best_loss = loss_val.copy()
+                    best_params = params.copy()
+                if step % print_every == 0:
+                    print(f"step {step:4d}  loss {loss_val:.4f}")
+            params = best_params.reshape(n_samples, n_params)
+            print(f"params optimized. Loss: {best_loss:.4f}")
+
         else: 
             # 1.  build adam with learning rate schedule for better convergence
             #     Higher initial LR helps parameters with different scales converge
-            peak_lr = 0.001
+            # Ensure learning_rate is a Python float (not JAX array) for optax
+            peak_lr = float(learning_rate) if learning_rate is not None else 0.001
             schedule = optax.warmup_cosine_decay_schedule(
                 init_value=peak_lr * 0.1,
                 peak_value=peak_lr,
@@ -738,37 +760,37 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
                 new_params = optax.apply_updates(params, updates)
                 return new_params, new_opt_state, loss
         
-        # 3.  iterate
-        print_every = 50
-        params = initial_params.reshape(-1)  # Flatten params for the optimizer
-        initial_loss, _ = loss_and_grad_batched(params)
+            # 3.  iterate
+            print_every = 50
+            params = initial_params.reshape(-1)  # Flatten params for the optimizer
+            initial_loss, _ = loss_and_grad_batched(params)
         
-        # Early exit for catastrophically bad programs (loss > 1e10 suggests garbage outputs)
-        CATASTROPHIC_LOSS_THRESHOLD = 1e6
-        if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
-            print(f"Initial loss {initial_loss:.2e} exceeds threshold {CATASTROPHIC_LOSS_THRESHOLD:.0e}. Skipping optimization.")
-            logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
-            return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
-        
-        best_loss, best_params = initial_loss.copy(), params.copy()
-        for step in range(1, max_iter + 1):
-            params, opt_state, loss_val = train_step(params, opt_state)
-            if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
-                logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
-                print(f"Final loss: {loss_val:.4f} at step {step}")
-                break
-            # Also exit early if loss explodes during training
-            if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
-                logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
-                print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
+            # Early exit for catastrophically bad programs (loss > 1e10 suggests garbage outputs)
+            CATASTROPHIC_LOSS_THRESHOLD = 1e6
+            if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
+                print(f"Initial loss {initial_loss:.2e} exceeds threshold {CATASTROPHIC_LOSS_THRESHOLD:.0e}. Skipping optimization.")
+                logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
                 return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
-            if loss_val < best_loss:
-                best_loss = loss_val.copy()
-                best_params = params.copy()
-            if step % print_every == 0:
-                print(f"step {step:4d}  loss {loss_val:.4f}")
-        params = best_params.reshape(n_samples, n_params)
-        print(f"params optimized. Loss: {best_loss:.4f}")
+            
+            best_loss, best_params = initial_loss.copy(), params.copy()
+            for step in range(1, max_iter + 1):
+                params, opt_state, loss_val = train_step(params, opt_state)
+                if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
+                    logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
+                    print(f"Final loss: {loss_val:.4f} at step {step}")
+                    break
+                # Also exit early if loss explodes during training
+                if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
+                    logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
+                    print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
+                    return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
+                if loss_val < best_loss:
+                    best_loss = loss_val.copy()
+                    best_params = params.copy()
+                if step % print_every == 0:
+                    print(f"step {step:4d}  loss {loss_val:.4f}")
+            params = best_params.reshape(n_samples, n_params)
+            print(f"params optimized. Loss: {best_loss:.4f}")
     else:
         params = compute_initial_params(param_estimator, model, np.asarray(x_train), np.asarray(y_train))
         if params is None or not isinstance(params, jnp.ndarray):
@@ -1012,7 +1034,8 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
     
     if fit_params:
         # Adam optimizer with learning rate schedule
-        peak_lr = learning_rate
+        # Ensure learning_rate is a Python float (not JAX array) for optax
+        peak_lr = float(learning_rate)
         schedule = optax.warmup_cosine_decay_schedule(
             init_value=peak_lr * 0.1,
             peak_value=peak_lr,
@@ -1174,7 +1197,7 @@ def objective(model, param_estimator, loss_func, x, y,
             max_iter=max_iter,
             learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
-            trial_batch_size=trial_batch_size,
+            trial_batch_size=None,
         )
     else:
         # Multiple targets: use vectorized implementation
@@ -1195,7 +1218,6 @@ def objective(model, param_estimator, loss_func, x, y,
             use_param_estimator=use_param_estimator,
             trial_batch_size=trial_batch_size,
         )
-
 
 async def generate_new_model(current_island, llm_name, client, 
                                     spike_matrix, stimuli, prompt_manager,
