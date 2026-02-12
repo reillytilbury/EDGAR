@@ -366,6 +366,15 @@ def load_and_process_data(
         "smoothing_sigma": smoothing_sigma,
     }
 
+def create_train_test_trial_split(n_trials: int, random_seed : int = 0) -> Tuple[jnp.ndarray, jnp.ndarray]:    
+    key = jax.random.PRNGKey(random_seed)        
+    n_trial_splits = 10 
+    trials_per_split = n_trials // n_trial_splits
+    split_indices = [jnp.arange(i * trials_per_split, (i + 1) * trials_per_split) for i in range(n_trial_splits)]
+    training_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 1])
+    test_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 0])
+    return training_trials_idx, test_trials_idx
+
 def grid_cell_filter(
     response: np.ndarray,
     inputs: Inputs,

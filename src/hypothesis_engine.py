@@ -516,7 +516,7 @@ def validate_model_execution(
         return False, f"Model failed to run or is incompatible with JAX tracing: {e}"
 
 
-def objective_legacy(model, param_estimator, loss_func, x, y, 
+def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -567,21 +567,7 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
     
     n_samples, n_features, n_trials = x_data.shape
     
-    # train/test split over trials (axis 2)
-    # split the trials into 10 equal length chunks and allocate all odd chunks to train and even chunks to test     
-    # key = jax.random.PRNGKey(random_seed)        
-    # new code - CR dkwon : implement this on the experiment config level - maybe in data_parser 
-    # n_trial_splits = 10 
-    # trials_per_split = n_trials // n_trial_splits
-    # split_indices = [jnp.arange(i * trials_per_split, (i + 1) * trials_per_split) for i in range(n_trial_splits)]
-    # training_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 1])
-    # test_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 0])
-    # old code 
-    key = jax.random.PRNGKey(random_seed)
-    training_size = n_trials // 2
-    shuffled_indices = jax.random.permutation(key, jnp.arange(n_trials))
-    training_trials_idx = shuffled_indices[:training_size]
-    test_trials_idx = shuffled_indices[training_size:]
+    training_trials_idx, test_trials_idx = create_train_test_trial_split_fn(n_trials, random_seed)
 
     # Split inputs and response: x has shape (n_samples, n_features, n_trials)
     x_train = x_data[:, :, training_trials_idx]  # (n_samples, n_features, training_size)
@@ -828,7 +814,7 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-def objective_vectorized(model, param_estimator, loss_func, x, y,
+def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn,
                          target_weights=None,
                          param_penalty_weight=0.1, fit_params=True, random_seed=0,
                          FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
@@ -905,15 +891,8 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
             raise ValueError(f"target_weights shape {target_weights.shape} does not match n_targets={n_targets}")
         target_weights = target_weights / jnp.sum(target_weights)  # normalize
     
-    # Train/test split over trials (axis 2)
-    # Split the trials into 10 equal length chunks: odd chunks -> train, even chunks -> test
-    key = jax.random.PRNGKey(random_seed)
-    n_trial_splits = 10
-    trials_per_split = n_trials // n_trial_splits
-    split_indices = [jnp.arange(i * trials_per_split, (i + 1) * trials_per_split) for i in range(n_trial_splits)]
-    training_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 1])
-    test_trials_idx = jnp.concatenate([split_indices[i] for i in range(n_trial_splits) if i % 2 == 0])
-    
+    training_trials_idx, test_trials_idx = create_train_test_trial_split_fn(n_trials, random_seed=random_seed)    
+
     # Split inputs and outputs
     x_train = x_data[:, :, training_trials_idx]  # (n_samples, n_features, training_size)
     y_train = y_data[:, :, training_trials_idx]  # (n_samples, n_targets, training_size)
@@ -1105,7 +1084,7 @@ def objective_vectorized(model, param_estimator, loss_func, x, y,
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-def objective(model, param_estimator, loss_func, x, y,
+def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn,
               target_weights=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
@@ -1175,6 +1154,7 @@ def objective(model, param_estimator, loss_func, x, y,
             loss_func=loss_func,
             x=x,
             y=y_2d,
+            create_train_test_trial_split_fn=create_train_test_trial_split_fn,
             param_penalty_weight=param_penalty_weight,
             fit_params=fit_params,
             random_seed=random_seed,
@@ -1183,8 +1163,7 @@ def objective(model, param_estimator, loss_func, x, y,
             max_iter=max_iter,
             learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
-            trial_batch_size=10000, # Consider setting this if you OOM with legacy implementation (which doesn't do mini-batching)
-
+            trial_batch_size=None, # Consider setting this if you OOM with legacy implementation (which doesn't do mini-batching)
         )
     else:
         # Multiple targets: use vectorized implementation
@@ -1194,6 +1173,7 @@ def objective(model, param_estimator, loss_func, x, y,
             loss_func=loss_func,
             x=x,
             y=y_outputs,
+            create_train_test_trial_split_fn=create_train_test_trial_split_fn,
             target_weights=target_weights,
             param_penalty_weight=param_penalty_weight,
             fit_params=fit_params,
@@ -1461,6 +1441,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 jax_programs = None,
                 param_estimators = None,
                 load_and_process_data_fn = None,
+                create_train_test_trial_split_fn = None,
                 data_config = None,
                 diagnostics_module = None,
                 prompts_config_path = None,
@@ -1603,6 +1584,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         loss_init, params_init, loss, params = objective(program_jax, param_est, 
                                         loss_func=loss_functions.quadratic_loss, 
                                         x=inputs_train, y=response_train, 
+                                        create_train_test_trial_split_fn=create_train_test_trial_split_fn,
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol, learning_rate=learning_rate,
                                         use_param_estimator=use_param_estimator, max_iter=max_iter)
         print(f"Initial program {i + 1} loss before parameter fitting: {loss_init:.2f} and loss after fitting: {loss:.2f}")
