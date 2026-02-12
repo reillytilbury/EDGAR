@@ -19,10 +19,14 @@ def place_model_1(
     baseline=0.0,
 ):
     """
-    Isotropic 2D Gaussian place field.
+    Independent variable:
+    X = [x, y]  # position (normalized to [-1, 1])
+
+    Isotropic 2D Gaussian place field with equation
+    f(x, y) = baseline + amplitude * exp(-0.5 * ((x - x0)^2 + (y - y0)^2) / sigma^2)
 
     Args:
-        X (np.ndarray): Input array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (2, n_trials).
                         X[0] is x position, X[1] is y position (normalized to [-1, 1]).
         x0, y0 (float): Place field center.
         sigma (float): Field width (same for x and y).
@@ -91,10 +95,17 @@ def place_model_2(
     baseline=0.0,
 ):
     """
-    Elliptical (rotated) 2D Gaussian place field.
+    Independent variable:
+    X = [x, y]  # position (normalized to [-1, 1])
+
+    Elliptical (rotated) 2D Gaussian place field with equation
+    f(x, y) = baseline + amplitude * exp(-0.5 * (xr^2 / sigma_x^2 + yr^2 / sigma_y^2))
+    where
+    xr = cos(theta) * (x - x0) + sin(theta) * (y - y0)
+    yr = -sin(theta) * (x - x0) + cos(theta) * (y - y0)
 
     Args:
-        X (np.ndarray): Input array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (2, n_trials).
                         X[0] is x position, X[1] is y position (normalized to [-1, 1]).
         x0, y0 (float): Place field center.
         sigma_x, sigma_y (float): Field widths along principal axes.

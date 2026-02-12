@@ -2,9 +2,12 @@ import numpy as np
 
 def neuron_model_1(X, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=1.0):
     """
+    Independent variable:
+    X = [theta]  # stimulus angle (radians)
+
     A simple neuron model that computes the response based on a Gaussian tuning curve.
     Args:
-        X (np.ndarray): Input array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (1, n_trials).
                         X[0] is the stimulus angle theta in radians.
         theta_pref (float): Preferred direction of the neuron.
         baseline (float): Baseline firing rate.
@@ -28,7 +31,7 @@ def parameter_estimator_1(X, spike_counts):
     """
     Estimates the parameters of the gaussian neuron model. We do this by creating a binned tuning curve and picking out salient features.
     Args:
-        X (np.ndarray): Input array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (1, n_trials).
                         X[0] is the stimulus angle theta in radians.
         spike_counts (np.ndarray): Spike counts corresponding to each trial, shape (n_trials,).
     Returns:
@@ -55,9 +58,12 @@ def parameter_estimator_1(X, spike_counts):
 
 def neuron_model_2(X, theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2=0.0, tuning_width=1.0):
     """
+    Independent variable:
+    X = [theta]  # stimulus angle (radians)
+
     A neuron model that computes the response based on a double peaked gaussian tuning curve, with peaks at theta_pref and (theta_pref + pi) % 2pi.
     Args:
-        X (np.ndarray): Input array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (1, n_trials).
                         X[0] is the stimulus angle theta in radians.
         theta_pref (float): Preferred angle in radians.
         baseline (float): Baseline firing rate.
@@ -84,7 +90,7 @@ def parameter_estimator_2(X, spike_counts):
     """
     A parameter estimator for the double peaked neuron model. Creates a binned tuning curve from spike counts and estimates parameters using features from the tuning curve.
     Args:
-        X (np.ndarray): Input array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (1, n_trials).
                         X[0] is the stimulus angle theta in radians.
         spike_counts (np.ndarray): Spike counts corresponding to the angles, shape (n_trials,).
     Returns:

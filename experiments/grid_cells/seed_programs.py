@@ -14,6 +14,9 @@ from scipy import signal, ndimage, spatial
 
 def grid_model_1(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, amplitude=1.0):
     """
+    Independent variable:
+    X = [x, y]  # position (normalized to [-1, 1])
+
     Grid cell model using sum of 3 cosines at 60-degree angles.
     
     This model approximates the hexagonal firing pattern using interference
@@ -23,7 +26,7 @@ def grid_model_1(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, ampl
     where q = 4*pi/(sqrt(3)*lam) and u_k are unit vectors 60 degrees apart.
     
     Args:
-        X (np.ndarray): Input array with shape (n_features, n_trials).
+        X (np.ndarray): Input array with shape (2, n_trials).
                         X[0] is x position, X[1] is y position (normalized to [-1, 1]).
         lam (float): Grid spacing (wavelength) in same units as x,y.
         theta (float): Orientation of the grid pattern in radians.
@@ -436,13 +439,16 @@ def parameter_estimator_1_v2(X, firing_rates):
 def grid_model_2(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, 
                  amplitude=1.0, sigma=0.08):
     """
+    Independent variable:
+    X = [x, y]  # position (normalized to [-1, 1])
+
     Grid cell model using Gaussian bumps on a hexagonal lattice.
     
     This model places Gaussian firing fields at the vertices of a hexagonal
     lattice, providing sharper field boundaries than the cosine model.
     
     Args:
-        X (np.ndarray): Input array (n_features, n_trials).
+        X (np.ndarray): Input array (2, n_trials).
                         X[0] is x, X[1] is y (normalized to [-1, 1]).
         lam (float): Lattice spacing.
         theta (float): Orientation of the lattice in radians.
