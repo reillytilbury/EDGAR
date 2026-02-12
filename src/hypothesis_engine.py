@@ -683,6 +683,12 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
         return total_loss / n_samples, total_grad / n_samples
 
     if fit_params:
+        # 1.  build adam
+        beta1, beta2  = 0.9, 0.999
+        lr = float(learning_rate)
+        opt = optax.adam(lr, b1=beta1, b2=beta2, eps=1e-8)
+        opt_state = opt.init(initial_params.reshape(-1))
+
         if trial_batch_size is None:
             # define the loss function wrt params. This will have input shape n_cells * n_params (note that params is flattened) and output shape (1,)
             loss_param = lambda params: jnp.mean(loss_total(params.reshape(-1, n_params), x_train, y_train))
@@ -703,13 +709,6 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
             #     params = initial_params
             #     logging.info(f"Error during optimization: {e}")
 
-            # 1.  build adam
-            # learning_rate = 3e-3
-            beta1, beta2  = 0.9, 0.999
-            # Ensure learning_rate is a Python float (not JAX array) for optax
-            lr = float(learning_rate)
-            opt = optax.adam(lr, b1=beta1, b2=beta2, eps=1e-8)
-            opt_state = opt.init(initial_params.reshape(-1))
             
             # 2. jit single step
             @jax.jit
@@ -738,21 +737,7 @@ def objective_legacy(model, param_estimator, loss_func, x, y,
             params = best_params.reshape(n_samples, n_params)
             print(f"params optimized. Loss: {best_loss:.4f}")
 
-        else: 
-            # 1.  build adam with learning rate schedule for better convergence
-            #     Higher initial LR helps parameters with different scales converge
-            # Ensure learning_rate is a Python float (not JAX array) for optax
-            peak_lr = float(learning_rate) if learning_rate is not None else 0.001
-            schedule = optax.warmup_cosine_decay_schedule(
-                init_value=peak_lr * 0.1,
-                peak_value=peak_lr,
-                warmup_steps=50,
-                decay_steps=max_iter,
-                end_value=peak_lr * 0.01
-            )
-            opt = optax.adam(schedule, b1=0.9, b2=0.999, eps=1e-8)
-            opt_state = opt.init(initial_params.reshape(-1))
-            
+        else:             
             # 2. Define update step (NOT jit-compiled because loss_and_grad_batched has Python loop)
             def train_step(params, opt_state):
                 loss, grad = loss_and_grad_batched(params)
@@ -1197,7 +1182,7 @@ def objective(model, param_estimator, loss_func, x, y,
             max_iter=max_iter,
             learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
-            trial_batch_size=None,
+            trial_batch_size=10000,
         )
     else:
         # Multiple targets: use vectorized implementation
@@ -1618,6 +1603,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                         x=inputs_train, y=response_train, 
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol, learning_rate=learning_rate,
                                         use_param_estimator=use_param_estimator, max_iter=max_iter)
+        print(f"Initial program {i + 1} loss before parameter fitting: {loss_init:.2f} and loss after fitting: {loss:.2f}")
+
         seed_losses[i] = loss
         # format strings
         program_code_string = utils.format_function_source(
