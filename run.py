@@ -127,6 +127,7 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
             large_lm_name=params['large_lm_name'],
             use_chat_mode=params.get('use_chat_mode', False),  # Default to legacy mode
             chat_token_limit=params.get('chat_token_limit', 50000),  # Max tokens per chat before auto-reset
+            param_estimator_refinement_rounds=params.get('param_estimator_refinement_rounds', 0),
             numpy_programs=numpy_programs,
             jax_programs=jax_programs,
             param_estimators=param_estimators,

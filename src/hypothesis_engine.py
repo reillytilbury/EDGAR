@@ -1,4 +1,5 @@
 import inspect
+import re
 import os
 import logging
 import asyncio
@@ -1186,6 +1187,46 @@ def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_s
             trial_batch_size=trial_batch_size,
         )
 
+
+def evaluate_param_estimator_loss(model, param_estimator, loss_func, x, y,
+                                  create_train_test_trial_split_fn=None,
+                                  param_penalty_weight=0.1, random_seed=0,
+                                  trial_batch_size=5000, FAILED_PROGRAM_COST=jnp.inf):
+    """
+    Evaluate parameter estimator loss without gradient descent.
+
+    Returns:
+        (loss, params) where loss is computed using the objective pipeline with
+        fit_params=False and params are the initial parameters from the estimator.
+    """
+    if create_train_test_trial_split_fn is None:
+        def _default_split(n_trials, random_seed=0):
+            idx = jnp.arange(n_trials)
+            return idx, idx
+        split_fn = _default_split
+    else:
+        split_fn = create_train_test_trial_split_fn
+
+    try:
+        initial_loss, initial_params, _, _ = objective(
+            model=model,
+            param_estimator=param_estimator,
+            loss_func=loss_func,
+            x=x,
+            y=y,
+            create_train_test_trial_split_fn=split_fn,
+            param_penalty_weight=param_penalty_weight,
+            fit_params=False,
+            random_seed=random_seed,
+            FAILED_PROGRAM_COST=FAILED_PROGRAM_COST,
+            use_param_estimator=True,
+            trial_batch_size=trial_batch_size,
+        )
+        return float(initial_loss), initial_params
+    except Exception as e:
+        logging.info(f"Error evaluating parameter estimator loss: {e}")
+        return float(FAILED_PROGRAM_COST), None
+
 async def generate_new_model(current_island, llm_name, client, 
                                     spike_matrix, stimuli, prompt_manager,
                                     mode='explore', k_max=2, temp=1, 
@@ -1263,11 +1304,16 @@ async def generate_new_model(current_island, llm_name, client,
 
 async def generate_new_parameter_estimator(current_island, 
                                            model_code_string: str,
+                                           model_fn,
                                            llm_name, client, 
                                            spike_matrix, stimuli, prompt_manager,
                                            mode='explore', k_max=1, temp=1,
                                            param_estimator_max_lines=100, img_dir=None,
-                                           swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'], 
+                                           swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'],
+                                           refine_rounds: int = 0,
+                                           param_penalty_weight: float = 0.1,
+                                           create_train_test_trial_split_fn=None,
+                                           random_seed: int = 0,
                                            island_chat_manager=None, island_id: int = None,
                                            batch_id: int = 0,
                                            diagnostics_module=None,
@@ -1349,7 +1395,154 @@ async def generate_new_parameter_estimator(current_island,
         return None, None
     code_string = code_string.replace(f'def parameter_estimator_v{k+1}(', 'def parameter_estimator(')
     func = utils.str_to_func(code_string, 'parameter_estimator')
-    return code_string, func
+
+    if func is None:
+        logging.info("Failed to parse parameter estimator code, skipping.")
+        return None, None
+
+    if refine_rounds <= 0 or model_fn is None:
+        return code_string, func
+
+    best_code = code_string
+    best_func = func
+    best_loss = float(jnp.inf)
+
+    current_code = code_string
+    current_func = func
+    current_loss, current_params = evaluate_param_estimator_loss(
+        model=model_fn,
+        param_estimator=current_func,
+        loss_func=loss_functions.quadratic_loss,
+        x=stimuli,
+        y=spike_matrix,
+        create_train_test_trial_split_fn=create_train_test_trial_split_fn,
+        param_penalty_weight=param_penalty_weight,
+        random_seed=random_seed,
+    )
+
+    if current_loss < best_loss:
+        best_loss = current_loss
+        best_code = current_code
+        best_func = current_func
+
+    for r in range(refine_rounds):
+        img_bytes = None
+        refine_img_path = None
+        if diagnostics_module is not None and img_dir is not None and current_params is not None:
+            try:
+                base_path = Path(img_dir)
+                refine_img_path = base_path.with_name(f"{base_path.stem}_refine_{r+1}{base_path.suffix}")
+
+                programs_df = pd.DataFrame({
+                    'program': [model_fn],
+                    'params': [current_params],
+                })
+                n_cells = spike_matrix.shape[0]
+                n_cells_img = min(4, n_cells)
+                sample_selection = np.random.choice(n_cells, size=n_cells_img, replace=False)
+                diagnostics_module.plot_model_fits(
+                    programs_df=programs_df,
+                    loss_function=loss_functions.quadratic_loss,
+                    inputs=stimuli,
+                    response=spike_matrix,
+                    sample_selection=sample_selection,
+                    save_path=str(refine_img_path),
+                    labels=[f"refine_{r+1}"],
+                    colours=['tab:green'],
+                    dpi=100.0,
+                    title=f"Param estimator refinement {r+1}/{refine_rounds} (no-GD loss={current_loss:.4f})",
+                )
+                with refine_img_path.open("rb") as f:
+                    img_bytes = f.read()
+            except Exception as e:
+                logging.info(f"Error generating refinement image: {e}")
+                img_bytes = None
+
+        # Build refinement prompt using current estimator as the only parent
+        refinement_df = pd.DataFrame({
+            'train_loss': [current_loss],
+            'program_code_string': [model_code_string],
+            'parameter_estimator_code_string': [current_code],
+        })
+
+        refine_header = (
+            f"Refinement round {r+1}/{refine_rounds}.\n"
+            f"Current no-GD loss: {current_loss:.4f}.\n"
+            "Improve the parameter estimator without using gradient descent or external optimizers.\n"
+            "Return only the updated parameter_estimator code.\n"
+        )
+
+        if use_chat_mode:
+            refine_prompt = prompt_manager.get_parameter_estimator_prompt(
+                refinement_df,
+                model_code_string=model_code_string,
+                max_lines=param_estimator_max_lines,
+                use_image=img_bytes is not None,
+            )
+        else:
+            refine_prompt = prompt_manager.get_parameter_estimator_prompt_legacy(
+                refinement_df,
+                model_code_string=model_code_string,
+                max_lines=param_estimator_max_lines,
+                use_image=img_bytes is not None,
+            )
+        refine_prompt = refine_header + "\n" + refine_prompt
+
+        # Call LLM for refinement
+        if island_chat_manager is not None and island_id is not None:
+            llm_output = await island_chat_manager.ask_island(
+                island_id, refine_prompt,
+                batch_id=batch_id,
+                mode=mode,
+                use_large_model=use_large_model,
+                png_img=img_bytes
+            )
+        else:
+            llm_output = await llm_helper.call_llm_async(
+                refine_prompt,
+                model_name=llm_name,
+                client=client,
+                temperature=temp,
+                thinking_budget=0.25,
+                img_bytes=img_bytes
+            )
+
+        new_code = utils.extract_code_block(llm_output)
+        if new_code is None:
+            logging.info("No code block found in refinement output; keeping current estimator.")
+            continue
+        if any(word in new_code for word in swear_words):
+            logging.info("Refinement code contains banned words; skipping.")
+            continue
+
+        new_code = re.sub(r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", new_code)
+        new_func = utils.str_to_func(new_code, 'parameter_estimator')
+        if new_func is None:
+            logging.info("Failed to parse refined parameter estimator; keeping current.")
+            continue
+
+        new_loss, new_params = evaluate_param_estimator_loss(
+            model=model_fn,
+            param_estimator=new_func,
+            loss_func=loss_functions.quadratic_loss,
+            x=stimuli,
+            y=spike_matrix,
+            create_train_test_trial_split_fn=create_train_test_trial_split_fn,
+            param_penalty_weight=param_penalty_weight,
+            random_seed=random_seed,
+        )
+
+        current_code = new_code
+        current_func = new_func
+        current_loss = new_loss
+        current_params = new_params
+
+        if new_loss < best_loss:
+            best_loss = new_loss
+            best_code = new_code
+            best_func = new_func
+
+    return best_code, best_func
 
 async def not_used_yet_generate_new_parameter_estimator_from_image_feedback(image_prompt: str,
                                                                image_dir: str,
@@ -1473,6 +1666,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 use_image_feedback=True, use_param_estimator=True,
                 use_chat_mode=False,  # If True, use persistent chat sessions per island (expensive)
                 chat_token_limit=50000,  # Max tokens per chat before auto-summarize and reset. 0 = unlimited
+                param_estimator_refinement_rounds=0,
                 exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 tiny_lm_name = 'gemini-2.0-flash-lite',
@@ -1800,6 +1994,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             generate_new_parameter_estimator(
                 current_island=islands[island_idx],
                 model_code_string=model_code_strings[island_idx * batch_size + j],
+                model_fn=model_results[island_idx * batch_size + j][3],
                 llm_name=little_lm_name,
                 client=client,
                 spike_matrix=response_train,
@@ -1810,6 +2005,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 temp=temperature,
                 param_estimator_max_lines=100,
                 img_dir=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_estimator.png') if use_large_model_for_param_estimators else None,
+                refine_rounds=param_estimator_refinement_rounds,
+                param_penalty_weight=param_penalty_weight,
+                create_train_test_trial_split_fn=create_train_test_trial_split_fn,
+                random_seed=random_seed,
                 island_chat_manager=island_chat_manager,
                 island_id=island_idx,
                 batch_id=j,
