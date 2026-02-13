@@ -16,23 +16,23 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
     
     print(f"Using config directory: {config_path}")
     
-    # Load experiment configuration
-    experiment_config_path = config_path / "experiment.yaml"
-    with open(experiment_config_path) as f:
-        experiment_config = yaml.safe_load(f)
+    # Load hyperparameter configuration
+    hyperparameters_config_path = config_path / "hyperparameters.yaml"
+    with open(hyperparameters_config_path) as f:
+        hyperparameters_config = yaml.safe_load(f)
     
-    # Extract experiment parameters
-    params = experiment_config.get('experiment_params', {})
-    seed_programs = experiment_config.get('seed_programs', {})
+    # Extract hyperparameters
+    params = hyperparameters_config.get('experiment_params', {})
+    seed_programs = hyperparameters_config.get('seed_programs', {})
     
     # Load experiment-specific diagnostics (returns None if not configured or file missing)
-    diagnostics_path = experiment_config.get('diagnostics_path', None)
+    diagnostics_path = hyperparameters_config.get('diagnostics_path', None)
     diagnostics_module = load_diagnostics(diagnostics_path)
 
     # Dynamically load seed programs module
     module_path = seed_programs.get('module')
     if not module_path:
-        raise ValueError("seed_programs.module not specified in experiment.yaml")
+        raise ValueError("seed_programs.module not specified in hyperparameters.yaml")
     
     seed_module = importlib.import_module(module_path)
     
