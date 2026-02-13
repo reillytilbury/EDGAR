@@ -4,17 +4,28 @@ from pathlib import Path
 from .prompt_test import PromptValidator
 
 class PromptManager:
-    def __init__(self, config_path="config.yaml", validate=True):
+    def __init__(self, config_path="config.yaml", config: dict = None, validate=True):
+        """Initialize PromptManager with either a config path or a pre-loaded config dict.
+        
+        Args:
+            config_path: Path to config file (used if config is None)
+            config: Pre-loaded config dict (takes precedence over config_path)
+            validate: Whether to validate prompt configuration
+        """
+        if config is not None:
+            self.config = config
+        else:
+            with open(config_path) as f:
+                self.config = yaml.safe_load(f)
+        
         if validate:
-            validator = PromptValidator(config_path)
+            validator = PromptValidator(config=self.config)
             try:
                 validator.test_required_prompts_exist()
                 validator.test_no_invalid_variables()
             except AssertionError as e:
                 raise ValueError(f"Invalid prompt configuration:\n{e}")
 
-        with open(config_path) as f:
-            self.config = yaml.safe_load(f)
         self.prompts = self.config['prompts']
 
     def _load_config(self, path):

@@ -7,19 +7,60 @@ from src import hypothesis_engine
 from src.diagnostics_manager import load_diagnostics
 from src.prompt_manager import PromptManager
 
+
+def deep_merge(base: dict, override: dict) -> dict:
+    """
+    Recursively merge override into base. 
+    Values in override take precedence over base.
+    For nested dicts, merge recursively. For other types, override replaces base.
+    """
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def load_config_with_defaults(config_path: Path, project_root: Path) -> dict:
+    """
+    Load experiment config and merge with DEFAULT config.
+    Experiment-specific values override DEFAULT values.
+    """
+    default_config_path = project_root / "experiments" / "DEFAULT" / "config.yaml"
+    
+    # Load DEFAULT config first
+    if default_config_path.exists():
+        with open(default_config_path) as f:
+            default_config = yaml.safe_load(f) or {}
+        print(f"Loaded default config from: {default_config_path}")
+    else:
+        default_config = {}
+        print(f"Warning: DEFAULT config not found at {default_config_path}")
+    
+    # Load experiment-specific config
+    if not config_path.exists():
+        raise ValueError(f"Config file not found: {config_path}")
+    
+    with open(config_path) as f:
+        experiment_config = yaml.safe_load(f) or {}
+    
+    # Merge: experiment overrides default
+    config = deep_merge(default_config, experiment_config)
+    
+    return config
+
+
 async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     # Resolve config directory (relative to project root)
     project_root = Path(__file__).parent
     config_path = project_root / config_path
     
-    if not config_path.exists():
-        raise ValueError(f"Config file not found: {config_path}")
-    
     print(f"Using config file: {config_path}")
     
-    # Load config
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
+    # Load config with DEFAULT fallbacks
+    config = load_config_with_defaults(config_path, project_root)
     
     # Extract hyperparameters
     params = config.get('experiment_params', {})
@@ -77,8 +118,8 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     else:
         create_train_test_trial_split_fn = None
 
-    # Initialize prompt manager with experiment-specific prompts
-    prompt_manager = PromptManager(config_path=config_path)
+    # Initialize prompt manager with merged config (includes DEFAULT prompts)
+    prompt_manager = PromptManager(config=config)
 
     # Extract input names from config (for multi-input support)
     # These stay in data_config for the data loading function to use

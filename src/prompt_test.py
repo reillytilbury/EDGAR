@@ -4,10 +4,20 @@ from pathlib import Path
 import pytest
 
 class PromptValidator:
-    def __init__(self, config_path="prompts.yaml"):
-        self.config_path = Path(config_path)
-        with open(self.config_path) as f:
-            self.config = yaml.safe_load(f)
+    def __init__(self, config_path="prompts.yaml", config: dict = None):
+        """Initialize PromptValidator with either a config path or a pre-loaded config dict.
+        
+        Args:
+            config_path: Path to config file (used if config is None)
+            config: Pre-loaded config dict (takes precedence over config_path)
+        """
+        if config is not None:
+            self.config = config
+            self.config_path = None
+        else:
+            self.config_path = Path(config_path)
+            with open(self.config_path) as f:
+                self.config = yaml.safe_load(f)
         
         self.metadata = self.config.get('_metadata', {})
         self.prompts = self.config.get('prompts', {})
