@@ -5,34 +5,35 @@ import importlib
 import os, argparse
 from src import hypothesis_engine 
 from src.diagnostics_manager import load_diagnostics
+from src.prompt_manager import PromptManager
 
-async def _run_many(test_mode: bool = False, config_dir: str = "config"):
+async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     # Resolve config directory (relative to project root)
     project_root = Path(__file__).parent
-    config_path = project_root / config_dir
+    config_path = project_root / config_path
     
     if not config_path.exists():
-        raise ValueError(f"Config directory not found: {config_path}")
+        raise ValueError(f"Config file not found: {config_path}")
     
-    print(f"Using config directory: {config_path}")
+    print(f"Using config file: {config_path}")
     
-    # Load hyperparameter configuration
-    hyperparameters_config_path = config_path / "hyperparameters.yaml"
-    with open(hyperparameters_config_path) as f:
-        hyperparameters_config = yaml.safe_load(f)
+    # Load config
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
     
     # Extract hyperparameters
-    params = hyperparameters_config.get('experiment_params', {})
-    seed_programs = hyperparameters_config.get('seed_programs', {})
+    params = config.get('experiment_params', {})
+    seed_programs = config.get('seed_programs', {})
+    data_processing_params = config.get('data_processing_params', {})
     
     # Load experiment-specific diagnostics (returns None if not configured or file missing)
-    diagnostics_path = hyperparameters_config.get('diagnostics_path', None)
+    diagnostics_path = config.get('diagnostics_path', None)
     diagnostics_module = load_diagnostics(diagnostics_path)
 
     # Dynamically load seed programs module
     module_path = seed_programs.get('module')
     if not module_path:
-        raise ValueError("seed_programs.module not specified in hyperparameters.yaml")
+        raise ValueError("seed_programs.module not specified in config.yaml")
     
     seed_module = importlib.import_module(module_path)
     
@@ -58,38 +59,32 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
     if len(param_estimators) != 2:  
         raise ValueError("There must be exactly 2 parameter estimator seeds.")
 
-    data_config_path = config_path / "data.yaml"
-    with open(data_config_path) as f:
-        data_config = yaml.safe_load(f)
-
-    # Path to prompts.yaml in the config directory
-    prompts_config_path = config_path / "prompts.yaml"
-    if not prompts_config_path.exists():
-        raise ValueError(f"prompts.yaml not found in config directory: {prompts_config_path}")
-
     # Dynamically load data extraction function
-    load_and_process_data_fn_path = data_config.pop('load_and_process_data_fn', None)
+    load_and_process_data_fn_path = config.pop('load_and_process_data_fn', None)
     if load_and_process_data_fn_path:
         # Parse module path and function name (e.g., 'experiments.orientation_tuning.data_parser.load_and_process_data')
         module_path, function_name = load_and_process_data_fn_path.rsplit('.', 1)
         data_module = importlib.import_module(module_path)
         load_and_process_data_fn = getattr(data_module, function_name)
     else:
-        raise ValueError("load_and_process_data_fn must be specified in data.yaml")
+        raise ValueError("load_and_process_data_fn must be specified in config.yaml")
     
-    create_train_test_trial_split_fn_path = data_config.pop('create_train_test_trial_split_fn', None)
+    create_train_test_trial_split_fn_path = config.pop('create_train_test_trial_split_fn', None)
     if create_train_test_trial_split_fn_path:
         module_path, function_name = create_train_test_trial_split_fn_path.rsplit('.', 1)
         data_module = importlib.import_module(module_path)
         create_train_test_trial_split_fn = getattr(data_module, function_name)
     else:
         create_train_test_trial_split_fn = None
-    
+
+    # Initialize prompt manager with experiment-specific prompts
+    prompt_manager = PromptManager(config_path=config_path)
+
     # Extract input names from config (for multi-input support)
     # These stay in data_config for the data loading function to use
-    inputs_config = data_config.get('inputs', [])
+    inputs_config = config.get('inputs', [])
     if inputs_config:
-        data_config['input_names'] = [p['name'] for p in inputs_config]
+        config['input_names'] = [p['name'] for p in inputs_config]
     if test_mode:
         params['num_runs'] = 1
         params['n_iterations'] = 1
@@ -133,15 +128,15 @@ async def _run_many(test_mode: bool = False, config_dir: str = "config"):
             param_estimators=param_estimators,
             load_and_process_data_fn=load_and_process_data_fn,
             create_train_test_trial_split_fn=create_train_test_trial_split_fn,
-            data_config=data_config,
+            data_processing_params=data_processing_params,
             diagnostics_module=diagnostics_module,
-            prompts_config_path=prompts_config_path,
+            prompt_manager=prompt_manager,
             use_large_model_for_param_estimators=params.get('use_large_model_for_param_estimators', False)
         )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Hypothesis Engine")
     parser.add_argument('--test_mode', action='store_true', help='Run in test mode with reduced iterations and time limit')
-    parser.add_argument('--config', type=str, help='Path to experiment specific config directory')
+    parser.add_argument('--config', type=str, help='Path to experiment specific config file (relative to project root)', default="config.yaml")
     args = parser.parse_args()
-    asyncio.run(_run_many(test_mode=args.test_mode, config_dir=args.config))
+    asyncio.run(_run_many(test_mode=args.test_mode, config_path=args.config))

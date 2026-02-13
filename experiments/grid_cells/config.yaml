@@ -1,0 +1,308 @@
+# DATA CONFIG 
+task: grid_cells  # name of the sub directory under experiments
+load_and_process_data_fn: experiments.grid_cells.data_parser.load_and_process_data
+create_train_test_trial_split_fn: experiments.grid_cells.data_parser.create_train_test_trial_split
+
+# some details on the data : 
+# spikes_mod1
+# └── object
+#     └── list (length = 97)
+#         ├── array of spike times for neuron 0 (length = 6,921)
+#         ├── array of spike times for neuron 1 (length = 37,621)
+#         ├── ...
+#         └── array of spike times for neuron 96
+
+# Data processing parameters
+data_processing_params:
+  data_path: /home/dabin/data/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
+  time_start: 27826       # start time in seconds
+  time_end: 31223         # end time in seconds
+  spatial_bin_cm: 3.0     # size of spatial bins in cm (arena is 150cm x 150cm, so 3cm gives 50x50 bins)
+  time_bin_ms: 10         # size of time bin in ms 
+  speed_threshold: 2.5    # minimum speed in cm/s to include data point
+  smoothing_sigma: 1.5    # Gaussian smoothing sigma for rate maps (in bins)
+  wall_val: 0.75          # arena half-width in meters (0.75m for 1.5m x 1.5m arena)
+
+# Input configuration - defines the input variables for models
+# Grid cells respond to 2D spatial position
+inputs:
+  - name: x
+    description: "Normalized x position in arena [-1, 1]"
+  - name: y
+    description: "Normalized y position in arena [-1, 1]"
+  # - name: z
+  #   description: "Head height"
+  # - name: azimuth
+  #   description: "Head azimuth angle in radians [0, 2π]"
+
+# HYPERPARAMETERS CONFIG
+
+# Path to experiment-specific diagnostics module (relative to project root)
+# If not specified or file doesn't exist, diagnostics will be disabled
+diagnostics_path: experiments/grid_cells
+
+seed_programs:
+  module: experiments.grid_cells.seed_programs
+  function_seeds:
+    - grid_model_1
+    - grid_model_2
+  parameter_estimator_seeds:
+    - parameter_estimator_1
+    - parameter_estimator_2
+
+experiment_params:
+  num_runs: 1
+  n_iterations: 2
+  time_limit: 60          # in minutes
+  k_max: 2
+  n_islands: 8
+  batch_size: 6
+  max_iter: 100
+  critical_population_size: 12
+  min_wise_population_size: 0
+  n_migrants: 2
+  fit_params: true
+  tol: 1e-6
+  exploit_point: 0.5
+  learning_rate: 1e-3
+  param_penalty_weight: 0.01
+  FAILED_PROGRAM_COST: .inf
+  use_image_feedback: true
+  use_param_estimator: true
+  param_estimator_refinement_rounds: 3
+  use_chat_mode: false  # If true, uses persistent chat sessions per island (expensive). Default: false (legacy independent queries)
+  chat_token_limit: 50000  # Max tokens per island chat before auto-summarize and reset. 0 = unlimited
+  exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
+  exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
+  tiny_lm_name: gemini-2.0-flash-lite
+  little_lm_name: gemini-2.0-flash
+  large_lm_name: gemini-2.5-flash
+  use_large_every: 3
+  use_large_model_for_param_estimators: true # Whether parameter estimators should use the large LM (true) or tiny LM (false). 
+
+  # Evolution algorithm parameters (used by EvolutionConfig)
+evolution:
+  capacity_per_island: 12        # Max programs per island (same as critical_population_size)
+  n_migrants: 2                  # Programs to migrate each round
+  overlap_threshold: 6           # Threshold for cross-island deduplication
+  loss_tolerance: 0.01           # Loss difference for similarity detection
+  cosine_tolerance: 0.99         # Behavioral similarity threshold
+  min_wise_programs: 0           # Minimum "wise" (large LLM) programs to preserve
+
+# PROMPTS config
+# Metadata section for validation
+model_name: grid_model 
+
+_metadata:
+  required_prompts:
+    - prompts.program_prompt.base
+    - prompts.program_prompt.exploit
+    - prompts.program_prompt.explore
+    - prompts.program_prompt.code_guidelines
+    - prompts.program_prompt.function_signature
+    - prompts.program_prompt.docstring_guidelines
+    - prompts.program_prompt.per_model_detail
+    - prompts.parameter_estimator.base
+    - prompts.parameter_estimator.code_guidelines
+    - prompts.parameter_estimator.function_signature
+    - prompts.parameter_estimator.per_model_detail
+    - prompts.jax_translator_prompt
+  
+  optional_prompts:
+    - prompts.program_prompt.image_analysis
+    - prompts.parameter_estimator.image_analysis
+  # Define allowed variables for each prompt type
+  allowed_variables:
+    program_prompt:
+      _default:
+        - k
+        - next_version
+      code_guidelines:
+        - max_lines
+      per_model_detail:
+        - model_idx
+        - train_loss
+        - program_code_string
+    parameter_estimator:
+      _default:
+        - k
+        - next_version
+        - max_lines
+      code_guidelines:
+        - max_lines
+        - next_version
+      per_model_detail:
+        - model_idx 
+        - train_loss
+        - program_code_string
+        - parameter_estimator_code_string
+    jax_translator_prompt: 
+      - function_code
+
+prompts:
+  program_prompt:
+    base: | 
+      You are an AI scientist. The programs below are biological models of grid cells in the entorhinal cortex.
+      The models are sorted from highest to lowest loss.
+      Your task is to create a new grid cell model, grid_model_v{next_version}, that has a lower loss than the models below.
+      *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
+      
+      **Domain Knowledge:** Grid cells fire in a hexagonal pattern as an animal navigates through space. Grid cell firing rates are bounded, typically 0-50 Hz. Your model outputs must remain in this physiological range.
+      Unbounded functions like `exp(alpha * x)` with large alpha can produce astronomically large outputs, leading to numerical overflow and failed optimization.
+      Always ensure your model outputs are bounded (e.g., by clipping exponential arguments or the final output).
+
+    explore: |
+      Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? 
+      Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
+      Consider different mathematical formulations for hexagonal patterns:
+      * Sum of cosines with 60-degree phase offsets
+      * Gaussian bumps on a hexagonal lattice
+      * Interference patterns from plane waves
+      
+    exploit: |
+      Use the models below as a *template* to create a new model. 
+      Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. 
+      Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
+      Are the parameter ranges correct (grid spacing, orientation, phase offsets)? If not, adjust them to be more appropriate.
+      You will be *penalized* for complexity, so make the new model as *simple* as possible while still being better than the previous models.
+
+    image_analysis: |
+      **Image Analysis Instructions:**
+
+      Attached are 2D rate maps where each row corresponds to a cell. The first left column shows the actual firing rate data and the second column shows the actual firing rate but smoothed. 
+      There are two additional columns for each model where we first show the firing rate from model prediction and then an overlap between the data and model prediction where the model is in green and the actual data (smoothed) is in red.
+
+      Analyse the models' fits to the data in the images below. Identify systematic weaknesses by observing patterns across multiple cells: 
+      *   **Grid Pattern:** Do the hexagonal firing fields align correctly in terms of spacing, orientation, and phase?
+      *   **Field Shape:** Are the individual firing fields (bumps) the right size and shape? Too sharp or too diffuse?
+      *   **Amplitude Modulation:** Are the peak firing rates captured correctly? Is there a consistent bias in over- or under-predicting firing rates?
+      *   **Baseline:** Is the baseline firing rate captured correctly between fields?
+      *   **Edge Effects:** How do the models behave near arena boundaries?
+
+      Use this analysis to inform the design of a new grid model, `grid_model_v{next_version}`, that improves upon the previous models.
+      Include your analysis in the docstring, pointing to specific cells that illustrate strengths and weaknesses.
+
+    code_guidelines: |
+      **Code Generation Guidelines:**
+
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * Ensure all free parameters are numeric, not strings.
+      * At the beginning of the code, clip the free parameters to biologically plausible ranges:
+        - `lam = np.clip(lam, 0.1, 1.5)` for grid spacing
+        - `theta = np.clip(theta, 0, np.pi/3)` for orientation (60-degree periodicity)
+        - `sigma = np.clip(sigma, 0.01, 0.3)` for field width
+      * If using `np.exp()`, ALWAYS clip the argument to prevent overflow: `np.exp(np.clip(x, -10, 10))`
+        - Unbounded functions like `exp(alpha * x)` with large alpha will cause numerical overflow and infinite loss.
+      * IMPORTANT: Your code will be translated to JAX. Avoid boolean indexing (e.g., `array[condition]`), dynamic shapes, and control flow based on array values. Use `jnp.where()` instead of boolean indexing.
+
+    function_signature: |
+      **Function Signature:**
+
+      Your grid cell model must have this signature:
+      ```
+      def grid_model_v{next_version}(X, param1=default1, param2=default2, ...):
+      ```
+      where:
+      * `X` is a 2D array with shape `(n_features, n_trials)`. Each row `X[i]` is a different input variable.
+      * For grid cells, `X[0]` is the x position and `X[1]` is the y position (both normalized to [-1, 1]).
+      * Access inputs by index: `x = X[0]`, `y = X[1]`
+      * The remaining arguments are free parameters with default values.
+      * Return shape: `(n_trials,)` — the predicted firing rate for each position.
+
+    docstring_guidelines: |
+      **Docstring Guidelines:**
+      * Begin by listing the parent models with descriptive names, e.g., `parent_model_1: cosine_sum_model`, `parent_model_2: gaussian_lattice_model`.
+      * Do not refer to the current model as `grid_model_v{next_version}`. Instead, refer to it as "this model".
+      * Provide a simple equation for the model, including all free parameters.
+      * Include a brief description of how the model improves upon the previous models.
+
+    per_model_detail: |
+      loss of model {model_idx}: {train_loss}
+      {program_code_string}
+      \n
+      ----------------------------
+      \n
+
+  parameter_estimator:
+    base: |
+      You are an AI scientist. Your task is to create a parameter estimator function, parameter_estimator_v{next_version}, to estimate the free parameters of the latest grid cell model, grid_model_v{next_version}.
+      The role of the parameter estimator is to infer the best parameter values of each cell from observed firing rate of individual cells. 
+      To achieve this, inspect the mathematical structure of the grid_model and understand how each parameter influences the firing pattern. 
+      Importantly, focus on triangulating the spatial periodicity and symmetry that is often inherent in grid cell firing. 
+      Parameterising the spread of each firing field and the overall grid orientation will be crucial for accurate estimation.
+
+      Example parameters you might consider adopting include : 
+      * Grid spacing (lambda): distance between firing field centers
+      * Orientation (theta): rotation of the hexagonal pattern
+      * Phase offsets (phi_x, phi_y): position of the pattern in space
+      * Amplitude/baseline: firing rate modulation
+      
+      *Analyze* the progression of the parameter estimators and *create* a new one that is better than *all* previous estimators.
+
+    image_analysis: |
+      **Image Analysis Instructions:**
+
+      Attached are 2D rate maps showing actual firing rate data (left) and model predictions (right).
+      The model predictions use parameters from the corresponding parameter estimator.
+
+      Focus on how *parameter values* affect model fit:
+      * **Grid Spacing:** Are fields too close or too far apart?
+      * **Orientation:** Is the hexagonal pattern rotated correctly?
+      * **Phase:** Are the field centers in the right positions?
+      * **Amplitude:** Are peak firing rates captured correctly?
+
+      Summarise this analysis in the docstring of `parameter_estimator_v{next_version}`.
+
+    code_guidelines: |
+      **Code Generation Guidelines:**
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * The only arguments to the function should be the inputs (X) and the firing rates.
+      * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
+      * Use spatial autocorrelation, peak detection, or FFT-based methods to estimate grid parameters.
+      * Do not use complex fitting functions like `curve_fit`, `least_squares` or `minimize`.
+
+    function_signature: |
+      **Function Signature:**
+
+      Your parameter estimator must have this signature:
+      ```
+      def parameter_estimator_v{next_version}(X, firing_rates):
+      ```
+      where:
+      * `X` is a 2D array with shape `(n_features, n_trials)`. 
+      * `X[0]` is the x position and `X[1]` is the y position.
+      * `firing_rates` has shape `(n_trials,)`.
+      * Return: a 1D array of estimated parameter values matching the grid model's free parameters.
+
+    docstring_guidelines: |
+      **Docstring Guidelines:**
+      * Begin by listing the parent models with descriptive names.
+      * Do not refer to the current model as `grid_model_v{next_version}`.
+      * Include a brief description of the estimation method.
+
+    per_model_detail: |
+      loss of model {model_idx}: {train_loss}
+      {program_code_string}
+      \n
+      {parameter_estimator_code_string}
+      \n
+      ----------------------------
+      \n
+
+  jax_translator_prompt: | 
+    Convert the following function to a JAX-compatible function.
+
+      Include all necessary imports, and ensure that the function is compatible with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.
+      
+      CRITICAL JAX compatibility requirements:
+      * Replace all boolean indexing (e.g., `array[condition]`) with `jnp.where(condition, true_value, false_value)`
+      * Replace NumPy functions with JAX equivalents (np.array → jnp.array, np.sin → jnp.sin, etc.)
+      * Avoid Python control flow (if/for) that depends on array values - use `jnp.where`, `jax.lax.cond`, `jax.lax.scan` instead
+      * Do not use dynamic array shapes or indexing with non-constant indices
+      * Use `jnp.clip()` instead of boolean masking for bounds
+      
+      Do not include any text other than the code. 
+      Here is the code to translate:
+      {function_code}

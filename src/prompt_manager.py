@@ -4,7 +4,7 @@ from pathlib import Path
 from .prompt_test import PromptValidator
 
 class PromptManager:
-    def __init__(self, config_path="prompts.yaml", validate=True):
+    def __init__(self, config_path="config.yaml", validate=True):
         if validate:
             validator = PromptValidator(config_path)
             try:

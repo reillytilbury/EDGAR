@@ -11,7 +11,6 @@ import pandas as pd
 from pathlib import Path
 from . import utils, loss_functions, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
-from .prompt_manager import PromptManager
 from .data_structures import Inputs, Outputs, ensure_inputs, ensure_outputs
 import experiments.orientation_tuning.seed_programs # delete this once we read seed_programs from experiment.yaml
 from tqdm import tqdm
@@ -1682,16 +1681,16 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 param_estimators = None,
                 load_and_process_data_fn = None,
                 create_train_test_trial_split_fn = None,
-                data_config = None,
+                data_processing_params = None,
                 diagnostics_module = None,
-                prompts_config_path = None,
+                prompt_manager = None,
                 log_best_loss = True,
                 random_seed = 42):
     """ 
     Main function to run the hypothesis engine.
     
     Args:
-        data_config: Dict containing all data loading parameters. This is passed
+        data_processing_params: Dict containing all data loading parameters. This is passed
                      directly to load_and_process_data_fn, which extracts whatever
                      parameters it needs. This allows different experiments to have
                      different parameter sets without changing hypothesis_engine.
@@ -1699,15 +1698,9 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                        for live monitoring. The file is saved to the experiment
                        output directory as 'best_loss_log.csv'.
     """
-    if data_config is None:
-        data_config = {}
-    
-    # Initialize prompt manager with experiment-specific prompts
-    if prompts_config_path is None:
-        # Fall back to default config path
-        prompts_config_path = Path(__file__).parent.parent / "config" / "prompts.yaml"
-    prompt_manager = PromptManager(config_path=prompts_config_path)
-    
+    if data_processing_params is None:
+        data_processing_params = {}
+        
     # load api keys
     load_dotenv()
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -1745,7 +1738,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     if jax_programs is not None and len(jax_programs) != 2:
         raise ValueError("jax_programs must be a list of 2 functions when provided.")
 
-    data_dict = load_and_process_data_fn(**data_config)
+    data_dict = load_and_process_data_fn(**data_processing_params)
     response = data_dict['response']
     # Use 'inputs' if available (new format), fall back to 'trials' (deprecated)
     if 'inputs' in data_dict:
