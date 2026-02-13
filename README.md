@@ -1,4 +1,4 @@
-# EDGAR-gamma: Evolutionary Discovery of Generative AI-assisted Research
+# EDGAR-gamma: Equation Discovery with Graphical AI Reasoning
 
 A framework for automated equation discovery using LLMs within an evolutionary algorithm.
 
