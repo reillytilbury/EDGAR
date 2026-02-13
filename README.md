@@ -37,13 +37,11 @@ Results are saved to `program_databases/MM-DD/HH-MM-SS/` with:
 
 ```
 EDGAR-gamma/
-├── config/                    # Configuration files
-│   ├── experiment.yaml        # Experiment parameters and seed programs
-│   ├── data.yaml             # Data loading configuration
-│   └── prompts.yaml          # LLM prompt templates
 ├── experiments/              # Task-specific implementations
 │   └── orientation_tuning/   # Example task
+│       ├── config.yaml       # Configuration file 
 │       ├── seed_programs.py  # Initial model implementations
+│       ├── diagnostics  .py  # Image diagnostics specification
 │       └── data_parser.py    # Data loading functions
 ├── src/                      # Core framework code
 │   ├── hypothesis_engine.py  # Main evolution loop
@@ -205,12 +203,29 @@ def neuron_model_multi(X, theta_pref=0.0, contrast_gain=1.0, baseline=0.0):
     return baseline + contrast_gain * contrast * tuning
 ```
 
-
-### 4. Configure `config/experiment.yaml`
+### 4. Configure `config/data.yaml`
 
 ```yaml
-task: your_task_name  # Must match directory name
+task: your_task_name
+load_and_process_data_fn: experiments.your_task_name.data_parser.load_and_process_data
+data_path: /path/to/your/data.npy
 
+# Cell selection thresholds
+activity_threshold: 0.4
+conc_threshold: 0.55
+
+# Define inputs (names used in models)
+inputs:
+  - name: theta
+    description: "Stimulus orientation angle in radians"
+  # Add more inputs as needed:
+  # - name: contrast
+  #   description: "Stimulus contrast level"
+```
+
+### 5. Configure hyperparameters in `config.yaml`
+
+```yaml
 seed_programs:
   module: experiments.your_task_name.seed_programs
   function_seeds:
@@ -254,27 +269,7 @@ experiment_params:
   activity_thresh: 0.4      # Cell selection threshold
 ```
 
-### 5. Configure `config/data.yaml`
-
-```yaml
-task: your_task_name
-load_and_process_data_fn: experiments.your_task_name.data_parser.load_and_process_data
-data_path: /path/to/your/data.npy
-
-# Cell selection thresholds
-activity_threshold: 0.4
-conc_threshold: 0.55
-
-# Define inputs (names used in models)
-inputs:
-  - name: theta
-    description: "Stimulus orientation angle in radians"
-  # Add more inputs as needed:
-  # - name: contrast
-  #   description: "Stimulus contrast level"
-```
-
-### 6. Customize Prompts in `config/prompts.yaml`
+### 6. Customize Prompts in `config.yaml`
 
 The prompts control how LLMs generate code. Key sections:
 
