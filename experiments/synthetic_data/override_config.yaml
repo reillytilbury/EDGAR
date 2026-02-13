@@ -1,0 +1,22 @@
+# DATA CONFIG 
+task: synthetic_data # name of the sub directory under experiments
+load_and_process_data_fn: experiments.synthetic_data.data_parser.load_and_process_data
+create_train_test_trial_split_fn: experiments.synthetic_data.data_parser.create_train_test_trial_split
+
+data_processing_params:
+  # Parameters for synthetic data generation
+  SEED: 42
+  n_samples: 1000
+  n_trials: 2000
+  noise_std: 0.1
+
+diagnostics_path: experiments/synthetic_data
+
+seed_programs:
+  module: experiments.synthetic_data.seed_programs
+  function_seeds:
+    - model_v1
+    - model_v2
+  parameter_estimator_seeds:
+    - parameter_estimator_v1
+    - parameter_estimator_v2
