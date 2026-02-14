@@ -304,5 +304,6 @@ prompts:
       * Use `jnp.clip()` instead of boolean masking for bounds
       
       Do not include any text other than the code. 
+      Update the function name to be the original name without "_v*". For example, `def neuron_model_v1(X, param1=0.5):` should become `def neuron_model(X, param1=0.5):`.
       Here is the code to translate:
       {function_code}

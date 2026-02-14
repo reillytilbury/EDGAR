@@ -1,6 +1,45 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+
+def select_evaluation_points(inputs: np.ndarray,
+                             n_points: int = 100,
+                             random_seed: int = 0,
+                             **kwargs) -> np.ndarray:
+    """
+    Select evaluation points for default/template diagnostics.
+
+    Purpose:
+    - Provide a clear extension point for experiment-specific evaluation policy.
+    - Return explicit evaluation points that downstream code can pass to model evaluation.
+
+    Strategy:
+    - If `inputs` is 1D or 2D, return a linear grid across observed min/max and
+      broadcast per sample.
+    - If `inputs` is 3D, sample trial columns with a seeded RNG.
+    """
+    x_arr = np.asarray(inputs)
+    if x_arr.ndim <= 2:
+        if x_arr.ndim == 1:
+            n_samples = 1
+        else:
+            n_samples = x_arr.shape[0]
+        x_min = float(np.min(x_arr))
+        x_max = float(np.max(x_arr))
+        if x_max <= x_min:
+            x_max = x_min + 1e-6
+        grid = np.linspace(x_min, x_max, n_points)
+        return np.broadcast_to(grid, (n_samples, n_points))
+
+    if x_arr.ndim == 3:
+        n_trials = x_arr.shape[2]
+        n_eval = min(int(n_points), int(n_trials))
+        rng = np.random.default_rng(random_seed)
+        trial_idx = rng.choice(n_trials, size=n_eval, replace=False)
+        return x_arr[:, :, trial_idx]
+
+    raise ValueError(f"Expected 1D, 2D, or 3D inputs, got shape {x_arr.shape}.")
+
 def plot_model_fits(x, y_true, 
                     y_pred_v1, y_pred_v2, 
                     loss_v1, loss_v2,

@@ -1226,6 +1226,289 @@ def evaluate_param_estimator_loss(model, param_estimator, loss_func, x, y,
         logging.info(f"Error evaluating parameter estimator loss: {e}")
         return float(FAILED_PROGRAM_COST), None
 
+
+def _infer_n_features(inputs):
+    """Infer feature count from (n_samples, n_trials) or (n_samples, n_features, n_trials)."""
+    x_arr = jnp.asarray(inputs)
+    if x_arr.ndim == 2:
+        return 1
+    if x_arr.ndim == 3:
+        return int(x_arr.shape[1])
+    raise ValueError(f"Expected 2D or 3D inputs, got shape {x_arr.shape}.")
+
+
+def build_evaluation_points(inputs,
+                            n_points=100,
+                            random_seed=0):
+    """
+    Build explicit evaluation points from training inputs.
+
+    - Single-input data: uniform grid across observed input range, broadcast per sample.
+    - Multi-input data: sample trial columns from observed inputs.
+    """
+    x_arr = jnp.asarray(inputs)
+    n_features = _infer_n_features(x_arr)
+    n_samples = int(x_arr.shape[0])
+
+    if n_features == 1:
+        x_min = float(jnp.min(x_arr))
+        x_max = float(jnp.max(x_arr))
+        if x_max <= x_min:
+            x_max = x_min + 1e-6
+        grid = jnp.linspace(x_min, x_max, n_points)
+        return jnp.broadcast_to(grid, (n_samples, n_points))
+
+    if x_arr.ndim != 3:
+        raise ValueError(
+            f"Expected 3D input for multi-feature eval points, got shape {x_arr.shape}."
+        )
+
+    n_trials = int(x_arr.shape[2])
+    n_eval = min(int(n_points), n_trials)
+    rng = np.random.default_rng(random_seed)
+    trial_idx = rng.choice(n_trials, size=n_eval, replace=False)
+    return x_arr[:, :, trial_idx]
+
+
+def select_evaluation_points(inputs,
+                             diagnostics_module=None,
+                             n_points=100,
+                             random_seed=0):
+    """
+    Select evaluation points for model diagnostics.
+
+    If a diagnostics module provides `select_evaluation_points`, delegate to it.
+    Otherwise, use a generic fallback based on observed input ranges/trials.
+    """
+    if diagnostics_module is not None and hasattr(diagnostics_module, "select_evaluation_points"):
+        selector = diagnostics_module.select_evaluation_points
+        try:
+            return selector(inputs=inputs, n_points=n_points, random_seed=random_seed)
+        except TypeError:
+            # Backward compatibility with alternate arg naming.
+            return selector(inputs=inputs, n_evaluation_points=n_points, random_seed=random_seed)
+
+    return build_evaluation_points(
+        inputs=inputs,
+        n_points=n_points,
+        random_seed=random_seed,
+    )
+
+
+def compute_evaluation_matrix(program,
+                              params,
+                              eval_points):
+    """
+    Compute model evaluations used for logging/comparison.
+    """
+    if eval_points is None:
+        raise ValueError("eval_points must be provided.")
+
+    params_arr = jnp.asarray(params)
+    n_samples = params_arr.shape[0]
+    program_vmap = utils.vmap_over_cells(program)
+    eval_arr = jnp.asarray(eval_points)
+
+    if eval_arr.ndim == 1:
+        eval_arr = jnp.broadcast_to(eval_arr, (n_samples, eval_arr.shape[0]))
+
+    if eval_arr.ndim == 2:
+        if eval_arr.shape[0] != n_samples:
+            raise ValueError(
+                f"eval_points first dimension must match n_samples={n_samples}, got {eval_arr.shape}."
+            )
+        # Backward compatibility: some models expect 1D, others (1, n_trials).
+        try:
+            return program_vmap(eval_arr, params_arr)
+        except Exception:
+            return program_vmap(eval_arr[:, jnp.newaxis, :], params_arr)
+
+    if eval_arr.ndim != 3:
+        raise ValueError(
+            f"eval_points must be 1D, 2D, or 3D, got shape {eval_arr.shape}."
+        )
+    if eval_arr.shape[0] != n_samples:
+        raise ValueError(
+            f"eval_points first dimension must match n_samples={n_samples}, got {eval_arr.shape}."
+        )
+
+    try:
+        return program_vmap(eval_arr, params_arr)
+    except Exception:
+        if eval_arr.shape[1] == 1:
+            return program_vmap(eval_arr[:, 0, :], params_arr)
+        raise
+
+
+def prepare_model_fit_plot_data(programs_df,
+                                inputs,
+                                response,
+                                sample_selection,
+                                loss_function,
+                                n_eval=100,
+                                n_mean=50,
+                                input_idx=0):
+    """
+    Compute all plot-ready tensors for model-fit diagnostics.
+    """
+    sample_selection = np.asarray(sample_selection)
+    if sample_selection.size == 0:
+        raise ValueError("sample_selection must not be empty.")
+    n_side = int(np.sqrt(sample_selection.size))
+    if n_side * n_side != sample_selection.size:
+        raise ValueError("sample_selection size must be a square number (e.g., 1,4,9).")
+
+    x_arr = jnp.asarray(inputs)
+    y_arr = jnp.asarray(response)
+    n_features = _infer_n_features(x_arr)
+    if x_arr.ndim == 2 and input_idx != 0:
+        raise ValueError("input_idx must be 0 for 2D inputs.")
+    if x_arr.ndim == 3 and (input_idx < 0 or input_idx >= n_features):
+        raise ValueError(f"input_idx ({input_idx}) must be in range [0, {n_features}).")
+
+    models = programs_df['program'].tolist()
+    params_all = [jnp.asarray(p)[sample_selection] for p in programs_df['params'].tolist()]
+    spike_matrix = y_arr[sample_selection]
+
+    if x_arr.ndim == 2:
+        stimuli_3d = x_arr[sample_selection][:, jnp.newaxis, :]
+        stimuli_1d = x_arr[sample_selection]
+    else:
+        stimuli_3d = x_arr[sample_selection]
+        stimuli_1d = x_arr[sample_selection][:, input_idx, :]
+
+    n_models = len(models)
+    n_cells = int(stimuli_3d.shape[0])
+    n_trials = int(stimuli_3d.shape[2])
+
+    def _as_trial_vector(arr, expected_len, name):
+        """
+        Normalize model/loss outputs to a 1D trial vector.
+
+        Accepts scalar (broadcast), (n_trials,), (1, n_trials), or (n_trials, 1).
+        """
+        vec = jnp.asarray(arr)
+        vec = jnp.squeeze(vec)
+        if vec.ndim == 0:
+            return jnp.broadcast_to(vec, (expected_len,))
+        if vec.ndim != 1:
+            raise ValueError(
+                f"{name} must reduce to 1D shape ({expected_len},), got shape {jnp.asarray(arr).shape}."
+            )
+        if vec.shape[0] != expected_len:
+            raise ValueError(
+                f"{name} has length {vec.shape[0]}, expected {expected_len}."
+            )
+        return vec
+
+    point_losses = jnp.zeros((n_models, n_cells, n_trials))
+    for i, model in enumerate(models):
+        for c in range(n_cells):
+            params_ic = params_all[i][c]
+            x_cell = stimuli_3d[c]
+            y_pred_raw = model(x_cell, *params_ic)
+            y_pred = _as_trial_vector(y_pred_raw, n_trials, "model prediction")
+            y_true = _as_trial_vector(spike_matrix[c], n_trials, "response")
+            loss_vec_raw = loss_function(y_pred, y_true)
+            loss_vec = _as_trial_vector(loss_vec_raw, n_trials, "point loss")
+            point_losses = point_losses.at[i, c].set(loss_vec)
+
+    x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False)
+    x_values_mean = x_values_mean + 0.5 * (2 * jnp.pi / n_mean)
+    binned_mean = jnp.zeros((n_cells, n_mean))
+    for c in range(n_cells):
+        bin_idx = jnp.clip(((stimuli_1d[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
+        sums = jnp.bincount(bin_idx, weights=spike_matrix[c], minlength=n_mean)
+        counts = jnp.bincount(bin_idx, minlength=n_mean)
+        binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))
+
+    x_values_eval = jnp.linspace(0, 2 * jnp.pi, n_eval, endpoint=False)
+    model_outputs = jnp.zeros((n_models, n_cells, n_eval))
+    for i, model in enumerate(models):
+        for c in range(n_cells):
+            params_ic = params_all[i][c]
+            x_eval = jnp.zeros((n_features, n_eval))
+            x_eval = x_eval.at[input_idx, :].set(x_values_eval)
+            y_eval_raw = model(x_eval, *params_ic)
+            y_eval = _as_trial_vector(y_eval_raw, n_eval, "evaluation prediction")
+            model_outputs = model_outputs.at[i, c].set(y_eval)
+
+    return {
+        'sample_selection': sample_selection,
+        'stimuli_1d': stimuli_1d,
+        'spike_matrix': spike_matrix,
+        'point_losses': point_losses,
+        'x_values_mean': x_values_mean,
+        'binned_mean': binned_mean,
+        'x_values_eval': x_values_eval,
+        'model_outputs': model_outputs,
+        'n_row_cols': n_side,
+        'n_models': n_models,
+        'n_cells': n_cells,
+    }
+
+
+def _call_with_supported_kwargs(func, kwargs):
+    """Call a function with only supported keyword args unless it accepts **kwargs."""
+    sig = inspect.signature(func)
+    accepts_kwargs = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+    if accepts_kwargs:
+        return func(**kwargs)
+    filtered_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return func(**filtered_kwargs)
+
+
+def render_model_fit_diagnostics(diagnostics_module,
+                                 programs_df,
+                                 loss_function,
+                                 inputs,
+                                 response,
+                                 sample_selection,
+                                 **plot_kwargs):
+    """
+    Render model-fit diagnostics with compatibility for old and new diagnostics APIs.
+    """
+    if diagnostics_module is None:
+        return
+
+    plot_fn = diagnostics_module.plot_model_fits
+    sig = inspect.signature(plot_fn)
+    if 'plot_data' in sig.parameters:
+        plot_data = prepare_model_fit_plot_data(
+            programs_df=programs_df,
+            inputs=inputs,
+            response=response,
+            sample_selection=sample_selection,
+            loss_function=loss_function,
+            n_eval=plot_kwargs.get('n_eval', 100),
+            n_mean=plot_kwargs.get('n_mean', 50),
+            input_idx=plot_kwargs.get('input_idx', 0),
+        )
+        kwargs = dict(
+            programs_df=programs_df,
+            inputs=inputs,
+            response=response,
+            loss_function=loss_function,
+            sample_selection=sample_selection,
+            plot_data=plot_data,
+            **plot_kwargs,
+        )
+        _call_with_supported_kwargs(plot_fn, kwargs)
+        return
+
+    kwargs = dict(
+        programs_df=programs_df,
+        loss_function=loss_function,
+        inputs=inputs,
+        response=response,
+        sample_selection=sample_selection,
+        **plot_kwargs,
+    )
+    _call_with_supported_kwargs(plot_fn, kwargs)
+
+
 async def generate_new_model(current_island, llm_name, client, 
                                     spike_matrix, stimuli, prompt_manager,
                                     mode='explore', k_max=2, temp=1, 
@@ -1256,18 +1539,22 @@ async def generate_new_model(current_island, llm_name, client,
     if use_image and diagnostics_module is not None:
         try:
             sup_title = "".join([f"{model_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            diagnostics_module.plot_model_fits(programs_df=random_programs,
-                                    loss_function=loss_functions.quadratic_loss,
-                                    inputs=stimuli, response=spike_matrix,
-                                    sample_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
-                                    save_path=img_dir,
-                                    labels=[f'{model_name}_v_1', f'{model_name}_v_2'],
-                                    colours=['tab:green', 'tab:red'],
-                                    dpi=384*3/20,
-                                    title=sup_title,
-                                    legend_fontsize=20,
-                                    line_alpha=0.9,
-                                    line_width=4,)
+            render_model_fit_diagnostics(
+                diagnostics_module=diagnostics_module,
+                programs_df=random_programs,
+                loss_function=loss_functions.quadratic_loss,
+                inputs=stimuli,
+                response=spike_matrix,
+                sample_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
+                save_path=img_dir,
+                labels=[f'{model_name}_v_1', f'{model_name}_v_2'],
+                colours=['tab:green', 'tab:red'],
+                dpi=384 * 3 / 20,
+                title=sup_title,
+                legend_fontsize=20,
+                line_alpha=0.9,
+                line_width=4,
+            )
             
             img_path = Path(img_dir)
             with img_path.open("rb") as f:
@@ -1345,18 +1632,22 @@ async def generate_new_parameter_estimator(current_island,
     if use_image and diagnostics_module is not None:
         try:
             sup_title = "".join([f"model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            diagnostics_module.plot_model_fits(programs_df=random_programs_crude,
-                                    loss_function=loss_functions.quadratic_loss,
-                                    inputs=stimuli, response=spike_matrix,
-                                    sample_selection=np.random.choice(spike_matrix.shape[0], size=4, replace=False),
-                                    save_path=img_dir,
-                                    labels=['v_1', 'v_2'],
-                                    colours=['tab:green', 'tab:red'],
-                                    dpi=384*2/20,
-                                    title=sup_title,
-                                    legend_fontsize=20,
-                                    line_alpha=0.9,
-                                    line_width=4,)
+            render_model_fit_diagnostics(
+                diagnostics_module=diagnostics_module,
+                programs_df=random_programs_crude,
+                loss_function=loss_functions.quadratic_loss,
+                inputs=stimuli,
+                response=spike_matrix,
+                sample_selection=np.random.choice(spike_matrix.shape[0], size=4, replace=False),
+                save_path=img_dir,
+                labels=['v_1', 'v_2'],
+                colours=['tab:green', 'tab:red'],
+                dpi=384 * 2 / 20,
+                title=sup_title,
+                legend_fontsize=20,
+                line_alpha=0.9,
+                line_width=4,
+            )
             img_path = Path(img_dir)
             with img_path.open("rb") as f:
                 img_bytes = f.read()
@@ -1439,7 +1730,8 @@ async def generate_new_parameter_estimator(current_island,
                 n_cells = spike_matrix.shape[0]
                 n_cells_img = min(4, n_cells)
                 sample_selection = np.random.choice(n_cells, size=n_cells_img, replace=False)
-                diagnostics_module.plot_model_fits(
+                render_model_fit_diagnostics(
+                    diagnostics_module=diagnostics_module,
                     programs_df=programs_df,
                     loss_function=loss_functions.quadratic_loss,
                     inputs=stimuli,
@@ -1832,6 +2124,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     # Initialize best loss tracking for live monitoring
     best_loss_log = []  # List of dicts: {iteration, timestamp, best_train_loss, best_island, ...}
     best_loss_path = os.path.join(full_dir, 'best_loss_log.csv') if log_best_loss else None
+    evaluation_points_train = select_evaluation_points(
+        inputs_train,
+        diagnostics_module=diagnostics_module,
+        n_points=100,
+        random_seed=random_seed,
+    )
     
     # store and compute loss of 2 initial programs
     t_start = time.time()
@@ -1865,12 +2163,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             program_jax_code_string = utils.format_function_source(
                 program_jax, f'{model_name}_v{i+1}', 'import jax.numpy as jnp'
             )
-        # if inputs_train.shape[1] == 1 : 
-        #     # evenly spaced evaluation points for 1D inputs
-        #     eval_points = None
-        # else : 
-            # eval_points = inputs_train
-        y_eval = diagnostics_module.compute_evaluation_matrix(program_jax, params, eval_points=inputs_train, n_evaluation_points=100, n_features=n_features)
+        y_eval = compute_evaluation_matrix(
+            program_jax,
+            params,
+            eval_points=evaluation_points_train,
+        )
 
         new_program_df = pd.DataFrame({'program_code_string': program_code_string,
                                     'program': program_jax,
@@ -1907,18 +2204,22 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         island_chat_manager.log_configuration()
     
     if diagnostics_module is not None:
-        diagnostics_module.plot_model_fits(programs_df=initial_programs,
-                               loss_function=loss_functions.quadratic_loss,
-                               inputs=inputs_train, response=response_train,
-                               sample_selection=np.random.choice(len(inputs_train), size=9, replace=False),
-                               save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
-                               labels=['seed_1', 'seed_2'],
-                               colours=['tab:green', 'tab:red'],
-                               dpi=100.0,
-                               title="Seed Programs",
-                               legend_fontsize=20,
-                               line_alpha=0.9,
-                               line_width=4,)
+        render_model_fit_diagnostics(
+            diagnostics_module=diagnostics_module,
+            programs_df=initial_programs,
+            loss_function=loss_functions.quadratic_loss,
+            inputs=inputs_train,
+            response=response_train,
+            sample_selection=np.random.choice(len(inputs_train), size=9, replace=False),
+            save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
+            labels=['seed_1', 'seed_2'],
+            colours=['tab:green', 'tab:red'],
+            dpi=100.0,
+            title="Seed Programs",
+            legend_fontsize=20,
+            line_alpha=0.9,
+            line_width=4,
+        )
 
     # -----------------------------
     # HYPOTHESIS ENGINE
@@ -2067,13 +2368,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 logging.info('-' * 50)
                 continue
 
-            if inputs_train.shape[1] == 1 : 
-                # evenly spaced evaluation points for 1D inputs
-                # eval_points = None
-                eval_points = inputs_train
-            else : 
-                eval_points = inputs_train
-            y_eval = diagnostics_module.compute_evaluation_matrix(model_new, optimized_params, eval_points=eval_points, n_evaluation_points=100)
+            y_eval = compute_evaluation_matrix(
+                model_new,
+                optimized_params,
+                eval_points=evaluation_points_train,
+            )
             logging.info(f"Prompt: \n{prompt}\n")
             logging.info(f"Loss: {loss:.2f}\n")
             logging.info(f"Model: \n{model_code_string}\n")
@@ -2083,7 +2382,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
 
             # plot the fits of the neuron model and parameter estimator if using image feedback
             if use_image_feedback and diagnostics_module is not None:
-                diagnostics_module.plot_model_fits(
+                render_model_fit_diagnostics(
+                    diagnostics_module=diagnostics_module,
                     programs_df=pd.DataFrame({'program': [model_new, model_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
                     inputs=inputs_train,
@@ -2097,7 +2397,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                     point_size=120,
                     legend_fontsize=20,
                     title=f"Updated Parameter Estimator and Gradient Descent Fit \n"
-                        f"Initial Loss: {initial_loss:.2f}, Final Loss: {loss:.2f}",
+                    f"Initial Loss: {initial_loss:.2f}, Final Loss: {loss:.2f}",
                     save_path=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_updated_param_est.png')
                 )
             
@@ -2161,7 +2461,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
                 sup_title = f"Iteration {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
                 sup_title += "\n".join([f"model {j+1}: iter {top_df['iteration_number'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
-                diagnostics_module.plot_model_fits(
+                render_model_fit_diagnostics(
+                    diagnostics_module=diagnostics_module,
                     programs_df=top_df,
                     loss_function=loss_functions.quadratic_loss,
                     inputs=inputs_train,
@@ -2169,7 +2470,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                     sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                     title=sup_title,
                     save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
-                    dpi=300.0)
+                    dpi=300.0,
+                )
         
         if diagnostics_module is not None:
             all_programs = pd.concat([islands[idx] for idx in range(n_islands)], ignore_index=True)
@@ -2177,7 +2479,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
             sup_title = f"Iteration {i}, Top 3 Programs Overall\n"
             sup_title += "\n".join([f"model {j+1}: iter {top_programs['iteration_number'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
-            diagnostics_module.plot_model_fits(
+            render_model_fit_diagnostics(
+                diagnostics_module=diagnostics_module,
                 programs_df=top_programs,
                 loss_function=loss_functions.quadratic_loss,
                 inputs=inputs_train,
@@ -2185,7 +2488,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                 title=sup_title,
                 save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
-                dpi=300.0)
+                dpi=300.0,
+            )
         
         # save census
         census_path = os.path.join(iteration_dir, 'census.npy')
@@ -2285,14 +2589,15 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             df = df.head(3)
             df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
             df_sup += "".join([f"model {len(df) - i}: iter {df['iteration_number'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, total loss {0.5 * (df['test_loss'][i] + df['train_loss'][i]):.2f}\n" for i in range(min(3, len(df)))])
-            diagnostics_module.plot_model_fits(
+            render_model_fit_diagnostics(
+                diagnostics_module=diagnostics_module,
                 programs_df=df,
                 loss_function=loss_functions.quadratic_loss,
                 inputs=inputs_test,
                 response=response_test,
                 sample_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
                 title=df_sup,
-                save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
+                save_path=os.path.join(df_dirs[i], 'top_model_fits.png'),
             )
             # plot top 3 models separately
             for j in range(min(3, len(df))):

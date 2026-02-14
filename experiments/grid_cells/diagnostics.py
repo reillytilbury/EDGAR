@@ -21,6 +21,35 @@ import jax.numpy as jnp
 from typing import Optional, Callable, Sequence, Tuple, Dict, Any
 
 from src import utils
+
+
+def select_evaluation_points(inputs: jnp.ndarray,
+                             n_points: int = 100,
+                             random_seed: int = 0,
+                             **kwargs) -> jnp.ndarray:
+    """
+    Select evaluation points for grid-cell diagnostics.
+
+    Purpose:
+    - Define experiment-specific evaluation-point selection outside hypothesis_engine.
+    - Preserve realistic joint `(x, y)` trajectories when evaluating models.
+
+    Strategy:
+    - For 3D spatial inputs `(n_samples, 2, n_trials)`, sample `n_points` trial
+      columns from observed trajectories using a seeded RNG.
+    - For 2D inputs, sample trial indices directly as a fallback.
+    """
+    x_arr = jnp.asarray(inputs)
+    n_trials = int(x_arr.shape[-1])
+    n_eval = min(int(n_points), n_trials)
+    rng = np.random.default_rng(random_seed)
+    trial_idx = rng.choice(n_trials, size=n_eval, replace=False)
+
+    if x_arr.ndim == 3:
+        return x_arr[:, :, trial_idx]
+    if x_arr.ndim == 2:
+        return x_arr[:, trial_idx]
+    raise ValueError(f"Expected 2D or 3D inputs, got shape {x_arr.shape}.")
 # =============================================================================
 # Data loading diagnostics
 # =============================================================================
@@ -344,40 +373,36 @@ def _ensure_input_format(x_cell: jnp.ndarray) -> jnp.ndarray:
     return x_cell  # already (n_features, n_trials)
 
 
-def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100, eval_points : Optional[np.ndarray] = None, 
-                            n_features: int = 2, **kwargs) -> jnp.ndarray:
+def compute_evaluation_matrix(program: callable,
+                              params: jnp.ndarray,
+                              eval_points: np.ndarray,
+                              n_features: int = 2,
+                              **kwargs) -> jnp.ndarray:
     """
     Computes the evaluation matrix for a given program and parameters.
     
-    Evaluate the model at eval_points (n_samples x n_features x n_trials) by selecting n_evaluation_points out of n_trials.
+    Evaluate the model at explicit eval_points.
 
     Args:
         program (callable): The neuron model function with signature:
                            program(X, *params) -> (n_trials,)
                            where X has shape (n_features, n_trials).
         params (jnp.ndarray): The parameters for the neuron model. Shape: (n_samples, n_params)
-        n_evaluation_points (int): Number of points to evaluate the model at.
-        eval_points (Optional[np.ndarray]): Specific evaluation points to use. If None, this will raise an error for now. Has shape (n_samples x n_features x n_trials)
+        eval_points (np.ndarray): Evaluation points with shape (n_samples, n_features, n_eval).
         n_features (int): Total number of inputs in the model. Default is 2.
     Returns:
-        jnp.ndarray: The evaluation matrix of shape (n_samples, n_evaluation_points).
-    
-    Raises:
-        ValueError: If eval_points is None
+        jnp.ndarray: The evaluation matrix of shape (n_samples, n_eval).
     """
-    # Early validation
-    if eval_points is None:
-        raise ValueError("eval_points must be provided for grid cell models.")
-    
     if n_features != eval_points.shape[1]:
         raise ValueError(
             f"eval_points must have shape (n_samples, n_features, n_trials). "
             f"Got {eval_points.shape} with n_features={n_features}."
         )
-    n_samples = params.shape[0]
-    # randomly select n_evaluation_points from eval_points along the last axis
-    trials_idx = np.random.choice(eval_points.shape[2], size=n_evaluation_points, replace=False)
-    X_eval = eval_points[:, :, trials_idx]  # (n_samples, n_features, n_evaluation_points)
+    if eval_points.shape[0] != params.shape[0]:
+        raise ValueError(
+            f"eval_points first dimension must match params ({params.shape[0]}), got {eval_points.shape}."
+        )
+    X_eval = jnp.asarray(eval_points)
 
     # vmap over samples
     program_vmap = utils.vmap_over_cells(program)

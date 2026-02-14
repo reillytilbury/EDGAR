@@ -16,69 +16,118 @@ def _ensure_input_format(x_cell: jnp.ndarray) -> jnp.ndarray:
     return x_cell  # already (n_features, n_trials)
 
 
-def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100, 
-                               input_idx: int = 0, n_features: int = 1, **kwargs) -> jnp.ndarray:
+def select_evaluation_points(inputs: jnp.ndarray,
+                             n_points: int = 100,
+                             random_seed: int = 0,
+                             input_idx: int = 0,
+                             **kwargs) -> jnp.ndarray:
+    """
+    Select evaluation points for orientation-tuning diagnostics.
+
+    Purpose:
+    - Centralize experiment-specific evaluation-point policy outside hypothesis_engine.
+    - Provide explicit, reproducible points used to compute `evaluation_matrix`.
+
+    Strategy:
+    - Single-input data `(n_samples, n_trials)`: create a shared linear grid spanning
+      the observed input range and broadcast to all samples.
+    - Multi-input data `(n_samples, n_features, n_trials)`: vary `input_idx` across
+      its observed range while fixing other features at each sample's trial-mean.
+    """
+    x_arr = jnp.asarray(inputs)
+    n_samples = int(x_arr.shape[0])
+
+    if x_arr.ndim == 2:
+        x_min = float(jnp.min(x_arr))
+        x_max = float(jnp.max(x_arr))
+        if x_max <= x_min:
+            x_max = x_min + 1e-6
+        grid = jnp.linspace(x_min, x_max, n_points)
+        return jnp.broadcast_to(grid, (n_samples, n_points))
+
+    if x_arr.ndim != 3:
+        raise ValueError(f"Expected 2D or 3D inputs, got shape {x_arr.shape}.")
+
+    n_features = int(x_arr.shape[1])
+    if input_idx < 0 or input_idx >= n_features:
+        raise ValueError(f"input_idx ({input_idx}) must be in range [0, {n_features}).")
+
+    feature_vals = x_arr[:, input_idx, :]
+    f_min = float(jnp.min(feature_vals))
+    f_max = float(jnp.max(feature_vals))
+    if f_max <= f_min:
+        f_max = f_min + 1e-6
+    sweep = jnp.linspace(f_min, f_max, n_points)
+
+    base = jnp.mean(x_arr, axis=2, keepdims=True)
+    base = jnp.repeat(base, n_points, axis=2)
+    sweep_broadcast = jnp.broadcast_to(sweep, (n_samples, n_points))
+    return base.at[:, input_idx, :].set(sweep_broadcast)
+
+
+def compute_evaluation_matrix(program: callable,
+                              params: jnp.ndarray,
+                              eval_points: jnp.ndarray,
+                              **kwargs) -> jnp.ndarray:
     """
     Computes the evaluation matrix for a given program and parameters.
     
-    Creates a uniform grid of evaluation points and evaluates the model at those points
-    for all samples. 
-    
-    For backward compatibility:
-    - When n_features=1: passes X as 1D array (n_trials,) - original behavior
-    - When n_features>1: passes X as 2D array (n_features, n_trials) - new behavior
+    Evaluate the model on explicit evaluation points.
     
     Args:
         program (callable): The neuron model function.
         params (jnp.ndarray): The parameters for the neuron model. Shape: (n_samples, n_params)
-        n_evaluation_points (int): Number of points to evaluate the model at.
-        eval_points (np.ndarray, optional): Custom evaluation points. If None, uses linspace(0, 2π).
-        input_idx (int): Index of the input to vary for evaluation (for n_features > 1).
-        n_features (int): Total number of inputs in the model. Default is 1.
+        eval_points: Explicit points with shape:
+            - (n_samples, n_eval) for single-input models
+            - (n_samples, n_features, n_eval) for multi-input models
     Returns:
-        jnp.ndarray: The evaluation matrix of shape (n_samples, n_evaluation_points).
+        jnp.ndarray: The evaluation matrix of shape (n_samples, n_eval).
     """
-    trials = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
-    
-    # vmap over samples
-    program_vmap = utils.vmap_over_cells(program)
-    
-    if n_features == 1:
-        # Original 1D behavior: pass trials directly (shape: n_eval,)
-        # This is what orientation tuning models expect
-        n_samples = params.shape[0]
-        X_eval = jnp.zeros((n_samples, n_features, n_evaluation_points))
-        trials_broadcast = jnp.broadcast_to(trials, (n_samples, n_evaluation_points))
-        X_eval = X_eval.at[:, input_idx, :].set(trials_broadcast)
-        y_eval = program_vmap(trials_broadcast, params)
-    else:
-        # New 2D behavior for multi-input models (e.g., grid cells)
-        # Create X with zeros for all inputs, then set the evaluation input
-        n_samples = params.shape[0]
-        X_eval = jnp.zeros((n_samples, n_features, n_evaluation_points))
-        trials_broadcast = jnp.broadcast_to(trials, (n_samples, n_evaluation_points))
-        X_eval = X_eval.at[:, input_idx, :].set(trials_broadcast)
-        y_eval = program_vmap(X_eval, params)
-    
-    return y_eval
+    eval_arr = jnp.asarray(eval_points)
+    if eval_arr.ndim == 1:
+        eval_arr = jnp.broadcast_to(eval_arr, (params.shape[0], eval_arr.shape[0]))
 
-def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
-                    inputs: jnp.ndarray, response: jnp.ndarray, 
+    program_vmap = utils.vmap_over_cells(program)
+
+    if eval_arr.ndim == 2:
+        try:
+            return program_vmap(eval_arr, params)
+        except Exception:
+            return program_vmap(eval_arr[:, jnp.newaxis, :], params)
+    if eval_arr.ndim == 3:
+        try:
+            return program_vmap(eval_arr, params)
+        except Exception:
+            if eval_arr.shape[1] == 1:
+                return program_vmap(eval_arr[:, 0, :], params)
+            raise
+    raise ValueError(f"eval_points must be 1D, 2D, or 3D. Got shape {eval_arr.shape}.")
+
+def plot_model_fits(programs_df: Optional[pd.DataFrame],
+                    loss_function: Callable,
+                    inputs: jnp.ndarray,
+                    response: jnp.ndarray,
                     sample_selection: Sequence[int],
-                    n_eval: int = 100, n_mean: int = 50,
+                    plot_data: Optional[dict] = None,
+                    n_eval: int = 100,
+                    n_mean: int = 50,
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
-                    labels: Optional[list] = None, 
+                    labels: Optional[list] = None,
                     title: str = '',
-                    line_width=4.0, 
-                    line_alpha=1.0, 
+                    line_width=4.0,
+                    line_alpha=1.0,
                     point_alpha=0.1,
                     point_size: int = 80,
                     legend_fontsize: int = 12,
-                    dpi: float = 100.0, 
+                    dpi: float = 100.0,
                     save_path: Optional[str] = None,
                     input_idx: int = 0):
     """
-    plot fits of all models in programs_df over a subset of cells in x and y, along with the running mean.
+    Plot model fits over a subset of cells.
+
+    Preferred usage is to pass precomputed `plot_data` from `hypothesis_engine`.
+    For backward compatibility, this function can still compute plot data internally
+    when `plot_data` is None and `programs_df` is provided.
     Args:
         programs_df:
             - must have columns 'program' and 'params'. 
@@ -98,81 +147,88 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     Raises:
         ValueError: If input_idx != 0 when inputs is 2D, or if input_idx is out of range.
     """
-    assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, but has {len(programs_df)} rows."
     assert len(sample_selection) > 0, "sample_selection must not be empty."
     assert len(sample_selection) == int(np.sqrt(len(sample_selection)))**2, \
         f"sample_selection must be a square number, but has {len(sample_selection)} elements."
 
-    # Early validation of input_idx
-    x_arr = jnp.asarray(inputs)
-    y = jnp.asarray(response)
-    if x_arr.ndim == 2:
-        if input_idx != 0:
-            raise ValueError(
-                f"input_idx must be 0 for 2D input (single input), got {input_idx}."
-            )
-    else:
-        n_features = x_arr.shape[1]
-        if input_idx < 0 or input_idx >= n_features:
-            raise ValueError(
-                f"input_idx ({input_idx}) must be in range [0, {n_features}). "
-                f"Got n_features={n_features}."
-            )
+    if plot_data is None:
+        if programs_df is None:
+            raise ValueError("Either plot_data or programs_df must be provided.")
+        assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, but has {len(programs_df)} rows."
 
-    # define frequently used variables
-    models = programs_df['program'].tolist()
-    params = programs_df['params'].tolist()
-    sample_idx = jnp.array(sample_selection)
-    params = [p[sample_idx] for p in params]
-    spike_matrix = y[sample_idx]
-    
-    # Handle both 2D (n_samples, n_trials) and 3D (n_samples, n_features, n_trials) input
-    if x_arr.ndim == 2:
-        # 2D input: (n_samples, n_trials) - expand to (n_samples, 1, n_trials)
-        stimuli_3d = x_arr[sample_idx][:, jnp.newaxis, :]
-        stimuli_1d = x_arr[sample_idx]  # for plotting (single input)
+        # Backward-compatible internal compute path.
+        x_arr = jnp.asarray(inputs)
+        y = jnp.asarray(response)
+        if x_arr.ndim == 2:
+            if input_idx != 0:
+                raise ValueError(
+                    f"input_idx must be 0 for 2D input (single input), got {input_idx}."
+                )
+            n_features = 1
+            stimuli_3d = x_arr[jnp.array(sample_selection)][:, jnp.newaxis, :]
+            stimuli_1d = x_arr[jnp.array(sample_selection)]
+        else:
+            n_features = x_arr.shape[1]
+            if input_idx < 0 or input_idx >= n_features:
+                raise ValueError(
+                    f"input_idx ({input_idx}) must be in range [0, {n_features}). "
+                    f"Got n_features={n_features}."
+                )
+            stimuli_3d = x_arr[jnp.array(sample_selection)]
+            stimuli_1d = x_arr[jnp.array(sample_selection)][:, input_idx, :]
+
+        models = programs_df['program'].tolist()
+        params = [p[jnp.array(sample_selection)] for p in programs_df['params'].tolist()]
+        spike_matrix = y[jnp.array(sample_selection)]
+        n_cells, _, n_trials = stimuli_3d.shape
+        n_models = len(models)
+
+        point_losses = jnp.zeros((n_models, n_cells, n_trials))
+        for i, model in enumerate(models):
+            for c in range(n_cells):
+                params_ic = params[i][c]
+                predicted_response = model(stimuli_3d[c], *params_ic)
+                point_losses = point_losses.at[i, c].set(loss_function(predicted_response, spike_matrix[c]))
+
+        x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False) + 0.5 * (2 * jnp.pi / n_mean)
+        binned_mean = jnp.zeros((n_cells, n_mean))
+        for c in range(n_cells):
+            bin_idx = jnp.clip(((stimuli_1d[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
+            sums = jnp.bincount(bin_idx, weights=spike_matrix[c], minlength=n_mean)
+            counts = jnp.bincount(bin_idx, minlength=n_mean)
+            binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))
+
+        x_values_eval = jnp.linspace(0, 2 * jnp.pi, n_eval, endpoint=False)
+        model_outputs = jnp.zeros((n_models, n_cells, n_eval))
+        for i, model in enumerate(models):
+            for c in range(n_cells):
+                params_ic = params[i][c]
+                x_eval = jnp.zeros((n_features, n_eval))
+                x_eval = x_eval.at[input_idx, :].set(x_values_eval)
+                model_outputs = model_outputs.at[i, c].set(model(x_eval, *params_ic))
+        n_row_cols = int(np.sqrt(n_cells))
     else:
-        # 3D input: (n_cells, n_features, n_trials)
-        stimuli_3d = x_arr[sample_idx]
-        stimuli_1d = x_arr[sample_idx][:, input_idx, :]  # use specified input for plotting
-    
-    n_cells, n_features, n_trials = stimuli_3d.shape
-    n_models = len(models)
+        # Preferred path: data is precomputed in hypothesis_engine.
+        stimuli_1d = jnp.asarray(plot_data['stimuli_1d'])
+        spike_matrix = jnp.asarray(plot_data['spike_matrix'])
+        point_losses = jnp.asarray(plot_data['point_losses'])
+        x_values_mean = jnp.asarray(plot_data['x_values_mean'])
+        binned_mean = jnp.asarray(plot_data['binned_mean'])
+        x_values_eval = jnp.asarray(plot_data['x_values_eval'])
+        model_outputs = jnp.asarray(plot_data['model_outputs'])
+        n_models = int(plot_data['n_models'])
+        n_cells = int(plot_data['n_cells'])
+        n_row_cols = int(plot_data['n_row_cols'])
+        sample_selection = plot_data.get('sample_selection', sample_selection)
+
     if labels is None:
         labels = [f'model {i + 1}' for i in range(n_models)]
+    if len(colours) < n_models:
+        raise ValueError(f"Need at least {n_models} colours, got {len(colours)}.")
 
-    # define figure and axes, ensuring ax is 2D even if n_cells == 1
-    n_row_cols = int(np.sqrt(n_cells))
     fig, ax = plt.subplots(n_row_cols, n_row_cols, figsize=(20, 20))
     if n_cells == 1:
-        ax = np.array([[ax]])  # Ensure ax is 2D for single plot
-
-    # Calculate loss for each model, cell and trial
-    point_losses = jnp.zeros((n_models, n_cells, n_trials))
-    for i, model in enumerate(models):
-        for c in range(n_cells):
-            params_ic = params[i][c]
-            X_cell = stimuli_3d[c]  # (n_features, n_trials)
-            predicted_response = model(X_cell, *params_ic)
-            point_losses = point_losses.at[i, c].set(loss_function(predicted_response, spike_matrix[c]))
-    
-    # compute running mean (using first input for binning)
-    x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False) + 0.5 * (2 * jnp.pi / n_mean)  # Shift to center bins
-    binned_mean = jnp.zeros((n_cells, n_mean))
-    for c in range(n_cells):
-        bin_idx = jnp.clip(((stimuli_1d[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
-        sums = jnp.bincount(bin_idx, weights=spike_matrix[c], minlength=n_mean)
-        counts = jnp.bincount(bin_idx, minlength=n_mean)
-        binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))  # Avoid division by zero
-
-    # compute cell outputs at evaluation points
-    x_values_eval = jnp.linspace(0, 2 * jnp.pi, n_eval, endpoint=False)
-    X_eval = x_values_eval.reshape(1, -1)  # (1, n_eval) - single input format
-    model_outputs = jnp.zeros((n_models, n_cells, n_eval))
-    for i, model in enumerate(models):
-        for c in range(n_cells):
-            params_ic = params[i][c]
-            model_outputs = model_outputs.at[i, c].set(model(X_eval, *params_ic))
+        ax = np.array([[ax]])
 
     for c in range(n_cells):
         row, col = divmod(c, n_row_cols)
@@ -184,7 +240,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                           label='Mean', color="#3BD1FF", linewidth=line_width * 1.35)
 
         # Plot model fits to sample c
-        for i, model in enumerate(models):
+        for i in range(n_models):
             ax[row, col].plot(x_values_eval, model_outputs[i, c], 
                               label=labels[i] + f' (loss: {jnp.mean(point_losses[i, c]):.2f})',
                               color=colours[i], 

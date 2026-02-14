@@ -41,7 +41,7 @@ EDGAR-gamma/
 │   └── orientation_tuning/   # Example task
 │       ├── config.yaml       # Configuration file 
 │       ├── seed_programs.py  # Initial model implementations
-│       ├── diagnostics  .py  # Image diagnostics specification
+│       ├── diagnostics.py    # Diagnostics + eval-point selection
 │       └── data_parser.py    # Data loading functions
 ├── src/                      # Core framework code
 │   ├── hypothesis_engine.py  # Main evolution loop
@@ -203,7 +203,58 @@ def neuron_model_multi(X, theta_pref=0.0, contrast_gain=1.0, baseline=0.0):
     return baseline + contrast_gain * contrast * tuning
 ```
 
-### 4. Configure `config/data.yaml`
+### 4. Implement Diagnostics (`experiments/your_task_name/diagnostics.py`)
+
+Each experiment diagnostics module must define how evaluation points are chosen for
+diagnostic model evaluation. This is now experiment-specific (not hardcoded in
+`hypothesis_engine`).
+
+Required exported functions in `diagnostics.py`:
+- `select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs)`
+- `plot_model_fits(...)`
+- `plot_single_model_fit(...)`
+- `plot_train_vs_test_loss(...)`
+
+`select_evaluation_points(...)` should return explicit points with one of these shapes:
+- Single-input models: `(n_samples, n_eval)`
+- Multi-input models: `(n_samples, n_features, n_eval)`
+
+Example:
+
+```python
+import numpy as np
+import jax.numpy as jnp
+
+def select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs):
+    """
+    Select experiment-specific evaluation points for diagnostics.
+
+    This function is called by the hypothesis engine when building
+    `evaluation_matrix` values used in logging and model comparison.
+    """
+    x = jnp.asarray(inputs)
+
+    # Example 1: single-input -> sweep a grid over observed range
+    if x.ndim == 2:
+        n_samples = x.shape[0]
+        grid = jnp.linspace(float(jnp.min(x)), float(jnp.max(x)), n_points)
+        return jnp.broadcast_to(grid, (n_samples, n_points))
+
+    # Example 2: multi-input -> sample observed trials to preserve correlations
+    if x.ndim == 3:
+        n_trials = x.shape[2]
+        n_eval = min(n_points, n_trials)
+        rng = np.random.default_rng(random_seed)
+        idx = rng.choice(n_trials, size=n_eval, replace=False)
+        return x[:, :, idx]
+
+    raise ValueError(f"Unsupported input shape: {x.shape}")
+```
+
+Use this function to encode domain-specific choices (e.g., trajectory sampling,
+feature sweeps, fixed-context slices).
+
+### 5. Configure `config/data.yaml`
 
 ```yaml
 task: your_task_name
@@ -223,7 +274,7 @@ inputs:
   #   description: "Stimulus contrast level"
 ```
 
-### 5. Configure hyperparameters in `config.yaml`
+### 6. Configure hyperparameters in `config.yaml`
 
 ```yaml
 seed_programs:
@@ -269,7 +320,7 @@ experiment_params:
   activity_thresh: 0.4      # Cell selection threshold
 ```
 
-### 6. Customize Prompts in `config.yaml`
+### 7. Customize Prompts in `config.yaml`
 
 The prompts control how LLMs generate code. Key sections:
 

@@ -1,20 +1,38 @@
 """
 Diagnostics Manager for EDGAR.
 
-This module provides a way to load experiment-specific diagnostic functions
-while ensuring they implement the required interface. This allows different
-experiments (e.g., orientation_tuning, spatial_frequency) to have their own
-visualization functions while maintaining a consistent API.
+Each experiment should provide a `diagnostics.py` file that defines four
+functions used by the engine:
 
-Usage:
-    from src.diagnostics_manager import load_diagnostics
-    
-    # Load experiment-specific diagnostics
-    diagnostics = load_diagnostics('experiments/orientation_tuning')
-    diagnostics.plot_model_fits(...)
-    
-    # Or use default (src/diagnostic.py)
-    diagnostics = load_diagnostics()
+1. `select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs)`
+   - Chooses experiment-specific evaluation inputs used for model evaluation
+     summaries (`evaluation_matrix`).
+   - Return shape should be:
+     - `(n_samples, n_eval)` for single-input experiments, or
+     - `(n_samples, n_features, n_eval)` for multi-input experiments.
+
+2. `plot_model_fits(...)`
+   - Draws multi-model fit diagnostics for selected samples/cells.
+   - Called repeatedly during runs for image feedback and saved diagnostics.
+
+3. `plot_single_model_fit(...)`
+   - Draws a detailed fit plot for one model.
+   - Used for final reports of top-ranked programs.
+
+4. `plot_train_vs_test_loss(...)`
+   - Draws train-vs-test scatter diagnostics across discovered programs.
+
+Process in a typical run:
+- `load_diagnostics(experiment_path)` imports `experiments/<task>/diagnostics.py`
+  and validates that all required functions exist.
+- `hypothesis_engine` calls `select_evaluation_points(...)` once on training
+  inputs to get evaluation inputs for the run.
+- `hypothesis_engine` computes `evaluation_matrix` values using those inputs.
+- `hypothesis_engine` calls plotting functions to save iteration/final figures.
+
+This module is the contract boundary that guarantees every experiment exposes
+the same diagnostics entry points while still letting each task control
+evaluation-point policy and visualization style.
 """
 
 import importlib.util
@@ -37,12 +55,20 @@ class DiagnosticsProtocol(Protocol):
     IDE autocomplete support.
     """
     
+    def select_evaluation_points(self,
+                                 inputs: jnp.ndarray,
+                                 n_points: int = 100,
+                                 random_seed: int = 0) -> jnp.ndarray:
+        """Select experiment-specific evaluation points for model diagnostics."""
+        ...
+
     def plot_model_fits(self,
-                        programs_df: pd.DataFrame,
+                        programs_df: Optional[pd.DataFrame],
                         loss_function: Callable,
-                        x: jnp.ndarray,
-                        y: jnp.ndarray,
+                        inputs: jnp.ndarray,
+                        response: jnp.ndarray,
                         sample_selection: Sequence[int],
+                        plot_data: Optional[dict] = None,
                         n_eval: int = 100,
                         n_mean: int = 50,
                         colours: list = ...,
@@ -84,6 +110,7 @@ class DiagnosticsProtocol(Protocol):
 
 # Required function names that must exist in a diagnostics module
 REQUIRED_FUNCTIONS = [
+    'select_evaluation_points',
     'plot_model_fits',
     'plot_single_model_fit',
     'plot_train_vs_test_loss',
