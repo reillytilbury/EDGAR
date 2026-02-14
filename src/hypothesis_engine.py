@@ -1580,50 +1580,38 @@ def _call_with_supported_kwargs(func, kwargs):
     return func(**filtered_kwargs)
 
 
-def render_model_fit_diagnostics(diagnostics_module,
-                                 programs_df,
-                                 loss_function,
-                                 inputs,
-                                 response,
-                                 sample_selection,
-                                 **plot_kwargs):
+def prepare_and_plot_model_fits(diagnostics_module,
+                                programs_df,
+                                loss_function,
+                                inputs,
+                                response,
+                                sample_selection,
+                                **plot_kwargs):
     """
-    Render model-fit diagnostics with compatibility for old and new diagnostics APIs.
+    Prepare `plot_data` and render model-fit diagnostics.
+
+    This wrapper intentionally owns the `diagnostics_module is None` guard so
+    the hypothesis engine can run in configurations where image diagnostics are
+    disabled. When diagnostics are enabled, it computes canonical `plot_data`
+    via `prepare_model_fit_plot_data(...)` and forwards it to
+    `diagnostics_module.plot_model_fits(...)`.
     """
     if diagnostics_module is None:
         return
 
     plot_fn = diagnostics_module.plot_model_fits
-    sig = inspect.signature(plot_fn)
-    if 'plot_data' in sig.parameters:
-        plot_data = prepare_model_fit_plot_data(
-            programs_df=programs_df,
-            inputs=inputs,
-            response=response,
-            sample_selection=sample_selection,
-            loss_function=loss_function,
-            n_eval=plot_kwargs.get('n_eval', 100),
-            n_mean=plot_kwargs.get('n_mean', 50),
-            input_idx=plot_kwargs.get('input_idx', 0),
-        )
-        kwargs = dict(
-            programs_df=programs_df,
-            inputs=inputs,
-            response=response,
-            loss_function=loss_function,
-            sample_selection=sample_selection,
-            plot_data=plot_data,
-            **plot_kwargs,
-        )
-        _call_with_supported_kwargs(plot_fn, kwargs)
-        return
-
-    kwargs = dict(
+    plot_data = prepare_model_fit_plot_data(
         programs_df=programs_df,
-        loss_function=loss_function,
         inputs=inputs,
         response=response,
         sample_selection=sample_selection,
+        loss_function=loss_function,
+        n_eval=plot_kwargs.get('n_eval', 100),
+        n_mean=plot_kwargs.get('n_mean', 50),
+        input_idx=plot_kwargs.get('input_idx', 0),
+    )
+    kwargs = dict(
+        plot_data=plot_data,
         **plot_kwargs,
     )
     _call_with_supported_kwargs(plot_fn, kwargs)
@@ -1659,7 +1647,7 @@ async def generate_new_model(current_island, llm_name, client,
     if use_image and diagnostics_module is not None:
         try:
             sup_title = "".join([f"{model_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            render_model_fit_diagnostics(
+            prepare_and_plot_model_fits(
                 diagnostics_module=diagnostics_module,
                 programs_df=random_programs,
                 loss_function=loss_functions.quadratic_loss,
@@ -1752,7 +1740,7 @@ async def generate_new_parameter_estimator(current_island,
     if use_image and diagnostics_module is not None:
         try:
             sup_title = "".join([f"model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            render_model_fit_diagnostics(
+            prepare_and_plot_model_fits(
                 diagnostics_module=diagnostics_module,
                 programs_df=random_programs_crude,
                 loss_function=loss_functions.quadratic_loss,
@@ -1850,7 +1838,7 @@ async def generate_new_parameter_estimator(current_island,
                 n_cells = spike_matrix.shape[0]
                 n_cells_img = min(4, n_cells)
                 sample_selection = np.random.choice(n_cells, size=n_cells_img, replace=False)
-                render_model_fit_diagnostics(
+                prepare_and_plot_model_fits(
                     diagnostics_module=diagnostics_module,
                     programs_df=programs_df,
                     loss_function=loss_functions.quadratic_loss,
@@ -2325,7 +2313,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         island_chat_manager.log_configuration()
     
     if diagnostics_module is not None:
-        render_model_fit_diagnostics(
+        prepare_and_plot_model_fits(
             diagnostics_module=diagnostics_module,
             programs_df=initial_programs,
             loss_function=loss_functions.quadratic_loss,
@@ -2503,7 +2491,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
 
             # plot the fits of the neuron model and parameter estimator if using image feedback
             if use_image_feedback and diagnostics_module is not None:
-                render_model_fit_diagnostics(
+                prepare_and_plot_model_fits(
                     diagnostics_module=diagnostics_module,
                     programs_df=pd.DataFrame({'program': [model_new, model_new], 'params': [initial_params, optimized_params]}),
                     loss_function=loss_functions.quadratic_loss,
@@ -2582,7 +2570,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
                 sup_title = f"Iteration {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
                 sup_title += "\n".join([f"model {j+1}: iter {top_df['iteration_number'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
-                render_model_fit_diagnostics(
+                prepare_and_plot_model_fits(
                     diagnostics_module=diagnostics_module,
                     programs_df=top_df,
                     loss_function=loss_functions.quadratic_loss,
@@ -2600,7 +2588,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
             sup_title = f"Iteration {i}, Top 3 Programs Overall\n"
             sup_title += "\n".join([f"model {j+1}: iter {top_programs['iteration_number'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
-            render_model_fit_diagnostics(
+            prepare_and_plot_model_fits(
                 diagnostics_module=diagnostics_module,
                 programs_df=top_programs,
                 loss_function=loss_functions.quadratic_loss,
@@ -2711,7 +2699,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             df = df.head(3)
             df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
             df_sup += "".join([f"model {len(df) - i}: iter {df['iteration_number'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, total loss {0.5 * (df['test_loss'][i] + df['train_loss'][i]):.2f}\n" for i in range(min(3, len(df)))])
-            render_model_fit_diagnostics(
+            prepare_and_plot_model_fits(
                 diagnostics_module=diagnostics_module,
                 programs_df=df,
                 loss_function=loss_functions.quadratic_loss,

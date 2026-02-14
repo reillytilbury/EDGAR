@@ -133,7 +133,7 @@ def load_and_process_data(data_path, conc_thresh=0.55, activity_thresh=0.4):
     Returns:
         dict with keys:
             - 'response': jnp.ndarray of shape (n_cells, n_trials)
-            - 'angles': jnp.ndarray of shape (n_cells, n_trials)
+            - 'inputs': Inputs object with shape (n_cells, n_features, n_trials)
             - 'good_cells': np.ndarray of selected cell indices
             - 'n_good_cells': int, number of selected cells
     """
@@ -162,11 +162,10 @@ def load_and_process_data(data_path, conc_thresh=0.55, activity_thresh=0.4):
         names=input_names or ['theta']
     )
     
-    # Return with both new and legacy formats
+    # Return the model-ready response + inputs payload
     return {
         'response': jnp.array(response[good_cells]),
-        'inputs': inputs,  # New format
-        'angles': jnp.array(stimuli_expanded[:, 0, :]),  # Deprecated, for backward compat
+        'inputs': inputs,
         'good_cells': good_cells,
         'n_good_cells': n_good_cells
     }
@@ -211,7 +210,7 @@ diagnostic model evaluation. This is now experiment-specific (not hardcoded in
 
 Required exported functions in `diagnostics.py`:
 - `select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs)`
-- `plot_model_fits(...)`
+- `plot_model_fits(plot_data, ...)`
 - `plot_single_model_fit(...)`
 - `plot_train_vs_test_loss(...)`
 
