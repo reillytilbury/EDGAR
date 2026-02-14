@@ -61,16 +61,16 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     Plot model fits for synthetic data.
     """
     sample_idx = np.asarray(plot_data['sample_selection'])
-    stimuli_1d = jnp.asarray(plot_data['stimuli_1d'])
-    spike_matrix = jnp.asarray(plot_data['spike_matrix'])
+    inputs_plot = jnp.asarray(plot_data['inputs_plot'])
+    observed_outputs = jnp.asarray(plot_data['observed_outputs'])
     point_losses = jnp.asarray(plot_data['point_losses'])
     x_values_mean = jnp.asarray(plot_data['x_values_mean'])
     binned_mean = jnp.asarray(plot_data['binned_mean'])
     x_values_eval = jnp.asarray(plot_data['x_values_eval'])
     model_outputs = jnp.asarray(plot_data['model_outputs'])
     n_models = int(plot_data['n_models'])
-    n_cells = int(plot_data['n_cells'])
-    n_row_cols = int(plot_data['n_row_cols'])
+    n_samples = int(plot_data['n_samples'])
+    n_grid_side = int(plot_data['n_grid_side'])
 
     if labels is None:
         labels = [f'model {i + 1}' for i in range(n_models)]
@@ -79,13 +79,13 @@ def plot_model_fits(plot_data: ModelFitPlotData,
         repeats = int(np.ceil(n_models / max(len(colours), 1)))
         colours = (colours * repeats)[:n_models]
 
-    fig, axes = plt.subplots(n_row_cols, n_row_cols, figsize=(15, 10))
-    axes = np.array([[axes]]) if n_cells == 1 else axes
+    fig, axes = plt.subplots(n_grid_side, n_grid_side, figsize=(15, 10))
+    axes = np.array([[axes]]) if n_samples == 1 else axes
 
-    for c in range(n_cells):
-        row, col = divmod(c, n_row_cols)
+    for c in range(n_samples):
+        row, col = divmod(c, n_grid_side)
         ax = axes[row, col]
-        ax.scatter(np.asarray(stimuli_1d[c]), np.asarray(spike_matrix[c]), c='black', alpha=point_alpha, s=point_size)
+        ax.scatter(np.asarray(inputs_plot[c]), np.asarray(observed_outputs[c]), c='black', alpha=point_alpha, s=point_size)
         ax.plot(np.asarray(x_values_mean), np.asarray(binned_mean[c]), color='blue', alpha=0.8, linewidth=line_width, label='Binned observed mean')
         for i in range(n_models):
             loss_val = float(jnp.mean(point_losses[i, c]))

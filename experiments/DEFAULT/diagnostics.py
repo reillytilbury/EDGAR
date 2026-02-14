@@ -6,7 +6,6 @@ from typing import Optional, Callable
 
 from src.diagnostics_manager import ModelFitPlotData
 
-
 def select_evaluation_points(inputs: np.ndarray,
                              n_points: int = 100,
                              random_seed: int = 0,
@@ -53,16 +52,16 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     Plot model fits from precomputed `plot_data`.
     """
     sample_selection = np.asarray(plot_data['sample_selection'])
-    stimuli_1d = np.asarray(plot_data['stimuli_1d'])
-    spike_matrix = np.asarray(plot_data['spike_matrix'])
+    inputs_plot = np.asarray(plot_data['inputs_plot'])
+    observed_outputs = np.asarray(plot_data['observed_outputs'])
     point_losses = np.asarray(plot_data['point_losses'])
     x_values_mean = np.asarray(plot_data['x_values_mean'])
     binned_mean = np.asarray(plot_data['binned_mean'])
     x_values_eval = np.asarray(plot_data['x_values_eval'])
     model_outputs = np.asarray(plot_data['model_outputs'])
     n_models = int(plot_data['n_models'])
-    n_cells = int(plot_data['n_cells'])
-    n_row_cols = int(plot_data['n_row_cols'])
+    n_samples = int(plot_data['n_samples'])
+    n_grid_side = int(plot_data['n_grid_side'])
 
     if labels is None:
         labels = [f"model {i + 1}" for i in range(n_models)]
@@ -70,13 +69,13 @@ def plot_model_fits(plot_data: ModelFitPlotData,
         repeats = int(np.ceil(n_models / max(1, len(colours))))
         colours = (colours * repeats)[:n_models]
 
-    fig, axes = plt.subplots(n_row_cols, n_row_cols, figsize=(4.5 * n_row_cols, 3.8 * n_row_cols))
-    axes = np.array([[axes]]) if n_cells == 1 else axes
+    fig, axes = plt.subplots(n_grid_side, n_grid_side, figsize=(4.5 * n_grid_side, 3.8 * n_grid_side))
+    axes = np.array([[axes]]) if n_samples == 1 else axes
 
-    for c in range(n_cells):
-        row, col = divmod(c, n_row_cols)
+    for c in range(n_samples):
+        row, col = divmod(c, n_grid_side)
         ax = axes[row, col]
-        ax.scatter(stimuli_1d[c], spike_matrix[c], c='black', alpha=point_alpha, s=point_size)
+        ax.scatter(inputs_plot[c], observed_outputs[c], c='black', alpha=point_alpha, s=point_size)
         ax.plot(x_values_mean, binned_mean[c], color='#2E86DE', linewidth=line_width, label='Observed mean')
         for i in range(n_models):
             loss_val = float(np.mean(point_losses[i, c]))

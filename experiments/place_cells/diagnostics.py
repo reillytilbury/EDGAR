@@ -329,20 +329,20 @@ def plot_model_fits(plot_data: ModelFitPlotData,
         save_path: Path to save figure.
     """
     sample_selection = np.asarray(plot_data['sample_selection'])
-    inputs_subset = jnp.asarray(plot_data['stimuli_3d'])        # (n_cells, n_features, n_trials)
-    response_subset = jnp.asarray(plot_data['spike_matrix'])    # (n_cells, n_trials)
-    trial_predictions = jnp.asarray(plot_data['trial_predictions'])  # (n_models, n_cells, n_trials)
-    point_losses = jnp.asarray(plot_data['point_losses'])       # (n_models, n_cells, n_trials)
-    n_cells_plot = int(plot_data['n_cells'])
+    inputs_subset = jnp.asarray(plot_data['inputs_full'])            # (n_samples, n_features, n_trials)
+    response_subset = jnp.asarray(plot_data['observed_outputs'])     # (n_samples, n_trials)
+    trial_predictions = jnp.asarray(plot_data['trial_predictions'])  # (n_models, n_samples, n_trials)
+    point_losses = jnp.asarray(plot_data['point_losses'])            # (n_models, n_samples, n_trials)
+    n_samples_plot = int(plot_data['n_samples'])
     n_models = int(plot_data['n_models'])
 
     if inputs_subset.ndim != 3 or inputs_subset.shape[1] < 2:
         raise ValueError(
-            f"Place-cell plot_model_fits requires 2D position inputs; got stimuli_3d shape {inputs_subset.shape}."
+            f"Place-cell plot_model_fits requires 2D position inputs; got inputs_full shape {inputs_subset.shape}."
         )
-    if sample_selection.shape[0] != n_cells_plot:
+    if sample_selection.shape[0] != n_samples_plot:
         raise ValueError(
-            f"sample_selection length ({sample_selection.shape[0]}) must equal n_cells ({n_cells_plot})."
+            f"sample_selection length ({sample_selection.shape[0]}) must equal n_samples ({n_samples_plot})."
         )
     
     if labels is None:
@@ -350,11 +350,11 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     
     # Figure layout: rows = cells, cols = [data, model1, model2, ...]
     n_cols = 1 + n_models
-    fig, axes = plt.subplots(n_cells_plot, n_cols, figsize=(4 * n_cols, 4 * n_cells_plot))
-    if n_cells_plot == 1:
+    fig, axes = plt.subplots(n_samples_plot, n_cols, figsize=(4 * n_cols, 4 * n_samples_plot))
+    if n_samples_plot == 1:
         axes = axes.reshape(1, -1)
     
-    for c_idx in range(n_cells_plot):
+    for c_idx in range(n_samples_plot):
         cell_idx = sample_selection[c_idx]
 
         x_pos = np.asarray(inputs_subset[c_idx, 0, :])

@@ -1345,18 +1345,18 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
     """Validate `prepare_model_fit_plot_data` outputs and fail early on schema drift."""
     required_keys = (
         "sample_selection",
-        "stimuli_3d",
-        "stimuli_1d",
-        "spike_matrix",
+        "inputs_full",
+        "inputs_plot",
+        "observed_outputs",
         "trial_predictions",
         "point_losses",
         "x_values_mean",
         "binned_mean",
         "x_values_eval",
         "model_outputs",
-        "n_row_cols",
+        "n_grid_side",
         "n_models",
-        "n_cells",
+        "n_samples",
         "n_trials",
         "n_eval",
         "n_mean",
@@ -1366,17 +1366,17 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
     if missing:
         raise ValueError(f"plot_data missing required keys: {missing}")
 
-    n_cells = int(plot_data["n_cells"])
+    n_samples = int(plot_data["n_samples"])
     n_models = int(plot_data["n_models"])
     n_trials = int(plot_data["n_trials"])
     n_eval = int(plot_data["n_eval"])
     n_mean = int(plot_data["n_mean"])
-    n_row_cols = int(plot_data["n_row_cols"])
+    n_grid_side = int(plot_data["n_grid_side"])
 
     sample_selection = np.asarray(plot_data["sample_selection"])
-    stimuli_3d = jnp.asarray(plot_data["stimuli_3d"])
-    stimuli_1d = jnp.asarray(plot_data["stimuli_1d"])
-    spike_matrix = jnp.asarray(plot_data["spike_matrix"])
+    inputs_full = jnp.asarray(plot_data["inputs_full"])
+    inputs_plot = jnp.asarray(plot_data["inputs_plot"])
+    observed_outputs = jnp.asarray(plot_data["observed_outputs"])
     trial_predictions = jnp.asarray(plot_data["trial_predictions"])
     point_losses = jnp.asarray(plot_data["point_losses"])
     x_values_mean = jnp.asarray(plot_data["x_values_mean"])
@@ -1384,50 +1384,50 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
     x_values_eval = jnp.asarray(plot_data["x_values_eval"])
     model_outputs = jnp.asarray(plot_data["model_outputs"])
 
-    if sample_selection.ndim != 1 or sample_selection.shape[0] != n_cells:
+    if sample_selection.ndim != 1 or sample_selection.shape[0] != n_samples:
         raise ValueError(
-            f"plot_data['sample_selection'] must have shape ({n_cells},), got {sample_selection.shape}."
+            f"plot_data['sample_selection'] must have shape ({n_samples},), got {sample_selection.shape}."
         )
-    if stimuli_1d.shape != (n_cells, n_trials):
+    if inputs_plot.shape != (n_samples, n_trials):
         raise ValueError(
-            f"plot_data['stimuli_1d'] must have shape ({n_cells}, {n_trials}), got {stimuli_1d.shape}."
+            f"plot_data['inputs_plot'] must have shape ({n_samples}, {n_trials}), got {inputs_plot.shape}."
         )
-    if stimuli_3d.ndim != 3 or stimuli_3d.shape[0] != n_cells or stimuli_3d.shape[2] != n_trials:
+    if inputs_full.ndim != 3 or inputs_full.shape[0] != n_samples or inputs_full.shape[2] != n_trials:
         raise ValueError(
-            f"plot_data['stimuli_3d'] must have shape (n_cells, n_features, n_trials) with "
-            f"n_cells={n_cells}, n_trials={n_trials}, got {stimuli_3d.shape}."
+            f"plot_data['inputs_full'] must have shape (n_samples, n_features, n_trials) with "
+            f"n_samples={n_samples}, n_trials={n_trials}, got {inputs_full.shape}."
         )
-    if spike_matrix.shape != (n_cells, n_trials):
+    if observed_outputs.shape != (n_samples, n_trials):
         raise ValueError(
-            f"plot_data['spike_matrix'] must have shape ({n_cells}, {n_trials}), got {spike_matrix.shape}."
+            f"plot_data['observed_outputs'] must have shape ({n_samples}, {n_trials}), got {observed_outputs.shape}."
         )
-    if trial_predictions.shape != (n_models, n_cells, n_trials):
+    if trial_predictions.shape != (n_models, n_samples, n_trials):
         raise ValueError(
-            f"plot_data['trial_predictions'] must have shape ({n_models}, {n_cells}, {n_trials}), got {trial_predictions.shape}."
+            f"plot_data['trial_predictions'] must have shape ({n_models}, {n_samples}, {n_trials}), got {trial_predictions.shape}."
         )
-    if point_losses.shape != (n_models, n_cells, n_trials):
+    if point_losses.shape != (n_models, n_samples, n_trials):
         raise ValueError(
-            f"plot_data['point_losses'] must have shape ({n_models}, {n_cells}, {n_trials}), got {point_losses.shape}."
+            f"plot_data['point_losses'] must have shape ({n_models}, {n_samples}, {n_trials}), got {point_losses.shape}."
         )
     if x_values_mean.shape != (n_mean,):
         raise ValueError(
             f"plot_data['x_values_mean'] must have shape ({n_mean},), got {x_values_mean.shape}."
         )
-    if binned_mean.shape != (n_cells, n_mean):
+    if binned_mean.shape != (n_samples, n_mean):
         raise ValueError(
-            f"plot_data['binned_mean'] must have shape ({n_cells}, {n_mean}), got {binned_mean.shape}."
+            f"plot_data['binned_mean'] must have shape ({n_samples}, {n_mean}), got {binned_mean.shape}."
         )
     if x_values_eval.shape != (n_eval,):
         raise ValueError(
             f"plot_data['x_values_eval'] must have shape ({n_eval},), got {x_values_eval.shape}."
         )
-    if model_outputs.shape != (n_models, n_cells, n_eval):
+    if model_outputs.shape != (n_models, n_samples, n_eval):
         raise ValueError(
-            f"plot_data['model_outputs'] must have shape ({n_models}, {n_cells}, {n_eval}), got {model_outputs.shape}."
+            f"plot_data['model_outputs'] must have shape ({n_models}, {n_samples}, {n_eval}), got {model_outputs.shape}."
         )
-    if n_row_cols * n_row_cols != n_cells:
+    if n_grid_side * n_grid_side != n_samples:
         raise ValueError(
-            f"plot_data['n_row_cols']={n_row_cols} is inconsistent with n_cells={n_cells}."
+            f"plot_data['n_grid_side']={n_grid_side} is inconsistent with n_samples={n_samples}."
         )
     return plot_data
 
@@ -1444,23 +1444,29 @@ def prepare_model_fit_plot_data(programs_df,
     Compute canonical plotting tensors for diagnostics `plot_model_fits(plot_data=...)`.
 
     Returned `plot_data` schema:
-    - `sample_selection`: `(n_cells,)` original cell/sample ids selected for plotting.
-    - `stimuli_3d`: `(n_cells, n_features, n_trials)` full per-cell input tensor.
-    - `stimuli_1d`: `(n_cells, n_trials)` x-axis input values used in scatter/means.
-    - `spike_matrix`: `(n_cells, n_trials)` observed responses.
-    - `trial_predictions`: `(n_models, n_cells, n_trials)` model predictions on observed trials.
-    - `point_losses`: `(n_models, n_cells, n_trials)` per-point model loss.
+    - `sample_selection`: `(n_samples,)` original sample ids selected for plotting.
+    - `inputs_full`: `(n_samples, n_features, n_trials)` full input tensor.
+    - `inputs_plot`: `(n_samples, n_trials)` input values used for x-axis plotting.
+    - `observed_outputs`: `(n_samples, n_trials)` observed targets/outputs.
+    - `trial_predictions`: `(n_models, n_samples, n_trials)` model predictions on observed trials.
+    - `point_losses`: `(n_models, n_samples, n_trials)` per-point model loss.
     - `x_values_mean`: `(n_mean,)` x-grid for empirical mean curve.
-    - `binned_mean`: `(n_cells, n_mean)` empirical mean response over bins.
+    - `binned_mean`: `(n_samples, n_mean)` empirical mean response over bins.
     - `x_values_eval`: `(n_eval,)` x-grid used for model evaluation curves.
-    - `model_outputs`: `(n_models, n_cells, n_eval)` evaluated model predictions.
-    - `n_row_cols`: subplot side length (`sqrt(n_cells)`).
+    - `model_outputs`: `(n_models, n_samples, n_eval)` evaluated model predictions.
+    - `n_grid_side`: subplot side length (`sqrt(n_samples)`).
     - `n_models`: number of candidate models in `programs_df`.
-    - `n_cells`: number of plotted samples/cells.
-    - `n_trials`: number of observed trials per plotted cell.
+    - `n_samples`: number of plotted samples.
+    - `n_trials`: number of observed trials per plotted sample.
     - `n_eval`: number of model evaluation points.
     - `n_mean`: number of bins for empirical mean curve.
-    - `input_idx`: input feature index used for x-axis extraction in multi-input data.
+    - `input_idx`: input feature index used to build `inputs_plot`.
+
+    Why both `inputs_full` and `inputs_plot`:
+    - `inputs_full` is required for diagnostics that need the complete feature
+      vector per trial (e.g., 2D spatial plots).
+    - `inputs_plot` is a 1D projection used by line/scatter diagnostics that
+      plot one feature on the x-axis.
     """
     sample_selection = np.asarray(sample_selection)
     if sample_selection.size == 0:
@@ -1479,18 +1485,18 @@ def prepare_model_fit_plot_data(programs_df,
 
     models = programs_df['program'].tolist()
     params_all = [jnp.asarray(p)[sample_selection] for p in programs_df['params'].tolist()]
-    spike_matrix = y_arr[sample_selection]
+    observed_outputs = y_arr[sample_selection]
 
     if x_arr.ndim == 2:
-        stimuli_3d = x_arr[sample_selection][:, jnp.newaxis, :]
-        stimuli_1d = x_arr[sample_selection]
+        inputs_full = x_arr[sample_selection][:, jnp.newaxis, :]
+        inputs_plot = x_arr[sample_selection]
     else:
-        stimuli_3d = x_arr[sample_selection]
-        stimuli_1d = x_arr[sample_selection][:, input_idx, :]
+        inputs_full = x_arr[sample_selection]
+        inputs_plot = x_arr[sample_selection][:, input_idx, :]
 
     n_models = len(models)
-    n_cells = int(stimuli_3d.shape[0])
-    n_trials = int(stimuli_3d.shape[2])
+    n_samples = int(inputs_full.shape[0])
+    n_trials = int(inputs_full.shape[2])
 
     def _as_trial_vector(arr, expected_len, name):
         """
@@ -1512,33 +1518,33 @@ def prepare_model_fit_plot_data(programs_df,
             )
         return vec
 
-    trial_predictions = jnp.zeros((n_models, n_cells, n_trials))
-    point_losses = jnp.zeros((n_models, n_cells, n_trials))
+    trial_predictions = jnp.zeros((n_models, n_samples, n_trials))
+    point_losses = jnp.zeros((n_models, n_samples, n_trials))
     for i, model in enumerate(models):
-        for c in range(n_cells):
+        for c in range(n_samples):
             params_ic = params_all[i][c]
-            x_cell = stimuli_3d[c]
+            x_cell = inputs_full[c]
             y_pred_raw = model(x_cell, *params_ic)
             y_pred = _as_trial_vector(y_pred_raw, n_trials, "model prediction")
             trial_predictions = trial_predictions.at[i, c].set(y_pred)
-            y_true = _as_trial_vector(spike_matrix[c], n_trials, "response")
+            y_true = _as_trial_vector(observed_outputs[c], n_trials, "response")
             loss_vec_raw = loss_function(y_pred, y_true)
             loss_vec = _as_trial_vector(loss_vec_raw, n_trials, "point loss")
             point_losses = point_losses.at[i, c].set(loss_vec)
 
     x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False)
     x_values_mean = x_values_mean + 0.5 * (2 * jnp.pi / n_mean)
-    binned_mean = jnp.zeros((n_cells, n_mean))
-    for c in range(n_cells):
-        bin_idx = jnp.clip(((stimuli_1d[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
-        sums = jnp.bincount(bin_idx, weights=spike_matrix[c], minlength=n_mean)
+    binned_mean = jnp.zeros((n_samples, n_mean))
+    for c in range(n_samples):
+        bin_idx = jnp.clip(((inputs_plot[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
+        sums = jnp.bincount(bin_idx, weights=observed_outputs[c], minlength=n_mean)
         counts = jnp.bincount(bin_idx, minlength=n_mean)
         binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))
 
     x_values_eval = jnp.linspace(0, 2 * jnp.pi, n_eval, endpoint=False)
-    model_outputs = jnp.zeros((n_models, n_cells, n_eval))
+    model_outputs = jnp.zeros((n_models, n_samples, n_eval))
     for i, model in enumerate(models):
-        for c in range(n_cells):
+        for c in range(n_samples):
             params_ic = params_all[i][c]
             x_eval = jnp.zeros((n_features, n_eval))
             x_eval = x_eval.at[input_idx, :].set(x_values_eval)
@@ -1548,18 +1554,18 @@ def prepare_model_fit_plot_data(programs_df,
 
     plot_data: ModelFitPlotData = {
         'sample_selection': sample_selection,
-        'stimuli_3d': stimuli_3d,
-        'stimuli_1d': stimuli_1d,
-        'spike_matrix': spike_matrix,
+        'inputs_full': inputs_full,
+        'inputs_plot': inputs_plot,
+        'observed_outputs': observed_outputs,
         'trial_predictions': trial_predictions,
         'point_losses': point_losses,
         'x_values_mean': x_values_mean,
         'binned_mean': binned_mean,
         'x_values_eval': x_values_eval,
         'model_outputs': model_outputs,
-        'n_row_cols': n_side,
+        'n_grid_side': n_side,
         'n_models': n_models,
-        'n_cells': n_cells,
+        'n_samples': n_samples,
         'n_trials': n_trials,
         'n_eval': int(n_eval),
         'n_mean': int(n_mean),

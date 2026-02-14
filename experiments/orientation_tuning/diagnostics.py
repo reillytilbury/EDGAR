@@ -122,16 +122,16 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     and curve preparation are done upstream in
     `hypothesis_engine.prepare_model_fit_plot_data(...)`.
     """
-    stimuli_1d = jnp.asarray(plot_data['stimuli_1d'])
-    spike_matrix = jnp.asarray(plot_data['spike_matrix'])
+    inputs_plot = jnp.asarray(plot_data['inputs_plot'])
+    observed_outputs = jnp.asarray(plot_data['observed_outputs'])
     point_losses = jnp.asarray(plot_data['point_losses'])
     x_values_mean = jnp.asarray(plot_data['x_values_mean'])
     binned_mean = jnp.asarray(plot_data['binned_mean'])
     x_values_eval = jnp.asarray(plot_data['x_values_eval'])
     model_outputs = jnp.asarray(plot_data['model_outputs'])
     n_models = int(plot_data['n_models'])
-    n_cells = int(plot_data['n_cells'])
-    n_row_cols = int(plot_data['n_row_cols'])
+    n_samples = int(plot_data['n_samples'])
+    n_grid_side = int(plot_data['n_grid_side'])
     sample_selection = np.asarray(plot_data['sample_selection'])
 
     if labels is None:
@@ -139,14 +139,14 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     if len(colours) < n_models:
         raise ValueError(f"Need at least {n_models} colours, got {len(colours)}.")
 
-    fig, ax = plt.subplots(n_row_cols, n_row_cols, figsize=(20, 20))
-    if n_cells == 1:
+    fig, ax = plt.subplots(n_grid_side, n_grid_side, figsize=(20, 20))
+    if n_samples == 1:
         ax = np.array([[ax]])
 
-    for c in range(n_cells):
-        row, col = divmod(c, n_row_cols)
+    for c in range(n_samples):
+        row, col = divmod(c, n_grid_side)
         # Scatter plot of data points (x=stimulus, y=response) for sample c
-        ax[row, col].scatter(stimuli_1d[c], spike_matrix[c], c='black', alpha=point_alpha, s=point_size)
+        ax[row, col].scatter(inputs_plot[c], observed_outputs[c], c='black', alpha=point_alpha, s=point_size)
 
         # Plot running mean for sample c
         ax[row, col].plot(x_values_mean, binned_mean[c], 
@@ -166,7 +166,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
         ax[row, col].set_ylim(0, max(model_max, mean_max) * 2)
         ax[row, col].set_title(f'Sample {sample_selection[c]}', fontsize=16)
         ax[row, col].legend(loc='upper right', fontsize=legend_fontsize)
-        if row == n_row_cols - 1:
+        if row == n_grid_side - 1:
             ax[row, col].set_xlabel('Theta (radians)', fontsize=20)
         if col == 0:
             ax[row, col].set_ylabel('Firing Rate', fontsize=20)

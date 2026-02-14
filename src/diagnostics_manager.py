@@ -44,23 +44,23 @@ import jax.numpy as jnp
 class ModelFitPlotData(TypedDict):
     """Structured payload consumed by experiment `plot_model_fits(plot_data=...)`."""
 
-    sample_selection: np.ndarray
-    stimuli_3d: jnp.ndarray
-    stimuli_1d: jnp.ndarray
-    spike_matrix: jnp.ndarray
-    trial_predictions: jnp.ndarray
-    point_losses: jnp.ndarray
-    x_values_mean: jnp.ndarray
-    binned_mean: jnp.ndarray
-    x_values_eval: jnp.ndarray
-    model_outputs: jnp.ndarray
-    n_row_cols: int
-    n_models: int
-    n_cells: int
-    n_trials: int
-    n_eval: int
-    n_mean: int
-    input_idx: int
+    sample_selection: np.ndarray   # (n_samples,) source sample indices selected for plotting
+    inputs_full: jnp.ndarray       # (n_samples, n_features, n_trials) full input tensor per sample
+    inputs_plot: jnp.ndarray       # (n_samples, n_trials) input values used on the x-axis for 1D plots
+    observed_outputs: jnp.ndarray  # (n_samples, n_trials) observed target/output values
+    trial_predictions: jnp.ndarray # (n_models, n_samples, n_trials) model predictions on observed trials
+    point_losses: jnp.ndarray      # (n_models, n_samples, n_trials) per-point loss values
+    x_values_mean: jnp.ndarray     # (n_mean,) x-grid used when plotting empirical means
+    binned_mean: jnp.ndarray       # (n_samples, n_mean) empirical mean outputs in x bins
+    x_values_eval: jnp.ndarray     # (n_eval,) x-grid used for smooth evaluation curves
+    model_outputs: jnp.ndarray     # (n_models, n_samples, n_eval) model outputs on evaluation grid
+    n_grid_side: int               # subplot grid side length; n_grid_side^2 == n_samples
+    n_models: int                  # number of models being compared
+    n_samples: int                 # number of selected samples
+    n_trials: int                  # number of observed trials per sample
+    n_eval: int                    # number of evaluation points per curve/map
+    n_mean: int                    # number of bins used for empirical mean curve
+    input_idx: int                 # feature index used to build `inputs_plot` for 1D views
 
 
 @runtime_checkable
