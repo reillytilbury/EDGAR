@@ -11,8 +11,10 @@ functions used by the engine:
      - `(n_samples, n_eval)` for single-input experiments, or
      - `(n_samples, n_features, n_eval)` for multi-input experiments.
 
-2. `plot_model_fits(...)`
+2. `plot_model_fits(plot_data, ...)`
    - Draws multi-model fit diagnostics for selected samples/cells.
+   - Receives precomputed tensors from the engine in `plot_data` and should
+     only handle visualization decisions (layout/styling/annotations).
    - Called repeatedly during runs for image feedback and saved diagnostics.
 
 3. `plot_single_model_fit(...)`
@@ -28,7 +30,9 @@ Process in a typical run:
 - `hypothesis_engine` calls `select_evaluation_points(...)` once on training
   inputs to get evaluation inputs for the run.
 - `hypothesis_engine` computes `evaluation_matrix` values using those inputs.
-- `hypothesis_engine` calls plotting functions to save iteration/final figures.
+- `hypothesis_engine` prepares `plot_data` (predictions, observations, losses,
+  evaluation-grid outputs, and subplot metadata) and then calls plotting
+  functions to save iteration/final figures.
 
 This module is the contract boundary that guarantees every experiment exposes
 the same diagnostics entry points while still letting each task control
@@ -38,9 +42,7 @@ evaluation-point policy and visualization style.
 import importlib.util
 import logging
 from pathlib import Path
-from typing import Protocol, Optional, Callable, Sequence, runtime_checkable
-
-import numpy as np
+from typing import Protocol, Optional, Callable, runtime_checkable
 import pandas as pd
 import jax.numpy as jnp
 
@@ -63,14 +65,7 @@ class DiagnosticsProtocol(Protocol):
         ...
 
     def plot_model_fits(self,
-                        programs_df: Optional[pd.DataFrame],
-                        loss_function: Callable,
-                        inputs: jnp.ndarray,
-                        response: jnp.ndarray,
-                        sample_selection: Sequence[int],
-                        plot_data: Optional[dict] = None,
-                        n_eval: int = 100,
-                        n_mean: int = 50,
+                        plot_data: dict,
                         colours: list = ...,
                         labels: Optional[list] = None,
                         title: str = '',
@@ -80,9 +75,13 @@ class DiagnosticsProtocol(Protocol):
                         point_size: int = 80,
                         legend_fontsize: int = 12,
                         dpi: float = 100.0,
-                        save_path: Optional[str] = None,
-                        input_idx: int = 0) -> None:
-        """Plot fits of multiple models over selected samples."""
+                        save_path: Optional[str] = None) -> None:
+        """
+        Plot fits of multiple models using precomputed plotting tensors.
+
+        Required `plot_data` keys are produced by
+        `hypothesis_engine.prepare_model_fit_plot_data(...)`.
+        """
         ...
     
     def plot_single_model_fit(self,
@@ -139,7 +138,7 @@ def load_diagnostics(experiment_path: Optional[str] = None):
         # Load diagnostics (returns None if not found)
         diag = load_diagnostics('experiments/orientation_tuning')
         if diag:
-            diag.plot_model_fits(...)
+            diag.plot_model_fits(plot_data=...)
     """
     if experiment_path is None:
         logging.info("No diagnostics path specified, diagnostics disabled.")
