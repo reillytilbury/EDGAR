@@ -59,15 +59,11 @@ def grid_model_1(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, ampl
     dx = x - phi_x
     dy = y - phi_y
     
-    # Sum of three plane waves
-    s = 0.0
-    for k in range(3):
-        proj = ux[k] * dx + uy[k] * dy
-        s = s + np.cos(q * proj)
+    # Sum of three plane waves (vectorized; equivalent to the loop over k=0..2)
+    proj = np.outer(ux, dx) + np.outer(uy, dy)
+    s = np.sum(np.cos(q * proj), axis=0)
     
     return baseline + amplitude * s
-
-
 
 
 def parameter_estimator_1_v2(X, firing_rates):
@@ -490,18 +486,17 @@ def grid_model_2(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0,
     dx = x - phi_x
     dy = y - phi_y
     
-    # Sum Gaussian bumps
-    r = np.full_like(x, baseline, dtype=float)
+    # Sum Gaussian bumps over lattice centers (vectorized; equivalent to nested loops)
     inv2sig2 = 1.0 / (2.0 * sigma * sigma)
-    
-    for n in range(-n_range, n_range + 1):
-        for m in range(-n_range, n_range + 1):
-            cx, cy = n * v1 + m * v2
-            ddx = dx - cx
-            ddy = dy - cy
-            r = r + amplitude * np.exp(-(ddx * ddx + ddy * ddy) * inv2sig2)
-    
-    return r
+    idx = np.arange(-n_range, n_range + 1, dtype=float)
+    nn, mm = np.meshgrid(idx, idx, indexing='ij')
+    centers = (nn[..., None] * v1 + mm[..., None] * v2).reshape(-1, 2)
+    cx = centers[:, 0][:, None]
+    cy = centers[:, 1][:, None]
+    ddx = dx[None, :] - cx
+    ddy = dy[None, :] - cy
+    fields = np.exp(-(ddx * ddx + ddy * ddy) * inv2sig2)
+    return baseline + amplitude * np.sum(fields, axis=0)
 
 
 

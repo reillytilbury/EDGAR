@@ -300,7 +300,16 @@ prompts:
       * Replace all boolean indexing (e.g., `array[condition]`) with `jnp.where(condition, true_value, false_value)`
       * Replace NumPy functions with JAX equivalents (np.array → jnp.array, np.sin → jnp.sin, etc.)
       * Avoid Python control flow (if/for) that depends on array values - use `jnp.where`, `jax.lax.cond`, `jax.lax.scan` instead
+      * Loop handling: for short fixed-size loops (e.g., sum over 3 directions), prefer vectorized `jnp` expressions instead of `lax.scan`
+      * If a loop is required, use `jax.lax.fori_loop` for index-based accumulation; keep loop bounds static integers (no `int(jnp...)`)
+      * In `lax.scan`/`fori_loop`, the carry/state must keep exactly the same shape and dtype each iteration (never scalar on input and vector on output)
       * Do not use dynamic array shapes or indexing with non-constant indices
+      * Never call Python `int()` / `float()` / `range()` on JAX values (e.g., no `int(jnp.ceil(...))`).
+      * For lattice/grid models, avoid data-dependent `jnp.arange(-n, n+1)` where `n` depends on parameters.
+      * Instead, create a fixed static maximum range (e.g., `n_range_max`) and use a mask:
+        compute dynamic `n_eff = jnp.ceil(...)`, build static indices with `jnp.arange(-n_range_max, n_range_max + 1)`,
+        then zero out contributions where `abs(index) > n_eff` using `jnp.where`.
+      * `jnp.where(condition, x, y)` requires broadcast-compatible shapes. If `x` is flattened (e.g., `(N, 2)`), flatten/reshape masks to match (e.g., `(N, 1)`), rather than using unflattened masks like `(H, W, 1)`.
       * Use `jnp.clip()` instead of boolean masking for bounds
       
       Do not include any text other than the code. 

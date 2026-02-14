@@ -6,6 +6,7 @@ Grid cells fire in hexagonal patterns as animals navigate through 2D environment
 """
 
 import numpy as np
+import jax
 import jax.numpy as jnp
 from scipy.ndimage import gaussian_filter
 from typing import Dict, Any, Optional, List, Tuple
