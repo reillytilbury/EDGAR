@@ -50,16 +50,10 @@ class ModelFitPlotData(TypedDict):
     observed_outputs: jnp.ndarray  # (n_samples, n_trials) observed target/output values
     trial_predictions: jnp.ndarray # (n_models, n_samples, n_trials) model predictions on observed trials
     point_losses: jnp.ndarray      # (n_models, n_samples, n_trials) per-point loss values
-    x_values_mean: jnp.ndarray     # (n_mean,) x-grid used when plotting empirical means
-    binned_mean: jnp.ndarray       # (n_samples, n_mean) empirical mean outputs in x bins
-    x_values_eval: jnp.ndarray     # (n_eval,) x-grid used for smooth evaluation curves
-    model_outputs: jnp.ndarray     # (n_models, n_samples, n_eval) model outputs on evaluation grid
     n_grid_side: int               # subplot grid side length; n_grid_side^2 == n_samples
     n_models: int                  # number of models being compared
     n_samples: int                 # number of selected samples
     n_trials: int                  # number of observed trials per sample
-    n_eval: int                    # number of evaluation points per curve/map
-    n_mean: int                    # number of bins used for empirical mean curve
     input_idx: int                 # feature index used to build `inputs_plot` for 1D views
 
 

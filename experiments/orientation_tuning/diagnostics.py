@@ -108,6 +108,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
                     labels: Optional[list] = None,
                     title: str = '',
+                    n_mean: int = 50,
                     line_width=4.0,
                     line_alpha=1.0,
                     point_alpha=0.1,
@@ -118,17 +119,14 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     """
     Plot orientation-tuning fits using precomputed plotting data.
 
-    This function is visualization-only. Model evaluation, loss computation,
-    and curve preparation are done upstream in
-    `hypothesis_engine.prepare_model_fit_plot_data(...)`.
+    This function is visualization-only. Model evaluation and per-point losses
+    are computed upstream in `hypothesis_engine.prepare_model_fit_plot_data(...)`.
+    Orientation-specific summary curves (circular binning) are computed locally.
     """
     inputs_plot = jnp.asarray(plot_data['inputs_plot'])
     observed_outputs = jnp.asarray(plot_data['observed_outputs'])
+    trial_predictions = jnp.asarray(plot_data['trial_predictions'])
     point_losses = jnp.asarray(plot_data['point_losses'])
-    x_values_mean = jnp.asarray(plot_data['x_values_mean'])
-    binned_mean = jnp.asarray(plot_data['binned_mean'])
-    x_values_eval = jnp.asarray(plot_data['x_values_eval'])
-    model_outputs = jnp.asarray(plot_data['model_outputs'])
     n_models = int(plot_data['n_models'])
     n_samples = int(plot_data['n_samples'])
     n_grid_side = int(plot_data['n_grid_side'])
@@ -143,6 +141,15 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     if n_samples == 1:
         ax = np.array([[ax]])
 
+    x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False)
+    x_values_mean = x_values_mean + 0.5 * (2 * jnp.pi / n_mean)
+    binned_mean = jnp.zeros((n_samples, n_mean))
+    for c in range(n_samples):
+        bin_idx = jnp.clip(((inputs_plot[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
+        sums = jnp.bincount(bin_idx, weights=observed_outputs[c], minlength=n_mean)
+        counts = jnp.bincount(bin_idx, minlength=n_mean)
+        binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))
+
     for c in range(n_samples):
         row, col = divmod(c, n_grid_side)
         # Scatter plot of data points (x=stimulus, y=response) for sample c
@@ -153,13 +160,16 @@ def plot_model_fits(plot_data: ModelFitPlotData,
                           label='Mean', color="#3BD1FF", linewidth=line_width * 1.35)
 
         # Plot model fits to sample c
+        sort_idx = jnp.argsort(inputs_plot[c])
+        x_sorted = inputs_plot[c][sort_idx]
         for i in range(n_models):
-            ax[row, col].plot(x_values_eval, model_outputs[i, c], 
+            y_sorted = trial_predictions[i, c][sort_idx]
+            ax[row, col].plot(x_sorted, y_sorted,
                               label=labels[i] + f' (loss: {jnp.mean(point_losses[i, c]):.2f})',
                               color=colours[i], 
                               alpha=line_alpha, 
                               linewidth=line_width)
-        model_max = jnp.max(model_outputs[:, c])
+        model_max = jnp.max(trial_predictions[:, c])
         mean_max = jnp.max(binned_mean[c])
 
         # Set axis properties

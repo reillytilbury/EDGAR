@@ -50,6 +50,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
                     labels: Optional[list] = None,
                     title: str = '',
+                    n_mean: int = 50,
                     line_width=4.0,
                     line_alpha=1.0,
                     point_alpha=0.1,
@@ -63,11 +64,8 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     sample_idx = np.asarray(plot_data['sample_selection'])
     inputs_plot = jnp.asarray(plot_data['inputs_plot'])
     observed_outputs = jnp.asarray(plot_data['observed_outputs'])
+    trial_predictions = jnp.asarray(plot_data['trial_predictions'])
     point_losses = jnp.asarray(plot_data['point_losses'])
-    x_values_mean = jnp.asarray(plot_data['x_values_mean'])
-    binned_mean = jnp.asarray(plot_data['binned_mean'])
-    x_values_eval = jnp.asarray(plot_data['x_values_eval'])
-    model_outputs = jnp.asarray(plot_data['model_outputs'])
     n_models = int(plot_data['n_models'])
     n_samples = int(plot_data['n_samples'])
     n_grid_side = int(plot_data['n_grid_side'])
@@ -82,16 +80,35 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     fig, axes = plt.subplots(n_grid_side, n_grid_side, figsize=(15, 10))
     axes = np.array([[axes]]) if n_samples == 1 else axes
 
+    x_min = float(jnp.min(inputs_plot))
+    x_max = float(jnp.max(inputs_plot))
+    if x_max <= x_min:
+        x_max = x_min + 1e-6
+    x_values_mean = jnp.linspace(x_min, x_max, n_mean)
+    binned_mean = jnp.zeros((n_samples, n_mean))
+    denom = max(x_max - x_min, 1e-6)
+    for c in range(n_samples):
+        bin_idx = jnp.clip(
+            (((inputs_plot[c] - x_min) / denom) * n_mean).astype(jnp.int32),
+            0,
+            n_mean - 1,
+        )
+        sums = jnp.bincount(bin_idx, weights=observed_outputs[c], minlength=n_mean)
+        counts = jnp.bincount(bin_idx, minlength=n_mean)
+        binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))
+
     for c in range(n_samples):
         row, col = divmod(c, n_grid_side)
         ax = axes[row, col]
         ax.scatter(np.asarray(inputs_plot[c]), np.asarray(observed_outputs[c]), c='black', alpha=point_alpha, s=point_size)
         ax.plot(np.asarray(x_values_mean), np.asarray(binned_mean[c]), color='blue', alpha=0.8, linewidth=line_width, label='Binned observed mean')
+        sort_idx = jnp.argsort(inputs_plot[c])
+        x_sorted = np.asarray(inputs_plot[c][sort_idx])
         for i in range(n_models):
             loss_val = float(jnp.mean(point_losses[i, c]))
             ax.plot(
-                np.asarray(x_values_eval),
-                np.asarray(model_outputs[i, c]),
+                x_sorted,
+                np.asarray(trial_predictions[i, c][sort_idx]),
                 color=colours[i],
                 alpha=line_alpha,
                 linewidth=line_width,

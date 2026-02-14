@@ -41,6 +41,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
                     colours: list = ["#15AC15", "#EB2B2C", "#FDC91E"],
                     labels: Optional[list] = None,
                     title: str = '',
+                    n_mean: int = 50,
                     line_width: float = 3.0,
                     line_alpha: float = 0.95,
                     point_alpha: float = 0.15,
@@ -54,11 +55,8 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     sample_selection = np.asarray(plot_data['sample_selection'])
     inputs_plot = np.asarray(plot_data['inputs_plot'])
     observed_outputs = np.asarray(plot_data['observed_outputs'])
+    trial_predictions = np.asarray(plot_data['trial_predictions'])
     point_losses = np.asarray(plot_data['point_losses'])
-    x_values_mean = np.asarray(plot_data['x_values_mean'])
-    binned_mean = np.asarray(plot_data['binned_mean'])
-    x_values_eval = np.asarray(plot_data['x_values_eval'])
-    model_outputs = np.asarray(plot_data['model_outputs'])
     n_models = int(plot_data['n_models'])
     n_samples = int(plot_data['n_samples'])
     n_grid_side = int(plot_data['n_grid_side'])
@@ -72,16 +70,31 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     fig, axes = plt.subplots(n_grid_side, n_grid_side, figsize=(4.5 * n_grid_side, 3.8 * n_grid_side))
     axes = np.array([[axes]]) if n_samples == 1 else axes
 
+    x_min = float(np.min(inputs_plot))
+    x_max = float(np.max(inputs_plot))
+    if x_max <= x_min:
+        x_max = x_min + 1e-6
+    x_values_mean = np.linspace(x_min, x_max, n_mean)
+    binned_mean = np.zeros((n_samples, n_mean))
+    denom = max(x_max - x_min, 1e-6)
+    for c in range(n_samples):
+        bin_idx = np.clip((((inputs_plot[c] - x_min) / denom) * n_mean).astype(np.int32), 0, n_mean - 1)
+        sums = np.bincount(bin_idx, weights=observed_outputs[c], minlength=n_mean)
+        counts = np.bincount(bin_idx, minlength=n_mean)
+        binned_mean[c] = (sums + 1e-6) / (counts + 1e-6)
+
     for c in range(n_samples):
         row, col = divmod(c, n_grid_side)
         ax = axes[row, col]
         ax.scatter(inputs_plot[c], observed_outputs[c], c='black', alpha=point_alpha, s=point_size)
         ax.plot(x_values_mean, binned_mean[c], color='#2E86DE', linewidth=line_width, label='Observed mean')
+        sort_idx = np.argsort(inputs_plot[c])
+        x_sorted = inputs_plot[c][sort_idx]
         for i in range(n_models):
             loss_val = float(np.mean(point_losses[i, c]))
             ax.plot(
-                x_values_eval,
-                model_outputs[i, c],
+                x_sorted,
+                trial_predictions[i, c][sort_idx],
                 color=colours[i],
                 alpha=line_alpha,
                 linewidth=line_width,

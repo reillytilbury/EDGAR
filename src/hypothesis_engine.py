@@ -1350,16 +1350,10 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
         "observed_outputs",
         "trial_predictions",
         "point_losses",
-        "x_values_mean",
-        "binned_mean",
-        "x_values_eval",
-        "model_outputs",
         "n_grid_side",
         "n_models",
         "n_samples",
         "n_trials",
-        "n_eval",
-        "n_mean",
         "input_idx",
     )
     missing = [k for k in required_keys if k not in plot_data]
@@ -1369,8 +1363,6 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
     n_samples = int(plot_data["n_samples"])
     n_models = int(plot_data["n_models"])
     n_trials = int(plot_data["n_trials"])
-    n_eval = int(plot_data["n_eval"])
-    n_mean = int(plot_data["n_mean"])
     n_grid_side = int(plot_data["n_grid_side"])
 
     sample_selection = np.asarray(plot_data["sample_selection"])
@@ -1379,10 +1371,6 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
     observed_outputs = jnp.asarray(plot_data["observed_outputs"])
     trial_predictions = jnp.asarray(plot_data["trial_predictions"])
     point_losses = jnp.asarray(plot_data["point_losses"])
-    x_values_mean = jnp.asarray(plot_data["x_values_mean"])
-    binned_mean = jnp.asarray(plot_data["binned_mean"])
-    x_values_eval = jnp.asarray(plot_data["x_values_eval"])
-    model_outputs = jnp.asarray(plot_data["model_outputs"])
 
     if sample_selection.ndim != 1 or sample_selection.shape[0] != n_samples:
         raise ValueError(
@@ -1409,22 +1397,6 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
         raise ValueError(
             f"plot_data['point_losses'] must have shape ({n_models}, {n_samples}, {n_trials}), got {point_losses.shape}."
         )
-    if x_values_mean.shape != (n_mean,):
-        raise ValueError(
-            f"plot_data['x_values_mean'] must have shape ({n_mean},), got {x_values_mean.shape}."
-        )
-    if binned_mean.shape != (n_samples, n_mean):
-        raise ValueError(
-            f"plot_data['binned_mean'] must have shape ({n_samples}, {n_mean}), got {binned_mean.shape}."
-        )
-    if x_values_eval.shape != (n_eval,):
-        raise ValueError(
-            f"plot_data['x_values_eval'] must have shape ({n_eval},), got {x_values_eval.shape}."
-        )
-    if model_outputs.shape != (n_models, n_samples, n_eval):
-        raise ValueError(
-            f"plot_data['model_outputs'] must have shape ({n_models}, {n_samples}, {n_eval}), got {model_outputs.shape}."
-        )
     if n_grid_side * n_grid_side != n_samples:
         raise ValueError(
             f"plot_data['n_grid_side']={n_grid_side} is inconsistent with n_samples={n_samples}."
@@ -1437,8 +1409,6 @@ def prepare_model_fit_plot_data(programs_df,
                                 response,
                                 sample_selection,
                                 loss_function,
-                                n_eval=100,
-                                n_mean=50,
                                 input_idx=0) -> ModelFitPlotData:
     """
     Compute canonical plotting tensors for diagnostics `plot_model_fits(plot_data=...)`.
@@ -1450,16 +1420,10 @@ def prepare_model_fit_plot_data(programs_df,
     - `observed_outputs`: `(n_samples, n_trials)` observed targets/outputs.
     - `trial_predictions`: `(n_models, n_samples, n_trials)` model predictions on observed trials.
     - `point_losses`: `(n_models, n_samples, n_trials)` per-point model loss.
-    - `x_values_mean`: `(n_mean,)` x-grid for empirical mean curve.
-    - `binned_mean`: `(n_samples, n_mean)` empirical mean response over bins.
-    - `x_values_eval`: `(n_eval,)` x-grid used for model evaluation curves.
-    - `model_outputs`: `(n_models, n_samples, n_eval)` evaluated model predictions.
     - `n_grid_side`: subplot side length (`sqrt(n_samples)`).
     - `n_models`: number of candidate models in `programs_df`.
     - `n_samples`: number of plotted samples.
     - `n_trials`: number of observed trials per plotted sample.
-    - `n_eval`: number of model evaluation points.
-    - `n_mean`: number of bins for empirical mean curve.
     - `input_idx`: input feature index used to build `inputs_plot`.
 
     Why both `inputs_full` and `inputs_plot`:
@@ -1532,26 +1496,6 @@ def prepare_model_fit_plot_data(programs_df,
             loss_vec = _as_trial_vector(loss_vec_raw, n_trials, "point loss")
             point_losses = point_losses.at[i, c].set(loss_vec)
 
-    x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False)
-    x_values_mean = x_values_mean + 0.5 * (2 * jnp.pi / n_mean)
-    binned_mean = jnp.zeros((n_samples, n_mean))
-    for c in range(n_samples):
-        bin_idx = jnp.clip(((inputs_plot[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
-        sums = jnp.bincount(bin_idx, weights=observed_outputs[c], minlength=n_mean)
-        counts = jnp.bincount(bin_idx, minlength=n_mean)
-        binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))
-
-    x_values_eval = jnp.linspace(0, 2 * jnp.pi, n_eval, endpoint=False)
-    model_outputs = jnp.zeros((n_models, n_samples, n_eval))
-    for i, model in enumerate(models):
-        for c in range(n_samples):
-            params_ic = params_all[i][c]
-            x_eval = jnp.zeros((n_features, n_eval))
-            x_eval = x_eval.at[input_idx, :].set(x_values_eval)
-            y_eval_raw = model(x_eval, *params_ic)
-            y_eval = _as_trial_vector(y_eval_raw, n_eval, "evaluation prediction")
-            model_outputs = model_outputs.at[i, c].set(y_eval)
-
     plot_data: ModelFitPlotData = {
         'sample_selection': sample_selection,
         'inputs_full': inputs_full,
@@ -1559,16 +1503,10 @@ def prepare_model_fit_plot_data(programs_df,
         'observed_outputs': observed_outputs,
         'trial_predictions': trial_predictions,
         'point_losses': point_losses,
-        'x_values_mean': x_values_mean,
-        'binned_mean': binned_mean,
-        'x_values_eval': x_values_eval,
-        'model_outputs': model_outputs,
         'n_grid_side': n_side,
         'n_models': n_models,
         'n_samples': n_samples,
         'n_trials': n_trials,
-        'n_eval': int(n_eval),
-        'n_mean': int(n_mean),
         'input_idx': int(input_idx),
     }
     return _validate_model_fit_plot_data(plot_data)
@@ -1612,8 +1550,6 @@ def prepare_and_plot_model_fits(diagnostics_module,
         response=response,
         sample_selection=sample_selection,
         loss_function=loss_function,
-        n_eval=plot_kwargs.get('n_eval', 100),
-        n_mean=plot_kwargs.get('n_mean', 50),
         input_idx=plot_kwargs.get('input_idx', 0),
     )
     kwargs = dict(
