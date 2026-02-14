@@ -42,9 +42,30 @@ evaluation-point policy and visualization style.
 import importlib.util
 import logging
 from pathlib import Path
-from typing import Protocol, Optional, Callable, runtime_checkable
+from typing import Protocol, Optional, Callable, TypedDict, runtime_checkable
+import numpy as np
 import pandas as pd
 import jax.numpy as jnp
+
+
+class ModelFitPlotData(TypedDict):
+    """Structured payload consumed by experiment `plot_model_fits(plot_data=...)`."""
+
+    sample_selection: np.ndarray
+    stimuli_1d: jnp.ndarray
+    spike_matrix: jnp.ndarray
+    point_losses: jnp.ndarray
+    x_values_mean: jnp.ndarray
+    binned_mean: jnp.ndarray
+    x_values_eval: jnp.ndarray
+    model_outputs: jnp.ndarray
+    n_row_cols: int
+    n_models: int
+    n_cells: int
+    n_trials: int
+    n_eval: int
+    n_mean: int
+    input_idx: int
 
 
 @runtime_checkable
@@ -65,7 +86,7 @@ class DiagnosticsProtocol(Protocol):
         ...
 
     def plot_model_fits(self,
-                        plot_data: dict,
+                        plot_data: ModelFitPlotData,
                         colours: list = ...,
                         labels: Optional[list] = None,
                         title: str = '',

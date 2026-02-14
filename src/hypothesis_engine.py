@@ -12,6 +12,7 @@ from pathlib import Path
 from . import utils, loss_functions, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .data_structures import Inputs, Outputs, ensure_inputs, ensure_outputs
+from .diagnostics_manager import ModelFitPlotData
 import experiments.orientation_tuning.seed_programs # delete this once we read seed_programs from experiment.yaml
 from tqdm import tqdm
 from google import genai
@@ -1340,6 +1341,84 @@ def compute_evaluation_matrix(program,
         raise
 
 
+def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotData:
+    """Validate `prepare_model_fit_plot_data` outputs and fail early on schema drift."""
+    required_keys = (
+        "sample_selection",
+        "stimuli_1d",
+        "spike_matrix",
+        "point_losses",
+        "x_values_mean",
+        "binned_mean",
+        "x_values_eval",
+        "model_outputs",
+        "n_row_cols",
+        "n_models",
+        "n_cells",
+        "n_trials",
+        "n_eval",
+        "n_mean",
+        "input_idx",
+    )
+    missing = [k for k in required_keys if k not in plot_data]
+    if missing:
+        raise ValueError(f"plot_data missing required keys: {missing}")
+
+    n_cells = int(plot_data["n_cells"])
+    n_models = int(plot_data["n_models"])
+    n_trials = int(plot_data["n_trials"])
+    n_eval = int(plot_data["n_eval"])
+    n_mean = int(plot_data["n_mean"])
+    n_row_cols = int(plot_data["n_row_cols"])
+
+    sample_selection = np.asarray(plot_data["sample_selection"])
+    stimuli_1d = jnp.asarray(plot_data["stimuli_1d"])
+    spike_matrix = jnp.asarray(plot_data["spike_matrix"])
+    point_losses = jnp.asarray(plot_data["point_losses"])
+    x_values_mean = jnp.asarray(plot_data["x_values_mean"])
+    binned_mean = jnp.asarray(plot_data["binned_mean"])
+    x_values_eval = jnp.asarray(plot_data["x_values_eval"])
+    model_outputs = jnp.asarray(plot_data["model_outputs"])
+
+    if sample_selection.ndim != 1 or sample_selection.shape[0] != n_cells:
+        raise ValueError(
+            f"plot_data['sample_selection'] must have shape ({n_cells},), got {sample_selection.shape}."
+        )
+    if stimuli_1d.shape != (n_cells, n_trials):
+        raise ValueError(
+            f"plot_data['stimuli_1d'] must have shape ({n_cells}, {n_trials}), got {stimuli_1d.shape}."
+        )
+    if spike_matrix.shape != (n_cells, n_trials):
+        raise ValueError(
+            f"plot_data['spike_matrix'] must have shape ({n_cells}, {n_trials}), got {spike_matrix.shape}."
+        )
+    if point_losses.shape != (n_models, n_cells, n_trials):
+        raise ValueError(
+            f"plot_data['point_losses'] must have shape ({n_models}, {n_cells}, {n_trials}), got {point_losses.shape}."
+        )
+    if x_values_mean.shape != (n_mean,):
+        raise ValueError(
+            f"plot_data['x_values_mean'] must have shape ({n_mean},), got {x_values_mean.shape}."
+        )
+    if binned_mean.shape != (n_cells, n_mean):
+        raise ValueError(
+            f"plot_data['binned_mean'] must have shape ({n_cells}, {n_mean}), got {binned_mean.shape}."
+        )
+    if x_values_eval.shape != (n_eval,):
+        raise ValueError(
+            f"plot_data['x_values_eval'] must have shape ({n_eval},), got {x_values_eval.shape}."
+        )
+    if model_outputs.shape != (n_models, n_cells, n_eval):
+        raise ValueError(
+            f"plot_data['model_outputs'] must have shape ({n_models}, {n_cells}, {n_eval}), got {model_outputs.shape}."
+        )
+    if n_row_cols * n_row_cols != n_cells:
+        raise ValueError(
+            f"plot_data['n_row_cols']={n_row_cols} is inconsistent with n_cells={n_cells}."
+        )
+    return plot_data
+
+
 def prepare_model_fit_plot_data(programs_df,
                                 inputs,
                                 response,
@@ -1347,9 +1426,26 @@ def prepare_model_fit_plot_data(programs_df,
                                 loss_function,
                                 n_eval=100,
                                 n_mean=50,
-                                input_idx=0):
+                                input_idx=0) -> ModelFitPlotData:
     """
-    Compute all plot-ready tensors for model-fit diagnostics.
+    Compute canonical plotting tensors for diagnostics `plot_model_fits(plot_data=...)`.
+
+    Returned `plot_data` schema:
+    - `sample_selection`: `(n_cells,)` original cell/sample ids selected for plotting.
+    - `stimuli_1d`: `(n_cells, n_trials)` x-axis input values used in scatter/means.
+    - `spike_matrix`: `(n_cells, n_trials)` observed responses.
+    - `point_losses`: `(n_models, n_cells, n_trials)` per-point model loss.
+    - `x_values_mean`: `(n_mean,)` x-grid for empirical mean curve.
+    - `binned_mean`: `(n_cells, n_mean)` empirical mean response over bins.
+    - `x_values_eval`: `(n_eval,)` x-grid used for model evaluation curves.
+    - `model_outputs`: `(n_models, n_cells, n_eval)` evaluated model predictions.
+    - `n_row_cols`: subplot side length (`sqrt(n_cells)`).
+    - `n_models`: number of candidate models in `programs_df`.
+    - `n_cells`: number of plotted samples/cells.
+    - `n_trials`: number of observed trials per plotted cell.
+    - `n_eval`: number of model evaluation points.
+    - `n_mean`: number of bins for empirical mean curve.
+    - `input_idx`: input feature index used for x-axis extraction in multi-input data.
     """
     sample_selection = np.asarray(sample_selection)
     if sample_selection.size == 0:
@@ -1433,7 +1529,7 @@ def prepare_model_fit_plot_data(programs_df,
             y_eval = _as_trial_vector(y_eval_raw, n_eval, "evaluation prediction")
             model_outputs = model_outputs.at[i, c].set(y_eval)
 
-    return {
+    plot_data: ModelFitPlotData = {
         'sample_selection': sample_selection,
         'stimuli_1d': stimuli_1d,
         'spike_matrix': spike_matrix,
@@ -1445,7 +1541,12 @@ def prepare_model_fit_plot_data(programs_df,
         'n_row_cols': n_side,
         'n_models': n_models,
         'n_cells': n_cells,
+        'n_trials': n_trials,
+        'n_eval': int(n_eval),
+        'n_mean': int(n_mean),
+        'input_idx': int(input_idx),
     }
+    return _validate_model_fit_plot_data(plot_data)
 
 
 def _call_with_supported_kwargs(func, kwargs):
