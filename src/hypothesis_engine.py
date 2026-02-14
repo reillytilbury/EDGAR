@@ -1865,12 +1865,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             program_jax_code_string = utils.format_function_source(
                 program_jax, f'{model_name}_v{i+1}', 'import jax.numpy as jnp'
             )
-        if inputs_train.shape[1] == 1 : 
-            # evenly spaced evaluation points for 1D inputs
-            eval_points = None
-        else : 
-            eval_points = inputs_train
-        y_eval = diagnostics_module.compute_evaluation_matrix(program_jax, params, eval_points=eval_points, n_evaluation_points=100, n_features=n_features)
+        # if inputs_train.shape[1] == 1 : 
+        #     # evenly spaced evaluation points for 1D inputs
+        #     eval_points = None
+        # else : 
+            # eval_points = inputs_train
+        y_eval = diagnostics_module.compute_evaluation_matrix(program_jax, params, eval_points=inputs_train, n_evaluation_points=100, n_features=n_features)
 
         new_program_df = pd.DataFrame({'program_code_string': program_code_string,
                                     'program': program_jax,
@@ -2069,7 +2069,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
 
             if inputs_train.shape[1] == 1 : 
                 # evenly spaced evaluation points for 1D inputs
-                eval_points = None
+                # eval_points = None
+                eval_points = inputs_train
             else : 
                 eval_points = inputs_train
             y_eval = diagnostics_module.compute_evaluation_matrix(model_new, optimized_params, eval_points=eval_points, n_evaluation_points=100)

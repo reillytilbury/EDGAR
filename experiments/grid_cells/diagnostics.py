@@ -345,7 +345,7 @@ def _ensure_input_format(x_cell: jnp.ndarray) -> jnp.ndarray:
 
 
 def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100, eval_points : Optional[np.ndarray] = None, 
-                            n_features: int = 2) -> jnp.ndarray:
+                            n_features: int = 2, **kwargs) -> jnp.ndarray:
     """
     Computes the evaluation matrix for a given program and parameters.
     

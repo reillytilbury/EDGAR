@@ -1,5 +1,6 @@
 import numpy as np
 from typing import Tuple
+from src.data_structures import Inputs
 
 def target_function(x, a, b, c, k, phi_0):
     """
@@ -19,7 +20,7 @@ def target_function(x, a, b, c, k, phi_0):
     """
     return (a * x**2 + b * x + c) * np.sin(k * x + phi_0)
 
-def load_and_process_data(SEED=42, n_samples=1_000, n_trials=2_000, noise_std=0.1):
+def load_and_process_data(SEED=42, n_samples=1_000, n_trials=2_000, noise_std=0.1, **kwargs):
     """
     simulate synthetic data for testing of the form
     f(x) = (a * x^2 + b * x + c)*sin(k * x + phi_0) + noise
@@ -29,7 +30,14 @@ def load_and_process_data(SEED=42, n_samples=1_000, n_trials=2_000, noise_std=0.
         SEED (int): random seed for reproducibility
         n_samples (int): number of samples to generate (corresponds to different parameters)
         n_trials (int): number of trials to run
-        noise_std (float): standard deviation of the Gaussian noise
+        noise_std (float): standard deviation of the Gaussian noise        
+    Returns:
+        dict: a dictionary containing the inputs, outputs, response (for now), and parameters
+            intputs: x values of shape (n_samples, n_trials)
+            outputs: y values of shape (n_samples, n_trials)
+            response: same as outputs for now - will be deleted in the future
+            parameters: a dictionary containing the parameters a, b, c, k, phi_0 used to generate the data, each of shape (n_samples,)
+
     """
     rng = np.random.default_rng(SEED)
     # Generate random parameters for each trial
@@ -42,10 +50,14 @@ def load_and_process_data(SEED=42, n_samples=1_000, n_trials=2_000, noise_std=0.
     # x values will be randomly sampled from -1 to 1 and the same across samples
     x = rng.uniform(-1, 1, n_trials)
     noise = rng.normal(0, noise_std, (n_samples, n_trials))
-    y = np.array([target_function(x, a[i], b[i], c[i], k[i], phi_0[i]) for i in range(n_samples)]) + noise
+    y = np.array([target_function(x, a[i], b[i], c[i], k[i], phi_0[i]) for i in range(n_samples)]) + noise 
 
-    return {"inputs": x, 
+    # extend x to be the same across samples
+    x_tiled = np.tile(x, (n_samples, 1)) 
+
+    return {"inputs": Inputs.from_array(x_tiled, names=['x']), 
             "outputs": y, 
+            "response" : y, # fix this once we've resolved the issue with naming things responses ambiguously
             "parameters": {"a": a, "b": b, "c": c, "k": k, "phi_0": phi_0}}
 
 def create_train_test_trial_split(n_trials: int, random_seed : int = 0) -> Tuple[np.ndarray, np.ndarray]:

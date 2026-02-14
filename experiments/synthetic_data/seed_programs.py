@@ -17,15 +17,16 @@ def parameter_estimator_v1(x, y):
     """
     parameter estimator for model version 1 using least squares regression
     Args:
-        x (n_trials,): input data
+        x (1, n_trials): input data. x[0] is the sole input feature for the 1 dimensional feature problem
         y (n_trials,): output data
     Returns:
         a (float): estimated parameter a
         b (float): estimated parameter b
     """
+    x = x[0]  # extract the 1D input feature from the input array
     A = np.vstack([x, np.ones(len(x))]).T
     a, b = np.linalg.lstsq(A, y, rcond=None)[0]
-    return a, b
+    return np.array([a, b])
 
 def model_v2(x, a, b, lam):
     """
@@ -38,13 +39,14 @@ def parameter_estimator_v2(x, y):
     """
     parameter estimator for model version 2 using least squares regression with regularization
     Args:
-        x (n_trials,): input data
+        x (1, n_trials): input data. x[0] is the sole input feature for the 1 dimensional feature problem
         y (n_trials,): output data
     Returns:
         a (float): estimated parameter a
         b (float): estimated parameter b
         lam (float): estimated parameter lam
     """
+    x = x[0]  # extract the 1D input feature from the input array
     # Near x=0, approximate exponential term as 1 + lam * x, so model can be approximated as
     # f(x) = (a * x + b) * (1 + lam * x) = a * x + b + (a * lam * x^2 + b * lam * x) = (a * lam) * x^2 + (a + b * lam) * x + b
     A = np.vstack([x, x**2, np.ones(len(x))]).T
@@ -55,4 +57,4 @@ def parameter_estimator_v2(x, y):
     # we can solve for a and lam using the relationships above
     a = a_lam / (a_plus_b_lam - b * a_lam / a_lam)
     lam = a_lam / a
-    return a, b, lam
+    return np.array([a, b, lam])

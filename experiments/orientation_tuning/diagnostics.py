@@ -16,8 +16,8 @@ def _ensure_input_format(x_cell: jnp.ndarray) -> jnp.ndarray:
     return x_cell  # already (n_features, n_trials)
 
 
-def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100, eval_points : Optional[np.ndarray] = None, 
-                               input_idx: int = 0, n_features: int = 1) -> jnp.ndarray:
+def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluation_points: int = 100, 
+                               input_idx: int = 0, n_features: int = 1, **kwargs) -> jnp.ndarray:
     """
     Computes the evaluation matrix for a given program and parameters.
     
@@ -38,9 +38,6 @@ def compute_evaluation_matrix(program: callable, params: jnp.ndarray, n_evaluati
     Returns:
         jnp.ndarray: The evaluation matrix of shape (n_samples, n_evaluation_points).
     """
-    if eval_points is not None : 
-        print("Custom eval_points is not supported for orientation tuning diagnostics. Using default linspace instead.")
-
     trials = jnp.linspace(0, 2 * jnp.pi, n_evaluation_points)
     
     # vmap over samples
