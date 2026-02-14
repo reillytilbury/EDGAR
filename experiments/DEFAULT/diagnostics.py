@@ -101,38 +101,3 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     else:
         plt.show()
     plt.close(fig)
-
-def plot_train_vs_test_loss(programs_df: pd.DataFrame,
-                            island_labels: list,
-                            save_path: Optional[str] = None):
-    """
-    Plot train-vs-test loss scatter.
-    """
-    if 'train_loss' not in programs_df.columns or 'test_loss' not in programs_df.columns:
-        raise ValueError("DataFrame must contain 'train_loss' and 'test_loss' columns.")
-
-    train_loss = np.asarray(programs_df['train_loss'].to_numpy(), dtype=float)
-    test_loss = np.asarray(programs_df['test_loss'].to_numpy(), dtype=float)
-    train_loss = np.nan_to_num(train_loss, nan=np.inf)
-    test_loss = np.nan_to_num(test_loss, nan=np.inf)
-    mask = np.isfinite(train_loss) & np.isfinite(test_loss)
-    train_loss = train_loss[mask]
-    test_loss = test_loss[mask]
-
-    plt.figure(figsize=(8, 8))
-    plt.scatter(train_loss, test_loss, alpha=0.8, color='tab:blue', edgecolor='none')
-    if train_loss.size > 0 and test_loss.size > 0:
-        lo = min(float(np.min(train_loss)), float(np.min(test_loss)))
-        hi = max(float(np.max(train_loss)), float(np.max(test_loss)))
-        plt.plot([lo, hi], [lo, hi], 'k--', alpha=0.6)
-        plt.xlim(lo * 0.95, hi * 1.05)
-        plt.ylim(lo * 0.95, hi * 1.05)
-    plt.xlabel('Train Loss')
-    plt.ylabel('Test Loss')
-    plt.title('Train vs Test Loss')
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path)
-    else:
-        plt.show()
-    plt.close()

@@ -12,7 +12,7 @@ from pathlib import Path
 from . import utils, loss_functions, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .data_structures import Inputs, Outputs, ensure_inputs, ensure_outputs
-from .diagnostics_manager import ModelFitPlotData
+from .diagnostics_manager import ModelFitPlotData, plot_train_vs_test_loss as plot_train_vs_test_loss_shared
 import experiments.orientation_tuning.seed_programs # delete this once we read seed_programs from experiment.yaml
 from tqdm import tqdm
 from google import genai
@@ -2680,9 +2680,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     # ---------------------------
     # save losses plot    
     if diagnostics_module is not None:
-        diagnostics_module.plot_train_vs_test_loss(programs_df=combined_programs_dataframe,
-                                           island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
-                                           save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'))
+        plot_train_vs_test_loss_shared(
+            programs_df=combined_programs_dataframe,
+            island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
+            save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'),
+        )
     
     # ---------------------------
     df_list = [combined_programs_dataframe] + islands

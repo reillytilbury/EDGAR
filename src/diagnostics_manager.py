@@ -1,7 +1,7 @@
 """
 Diagnostics Manager for EDGAR.
 
-Each experiment should provide a `diagnostics.py` file that defines three
+Each experiment should provide a `diagnostics.py` file that defines two
 functions used by the engine:
 
 1. `select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs)`
@@ -16,9 +16,6 @@ functions used by the engine:
    - Receives precomputed tensors from the engine in `plot_data` and should
      only handle visualization decisions (layout/styling/annotations).
    - Called repeatedly during runs for image feedback and saved diagnostics.
-
-3. `plot_train_vs_test_loss(...)`
-   - Draws train-vs-test scatter diagnostics across discovered programs.
 
 Process in a typical run:
 - `load_diagnostics(experiment_path)` imports `experiments/<task>/diagnostics.py`
@@ -102,21 +99,109 @@ class DiagnosticsProtocol(Protocol):
         `hypothesis_engine.prepare_model_fit_plot_data(...)`.
         """
         ...
-    
-    def plot_train_vs_test_loss(self,
-                                programs_df: pd.DataFrame,
-                                island_labels: list,
-                                save_path: Optional[str] = None) -> None:
-        """Plot train vs test loss scatter."""
-        ...
 
 
 # Required function names that must exist in a diagnostics module
 REQUIRED_FUNCTIONS = [
     'select_evaluation_points',
     'plot_model_fits',
-    'plot_train_vs_test_loss',
 ]
+
+
+def plot_train_vs_test_loss(programs_df: pd.DataFrame,
+                            island_labels: Optional[list] = None,
+                            save_path: Optional[str] = None,
+                            loss_thresh: float = 1000.0,
+                            title: str = 'Train vs Test Loss') -> None:
+    """
+    Shared train-vs-test loss scatter used across experiments.
+
+    This central implementation replaces per-experiment duplicates while keeping
+    behavior robust for both island-labeled and unlabeled data.
+    """
+    if 'train_loss' not in programs_df.columns or 'test_loss' not in programs_df.columns:
+        raise ValueError("DataFrame must contain 'train_loss' and 'test_loss' columns.")
+
+    train_loss = np.asarray(programs_df['train_loss'].to_numpy(), dtype=float)
+    test_loss = np.asarray(programs_df['test_loss'].to_numpy(), dtype=float)
+
+    train_loss = np.nan_to_num(train_loss, nan=np.inf, posinf=np.inf, neginf=np.inf)
+    test_loss = np.nan_to_num(test_loss, nan=np.inf, posinf=np.inf, neginf=np.inf)
+
+    finite_mask = np.isfinite(train_loss) & np.isfinite(test_loss)
+    if np.isfinite(loss_thresh):
+        finite_mask &= (train_loss < loss_thresh) & (test_loss < loss_thresh)
+
+    train_loss = train_loss[finite_mask]
+    test_loss = test_loss[finite_mask]
+
+    birth_island = None
+    if 'birth_island' in programs_df.columns:
+        birth_island = np.asarray(programs_df['birth_island'].to_numpy())[finite_mask]
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    if train_loss.size == 0:
+        plt.figure(figsize=(10, 10))
+        if np.isfinite(loss_thresh):
+            msg = f'No valid programs\n(all losses >= {loss_thresh})'
+        else:
+            msg = 'No valid programs'
+        plt.text(0.5, 0.5, msg, ha='center', va='center', fontsize=14, transform=plt.gca().transAxes)
+        plt.xlabel('Train Loss')
+        plt.ylabel('Test Loss')
+        plt.title(title)
+        if save_path:
+            plt.savefig(save_path)
+        else:
+            plt.show()
+        plt.close()
+        return
+
+    plt.figure(figsize=(10, 10))
+    cmap = plt.get_cmap('tab10')
+
+    if birth_island is not None and birth_island.size == train_loss.size:
+        for island_id in np.unique(birth_island):
+            island_mask = (birth_island == island_id)
+            island_int = int(island_id)
+            if island_labels is not None and 0 <= island_int < len(island_labels):
+                label = island_labels[island_int]
+            else:
+                label = f'Island {island_int}'
+            plt.scatter(
+                train_loss[island_mask],
+                test_loss[island_mask],
+                label=label,
+                color=cmap(island_int % 10),
+                alpha=0.9,
+            )
+    else:
+        plt.scatter(train_loss, test_loss, alpha=0.9, color='tab:blue', edgecolor='none')
+
+    lo = min(float(np.min(train_loss)), float(np.min(test_loss)))
+    hi = max(float(np.max(train_loss)), float(np.max(test_loss)))
+    if hi <= lo:
+        hi = lo + 1e-6
+    pad = 0.05 * (hi - lo)
+    plt.xlim(lo - pad, hi + pad)
+    plt.ylim(lo - pad, hi + pad)
+    plt.plot([lo, hi], [lo, hi], color='black', linestyle='--', alpha=0.6)
+
+    plt.xlabel('Train Loss')
+    plt.ylabel('Test Loss')
+    plt.title(title)
+    if birth_island is not None and np.unique(birth_island).size > 1:
+        plt.legend()
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path)
+    else:
+        plt.show()
+    plt.close()
 
 
 def load_diagnostics(experiment_path: Optional[str] = None):
