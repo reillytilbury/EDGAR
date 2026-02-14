@@ -211,7 +211,6 @@ diagnostic model evaluation. This is now experiment-specific (not hardcoded in
 Required exported functions in `diagnostics.py`:
 - `select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs)`
 - `plot_model_fits(plot_data, ...)`
-- `plot_single_model_fit(...)`
 - `plot_train_vs_test_loss(...)`
 
 `select_evaluation_points(...)` should return explicit points with one of these shapes:

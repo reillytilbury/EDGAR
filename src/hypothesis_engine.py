@@ -2709,19 +2709,26 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 title=df_sup,
                 save_path=os.path.join(df_dirs[i], 'top_model_fits.png'),
             )
-            # plot top 3 models separately
+            # Plot top models separately using the same plot_model_fits pathway.
             for j in range(min(3, len(df))):
                 birth_island = df['birth_island'][j]
                 iteration_number = df['iteration_number'][j]
                 batch_index = df['batch_index'][j]
-                sample_selection = np.random.choice(response_test.shape[0], size=9, replace=False)
-                diagnostics_module.plot_single_model_fit(
-                    model=df['program'][j],
+                model_df = df.iloc[[j]].copy().reset_index(drop=True)
+                model_title = (
+                    f"Island {birth_island}, Iteration {iteration_number}, "
+                    f"Batch {batch_index}, loss: {df['test_loss'][j]:.2f}"
+                )
+                prepare_and_plot_model_fits(
+                    diagnostics_module=diagnostics_module,
+                    programs_df=model_df,
                     loss_function=loss_functions.quadratic_loss,
-                    x=inputs_test[sample_selection],
-                    y=response_test[sample_selection],
-                    params=df['params'][j][sample_selection],
-                    title=f"Island {birth_island}, Iteration {iteration_number}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
+                    inputs=inputs_test,
+                    response=response_test,
+                    sample_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
+                    labels=['model'],
+                    colours=['tab:green'],
+                    title=model_title,
                     save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
                 )
     

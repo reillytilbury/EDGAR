@@ -1,7 +1,7 @@
 """
 Diagnostics Manager for EDGAR.
 
-Each experiment should provide a `diagnostics.py` file that defines four
+Each experiment should provide a `diagnostics.py` file that defines three
 functions used by the engine:
 
 1. `select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs)`
@@ -17,11 +17,7 @@ functions used by the engine:
      only handle visualization decisions (layout/styling/annotations).
    - Called repeatedly during runs for image feedback and saved diagnostics.
 
-3. `plot_single_model_fit(...)`
-   - Draws a detailed fit plot for one model.
-   - Used for final reports of top-ranked programs.
-
-4. `plot_train_vs_test_loss(...)`
+3. `plot_train_vs_test_loss(...)`
    - Draws train-vs-test scatter diagnostics across discovered programs.
 
 Process in a typical run:
@@ -42,7 +38,7 @@ evaluation-point policy and visualization style.
 import importlib.util
 import logging
 from pathlib import Path
-from typing import Protocol, Optional, Callable, TypedDict, runtime_checkable
+from typing import Protocol, Optional, TypedDict, runtime_checkable
 import numpy as np
 import pandas as pd
 import jax.numpy as jnp
@@ -107,21 +103,6 @@ class DiagnosticsProtocol(Protocol):
         """
         ...
     
-    def plot_single_model_fit(self,
-                              model: Callable,
-                              loss_function: Callable,
-                              x: jnp.ndarray,
-                              y: jnp.ndarray,
-                              params: jnp.ndarray,
-                              n_eval: int = 100,
-                              n_mean: int = 50,
-                              dpi: float = 100.0,
-                              title: str = '',
-                              save_path: Optional[str] = None,
-                              input_idx: int = 0) -> None:
-        """Plot fit of a single model."""
-        ...
-    
     def plot_train_vs_test_loss(self,
                                 programs_df: pd.DataFrame,
                                 island_labels: list,
@@ -134,7 +115,6 @@ class DiagnosticsProtocol(Protocol):
 REQUIRED_FUNCTIONS = [
     'select_evaluation_points',
     'plot_model_fits',
-    'plot_single_model_fit',
     'plot_train_vs_test_loss',
 ]
 
