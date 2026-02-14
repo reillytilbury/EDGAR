@@ -21,6 +21,7 @@ import jax.numpy as jnp
 from typing import Optional, Callable, Sequence, Tuple, Dict, Any
 
 from src import utils
+from src.diagnostics_manager import ModelFitPlotData
 
 
 def select_evaluation_points(inputs: jnp.ndarray,
@@ -303,10 +304,7 @@ def compute_evaluation_matrix(program: callable,
     y_eval = program_vmap(X_eval, params)
     return y_eval
 
-def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
-                    inputs: jnp.ndarray, response: jnp.ndarray,
-                    sample_selection: Sequence[int],
-                    rate_maps: Optional[np.ndarray] = None,
+def plot_model_fits(plot_data: ModelFitPlotData,
                     n_eval: int = 50,
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
                     labels: Optional[list] = None,
@@ -317,8 +315,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                     point_size: int = 80,
                     legend_fontsize: int = 12,
                     dpi: float = 100.0,
-                    save_path: Optional[str] = None,
-                    input_idx: int = 0):
+                    save_path: Optional[str] = None):
     """
     Plot 2D rate map fits for place cell models.
     
@@ -326,42 +323,30 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     Uses precomputed rate maps from data_parser when available.
     
     Args:
-        programs_df: DataFrame with 'program' and 'params' columns.
-        loss_function: Loss function (y_est, y_true) -> loss.
-        inputs: Input data of shape (n_cells, n_features, n_trials) where n_features=2 (x, y).
-        response: Response data of shape (n_cells, n_trials).
-        rate_maps: Precomputed rate maps of shape (n_cells, n_bins, n_bins). If None,
-            rate maps are computed from inputs, response.
-        sample_selection: Indices of cells to plot.
+        plot_data: Precomputed plotting tensors from
+            hypothesis_engine.prepare_model_fit_plot_data(...).
         n_eval: Number of evaluation points per dimension for model prediction grid.
         save_path: Path to save figure.
-        input_idx: Ignored for place cells (uses both x and y).
     """
-    assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, got {len(programs_df)}"
-    assert len(sample_selection) > 0, "sample_selection must not be empty"
-    
-    n_cells_plot = len(sample_selection)
-    n_models = len(programs_df)
-    
-    models = programs_df['program'].tolist()
-    params = programs_df['params'].tolist()
-    sample_idx = jnp.array(sample_selection)
-    
-    # Subset params and data for selected cells
-    params = [p[sample_idx] for p in params]
-    response_subset = response[sample_idx]
-    inputs_subset = inputs[sample_idx]  # (n_cells_plot, n_features, n_trials)
-    
-    # Subset rate maps if provided
-    rate_maps_subset = rate_maps[sample_idx] if rate_maps is not None else None
+    sample_selection = np.asarray(plot_data['sample_selection'])
+    inputs_subset = jnp.asarray(plot_data['stimuli_3d'])        # (n_cells, n_features, n_trials)
+    response_subset = jnp.asarray(plot_data['spike_matrix'])    # (n_cells, n_trials)
+    trial_predictions = jnp.asarray(plot_data['trial_predictions'])  # (n_models, n_cells, n_trials)
+    point_losses = jnp.asarray(plot_data['point_losses'])       # (n_models, n_cells, n_trials)
+    n_cells_plot = int(plot_data['n_cells'])
+    n_models = int(plot_data['n_models'])
+
+    if inputs_subset.ndim != 3 or inputs_subset.shape[1] < 2:
+        raise ValueError(
+            f"Place-cell plot_model_fits requires 2D position inputs; got stimuli_3d shape {inputs_subset.shape}."
+        )
+    if sample_selection.shape[0] != n_cells_plot:
+        raise ValueError(
+            f"sample_selection length ({sample_selection.shape[0]}) must equal n_cells ({n_cells_plot})."
+        )
     
     if labels is None:
         labels = [f'Model {i+1}' for i in range(n_models)]
-    
-    # Create evaluation grid
-    eval_pts = np.linspace(-1, 1, n_eval)
-    X_grid, Y_grid = np.meshgrid(eval_pts, eval_pts, indexing='xy')
-    X_eval = jnp.stack([X_grid.ravel(), Y_grid.ravel()], axis=0)  # (2, n_eval^2)
     
     # Figure layout: rows = cells, cols = [data, model1, model2, ...]
     n_cols = 1 + n_models
@@ -369,22 +354,13 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     if n_cells_plot == 1:
         axes = axes.reshape(1, -1)
     
-    for c_idx, c in enumerate(range(n_cells_plot)):
+    for c_idx in range(n_cells_plot):
         cell_idx = sample_selection[c_idx]
-        
-        # Use precomputed rate map if available, otherwise compute from data
-        if rate_maps_subset is not None:
-            data_rate_map = rate_maps_subset[c_idx]
-            # Resize to n_eval if needed
-            if data_rate_map.shape[0] != n_eval:
-                from scipy.ndimage import zoom
-                zoom_factor = n_eval / data_rate_map.shape[0]
-                data_rate_map = zoom(data_rate_map, zoom_factor, order=1)
-        else:
-            x_pos = np.array(inputs_subset[c_idx, 0, :])
-            y_pos = np.array(inputs_subset[c_idx, 1, :])
-            response_cell = np.array(response_subset[c_idx])
-            data_rate_map = _bin_to_rate_map(x_pos, y_pos, response_cell, n_bins=n_eval)
+
+        x_pos = np.asarray(inputs_subset[c_idx, 0, :])
+        y_pos = np.asarray(inputs_subset[c_idx, 1, :])
+        response_cell = np.asarray(response_subset[c_idx])
+        data_rate_map = _bin_to_rate_map(x_pos, y_pos, response_cell, n_bins=n_eval)
         
         peak_rate = data_rate_map.max()
         
@@ -397,18 +373,11 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         ax.set_ylabel('Y')
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         
-        # Plot model predictions
-        for m_idx, model in enumerate(models):
-            params_c = params[m_idx][c]
-            
-            # Evaluate model on grid
-            model_output = model(X_eval, *params_c)  # (n_eval^2,)
-            model_map = np.array(model_output).reshape(n_eval, n_eval)
-            
-            # Compute loss
-            X_cell = inputs_subset[c, :, :]  # (n_features, n_trials)
-            pred = model(X_cell, *params_c)
-            loss_val = float(jnp.mean(loss_function(pred, response_subset[c])))
+        # Plot model predictions from precomputed trial predictions
+        for m_idx in range(n_models):
+            pred_trials = np.asarray(trial_predictions[m_idx, c_idx])
+            model_map = _bin_to_rate_map(x_pos, y_pos, pred_trials, n_bins=n_eval)
+            loss_val = float(jnp.mean(point_losses[m_idx, c_idx]))
             
             ax = axes[c_idx, m_idx + 1]
             im = ax.imshow(model_map.T, origin='lower', extent=[-1, 1, -1, 1],

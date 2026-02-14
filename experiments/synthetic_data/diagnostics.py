@@ -5,8 +5,9 @@ import matplotlib
 # matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
-from typing import Optional, Callable, Sequence
+from typing import Optional, Callable
 from src import utils
+from src.diagnostics_manager import ModelFitPlotData
 
 
 def select_evaluation_points(inputs: jnp.ndarray,
@@ -45,14 +46,7 @@ def select_evaluation_points(inputs: jnp.ndarray,
     trial_idx = rng.choice(n_trials, size=n_eval, replace=False)
     return x_arr[:, :, trial_idx]
 
-def plot_model_fits(programs_df: Optional[pd.DataFrame],
-                    loss_function: Callable,
-                    inputs: jnp.ndarray,
-                    response: jnp.ndarray,
-                    sample_selection: Sequence[int],
-                    plot_data: Optional[dict] = None,
-                    n_eval: int = 100,
-                    n_mean: int = 50,
+def plot_model_fits(plot_data: ModelFitPlotData,
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
                     labels: Optional[list] = None,
                     title: str = '',
@@ -62,84 +56,21 @@ def plot_model_fits(programs_df: Optional[pd.DataFrame],
                     point_size: int = 80,
                     legend_fontsize: int = 12,
                     dpi: float = 100.0,
-                    save_path: Optional[str] = None,
-                    input_idx: int = 0):
+                    save_path: Optional[str] = None):
     """
     Plot model fits for synthetic data.
-
-    Preferred path: consume precomputed `plot_data` prepared by hypothesis_engine.
-    Fallback path: compute plotting tensors from `programs_df`, `inputs`, and `response`.
     """
-    if plot_data is None and programs_df is None:
-        raise ValueError("Either plot_data or programs_df must be provided.")
-
-    if plot_data is None:
-        sample_idx = np.asarray(sample_selection)
-        if sample_idx.size == 0:
-            raise ValueError("sample_selection must not be empty.")
-        x_arr = jnp.asarray(inputs)
-        y_arr = jnp.asarray(response)
-        if x_arr.ndim == 2:
-            stimuli_3d = x_arr[sample_idx][:, jnp.newaxis, :]
-            stimuli_1d = x_arr[sample_idx]
-        elif x_arr.ndim == 3:
-            if input_idx < 0 or input_idx >= x_arr.shape[1]:
-                raise ValueError(f"input_idx ({input_idx}) out of range for n_features={x_arr.shape[1]}.")
-            stimuli_3d = x_arr[sample_idx]
-            stimuli_1d = x_arr[sample_idx][:, input_idx, :]
-        else:
-            raise ValueError(f"Expected 2D or 3D inputs, got {x_arr.shape}.")
-
-        models = programs_df['program'].tolist()
-        params_list = [jnp.asarray(p)[sample_idx] for p in programs_df['params'].tolist()]
-        spike_matrix = y_arr[sample_idx]
-        n_models = len(models)
-        n_cells, n_features, n_trials = stimuli_3d.shape
-        n_row_cols = int(np.sqrt(n_cells))
-
-        x_min = float(jnp.min(stimuli_1d))
-        x_max = float(jnp.max(stimuli_1d))
-        if x_max <= x_min:
-            x_max = x_min + 1e-6
-        x_values_mean = jnp.linspace(x_min, x_max, n_mean)
-        x_values_eval = jnp.linspace(x_min, x_max, n_eval)
-
-        point_losses = jnp.zeros((n_models, n_cells, n_trials))
-        for i, model in enumerate(models):
-            for c in range(n_cells):
-                pred = model(stimuli_3d[c], *params_list[i][c])
-                point_losses = point_losses.at[i, c].set(loss_function(pred, spike_matrix[c]))
-
-        binned_mean = jnp.zeros((n_cells, n_mean))
-        denom = max(x_max - x_min, 1e-6)
-        for c in range(n_cells):
-            bin_idx = jnp.clip(
-                (((stimuli_1d[c] - x_min) / denom) * n_mean).astype(jnp.int32),
-                0,
-                n_mean - 1,
-            )
-            sums = jnp.bincount(bin_idx, weights=spike_matrix[c], minlength=n_mean)
-            counts = jnp.bincount(bin_idx, minlength=n_mean)
-            binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))
-
-        model_outputs = jnp.zeros((n_models, n_cells, n_eval))
-        for i, model in enumerate(models):
-            for c in range(n_cells):
-                x_eval = jnp.zeros((n_features, n_eval))
-                x_eval = x_eval.at[input_idx, :].set(x_values_eval)
-                model_outputs = model_outputs.at[i, c].set(model(x_eval, *params_list[i][c]))
-    else:
-        sample_idx = np.asarray(plot_data.get('sample_selection', sample_selection))
-        stimuli_1d = jnp.asarray(plot_data['stimuli_1d'])
-        spike_matrix = jnp.asarray(plot_data['spike_matrix'])
-        point_losses = jnp.asarray(plot_data['point_losses'])
-        x_values_mean = jnp.asarray(plot_data['x_values_mean'])
-        binned_mean = jnp.asarray(plot_data['binned_mean'])
-        x_values_eval = jnp.asarray(plot_data['x_values_eval'])
-        model_outputs = jnp.asarray(plot_data['model_outputs'])
-        n_models = int(plot_data['n_models'])
-        n_cells = int(plot_data['n_cells'])
-        n_row_cols = int(plot_data['n_row_cols'])
+    sample_idx = np.asarray(plot_data['sample_selection'])
+    stimuli_1d = jnp.asarray(plot_data['stimuli_1d'])
+    spike_matrix = jnp.asarray(plot_data['spike_matrix'])
+    point_losses = jnp.asarray(plot_data['point_losses'])
+    x_values_mean = jnp.asarray(plot_data['x_values_mean'])
+    binned_mean = jnp.asarray(plot_data['binned_mean'])
+    x_values_eval = jnp.asarray(plot_data['x_values_eval'])
+    model_outputs = jnp.asarray(plot_data['model_outputs'])
+    n_models = int(plot_data['n_models'])
+    n_cells = int(plot_data['n_cells'])
+    n_row_cols = int(plot_data['n_row_cols'])
 
     if labels is None:
         labels = [f'model {i + 1}' for i in range(n_models)]
@@ -196,16 +127,102 @@ def plot_single_model_fit(model: Callable,
     """
     Plot fit diagnostics for a single model by delegating to `plot_model_fits`.
     """
-    programs_df = pd.DataFrame({'program': [model], 'params': [params]})
     sample_selection = np.arange(y.shape[0])
+    x_arr = jnp.asarray(x)
+    y_arr = jnp.asarray(y)
+    sample_idx = np.asarray(sample_selection)
+    if x_arr.ndim == 2:
+        if input_idx != 0:
+            raise ValueError(
+                f"input_idx must be 0 for 2D input (single input), got {input_idx}."
+            )
+        stimuli_3d = x_arr[sample_idx][:, jnp.newaxis, :]
+        stimuli_1d = x_arr[sample_idx]
+    elif x_arr.ndim == 3:
+        if input_idx < 0 or input_idx >= x_arr.shape[1]:
+            raise ValueError(f"input_idx ({input_idx}) out of range for n_features={x_arr.shape[1]}.")
+        stimuli_3d = x_arr[sample_idx]
+        stimuli_1d = x_arr[sample_idx][:, input_idx, :]
+    else:
+        raise ValueError(f"Expected 2D or 3D inputs, got {x_arr.shape}.")
+
+    spike_matrix = y_arr[sample_idx]
+    params_sel = jnp.asarray(params)[sample_idx]
+    n_cells, n_features, n_trials = stimuli_3d.shape
+    n_row_cols = int(np.sqrt(n_cells))
+    if n_row_cols * n_row_cols != n_cells:
+        raise ValueError(f"n_cells must be a square number for plotting, got {n_cells}.")
+
+    x_min = float(jnp.min(stimuli_1d))
+    x_max = float(jnp.max(stimuli_1d))
+    if x_max <= x_min:
+        x_max = x_min + 1e-6
+
+    x_values_mean = jnp.linspace(x_min, x_max, n_mean)
+    x_values_eval = jnp.linspace(x_min, x_max, n_eval)
+
+    trial_predictions = jnp.zeros((1, n_cells, n_trials))
+    point_losses = jnp.zeros((1, n_cells, n_trials))
+    for c in range(n_cells):
+        pred = model(stimuli_3d[c], *params_sel[c])
+        pred = jnp.squeeze(jnp.asarray(pred))
+        if pred.ndim == 0:
+            pred = jnp.broadcast_to(pred, (n_trials,))
+        if pred.ndim != 1 or pred.shape[0] != n_trials:
+            raise ValueError(f"Model prediction must have length n_trials={n_trials}, got {pred.shape}.")
+        trial_predictions = trial_predictions.at[0, c].set(pred)
+        losses = jnp.squeeze(jnp.asarray(loss_function(pred, spike_matrix[c])))
+        if losses.ndim == 0:
+            losses = jnp.broadcast_to(losses, (n_trials,))
+        if losses.ndim != 1 or losses.shape[0] != n_trials:
+            raise ValueError(f"Point loss must have length n_trials={n_trials}, got {losses.shape}.")
+        point_losses = point_losses.at[0, c].set(losses)
+
+    binned_mean = jnp.zeros((n_cells, n_mean))
+    denom = max(x_max - x_min, 1e-6)
+    for c in range(n_cells):
+        bin_idx = jnp.clip(
+            (((stimuli_1d[c] - x_min) / denom) * n_mean).astype(jnp.int32),
+            0,
+            n_mean - 1,
+        )
+        sums = jnp.bincount(bin_idx, weights=spike_matrix[c], minlength=n_mean)
+        counts = jnp.bincount(bin_idx, minlength=n_mean)
+        binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))
+
+    model_outputs = jnp.zeros((1, n_cells, n_eval))
+    for c in range(n_cells):
+        x_eval = jnp.zeros((n_features, n_eval))
+        x_eval = x_eval.at[input_idx, :].set(x_values_eval)
+        y_eval = jnp.squeeze(jnp.asarray(model(x_eval, *params_sel[c])))
+        if y_eval.ndim == 0:
+            y_eval = jnp.broadcast_to(y_eval, (n_eval,))
+        if y_eval.ndim != 1 or y_eval.shape[0] != n_eval:
+            raise ValueError(f"Evaluation prediction must have length n_eval={n_eval}, got {y_eval.shape}.")
+        model_outputs = model_outputs.at[0, c].set(y_eval)
+
+    plot_data: ModelFitPlotData = {
+        'sample_selection': sample_idx,
+        'stimuli_3d': stimuli_3d,
+        'stimuli_1d': stimuli_1d,
+        'spike_matrix': spike_matrix,
+        'trial_predictions': trial_predictions,
+        'point_losses': point_losses,
+        'x_values_mean': x_values_mean,
+        'binned_mean': binned_mean,
+        'x_values_eval': x_values_eval,
+        'model_outputs': model_outputs,
+        'n_row_cols': n_row_cols,
+        'n_models': 1,
+        'n_cells': n_cells,
+        'n_trials': n_trials,
+        'n_eval': int(n_eval),
+        'n_mean': int(n_mean),
+        'input_idx': int(input_idx),
+    }
+
     plot_model_fits(
-        programs_df=programs_df,
-        loss_function=loss_function,
-        inputs=x,
-        response=y,
-        sample_selection=sample_selection,
-        n_eval=n_eval,
-        n_mean=n_mean,
+        plot_data=plot_data,
         labels=['Model'],
         colours=["#15AC15"],
         title=title,

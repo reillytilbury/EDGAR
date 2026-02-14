@@ -1089,7 +1089,7 @@ def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_s
               target_weights=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
-              use_param_estimator=True, trial_batch_size=5000) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+              use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate the loss of the model. Always uses vectorized Outputs representation.
     
@@ -1164,7 +1164,7 @@ def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_s
             max_iter=max_iter,
             learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
-            trial_batch_size=None, # Consider setting this if you OOM with legacy implementation (which doesn't do mini-batching)
+            trial_batch_size=trial_batch_size,
         )
     else:
         # Multiple targets: use vectorized implementation
@@ -1345,8 +1345,10 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
     """Validate `prepare_model_fit_plot_data` outputs and fail early on schema drift."""
     required_keys = (
         "sample_selection",
+        "stimuli_3d",
         "stimuli_1d",
         "spike_matrix",
+        "trial_predictions",
         "point_losses",
         "x_values_mean",
         "binned_mean",
@@ -1372,8 +1374,10 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
     n_row_cols = int(plot_data["n_row_cols"])
 
     sample_selection = np.asarray(plot_data["sample_selection"])
+    stimuli_3d = jnp.asarray(plot_data["stimuli_3d"])
     stimuli_1d = jnp.asarray(plot_data["stimuli_1d"])
     spike_matrix = jnp.asarray(plot_data["spike_matrix"])
+    trial_predictions = jnp.asarray(plot_data["trial_predictions"])
     point_losses = jnp.asarray(plot_data["point_losses"])
     x_values_mean = jnp.asarray(plot_data["x_values_mean"])
     binned_mean = jnp.asarray(plot_data["binned_mean"])
@@ -1388,9 +1392,18 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
         raise ValueError(
             f"plot_data['stimuli_1d'] must have shape ({n_cells}, {n_trials}), got {stimuli_1d.shape}."
         )
+    if stimuli_3d.ndim != 3 or stimuli_3d.shape[0] != n_cells or stimuli_3d.shape[2] != n_trials:
+        raise ValueError(
+            f"plot_data['stimuli_3d'] must have shape (n_cells, n_features, n_trials) with "
+            f"n_cells={n_cells}, n_trials={n_trials}, got {stimuli_3d.shape}."
+        )
     if spike_matrix.shape != (n_cells, n_trials):
         raise ValueError(
             f"plot_data['spike_matrix'] must have shape ({n_cells}, {n_trials}), got {spike_matrix.shape}."
+        )
+    if trial_predictions.shape != (n_models, n_cells, n_trials):
+        raise ValueError(
+            f"plot_data['trial_predictions'] must have shape ({n_models}, {n_cells}, {n_trials}), got {trial_predictions.shape}."
         )
     if point_losses.shape != (n_models, n_cells, n_trials):
         raise ValueError(
@@ -1432,8 +1445,10 @@ def prepare_model_fit_plot_data(programs_df,
 
     Returned `plot_data` schema:
     - `sample_selection`: `(n_cells,)` original cell/sample ids selected for plotting.
+    - `stimuli_3d`: `(n_cells, n_features, n_trials)` full per-cell input tensor.
     - `stimuli_1d`: `(n_cells, n_trials)` x-axis input values used in scatter/means.
     - `spike_matrix`: `(n_cells, n_trials)` observed responses.
+    - `trial_predictions`: `(n_models, n_cells, n_trials)` model predictions on observed trials.
     - `point_losses`: `(n_models, n_cells, n_trials)` per-point model loss.
     - `x_values_mean`: `(n_mean,)` x-grid for empirical mean curve.
     - `binned_mean`: `(n_cells, n_mean)` empirical mean response over bins.
@@ -1497,6 +1512,7 @@ def prepare_model_fit_plot_data(programs_df,
             )
         return vec
 
+    trial_predictions = jnp.zeros((n_models, n_cells, n_trials))
     point_losses = jnp.zeros((n_models, n_cells, n_trials))
     for i, model in enumerate(models):
         for c in range(n_cells):
@@ -1504,6 +1520,7 @@ def prepare_model_fit_plot_data(programs_df,
             x_cell = stimuli_3d[c]
             y_pred_raw = model(x_cell, *params_ic)
             y_pred = _as_trial_vector(y_pred_raw, n_trials, "model prediction")
+            trial_predictions = trial_predictions.at[i, c].set(y_pred)
             y_true = _as_trial_vector(spike_matrix[c], n_trials, "response")
             loss_vec_raw = loss_function(y_pred, y_true)
             loss_vec = _as_trial_vector(loss_vec_raw, n_trials, "point loss")
@@ -1531,8 +1548,10 @@ def prepare_model_fit_plot_data(programs_df,
 
     plot_data: ModelFitPlotData = {
         'sample_selection': sample_selection,
+        'stimuli_3d': stimuli_3d,
         'stimuli_1d': stimuli_1d,
         'spike_matrix': spike_matrix,
+        'trial_predictions': trial_predictions,
         'point_losses': point_losses,
         'x_values_mean': x_values_mean,
         'binned_mean': binned_mean,
@@ -2078,6 +2097,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 diagnostics_module = None,
                 prompt_manager = None,
                 log_best_loss = True,
+                trial_batch_size = None,
                 random_seed = 42):
     """ 
     Main function to run the hypothesis engine.
@@ -2247,7 +2267,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                         x=inputs_train, y=response_train, 
                                         create_train_test_trial_split_fn=create_train_test_trial_split_fn,
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol, learning_rate=learning_rate,
-                                        use_param_estimator=use_param_estimator, max_iter=max_iter)
+                                        use_param_estimator=use_param_estimator, max_iter=max_iter, trial_batch_size=trial_batch_size)
         print(f"Initial program {i + 1} loss before parameter fitting: {loss_init:.2f} and loss after fitting: {loss:.2f}")
 
         seed_losses[i] = loss
@@ -2464,7 +2484,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                                 param_penalty_weight=param_penalty_weight,
                                                                                 fit_params=fit_params, tol=tol, 
                                                                                 use_param_estimator=use_param_estimator, 
-                                                                                max_iter=max_iter)
+                                                                                max_iter=max_iter, trial_batch_size=trial_batch_size)
             if loss == FAILED_PROGRAM_COST:
                 logging.info('-' * 50)
                 continue
@@ -2634,6 +2654,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                           max_iter=max_iter, 
                                                           param_penalty_weight=param_penalty_weight, tol=tol,
                                                           use_param_estimator=use_param_estimator, 
+                                                          trial_batch_size=trial_batch_size
                                                           )
             islands[island_idx].at[j, 'test_loss'] = test_loss
             islands[island_idx].at[j, 'params'] = optimized_params

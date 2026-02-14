@@ -4,9 +4,10 @@ import matplotlib
 matplotlib.use('Agg')  # Set non-GUI backend before importing pyplot
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
-from typing import Optional, Callable, Sequence
+from typing import Optional, Callable
 
 from src import utils
+from src.diagnostics_manager import ModelFitPlotData
 
 
 def _ensure_input_format(x_cell: jnp.ndarray) -> jnp.ndarray:
@@ -103,14 +104,7 @@ def compute_evaluation_matrix(program: callable,
             raise
     raise ValueError(f"eval_points must be 1D, 2D, or 3D. Got shape {eval_arr.shape}.")
 
-def plot_model_fits(programs_df: Optional[pd.DataFrame],
-                    loss_function: Callable,
-                    inputs: jnp.ndarray,
-                    response: jnp.ndarray,
-                    sample_selection: Sequence[int],
-                    plot_data: Optional[dict] = None,
-                    n_eval: int = 100,
-                    n_mean: int = 50,
+def plot_model_fits(plot_data: ModelFitPlotData,
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
                     labels: Optional[list] = None,
                     title: str = '',
@@ -120,106 +114,25 @@ def plot_model_fits(programs_df: Optional[pd.DataFrame],
                     point_size: int = 80,
                     legend_fontsize: int = 12,
                     dpi: float = 100.0,
-                    save_path: Optional[str] = None,
-                    input_idx: int = 0):
+                    save_path: Optional[str] = None):
     """
-    Plot model fits over a subset of cells.
+    Plot orientation-tuning fits using precomputed plotting data.
 
-    Preferred usage is to pass precomputed `plot_data` from `hypothesis_engine`.
-    For backward compatibility, this function can still compute plot data internally
-    when `plot_data` is None and `programs_df` is provided.
-    Args:
-        programs_df:
-            - must have columns 'program' and 'params'. 
-            - must have n_rows <= 3
-            - 'program': callable (written in JAX): (X: jnp.ndarray, *params) -> jnp.ndarray
-                         where X has shape (n_features, n_trials)
-            - 'params': jnp.ndarray (n_cells, n_params)
-        loss_function: 
-            - callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
-        inputs: Input data. Can be:
-           - 2D array (n_cells, n_trials) - will use first axis as theta
-           - 3D array (n_cells, n_features, n_trials)
-        response: (n_cells x n_trials) - jnp.ndarray
-        input_idx (int): Index of the input to use for plotting (x-axis). Default is 0.
-                             Must be 0 if inputs is 2D.
-    
-    Raises:
-        ValueError: If input_idx != 0 when inputs is 2D, or if input_idx is out of range.
+    This function is visualization-only. Model evaluation, loss computation,
+    and curve preparation are done upstream in
+    `hypothesis_engine.prepare_model_fit_plot_data(...)`.
     """
-    assert len(sample_selection) > 0, "sample_selection must not be empty."
-    assert len(sample_selection) == int(np.sqrt(len(sample_selection)))**2, \
-        f"sample_selection must be a square number, but has {len(sample_selection)} elements."
-
-    if plot_data is None:
-        if programs_df is None:
-            raise ValueError("Either plot_data or programs_df must be provided.")
-        assert len(programs_df) <= 3, f"programs_df must have at most 3 rows, but has {len(programs_df)} rows."
-
-        # Backward-compatible internal compute path.
-        x_arr = jnp.asarray(inputs)
-        y = jnp.asarray(response)
-        if x_arr.ndim == 2:
-            if input_idx != 0:
-                raise ValueError(
-                    f"input_idx must be 0 for 2D input (single input), got {input_idx}."
-                )
-            n_features = 1
-            stimuli_3d = x_arr[jnp.array(sample_selection)][:, jnp.newaxis, :]
-            stimuli_1d = x_arr[jnp.array(sample_selection)]
-        else:
-            n_features = x_arr.shape[1]
-            if input_idx < 0 or input_idx >= n_features:
-                raise ValueError(
-                    f"input_idx ({input_idx}) must be in range [0, {n_features}). "
-                    f"Got n_features={n_features}."
-                )
-            stimuli_3d = x_arr[jnp.array(sample_selection)]
-            stimuli_1d = x_arr[jnp.array(sample_selection)][:, input_idx, :]
-
-        models = programs_df['program'].tolist()
-        params = [p[jnp.array(sample_selection)] for p in programs_df['params'].tolist()]
-        spike_matrix = y[jnp.array(sample_selection)]
-        n_cells, _, n_trials = stimuli_3d.shape
-        n_models = len(models)
-
-        point_losses = jnp.zeros((n_models, n_cells, n_trials))
-        for i, model in enumerate(models):
-            for c in range(n_cells):
-                params_ic = params[i][c]
-                predicted_response = model(stimuli_3d[c], *params_ic)
-                point_losses = point_losses.at[i, c].set(loss_function(predicted_response, spike_matrix[c]))
-
-        x_values_mean = jnp.linspace(0, 2 * jnp.pi, n_mean, endpoint=False) + 0.5 * (2 * jnp.pi / n_mean)
-        binned_mean = jnp.zeros((n_cells, n_mean))
-        for c in range(n_cells):
-            bin_idx = jnp.clip(((stimuli_1d[c] * n_mean) / (2 * jnp.pi)).astype(jnp.int32), 0, n_mean - 1)
-            sums = jnp.bincount(bin_idx, weights=spike_matrix[c], minlength=n_mean)
-            counts = jnp.bincount(bin_idx, minlength=n_mean)
-            binned_mean = binned_mean.at[c].set((sums + 1e-6) / (counts + 1e-6))
-
-        x_values_eval = jnp.linspace(0, 2 * jnp.pi, n_eval, endpoint=False)
-        model_outputs = jnp.zeros((n_models, n_cells, n_eval))
-        for i, model in enumerate(models):
-            for c in range(n_cells):
-                params_ic = params[i][c]
-                x_eval = jnp.zeros((n_features, n_eval))
-                x_eval = x_eval.at[input_idx, :].set(x_values_eval)
-                model_outputs = model_outputs.at[i, c].set(model(x_eval, *params_ic))
-        n_row_cols = int(np.sqrt(n_cells))
-    else:
-        # Preferred path: data is precomputed in hypothesis_engine.
-        stimuli_1d = jnp.asarray(plot_data['stimuli_1d'])
-        spike_matrix = jnp.asarray(plot_data['spike_matrix'])
-        point_losses = jnp.asarray(plot_data['point_losses'])
-        x_values_mean = jnp.asarray(plot_data['x_values_mean'])
-        binned_mean = jnp.asarray(plot_data['binned_mean'])
-        x_values_eval = jnp.asarray(plot_data['x_values_eval'])
-        model_outputs = jnp.asarray(plot_data['model_outputs'])
-        n_models = int(plot_data['n_models'])
-        n_cells = int(plot_data['n_cells'])
-        n_row_cols = int(plot_data['n_row_cols'])
-        sample_selection = plot_data.get('sample_selection', sample_selection)
+    stimuli_1d = jnp.asarray(plot_data['stimuli_1d'])
+    spike_matrix = jnp.asarray(plot_data['spike_matrix'])
+    point_losses = jnp.asarray(plot_data['point_losses'])
+    x_values_mean = jnp.asarray(plot_data['x_values_mean'])
+    binned_mean = jnp.asarray(plot_data['binned_mean'])
+    x_values_eval = jnp.asarray(plot_data['x_values_eval'])
+    model_outputs = jnp.asarray(plot_data['model_outputs'])
+    n_models = int(plot_data['n_models'])
+    n_cells = int(plot_data['n_cells'])
+    n_row_cols = int(plot_data['n_row_cols'])
+    sample_selection = np.asarray(plot_data['sample_selection'])
 
     if labels is None:
         labels = [f'model {i + 1}' for i in range(n_models)]

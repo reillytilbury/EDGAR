@@ -21,6 +21,7 @@ import jax.numpy as jnp
 from typing import Optional, Callable, Sequence, Tuple, Dict, Any
 
 from src import utils
+from src.diagnostics_manager import ModelFitPlotData
 
 
 def select_evaluation_points(inputs: jnp.ndarray,
@@ -534,24 +535,20 @@ def plot_model_fits_old(programs_df: pd.DataFrame, loss_function: Callable,
     plt.close(fig)
 
 
-def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
-                        inputs: jnp.ndarray, response: jnp.ndarray,
-                        sample_selection: Sequence[int],
-                        rate_maps: Optional[np.ndarray] = None,
-                        n_eval: int = 50,
-                        colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
-                        labels: Optional[list] = None,
-                        title: str = '',
-                        line_width=4.0,
-                        line_alpha=1.0,
-                        point_alpha=0.1,
-                        point_size: int = 80,
-                        legend_fontsize: int = 12,
-                        dpi: float = 100.0,
-                        save_path: Optional[str] = None,
-                        input_idx: int = 0,
-                        smoothing_sigma: float = 1.5,
-                        plot_raw_rates: bool = True):
+def plot_model_fits(plot_data: ModelFitPlotData,
+                    n_eval: int = 50,
+                    colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
+                    labels: Optional[list] = None,
+                    title: str = '',
+                    line_width=4.0,
+                    line_alpha=1.0,
+                    point_alpha=0.1,
+                    point_size: int = 80,
+                    legend_fontsize: int = 12,
+                    dpi: float = 100.0,
+                    save_path: Optional[str] = None,
+                    smoothing_sigma: float = 1.5,
+                    plot_raw_rates: bool = True):
     """
     Plot 2D rate map fits for grid cell models with detailed diagnostics.
     
@@ -564,13 +561,8 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     [Unsmoothed Actual | Smoothed Actual | Model1 Pred | Model1 Overlay | Model2 Pred | Model2 Overlay | ...]
     
     Args:
-        programs_df: DataFrame with 'program' and 'params' columns. Max 2 models supported.
-        loss_function: Loss function (y_est, y_true) -> loss.
-        inputs: Input data of shape (n_cells, n_features, n_trials) where n_features=2 (x, y).
-        response: Response data of shape (n_cells, n_trials).
-        rate_maps: Precomputed rate maps of shape (n_cells, n_bins, n_bins). If None,
-            rate maps are computed from inputs and response.
-        sample_selection: Indices of cells to plot.
+        plot_data: Precomputed plotting tensors from
+            hypothesis_engine.prepare_model_fit_plot_data(...).
         n_eval: Number of bins for rate map computation (default 50).
         colours: Colors for each model (unused, kept for signature compatibility).
         labels: Labels for each model. If None, uses 'Model 1', 'Model 2', etc.
@@ -582,24 +574,25 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         legend_fontsize: Unused, kept for signature compatibility.
         dpi: Figure DPI for saving.
         save_path: Path to save figure. If None, displays the figure.
-        input_idx: Ignored for grid cells (uses both x and y).
         smoothing_sigma: Gaussian smoothing sigma for smoothed rate maps.
         plot_raw_rates: Whether to plot the unsmoothed actual rate maps.
     """
-    # assert len(programs_df) <= 2, f"programs_df must have at most 2 rows, got {len(programs_df)}"
-    assert len(sample_selection) > 0, "sample_selection must not be empty"
-    
-    n_cells_plot = len(sample_selection)
-    n_models = len(programs_df)
-    
-    models = programs_df['program'].tolist()
-    params = programs_df['params'].tolist()
-    sample_idx = jnp.array(sample_selection)
-    
-    # Subset params and data for selected cells
-    params = [p[sample_idx] for p in params]
-    response_subset = response[sample_idx]
-    inputs_subset = inputs[sample_idx]  # (n_cells_plot, n_features, n_trials)
+    sample_selection = np.asarray(plot_data['sample_selection'])
+    inputs_subset = jnp.asarray(plot_data['stimuli_3d'])        # (n_cells, n_features, n_trials)
+    response_subset = jnp.asarray(plot_data['spike_matrix'])    # (n_cells, n_trials)
+    trial_predictions = jnp.asarray(plot_data['trial_predictions'])  # (n_models, n_cells, n_trials)
+    point_losses = jnp.asarray(plot_data['point_losses'])       # (n_models, n_cells, n_trials)
+
+    n_cells_plot = int(plot_data['n_cells'])
+    n_models = int(plot_data['n_models'])
+    if inputs_subset.ndim != 3 or inputs_subset.shape[1] < 2:
+        raise ValueError(
+            f"Grid-cell plot_model_fits requires 2D position inputs; got stimuli_3d shape {inputs_subset.shape}."
+        )
+    if sample_selection.shape[0] != n_cells_plot:
+        raise ValueError(
+            f"sample_selection length ({sample_selection.shape[0]}) must equal n_cells ({n_cells_plot})."
+        )
     
     if labels is None:
         labels = [f'Model {i+1}' for i in range(n_models)]
@@ -644,16 +637,9 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         
         # For each model: prediction and overlay
-        for m_idx, model in enumerate(models):
-            params_c = params[m_idx][c_idx]
-            
-            # Compute model predictions for this cell
-            X_cell = inputs_subset[c_idx, :, :]  # (n_features, n_trials)
-            pred = model(X_cell, *params_c)
-            pred_np = np.array(pred)
-            
-            # Compute loss
-            loss_val = float(jnp.mean(loss_function(pred, response_subset[c_idx])))
+        for m_idx in range(n_models):
+            pred_np = np.asarray(trial_predictions[m_idx, c_idx])
+            loss_val = float(jnp.mean(point_losses[m_idx, c_idx]))
             
             # Bin model predictions into rate map (no smoothing for model predictions)
             pred_rate_map = _bin_to_rate_map(x_pos, y_pos, pred_np, 

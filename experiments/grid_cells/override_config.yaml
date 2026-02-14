@@ -78,6 +78,7 @@ experiment_params:
   little_lm_name: gemini-2.0-flash
   large_lm_name: gemini-2.5-flash
   use_large_every: 3
+  trial_batch_size : 5000 # Batch size for trial-level loss computation during parameter fitting (set to None to disable mini-batching)
   use_large_model_for_param_estimators: true # Whether parameter estimators should use the large LM (true) or tiny LM (false). 
 
   # Evolution algorithm parameters (used by EvolutionConfig)

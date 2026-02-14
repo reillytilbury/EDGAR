@@ -52,8 +52,10 @@ class ModelFitPlotData(TypedDict):
     """Structured payload consumed by experiment `plot_model_fits(plot_data=...)`."""
 
     sample_selection: np.ndarray
+    stimuli_3d: jnp.ndarray
     stimuli_1d: jnp.ndarray
     spike_matrix: jnp.ndarray
+    trial_predictions: jnp.ndarray
     point_losses: jnp.ndarray
     x_values_mean: jnp.ndarray
     binned_mean: jnp.ndarray
