@@ -20,11 +20,11 @@ pip install -r requirements.txt
 ## Quick Start
 
 ```bash
-# Run with test mode (shorter iterations for testing)
-python -m run --test_mode
+# Run with test mode (shorter iterations for testing) using synthetic data
+python -m run --config experiments/synthetic_data/override_config.yaml --test_mode
 
-# Run full experiment
-python -m run
+# Run full experiment (example: orientation tuning)
+python -m run --config experiments/orientation_tuning/override_config.yaml
 ```
 
 Results are saved to `program_databases/MM-DD/HH-MM-SS/` with:
@@ -38,8 +38,10 @@ Results are saved to `program_databases/MM-DD/HH-MM-SS/` with:
 ```
 EDGAR-gamma/
 ├── experiments/              # Task-specific implementations
+│   └── DEFAULT/
+│       └── config.yaml       # Base/default config for all experiments
 │   └── orientation_tuning/   # Example task
-│       ├── config.yaml       # Configuration file 
+│       ├── override_config.yaml  # Experiment overrides merged with DEFAULT config
 │       ├── seed_programs.py  # Initial model implementations
 │       ├── diagnostics.py    # Diagnostics + eval-point selection
 │       └── data_parser.py    # Data loading functions
@@ -49,7 +51,7 @@ EDGAR-gamma/
 │   ├── data_structures.py    # Inputs class for multi-input support
 │   ├── prompt_manager.py     # LLM prompt generation
 │   ├── llm_helper.py         # LLM API interactions
-│   ├── diagnostic.py         # Visualization tools
+│   ├── diagnostics_manager.py # Diagnostics loading + shared plotting utilities
 │   └── utils.py              # Utility functions
 └── run.py                    # Entry point
 ```
@@ -251,16 +253,22 @@ def select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs):
 Use this function to encode domain-specific choices (e.g., trajectory sampling,
 feature sweeps, fixed-context slices).
 
-### 5. Configure `config/data.yaml`
+### 5. Configure `experiments/your_task_name/override_config.yaml`
 
 ```yaml
 task: your_task_name
 load_and_process_data_fn: experiments.your_task_name.data_parser.load_and_process_data
-data_path: /path/to/your/data.npy
+create_train_test_sample_split_fn: experiments.your_task_name.data_parser.create_train_test_sample_split
+create_train_test_trial_split_fn: experiments.your_task_name.data_parser.create_train_test_trial_split
+
+diagnostics_path: experiments/your_task_name
+
+data_processing_params:
+  data_path: /path/to/your/data.npy
 
 # Cell selection thresholds
-activity_threshold: 0.4
-conc_threshold: 0.55
+  activity_threshold: 0.4
+  conc_threshold: 0.55
 
 # Define inputs (names used in models)
 inputs:
@@ -271,7 +279,7 @@ inputs:
   #   description: "Stimulus contrast level"
 ```
 
-### 6. Configure hyperparameters in `config.yaml`
+### 6. Configure hyperparameters in `experiments/your_task_name/override_config.yaml`
 
 ```yaml
 seed_programs:
@@ -299,7 +307,6 @@ experiment_params:
   param_penalty_weight: 0.01  # Complexity penalty
   FAILED_PROGRAM_COST: inf  # Loss for failed programs
   use_image_feedback: true  # Generate diagnostic plots for LLM
-  use_param_estimator: true # Use parameter estimators vs random init
   
   # Migration topology (which island each island sends migrants to)
   exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]  # Ring topology
@@ -313,11 +320,9 @@ experiment_params:
   
   # Training parameters
   training_sample_ratio: 0.5       # Fraction of cells for training (rest for test)
-  conc_thresh: 0.55         # Cell selection threshold
-  activity_thresh: 0.4      # Cell selection threshold
 ```
 
-### 7. Customize Prompts in `config.yaml`
+### 7. Customize Prompts in `experiments/your_task_name/override_config.yaml`
 
 The prompts control how LLMs generate code. Key sections:
 
@@ -340,12 +345,14 @@ The prompts control how LLMs generate code. Key sections:
 
 ### Basic Usage
 
+`run.py` defaults to `config.yaml` at repo root, so pass `--config` explicitly in this repository.
+
 ```bash
 # Standard run
-python -m run
+python -m run --config experiments/orientation_tuning/override_config.yaml
 
 # Test mode (reduced iterations for quick validation)
-python -m run --test_mode
+python -m run --config experiments/synthetic_data/override_config.yaml --test_mode
 ```
 
 ### Environment Variables
@@ -368,7 +375,7 @@ The system provides real-time feedback:
 After completion, check:
 
 1. **Best programs**: `program_databases/MM-DD/HH-MM-SS/combined/programs_db.csv`
-   - Sorted by test loss
+   - Sorted by mean loss (`mean_loss`)
    - Contains code, parameters, and genealogy
 
 2. **Diagnostic plots**: `program_databases/MM-DD/HH-MM-SS/combined/top_model_fits.png`
@@ -422,7 +429,7 @@ After completion, check:
 
 **Low success rate**
 - LLM may be generating invalid code
-- Review prompts in `config/prompts.yaml`
+- Review prompts in your experiment config (for example `experiments/orientation_tuning/override_config.yaml`)
 - Check that `code_guidelines` are clear and comprehensive
 - Reduce `batch_size` to focus on quality over quantity
 
@@ -438,7 +445,7 @@ Edit `src/loss_functions.py` to add your loss function, then reference it in `sr
 
 ### Custom Migration Topologies
 
-Modify `exploration_topology` and `exploitation_topology` in `experiment.yaml`:
+Modify `exploration_topology` and `exploitation_topology` in `experiments/your_task_name/override_config.yaml`:
 - Ring: `[1, 2, 3, ..., 0]`
 - Star: `[0, 0, 0, ...]` (all migrate to island 0)
 - Random: `[randint(0, n_islands-1) for _ in range(n_islands)]`
@@ -446,11 +453,11 @@ Modify `exploration_topology` and `exploitation_topology` in `experiment.yaml`:
 ### Validation Testing
 
 ```bash
-# Validate configuration files
-python -m pytest config/test.py
+# Run all tests under tests/
+python -m pytest tests -q
 
-# Run specific tests
-python -m pytest tests.py::test_function_name
+# Run a specific test module
+python -m pytest tests/test_orientation_tuning_seed_loss_regression.py -q
 ```
 
 ## Citation
@@ -459,7 +466,7 @@ If you use EDGAR-gamma in your research, please cite:
 
 ```bibtex
 @article{edgar-gamma,
-  title={EDGAR-gamma: Evolutionary Discovery of Generative AI-assisted Research},
+  title={EDGAR-gamma: Equation Discovery with Graphical AI Reasoning},
   author={Your Name},
   year={2026}
 }
