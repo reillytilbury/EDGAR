@@ -63,32 +63,24 @@ def save_data_summary(
     training_samples: jnp.ndarray,
     test_samples: jnp.ndarray,
     output_dir: str,
-    random_seed: int = 0
+    random_seed: int = 0,
+    training_sample_ratio: float = 0.5,
+    create_train_test_sample_split_fn=None,
+    create_train_test_trial_split_fn=None,
+    trial_split_random_seed: int = 0,
 ) -> pd.DataFrame:
     """
-    Save a summary of data splits and matrix sizes to a CSV file.
-    
-    This function documents:
-    1. Sample split (training vs test cells)
-    2. Trial split (training vs test inputs within objective function)
-    3. Feature counts and data shapes
-    4. Data types and estimated memory sizes
-    
-    Args:
-        response: Full response matrix, shape (n_samples, n_trials)
-        inputs: Full inputs matrix, shape (n_samples, n_trials) or (n_samples, n_features, n_trials)
-        training_samples: Indices of samples used for training
-        test_samples: Indices of samples used for testing
-        output_dir: Directory to save the CSV
-        random_seed: Random seed used for trial split (for verification)
-    
-    Returns:
-        DataFrame with the summary information
+    Save a summary of the realized sample/trial splits and matrix sizes to CSV.
+
+    This uses the exact sample indices provided and computes trial split indices by
+    invoking the trial split function used by objective().
     """
     n_total_samples, n_trials = response.shape
-    n_train_samples = len(training_samples)
-    n_test_samples = len(test_samples)
-    
+    training_samples_np = np.asarray(training_samples).reshape(-1)
+    test_samples_np = np.asarray(test_samples).reshape(-1)
+    n_train_samples = int(training_samples_np.size)
+    n_test_samples = int(test_samples_np.size)
+
     # Determine inputs shape and features
     if inputs.ndim == 2:
         n_features = 1
@@ -96,32 +88,116 @@ def save_data_summary(
     else:
         n_features = inputs.shape[1]
         inputs_shape_str = f"({inputs.shape[0]}, {inputs.shape[1]}, {inputs.shape[2]})"
-    
-    # Calculate trial split (same logic as in objective function)
-    n_trial_splits = 10
-    trials_per_split = n_trials // n_trial_splits
-    n_training_trials = trials_per_split * 5  # odd chunks (5 of 10)
-    n_test_trials = trials_per_split * 5       # even chunks (5 of 10)
-    
+
+    def _call_trial_split_fn(split_fn, n_trials_value, seed):
+        if split_fn is None:
+            idx = np.arange(n_trials_value, dtype=np.int32)
+            return idx, idx, "default_identity_split"
+        attempts = [
+            lambda: split_fn(n_trials_value, seed),
+            lambda: split_fn(n_trials_value, random_seed=seed),
+            lambda: split_fn(n_trials_value),
+        ]
+        last_exc = None
+        for attempt in attempts:
+            try:
+                tr_idx, te_idx = attempt()
+                return tr_idx, te_idx, "runtime_function_call"
+            except TypeError as exc:
+                last_exc = exc
+        raise TypeError(
+            f"Unable to call trial split function {split_fn} with n_trials/seed."
+        ) from last_exc
+
+    def _split_stats(train_idx, test_idx, n_total):
+        train_arr = np.asarray(train_idx).reshape(-1)
+        test_arr = np.asarray(test_idx).reshape(-1)
+        train_unique = np.unique(train_arr)
+        test_unique = np.unique(test_arr)
+        overlap = np.intersect1d(train_unique, test_unique)
+        coverage = np.union1d(train_unique, test_unique)
+        return {
+            "disjoint": bool(overlap.size == 0),
+            "cover_all": bool(coverage.size == n_total),
+            "n_overlap": int(overlap.size),
+            "n_uncovered": int(max(0, n_total - coverage.size)),
+            "train_has_duplicates": bool(train_unique.size != train_arr.size),
+            "test_has_duplicates": bool(test_unique.size != test_arr.size),
+            "train_first10": train_arr[:10].tolist(),
+            "test_first10": test_arr[:10].tolist(),
+        }
+
+    def _describe_fn(fn):
+        if fn is None:
+            return "None"
+        module = getattr(fn, "__module__", "<unknown_module>")
+        name = getattr(fn, "__qualname__", getattr(fn, "__name__", repr(fn)))
+        return f"{module}.{name}"
+
+    # Trial split is the one used inside objective()
+    try:
+        training_trials_idx, test_trials_idx, trial_split_call_mode = _call_trial_split_fn(
+            create_train_test_trial_split_fn,
+            n_trials,
+            trial_split_random_seed,
+        )
+        trial_split_error = None
+    except Exception as exc:
+        idx = np.arange(n_trials, dtype=np.int32)
+        training_trials_idx, test_trials_idx = idx, idx
+        trial_split_call_mode = "fallback_identity_due_to_error"
+        trial_split_error = str(exc)
+
+    training_trials_idx_np = np.asarray(training_trials_idx).reshape(-1)
+    test_trials_idx_np = np.asarray(test_trials_idx).reshape(-1)
+    n_training_trials = int(training_trials_idx_np.size)
+    n_test_trials = int(test_trials_idx_np.size)
+
+    sample_stats = _split_stats(training_samples_np, test_samples_np, n_total_samples)
+    trial_stats = _split_stats(training_trials_idx_np, test_trials_idx_np, n_trials)
+
+    sample_split_method = (
+        f"fn={_describe_fn(create_train_test_sample_split_fn)}; "
+        f"training_sample_ratio={training_sample_ratio}; random_seed={random_seed}; "
+        f"disjoint={sample_stats['disjoint']}; cover_all={sample_stats['cover_all']}; "
+        f"overlap={sample_stats['n_overlap']}; uncovered={sample_stats['n_uncovered']}; "
+        f"train_has_duplicates={sample_stats['train_has_duplicates']}; "
+        f"test_has_duplicates={sample_stats['test_has_duplicates']}; "
+        f"train_first10={sample_stats['train_first10']}; "
+        f"test_first10={sample_stats['test_first10']}"
+    )
+
+    trial_split_method = (
+        f"fn={_describe_fn(create_train_test_trial_split_fn)}; "
+        f"random_seed={trial_split_random_seed}; call_mode={trial_split_call_mode}; "
+        f"disjoint={trial_stats['disjoint']}; cover_all={trial_stats['cover_all']}; "
+        f"overlap={trial_stats['n_overlap']}; uncovered={trial_stats['n_uncovered']}; "
+        f"train_has_duplicates={trial_stats['train_has_duplicates']}; "
+        f"test_has_duplicates={trial_stats['test_has_duplicates']}; "
+        f"train_first10={trial_stats['train_first10']}; "
+        f"test_first10={trial_stats['test_first10']}"
+    )
+    if trial_split_error is not None:
+        trial_split_method += f"; error={trial_split_error}"
+
     # Helper to calculate size in bytes
     def calc_size(shape, dtype):
         n_elements = np.prod(shape)
         bytes_per_element = np.dtype(dtype).itemsize
         return n_elements * bytes_per_element
-    
+
     def format_size(size_bytes):
         if size_bytes >= 1e9:
             return f"{size_bytes / 1e9:.2f} GB"
-        elif size_bytes >= 1e6:
+        if size_bytes >= 1e6:
             return f"{size_bytes / 1e6:.2f} MB"
-        elif size_bytes >= 1e3:
+        if size_bytes >= 1e3:
             return f"{size_bytes / 1e3:.2f} KB"
-        else:
-            return f"{size_bytes} B"
-    
+        return f"{size_bytes} B"
+
     # Build summary rows
     rows = []
-    
+
     # === SAMPLE SPLIT SUMMARY ===
     rows.append({
         'category': 'SAMPLE_SPLIT',
@@ -136,24 +212,34 @@ def save_data_summary(
     rows.append({
         'category': 'SAMPLE_SPLIT',
         'matrix_name': 'training_samples',
-        'description': 'Cells used for training (held-in)',
+        'description': 'Samples used for training (held-in)',
         'shape': f"({n_train_samples},)",
-        'dtype': str(training_samples.dtype),
-        'size_bytes': calc_size((n_train_samples,), training_samples.dtype),
-        'size_human': format_size(calc_size((n_train_samples,), training_samples.dtype)),
+        'dtype': str(training_samples_np.dtype),
+        'size_bytes': calc_size((n_train_samples,), training_samples_np.dtype),
+        'size_human': format_size(calc_size((n_train_samples,), training_samples_np.dtype)),
         'n_elements': n_train_samples
     })
     rows.append({
         'category': 'SAMPLE_SPLIT',
         'matrix_name': 'test_samples',
-        'description': 'Cells used for testing (held-out)',
+        'description': 'Samples used for testing (held-out)',
         'shape': f"({n_test_samples},)",
-        'dtype': str(test_samples.dtype),
-        'size_bytes': calc_size((n_test_samples,), test_samples.dtype),
-        'size_human': format_size(calc_size((n_test_samples,), test_samples.dtype)),
+        'dtype': str(test_samples_np.dtype),
+        'size_bytes': calc_size((n_test_samples,), test_samples_np.dtype),
+        'size_human': format_size(calc_size((n_test_samples,), test_samples_np.dtype)),
         'n_elements': n_test_samples
     })
-    
+    rows.append({
+        'category': 'SAMPLE_SPLIT',
+        'matrix_name': 'sample_split_method',
+        'description': sample_split_method,
+        'shape': '-',
+        'dtype': '-',
+        'size_bytes': '-',
+        'size_human': '-',
+        'n_elements': '-'
+    })
+
     # === TRIAL SPLIT SUMMARY (within objective function) ===
     rows.append({
         'category': 'TRIAL_SPLIT',
@@ -168,27 +254,27 @@ def save_data_summary(
     rows.append({
         'category': 'TRIAL_SPLIT',
         'matrix_name': 'training_trials',
-        'description': 'Trials used for param fitting (odd 10-chunks)',
+        'description': 'Trials used for param fitting in objective()',
         'shape': f"({n_training_trials},)",
-        'dtype': 'int32',
-        'size_bytes': calc_size((n_training_trials,), 'int32'),
-        'size_human': format_size(calc_size((n_training_trials,), 'int32')),
+        'dtype': str(training_trials_idx_np.dtype),
+        'size_bytes': calc_size((n_training_trials,), training_trials_idx_np.dtype),
+        'size_human': format_size(calc_size((n_training_trials,), training_trials_idx_np.dtype)),
         'n_elements': n_training_trials
     })
     rows.append({
         'category': 'TRIAL_SPLIT',
         'matrix_name': 'test_trials',
-        'description': 'Trials used for loss evaluation (even 10-chunks)',
+        'description': 'Trials used for loss evaluation in objective()',
         'shape': f"({n_test_trials},)",
-        'dtype': 'int32',
-        'size_bytes': calc_size((n_test_trials,), 'int32'),
-        'size_human': format_size(calc_size((n_test_trials,), 'int32')),
+        'dtype': str(test_trials_idx_np.dtype),
+        'size_bytes': calc_size((n_test_trials,), test_trials_idx_np.dtype),
+        'size_human': format_size(calc_size((n_test_trials,), test_trials_idx_np.dtype)),
         'n_elements': n_test_trials
     })
     rows.append({
         'category': 'TRIAL_SPLIT',
         'matrix_name': 'trial_split_method',
-        'description': f'Deterministic: 10 equal chunks, odd->train, even->test. Seed={random_seed}',
+        'description': trial_split_method,
         'shape': '-',
         'dtype': '-',
         'size_bytes': '-',
@@ -353,11 +439,24 @@ def save_data_summary(
     print("\n" + "=" * 70)
     print("DATA SUMMARY")
     print("=" * 70)
-    print(f"Sample Split: {n_train_samples}/{n_total_samples} train, {n_test_samples}/{n_total_samples} test")
-    print(f"Trial Split:  {n_training_trials}/{n_trials} train, {n_test_trials}/{n_trials} test (per sample, in objective)")
+    print(
+        f"Sample Split: {n_train_samples}/{n_total_samples} train, "
+        f"{n_test_samples}/{n_total_samples} test "
+        f"(disjoint={sample_stats['disjoint']}, cover_all={sample_stats['cover_all']})"
+    )
+    print(
+        f"Trial Split:  {n_training_trials}/{n_trials} train, "
+        f"{n_test_trials}/{n_trials} test (per sample, in objective; "
+        f"seed={trial_split_random_seed}, disjoint={trial_stats['disjoint']}, "
+        f"cover_all={trial_stats['cover_all']})"
+    )
     print(f"Features:     {n_features} per sample")
     print(f"Data Types:   response={response_dtype}, inputs={inputs_dtype}")
-    total_size = sum(r['size_bytes'] for r in rows if isinstance(r['size_bytes'], (int, float)))
+    total_size = sum(
+        r['size_bytes']
+        for r in rows
+        if isinstance(r['size_bytes'], (int, float, np.integer, np.floating))
+    )
     print(f"Total Data:   {format_size(total_size)}")
     print(f"Saved to:     {csv_path}")
     print("=" * 70 + "\n")
@@ -2073,7 +2172,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 log_best_loss = True,
                 trial_batch_size = None,
                 swear_words = None,
-                random_seed = 42):
+                random_seed = 42, # consider setting up a seed_manager to make behaviours more robustly reproducible.
+                ):
     """ 
     Main function to run the hypothesis engine.
     
@@ -2143,6 +2243,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     training_samples, test_samples = create_train_test_sample_split_fn(n_good_samples, training_sample_ratio, random_seed)
     response_train, response_test = response[training_samples, :], response[test_samples, :]
     inputs_train, inputs_test = inputs[training_samples, :], inputs[test_samples, :]  # has shape (n_samples, n_features, n_trials)
+    # Use run-level seed for objective() trial split so reporting and runtime align.
+    trial_split_random_seed = random_seed
     print(f"Loaded {n_good_samples} samples, {n_trials} trials per sample.")
     print(f"Using {len(training_samples)} samples for training and {len(test_samples)} samples for testing.")
 
@@ -2204,7 +2306,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         training_samples=training_samples,
         test_samples=test_samples,
         output_dir=full_dir,
-        random_seed=random_seed
+        random_seed=random_seed,
+        training_sample_ratio=training_sample_ratio,
+        create_train_test_sample_split_fn=create_train_test_sample_split_fn,
+        create_train_test_trial_split_fn=create_train_test_trial_split_fn,
+        trial_split_random_seed=trial_split_random_seed,
     )
 
     # census[i] = [generation, island, batch_index, llm_name, loss, time, parent1_id, parent2_id, evaluation_matrix, n_free_params]
@@ -2235,7 +2341,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                         x=inputs_train, y=response_train, 
                                         create_train_test_trial_split_fn=create_train_test_trial_split_fn,
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol, learning_rate=learning_rate,
-                                        use_param_estimator=use_param_estimator, max_iter=max_iter, trial_batch_size=trial_batch_size)
+                                        use_param_estimator=use_param_estimator, max_iter=max_iter, trial_batch_size=trial_batch_size,
+                                        random_seed=trial_split_random_seed)
         print(f"Initial program {i + 1} loss before parameter fitting: {loss_init:.2f} and loss after fitting: {loss:.2f}")
 
         seed_losses[i] = loss
@@ -2453,7 +2560,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                                 param_penalty_weight=param_penalty_weight,
                                                                                 fit_params=fit_params, tol=tol, 
                                                                                 use_param_estimator=use_param_estimator, 
-                                                                                max_iter=max_iter, trial_batch_size=trial_batch_size)
+                                                                                max_iter=max_iter, trial_batch_size=trial_batch_size,
+                                                                                random_seed=trial_split_random_seed)
             if loss == FAILED_PROGRAM_COST:
                 logging.info('-' * 50)
                 continue
@@ -2623,7 +2731,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                           max_iter=max_iter, 
                                                           param_penalty_weight=param_penalty_weight, tol=tol,
                                                           use_param_estimator=use_param_estimator, 
-                                                          trial_batch_size=trial_batch_size
+                                                          trial_batch_size=trial_batch_size,
+                                                          random_seed=trial_split_random_seed,
                                                           )
             islands[island_idx].at[j, 'test_loss'] = test_loss
             islands[island_idx].at[j, 'params'] = optimized_params
