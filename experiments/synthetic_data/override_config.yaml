@@ -12,7 +12,8 @@ data_processing_params:
   noise_std: 0.1
 
 experiment_params:
-  swear_words: ['scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
+  # swear_words: ['optimize.minimize', 'curve_fit', 'sklearn']
+  swear_words: []
 
 diagnostics_path: experiments/synthetic_data
 
