@@ -10,6 +10,9 @@ data_processing_params:
   n_trials: 2000
   noise_std: 0.1
 
+experiment_params:
+  swear_words: ['scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
+
 diagnostics_path: experiments/synthetic_data
 
 seed_programs:
@@ -20,3 +23,50 @@ seed_programs:
   parameter_estimator_seeds:
     - parameter_estimator_v1
     - parameter_estimator_v2
+
+model_name: model
+
+prompts:
+  program_prompt:
+    code_guidelines: |
+      **Code Generation Guidelines:**
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * Ensure all free parameters are numeric, not strings.
+      * This synthetic dataset has exactly one input feature. Only use `X[0]`.
+      * Never access `X[1]` or higher indices.
+      * IMPORTANT: Your code will be translated to JAX. Avoid boolean indexing (e.g., `array[condition]`), dynamic shapes, and control flow based on array values. Use `jnp.where()` instead of boolean indexing.
+
+    function_signature: |
+      **Function Signature:**
+      Your model must have this signature:
+      ```
+      def model_v{next_version}(X, param1=default1, param2=default2, ...):
+      ```
+      where:
+      * `X` is a 2D array with shape `(1, n_trials)`.
+      * Use only `x = X[0]`.
+      * Do not reference `X[1]` or any other feature index.
+      * Return shape: `(n_trials,)`.
+
+  parameter_estimator:
+    code_guidelines: |
+      **Code Generation Guidelines:**
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * The only arguments to the function should be the inputs (X) and the spike count.
+      * This synthetic dataset has exactly one input feature. Only use `X[0]`.
+      * Never access `X[1]` or higher indices.
+      * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
+
+    function_signature: |
+      **Function Signature:**
+      Your parameter estimator must have this signature:
+      ```
+      def parameter_estimator_v{next_version}(X, spike_counts):
+      ```
+      where:
+      * `X` is a 2D array with shape `(1, n_trials)`.
+      * Use only `x = X[0]`.
+      * Do not reference `X[1]` or any other feature index.
+      * Return: a 1D array of estimated parameter values matching the model's free parameters.

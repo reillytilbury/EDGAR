@@ -35,6 +35,28 @@ print(jax.default_backend())    # should print "gpu"
 print(jax.devices())
 
 
+def _enforce_single_feature_code_access(code_string: str, stimuli, code_label: str) -> str:
+    """
+    For single-feature datasets, rewrite out-of-bounds feature access (e.g., X[1]) to X[0].
+    """
+    if code_string is None:
+        return code_string
+
+    x_arr = np.asarray(stimuli)
+    n_features = 1 if x_arr.ndim == 2 else int(x_arr.shape[1])
+    if n_features != 1:
+        return code_string
+
+    pattern = r"\bX\s*\[\s*[1-9]\d*\s*\]"
+    rewritten, n_rewrites = re.subn(pattern, "X[0]", code_string)
+    if n_rewrites > 0:
+        logging.info(
+            f"{code_label}: rewrote {n_rewrites} out-of-bounds feature accesses to X[0] "
+            "for single-feature data."
+        )
+    return rewritten
+
+
 def save_data_summary(
     response: np.ndarray,
     inputs: np.ndarray,
@@ -1635,6 +1657,9 @@ async def generate_new_model(current_island, llm_name, client,
     if code_string is None:
         return None, None, (parent1_id, parent2_id)
     code_string = code_string.replace(f'def {model_name}_v{k+1}(', f'def {model_name}(')
+    code_string = _enforce_single_feature_code_access(
+        code_string, stimuli=stimuli, code_label="Model generation"
+    )
     
     return code_string, program_prompt, (parent1_id, parent2_id)
 
@@ -1645,7 +1670,7 @@ async def generate_new_parameter_estimator(current_island,
                                            spike_matrix, stimuli, prompt_manager,
                                            mode='explore', k_max=1, temp=1,
                                            param_estimator_max_lines=100, img_dir=None,
-                                           swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'],
+                                           swear_words=None,
                                            refine_rounds: int = 0,
                                            param_penalty_weight: float = 0.1,
                                            create_train_test_trial_split_fn=None,
@@ -1732,8 +1757,12 @@ async def generate_new_parameter_estimator(current_island,
         # find the word that is in the code_string
         swear_word = next((word for word in swear_words if word in code_string), None)
         logging.info(f"Parameter estimator code contains swear word: {swear_word}, skipping.")
+        logging.info(f"Code string was:\n{code_string}")
         return None, None
     code_string = code_string.replace(f'def parameter_estimator_v{k+1}(', 'def parameter_estimator(')
+    code_string = _enforce_single_feature_code_access(
+        code_string, stimuli=stimuli, code_label="Parameter estimator generation"
+    )
     func = utils.str_to_func(code_string, 'parameter_estimator')
 
     if func is None:
@@ -1888,7 +1917,7 @@ async def generate_new_parameter_estimator(current_island,
 async def not_used_yet_generate_new_parameter_estimator_from_image_feedback(image_prompt: str,
                                                                image_dir: str,
                                                                model_name='gemini-2.0-flash',
-                                                               swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'],
+                                                               swear_words=None,
                                                                max_lines=100,
                                                                temp=1,
                                                                client=None) -> tuple[str, callable]:
@@ -1982,11 +2011,25 @@ def _check_jax_translation(np_func, jax_func, param_estimator, inputs, response,
     x_full, y_full, x_check, _ = _prepare_seed_translation_check_data(
         inputs, response, sample_idx=0, max_trials=max_trials
     )
-    params = param_estimator(x_full, y_full)
+    try:
+        params = param_estimator(x_full, y_full)
+    except Exception as e:
+        n_features = int(np.asarray(x_full).shape[0])
+        raise ValueError(
+            f"Parameter estimator failed during translation check: {e}. "
+            f"Input has {n_features} feature(s); ensure code only accesses valid X[i] indices."
+        ) from e
     params = np.asarray(params).reshape(-1)
 
-    np_pred = np.asarray(np_func(x_check, *params))
-    jax_pred = np.asarray(jax_func(jnp.asarray(x_check), *params))
+    try:
+        np_pred = np.asarray(np_func(x_check, *params))
+        jax_pred = np.asarray(jax_func(jnp.asarray(x_check), *params))
+    except Exception as e:
+        n_features = int(np.asarray(x_check).shape[0])
+        raise ValueError(
+            f"Model execution failed during translation check: {e}. "
+            f"Input has {n_features} feature(s); ensure code only accesses valid X[i] indices."
+        ) from e
 
     if np_pred.shape != jax_pred.shape:
         raise ValueError(
@@ -2028,6 +2071,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 prompt_manager = None,
                 log_best_loss = True,
                 trial_batch_size = None,
+                swear_words = None,
                 random_seed = 42):
     """ 
     Main function to run the hypothesis engine.
@@ -2354,6 +2398,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 param_penalty_weight=param_penalty_weight,
                 create_train_test_trial_split_fn=create_train_test_trial_split_fn,
                 random_seed=random_seed,
+                swear_words=swear_words,
                 island_chat_manager=island_chat_manager,
                 island_id=island_idx,
                 batch_id=j,

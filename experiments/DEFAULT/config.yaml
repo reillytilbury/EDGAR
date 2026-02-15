@@ -59,6 +59,7 @@ experiment_params:
   large_lm_name : gemini-2.5-flash
   use_large_every : 3
   use_large_model_for_param_estimators: false # Whether parameter estimators should use the large LM (true) or tiny LM (false). 
+  swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
 
 # Evolution algorithm parameters (used by EvolutionConfig)
 evolution:
@@ -128,6 +129,7 @@ prompts:
       You are an AI scientist. Below are two models describing a phenomenon, sorted from hightest to lowest loss. 
       Your task is to create a new model, model_v{next_version}, that has a lower loss than the models below.
       *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
+      Always ensure your model outputs are bounded (e.g., by clipping exponential arguments or the final output) to avoid infinite losses.
 
     explore: |
       Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? 
@@ -234,7 +236,13 @@ prompts:
       * Replace NumPy functions with JAX equivalents (np.array → jnp.array, np.sin → jnp.sin, etc.)
       * Avoid Python control flow (if/for) that depends on array values - use `jnp.where`, `jax.lax.cond`, `jax.lax.scan` instead
       * Do not use dynamic array shapes or indexing with non-constant indices
-      * Use `jnp.clip()` instead of boolean masking for bounds
+      * Do not use dynamic array shapes or indexing with non-constant indices
+      * Never call Python `int()` / `float()` / `range()` on JAX values (e.g., no `int(jnp.ceil(...))`).
+      * For lattice/grid models, avoid data-dependent `jnp.arange(-n, n+1)` where `n` depends on parameters.
+      * Instead, create a fixed static maximum range (e.g., `n_range_max`) and use a mask:
+        compute dynamic `n_eff = jnp.ceil(...)`, build static indices with `jnp.arange(-n_range_max, n_range_max + 1)`,
+        then zero out contributions where `abs(index) > n_eff` using `jnp.where`.
+      * `jnp.where(condition, x, y)` requires broadcast-compatible shapes. If `x` is flattened (e.g., `(N, 2)`), flatten/reshape masks to match (e.g., `(N, 1)`), rather than using unflattened masks like `(H, W, 1)`.      * Use `jnp.clip()` instead of boolean masking for bounds
       
       Do not include any text other than the code. 
       Update the function name to be the original name without "_v*". For example, `def neuron_model_v1(X, param1=0.5):` should become `def neuron_model(X, param1=0.5):`.

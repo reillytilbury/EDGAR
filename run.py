@@ -173,7 +173,8 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             diagnostics_module=diagnostics_module,
             prompt_manager=prompt_manager,
             use_large_model_for_param_estimators=params.get('use_large_model_for_param_estimators', False),
-            trial_batch_size=params.get('trial_batch_size', None)
+            trial_batch_size=params.get('trial_batch_size', None),
+            swear_words=params.get('swear_words')
         )
 
 if __name__ == "__main__":

@@ -55,7 +55,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
                     line_alpha=1.0,
                     point_alpha=0.1,
                     point_size: int = 80,
-                    legend_fontsize: int = 12,
+                    legend_fontsize: int = 8,
                     dpi: float = 100.0,
                     save_path: Optional[str] = None):
     """
@@ -77,7 +77,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
         repeats = int(np.ceil(n_models / max(len(colours), 1)))
         colours = (colours * repeats)[:n_models]
 
-    fig, axes = plt.subplots(n_grid_side, n_grid_side, figsize=(15, 10))
+    fig, axes = plt.subplots(n_grid_side, n_grid_side, figsize=(n_grid_side * 5, n_grid_side * 5))
     axes = np.array([[axes]]) if n_samples == 1 else axes
 
     x_min = float(jnp.min(inputs_plot))
