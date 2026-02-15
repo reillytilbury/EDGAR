@@ -158,7 +158,7 @@ def load_and_process_data(
         "trials": angles_cropped,
     }
 
-def create_train_test_sample_split(n_samples, training_sample_ratio=0.5, random_seed=0):
+def create_train_test_sample_split(n_samples, training_sample_ratio=0.5, random_seed=42):
     key = jax.random.PRNGKey(random_seed)
     training_size = int(n_samples * training_sample_ratio)
     shuffled_indices = jax.random.permutation(key, jnp.arange(n_samples))
