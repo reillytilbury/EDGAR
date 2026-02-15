@@ -371,8 +371,8 @@ class TestObjectiveVectorized:
 class TestObjective:
     """Tests for objective function (main entry point)."""
     
-    def test_scalar_delegates_to_legacy(self):
-        """Test that n_targets=1 delegates to objective_legacy."""
+    def test_scalar_output_accepted(self):
+        """Test that scalar outputs (2D y) work via the unified objective path."""
         np.random.seed(42)
         n_samples, n_features, n_trials = 5, 2, 50
         
@@ -392,8 +392,8 @@ class TestObjective:
         assert np.isfinite(initial_loss)
         assert np.isfinite(final_loss)
         
-    def test_vectorized_calls_vectorized(self):
-        """Test that n_targets>1 calls objective_vectorized."""
+    def test_vectorized_output_accepted(self):
+        """Test that vectorized outputs (n_targets>1) work via the unified objective path."""
         np.random.seed(42)
         n_samples, n_features, n_trials = 5, 2, 50
         n_targets = 2
