@@ -139,17 +139,17 @@ Return a dict with model-ready inputs and outputs. Canonical shape is:
 
 Examples:
 - Orientation tuning: 1 feature (`theta`), 1 target (single-cell firing rate).
-- Shapes:
-- `X`: `(1, n_trials)`
-- model output: `(n_trials,)`
+    - Shapes:
+        - `X`: `(1, n_trials)`
+        - model output: `(n_trials,)`
 - Grid-cell tuning with position input: 2 features (`x`, `y`), 1 target (single-cell firing rate).
-- Shapes:
-- `X`: `(2, n_trials)`
-- model output: `(n_trials,)`
+    - Shapes:
+        - `X`: `(2, n_trials)`
+        - model output: `(n_trials,)`
 - Multi-cell prediction: 2 features (`x`, `y`), `N` targets (firing rates for `N` cells).
-- Shapes:
-- `X`: `(2, n_trials)`
-- model output: `(N, n_trials)` (or equivalent canonical outputs tensor with `n_targets=N`)
+    - Shapes:
+        - `X`: `(2, n_trials)`
+        - model output: `(N, n_trials)` (or equivalent canonical outputs tensor with `n_targets=N`)
 
 Current limitation:
 - The full `hypothesis_engine` run path currently assumes scalar targets (`n_targets=1`).
