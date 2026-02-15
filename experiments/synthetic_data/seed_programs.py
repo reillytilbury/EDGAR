@@ -5,13 +5,15 @@ def model_v1(x, a, b):
     model version 1 of the form
     f(x) = a * x + b
     Args:
-        x (n_trials,): input data
+        x (1, n_trials) or (n_trials,): input data
         a (float): parameter a
         b (float): parameter b
     Returns:
         y (n_trials,): output of the model
     """
-    return a * x + b
+    x_arr = np.asarray(x)
+    x_1d = x_arr[0] if x_arr.ndim > 1 else x_arr
+    return a * x_1d + b
 
 def parameter_estimator_v1(x, y):
     """

@@ -41,6 +41,8 @@ def select_evaluation_points(inputs: jnp.ndarray,
         raise ValueError(f"Expected 2D or 3D inputs, got shape {x_arr.shape}.")
 
     n_trials = int(x_arr.shape[2])
+    if n_trials < n_points:
+        raise ValueError(f"Requested n_points ({n_points}) exceeds available trials ({n_trials}).")
     n_eval = min(int(n_points), n_trials)
     rng = np.random.default_rng(random_seed)
     trial_idx = rng.choice(n_trials, size=n_eval, replace=False)

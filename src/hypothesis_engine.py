@@ -124,7 +124,6 @@ def save_data_summary(
     training_sample_ratio: float = 0.5,
     create_train_test_sample_split_fn=None,
     create_train_test_trial_split_fn=None,
-    trial_split_random_seed: int = 0,
 ) -> pd.DataFrame:
     """
     Save a summary of the realized sample/trial splits and matrix sizes to CSV.
@@ -206,7 +205,7 @@ def save_data_summary(
         training_trials_idx, test_trials_idx, trial_split_call_mode = _call_trial_split_fn(
             create_train_test_trial_split_fn,
             n_trials,
-            trial_split_random_seed,
+            random_seed,
         )
         trial_split_error = None
     except Exception as exc:
@@ -236,7 +235,7 @@ def save_data_summary(
 
     trial_split_method = (
         f"fn={_describe_fn(create_train_test_trial_split_fn)}; "
-        f"random_seed={trial_split_random_seed}; call_mode={trial_split_call_mode}; "
+        f"random_seed={random_seed}; call_mode={trial_split_call_mode}; "
         f"disjoint={trial_stats['disjoint']}; cover_all={trial_stats['cover_all']}; "
         f"overlap={trial_stats['n_overlap']}; uncovered={trial_stats['n_uncovered']}; "
         f"train_has_duplicates={trial_stats['train_has_duplicates']}; "
@@ -516,7 +515,7 @@ def save_data_summary(
     print(
         f"Trial Split:  {n_training_trials}/{n_trials} train, "
         f"{n_test_trials}/{n_trials} test (per sample, in objective; "
-        f"seed={trial_split_random_seed}, disjoint={trial_stats['disjoint']}, "
+        f"seed={random_seed}, disjoint={trial_stats['disjoint']}, "
         f"cover_all={trial_stats['cover_all']})"
     )
     print(f"Features:     {n_features} per sample")
@@ -2682,7 +2681,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                                 fit_params=fit_params, tol=tol, 
                                                                                 use_param_estimator=use_param_estimator, 
                                                                                 max_iter=max_iter, trial_batch_size=trial_batch_size,
-                                                                                random_seed=trial_split_random_seed)
+                                                                                random_seed=random_seed)
             if loss == FAILED_PROGRAM_COST:
                 logging.info('-' * 50)
                 continue
@@ -2853,7 +2852,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                           param_penalty_weight=param_penalty_weight, tol=tol,
                                                           use_param_estimator=use_param_estimator, 
                                                           trial_batch_size=trial_batch_size,
-                                                          random_seed=trial_split_random_seed,
+                                                          random_seed=random_seed,
                                                           )
             islands[island_idx].at[j, 'test_loss'] = test_loss
             islands[island_idx].at[j, 'params'] = optimized_params
