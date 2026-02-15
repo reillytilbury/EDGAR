@@ -1,6 +1,7 @@
 # DATA CONFIG 
 task: orientation_tuning # name of the sub directory under experiments
 load_and_process_data_fn: experiments.orientation_tuning.data_parser.load_and_process_data
+create_train_test_sample_split_fn: experiments.orientation_tuning.data_parser.create_train_test_sample_split
 create_train_test_trial_split_fn: experiments.orientation_tuning.data_parser.create_train_test_trial_split
 
 data_processing_params:

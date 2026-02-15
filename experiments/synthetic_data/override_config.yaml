@@ -1,6 +1,7 @@
 # DATA CONFIG 
 task: synthetic_data # name of the sub directory under experiments
 load_and_process_data_fn: experiments.synthetic_data.data_parser.load_and_process_data
+create_train_test_sample_split_fn: experiments.synthetic_data.data_parser.create_train_test_sample_split
 create_train_test_trial_split_fn: experiments.synthetic_data.data_parser.create_train_test_trial_split
 
 data_processing_params:

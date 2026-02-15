@@ -1,6 +1,8 @@
 # DATA CONFIG 
 task: place_cells  # name of the sub directory under experiments
 load_and_process_data_fn: experiments.place_cells.data_parser.load_and_process_data
+create_train_test_sample_split_fn: experiments.place_cells.data_parser.create_train_test_sample_split
+create_train_test_trial_split_fn: experiments.place_cells.data_parser.create_train_test_trial_split
 
 # Update to your local data file path
 # Expected fields: time vector, position x/y, and spike times per cell

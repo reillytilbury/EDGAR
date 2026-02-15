@@ -60,6 +60,14 @@ def load_and_process_data(SEED=42, n_samples=1_000, n_trials=2_000, noise_std=0.
             "response" : y, # fix this once we've resolved the issue with naming things responses ambiguously
             "parameters": {"a": a, "b": b, "c": c, "k": k, "phi_0": phi_0}}
 
+def create_train_test_sample_split(n_samples, training_sample_ratio=0.5, random_seed=0):
+    key = jax.random.PRNGKey(random_seed)
+    training_size = int(n_samples * training_sample_ratio)
+    shuffled_indices = jax.random.permutation(key, jnp.arange(n_samples))
+    training_samples = shuffled_indices[:training_size]
+    test_samples = shuffled_indices[training_size:]
+    return training_samples, test_samples
+
 def create_train_test_trial_split(n_trials: int, random_seed : int = 0) -> Tuple[np.ndarray, np.ndarray]:
     """
     Create a random split of trial indices into training and test sets.

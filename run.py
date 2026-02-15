@@ -109,7 +109,15 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         load_and_process_data_fn = getattr(data_module, function_name)
     else:
         raise ValueError("load_and_process_data_fn must be specified in config.yaml")
-    
+
+    create_train_test_sample_split_fn_path = config.pop('create_train_test_sample_split_fn', None)
+    if create_train_test_sample_split_fn_path:
+        module_path, function_name = create_train_test_sample_split_fn_path.rsplit('.', 1)
+        data_module = importlib.import_module(module_path)
+        create_train_test_sample_split_fn = getattr(data_module, function_name)
+    else:
+        create_train_test_sample_split_fn = None
+
     create_train_test_trial_split_fn_path = config.pop('create_train_test_trial_split_fn', None)
     if create_train_test_trial_split_fn_path:
         module_path, function_name = create_train_test_trial_split_fn_path.rsplit('.', 1)
@@ -168,7 +176,9 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             jax_programs=jax_programs,
             param_estimators=param_estimators,
             load_and_process_data_fn=load_and_process_data_fn,
+            create_train_test_sample_split_fn=create_train_test_sample_split_fn,
             create_train_test_trial_split_fn=create_train_test_trial_split_fn,
+            training_sample_ratio=params.get('training_sample_ratio', 0.5),
             data_processing_params=data_processing_params,
             diagnostics_module=diagnostics_module,
             prompt_manager=prompt_manager,

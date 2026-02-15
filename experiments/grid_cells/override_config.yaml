@@ -1,6 +1,7 @@
 # DATA CONFIG 
 task: grid_cells  # name of the sub directory under experiments
 load_and_process_data_fn: experiments.grid_cells.data_parser.load_and_process_data
+create_train_test_sample_split_fn: experiments.grid_cells.data_parser.create_train_test_sample_split
 create_train_test_trial_split_fn: experiments.grid_cells.data_parser.create_train_test_trial_split
 
 # some details on the data : 

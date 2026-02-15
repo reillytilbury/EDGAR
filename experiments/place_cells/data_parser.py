@@ -435,6 +435,24 @@ def load_and_process_data(
         'smoothing_sigma': smoothing_sigma,
     }
 
+def create_train_test_sample_split(n_samples, training_sample_ratio=0.5, random_seed: int = 0):
+    key = jax.random.PRNGKey(random_seed)
+    training_size = int(n_samples * training_sample_ratio)
+    shuffled_indices = jax.random.permutation(key, jnp.arange(n_samples))
+    training_samples = shuffled_indices[:training_size]
+    test_samples = shuffled_indices[training_size:]
+    return training_samples, test_samples
+
+def create_train_test_trial_split(n_trials: int, random_seed : int = 0) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Create a random split of trial indices into training and test sets.
+    """    
+    rng = np.random.default_rng(random_seed)
+    training_size = n_trials // 2
+    shuffled_indices = rng.permutation(n_trials)
+    training_trials_idx = shuffled_indices[:training_size]
+    test_trials_idx = shuffled_indices[training_size:]
+    return training_trials_idx, test_trials_idx
 
 def place_cell_filter(
     response: np.ndarray,

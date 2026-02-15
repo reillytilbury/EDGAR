@@ -2057,7 +2057,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 little_lm_name = 'gemini-2.0-flash',
                 large_lm_name = 'gemini-2.5-flash',
                 use_large_every = 3,
-                training_ratio = 0.5, 
+                training_sample_ratio = 0.5, 
                 max_iter = 1_000,
                 learning_rate = 3e-3,
                 use_large_model_for_param_estimators=False,
@@ -2065,6 +2065,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 jax_programs = None,
                 param_estimators = None,
                 load_and_process_data_fn = None,
+                create_train_test_sample_split_fn = None,
                 create_train_test_trial_split_fn = None,
                 data_processing_params = None,
                 diagnostics_module = None,
@@ -2138,15 +2139,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         n_features = 1
     else: 
         n_features = inputs.shape[1]
-        
-    key = jax.random.PRNGKey(random_seed)
-    def create_train_test_split(n_samples, training_ratio):
-        training_size = int(n_samples * training_ratio)
-        shuffled_indices = jax.random.permutation(key, jnp.arange(n_samples))
-        training_samples = shuffled_indices[:training_size]
-        test_samples = shuffled_indices[training_size:]
-        return training_samples, test_samples
-    training_samples, test_samples = create_train_test_split(n_good_samples, training_ratio)
+    
+    training_samples, test_samples = create_train_test_sample_split_fn(n_good_samples, training_sample_ratio, random_seed)
     response_train, response_test = response[training_samples, :], response[test_samples, :]
     inputs_train, inputs_test = inputs[training_samples, :], inputs[test_samples, :]  # has shape (n_samples, n_features, n_trials)
     print(f"Loaded {n_good_samples} samples, {n_trials} trials per sample.")

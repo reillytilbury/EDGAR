@@ -3,7 +3,9 @@
 # DATA CONFIG 
 task: new_experiment # name of the sub directory under experiments -- update this to make this more descriptive of the experiment
 load_and_process_data_fn: experiments.new_experiment.data_parser.load_and_process_data
+create_train_test_sample_split_fn: experiments.new_experiment.data_parser.create_train_test_sample_split
 create_train_test_trial_split_fn: experiments.new_experiment.data_parser.create_train_test_trial_split
+training_sample_ratio: 0.5 # Proportion of samples to use for training vs test split (the rest will be used for testing). This is separate from the trial split, which is defined in create_train_test_trial_split_fn and determines the train/test split of trials within each sample.
 
 data_processing_params:
   # consider saving some data parsing parameters (thresholds) so that we can save down a yaml copy each time we run an experiment

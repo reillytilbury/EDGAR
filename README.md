@@ -312,7 +312,7 @@ experiment_params:
   use_large_every: 3                     # Use large LLM every N iterations
   
   # Training parameters
-  training_ratio: 0.5       # Fraction of cells for training (rest for test)
+  training_sample_ratio: 0.5       # Fraction of cells for training (rest for test)
   conc_thresh: 0.55         # Cell selection threshold
   activity_thresh: 0.4      # Cell selection threshold
 ```

@@ -367,6 +367,14 @@ def load_and_process_data(
         "smoothing_sigma": smoothing_sigma,
     }
 
+def create_train_test_sample_split(n_samples, training_sample_ratio, random_seed=0):
+    key = jax.random.PRNGKey(random_seed)
+    training_size = int(n_samples * training_sample_ratio)
+    shuffled_indices = jax.random.permutation(key, jnp.arange(n_samples))
+    training_samples = shuffled_indices[:training_size]
+    test_samples = shuffled_indices[training_size:]
+    return training_samples, test_samples
+
 def create_train_test_trial_split(n_trials: int, random_seed : int = 0) -> Tuple[jnp.ndarray, jnp.ndarray]:    
     key = jax.random.PRNGKey(random_seed)        
     n_trial_splits = 10 
