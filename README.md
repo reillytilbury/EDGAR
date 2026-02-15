@@ -1,259 +1,208 @@
 # EDGAR-gamma: Equation Discovery with Graphical AI Reasoning
 
-A framework for automated equation discovery using LLMs within an evolutionary algorithm.
+EDGAR-gamma is an evolutionary framework for discovering equations with LLM-generated programs and parameter estimators.
 
-## Overview
+## Lightweight Quickstart (5 minutes)
 
-EDGAR-gamma uses an island-based genetic algorithm to evolve neuroscience models, leveraging large language models (LLMs) to generate candidate programs and parameter estimators. The system explores the hypothesis space through multiple populations (islands) that exchange successful models via migration.
-
-## Installation
+### 1) Install
 
 ```bash
-# Create conda environment
-conda create -n edgar python=3.13
+conda create -n edgar python=3.13 -y
 conda activate edgar
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Quick Start
+### 2) Set API key
 
 ```bash
-# Run with test mode (shorter iterations for testing) using synthetic data
-python -m run --config experiments/synthetic_data/override_config.yaml --test_mode
+export GOOGLE_API_KEY=your_gemini_api_key
+```
 
-# Run full experiment (example: orientation tuning)
+### 3) Run the shortest end-to-end experiment
+
+```bash
+python -m run --config experiments/synthetic_data/override_config.yaml --test_mode
+```
+
+### 4) Run a full example
+
+```bash
 python -m run --config experiments/orientation_tuning/override_config.yaml
 ```
 
-Results are saved to `program_databases/MM-DD/HH-MM-SS/` with:
-- Individual island results in `island_{i}/`
-- Combined best programs in `combined/`
-- Diagnostic plots in `image_feedback/`
-- Iteration snapshots in `iteration_updates/`
+Run outputs are written to `program_databases/MM-DD/HH-MM-SS/`.
+Most useful artifacts:
+- `combined/programs_db.csv`
+- `combined/top_model_fits.png`
+- `combined/train_vs_test_loss.png`
+- `hypothesis_engine.log`
 
-## Project Structure
+## New Experiment TODO (Minimal)
 
+If you are setting up a new task, use this as a checklist first. Then use the detailed sections below for examples.
+
+- [ ] Create `experiments/your_task_name/`.
+- [ ] Add `experiments/your_task_name/override_config.yaml`.
+- [ ] In `override_config.yaml`, define required keys: `task`, `model_name`, `load_and_process_data_fn`, `create_train_test_sample_split_fn`, `create_train_test_trial_split_fn`, `seed_programs.module`, `seed_programs.function_seeds` (2 names), `seed_programs.parameter_estimator_seeds` (2 names), `data_processing_params`, `inputs`, and `experiment_params` (or rely on defaults from `experiments/DEFAULT/config.yaml`).
+- [ ] Add `experiments/your_task_name/seed_programs.py` with exactly 2 model functions (`def ...(X, ...)`) and 2 parameter estimator functions (`def ...(X, y)`).
+- [ ] Add `experiments/your_task_name/data_parser.py` with `load_and_process_data(...)`, `create_train_test_sample_split(...)`, and `create_train_test_trial_split(...)`.
+- [ ] Add `experiments/your_task_name/diagnostics.py` with `select_evaluation_points(...)` and `plot_model_fits(...)` (required if you want diagnostics/image feedback).
+- [ ] Run:
+
+```bash
+python -m run --config experiments/your_task_name/override_config.yaml
 ```
+
+## How Configuration Works
+
+`run.py` merges:
+- Base defaults: `experiments/DEFAULT/config.yaml`
+- Your experiment override: `--config experiments/<task>/override_config.yaml`
+
+This repository does not include a root `config.yaml`, so always pass `--config`.
+
+## Project Layout
+
+```text
 EDGAR-gamma/
-├── experiments/              # Task-specific implementations
-│   └── DEFAULT/
-│       └── config.yaml       # Base/default config for all experiments
-│   └── orientation_tuning/   # Example task
-│       ├── override_config.yaml  # Experiment overrides merged with DEFAULT config
-│       ├── seed_programs.py  # Initial model implementations
-│       ├── diagnostics.py    # Diagnostics + eval-point selection
-│       └── data_parser.py    # Data loading functions
-├── src/                      # Core framework code
-│   ├── hypothesis_engine.py  # Main evolution loop
-│   ├── genetic_helpers.py    # Island operations (migration, pruning)
-│   ├── data_structures.py    # Inputs class for multi-input support
-│   ├── prompt_manager.py     # LLM prompt generation
-│   ├── llm_helper.py         # LLM API interactions
-│   ├── diagnostics_manager.py # Diagnostics loading + shared plotting utilities
-│   └── utils.py              # Utility functions
-└── run.py                    # Entry point
+├── experiments/
+│   ├── DEFAULT/
+│   │   └── config.yaml
+│   ├── orientation_tuning/
+│   │   ├── override_config.yaml
+│   │   ├── seed_programs.py
+│   │   ├── data_parser.py
+│   │   └── diagnostics.py
+│   └── ...
+├── src/
+│   ├── hypothesis_engine.py
+│   ├── diagnostics_manager.py
+│   ├── prompt_manager.py
+│   └── ...
+├── run.py
+└── tests/
 ```
 
-## Setting Up a New Experiment
+## Create a New Experiment
 
-### 1. Create Task Directory
+Use this checklist to get from zero to a runnable experiment quickly.
+
+### 1) Create a task folder
 
 ```bash
 mkdir -p experiments/your_task_name
 ```
 
-### 2. Implement Seed Programs (`experiments/your_task_name/seed_programs.py`)
+### 2) Add `seed_programs.py`
 
-You need to provide 2 seed models with corresponding parameter estimators (NumPy only):
+Minimum requirement: exactly 2 model seeds and exactly 2 parameter estimator seeds.
 
 ```python
 import numpy as np
 
-# NumPy version (used for parameter estimation)
-def neuron_model_1(X, amplitude=1.0, baseline=0.0):
-    """
-    Simple model description.
-    
-    Args:
-        X: Input array with shape (n_features, n_trials).
-           X[0] is the primary stimulus (e.g., orientation angles).
-        amplitude: Response amplitude
-        baseline: Baseline firing rate
-    
-    Returns:
-        Predicted firing rate, shape (n_trials,)
-    """
-    theta = X[0]  # Extract first input
-    return amplitude * np.cos(theta) + baseline
+def neuron_model_1(X, a=1.0, b=0.0):
+    x = X[0]
+    return a * np.cos(x) + b
 
-# Parameter estimator
-def parameter_estimator_1(X, response):
-    """
-    Estimate parameters from data.
-    
-    Args:
-        X: Input array with shape (n_features, n_trials).
-           X[0] is the primary stimulus.
-        response: Observed responses for a single cell, shape (n_trials,)
-    
-    Returns:
-        np.ndarray: Estimated parameters [amplitude, baseline]
-    """
-    theta = X[0]  # Extract first input
-    baseline = np.mean(response)
-    amplitude = np.std(response)
-    return np.array([amplitude, baseline])
 
-# Implement neuron_model_2, parameter_estimator_2
-# ...
+def neuron_model_2(X, a=1.0, b=0.0, c=0.1):
+    x = X[0]
+    return a * np.cos(x - c) + b
+
+
+def parameter_estimator_1(X, y):
+    return np.array([np.std(y), np.mean(y)])
+
+
+def parameter_estimator_2(X, y):
+    return np.array([np.std(y), np.mean(y), 0.0])
 ```
 
-**Important constraints:**
-- **Function signature**: Models must accept `X` as first argument with shape `(n_features, n_trials)`
-- **Input access**: Use index-based access like `theta = X[0]`, `contrast = X[1]`
-- Parameter estimators must be simple heuristics (no scipy.optimize, curve_fit, etc.)
-- Seed JAX versions are generated automatically via the JAX translator prompt when optimization starts
-- All parameters must have default values
+Seed rules:
+- Model signature is `def ...(X, ...)`
+- `X` shape is `(n_features, n_trials)`
+- Access features by index (`X[0]`, `X[1]`, ...)
+- Keep estimators simple heuristics (avoid optimize/curve_fit-style solvers)
+- Give all free parameters default values
 
-### 3. Implement Data Loader (`experiments/your_task_name/data_parser.py`)
+### 3) Add `data_parser.py`
+
+Return a dict with model-ready inputs and outputs. Canonical shape is:
+- `inputs`: `(n_samples, n_features, n_trials)`
+- `outputs`: `(n_samples, n_targets, n_trials)`
+
+### Features vs Targets (with examples)
+
+- `n_features` is how many input variables each model uses per trial.
+- `n_targets` is how many outputs the model predicts per trial.
+- In model code, `X` has shape `(n_features, n_trials)`, so each feature is `X[i]`.
+
+Examples:
+- Orientation tuning: 1 feature (`theta`), 1 target (single-cell firing rate).
+- Shapes:
+- `X`: `(1, n_trials)`
+- model output: `(n_trials,)`
+- Grid-cell tuning with position input: 2 features (`x`, `y`), 1 target (single-cell firing rate).
+- Shapes:
+- `X`: `(2, n_trials)`
+- model output: `(n_trials,)`
+- Multi-cell prediction: 2 features (`x`, `y`), `N` targets (firing rates for `N` cells).
+- Shapes:
+- `X`: `(2, n_trials)`
+- model output: `(N, n_trials)` (or equivalent canonical outputs tensor with `n_targets=N`)
+
+Current limitation:
+- The full `hypothesis_engine` run path currently assumes scalar targets (`n_targets=1`).
+- Multi-target objective logic exists, but end-to-end evolutionary runs currently require a single target per sample.
 
 ```python
 import numpy as np
+import jax
 import jax.numpy as jnp
+from src.data_structures import Inputs, Outputs
 
-def load_and_process_data(data_path, conc_thresh=0.55, activity_thresh=0.4):
-    """
-    Load and preprocess data for the task.
-    
-    Args:
-        data_path: Path to data file
-        conc_thresh: Concentration threshold for cell selection
-        activity_thresh: Activity threshold for cell selection
-    
-    Returns:
-        dict with keys:
-            - 'response': jnp.ndarray of shape (n_cells, n_trials)
-            - 'inputs': Inputs object with shape (n_cells, n_features, n_trials)
-            - 'good_cells': np.ndarray of selected cell indices
-            - 'n_good_cells': int, number of selected cells
-    """
-    # Load your data
+
+def load_and_process_data(data_path, **kwargs):
     data = np.load(data_path, allow_pickle=True).item()
-    
-    # Process data
-    response = data['response']  # (n_cells, n_trials)
-    stimuli = data['stimuli']    # (n_trials,) or (n_cells, n_trials)
-    
-    # Filter cells based on your criteria
-    good_cells = np.where((response.mean(axis=1) > activity_thresh))[0]
-    
-    # Create Inputs object (supports multiple Inputs)
-    n_good_cells = len(good_cells)
-    n_trials = response.shape[1]
-    
-    # Single input example: expand stimuli to (n_cells, 1, n_trials)
-    if stimuli.ndim == 1:
-        stimuli_expanded = np.tile(stimuli.reshape(1, 1, -1), (n_good_cells, 1, 1))
-    else:
-        stimuli_expanded = stimuli[good_cells][:, np.newaxis, :]
-    
-    inputs = Inputs.from_array(
-        stimuli_expanded,
-        names=input_names or ['theta']
-    )
-    
-    # Return the model-ready response + inputs payload
-    return {
-        'response': jnp.array(response[good_cells]),
-        'inputs': inputs,
-        'good_cells': good_cells,
-        'n_good_cells': n_good_cells
-    }
+
+    # Example arrays (adapt to your dataset)
+    # response: (n_samples, n_trials)
+    # stimulus: (n_trials,)
+    response = data["response"]
+    stimulus = data["stimulus"]
+
+    n_samples, _ = response.shape
+    inputs_arr = np.tile(stimulus.reshape(1, 1, -1), (n_samples, 1, 1))
+
+    inputs = Inputs.from_array(inputs_arr, names=["stimulus"])
+    outputs = Outputs.from_array(response, names=["response"])
+
+    return {"inputs": inputs, "outputs": outputs}
+
+
+def create_train_test_sample_split(n_samples, training_sample_ratio=0.5, random_seed=0):
+    key = jax.random.PRNGKey(random_seed)
+    n_train = int(n_samples * training_sample_ratio)
+    idx = jax.random.permutation(key, jnp.arange(n_samples))
+    return idx[:n_train], idx[n_train:]
+
+
+def create_train_test_trial_split(n_trials, random_seed=0):
+    rng = np.random.default_rng(random_seed)
+    idx = rng.permutation(n_trials)
+    n_train = n_trials // 2
+    return idx[:n_train], idx[n_train:]
 ```
 
-#### Multi-Input Support
+### 4) Add `diagnostics.py` (recommended)
 
-The framework supports models with multiple input variables (e.g., orientation + contrast):
-
-```python
-# In data_parser.py - create multi-input data
-theta = data['orientation']  # (n_trials,)
-contrast = data['contrast']  # (n_trials,)
-
-# Stack into (n_cells, n_features, n_trials)
-inputs_array = np.stack([
-    np.tile(theta, (n_cells, 1)),
-    np.tile(contrast, (n_cells, 1))
-], axis=1)
-
-inputs = Inputs.from_array(
-    inputs_array,
-    names=['theta', 'contrast']
-)
-```
-
-```python
-# In seed_programs.py - access multiple inputs
-def neuron_model_multi(X, theta_pref=0.0, contrast_gain=1.0, baseline=0.0):
-    theta = X[0]     # First nput: orientation
-    contrast = X[1]  # Second input: contrast
-    
-    tuning = np.cos(theta - theta_pref)
-    return baseline + contrast_gain * contrast * tuning
-```
-
-### 4. Implement Diagnostics (`experiments/your_task_name/diagnostics.py`)
-
-Each experiment diagnostics module must define how evaluation points are chosen for
-diagnostic model evaluation. This is now experiment-specific (not hardcoded in
-`hypothesis_engine`).
-
-Required exported functions in `diagnostics.py`:
+Required functions:
 - `select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs)`
 - `plot_model_fits(plot_data, ...)`
 
-`select_evaluation_points(...)` should return explicit points with one of these shapes:
-- Single-input models: `(n_samples, n_eval)`
-- Multi-input models: `(n_samples, n_features, n_eval)`
+Fastest path: copy and adapt `experiments/DEFAULT/diagnostics.py`.
 
-Example:
-
-```python
-import numpy as np
-import jax.numpy as jnp
-
-def select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs):
-    """
-    Select experiment-specific evaluation points for diagnostics.
-
-    This function is called by the hypothesis engine when building
-    `evaluation_matrix` values used in logging and model comparison.
-    """
-    x = jnp.asarray(inputs)
-
-    # Example 1: single-input -> sweep a grid over observed range
-    if x.ndim == 2:
-        n_samples = x.shape[0]
-        grid = jnp.linspace(float(jnp.min(x)), float(jnp.max(x)), n_points)
-        return jnp.broadcast_to(grid, (n_samples, n_points))
-
-    # Example 2: multi-input -> sample observed trials to preserve correlations
-    if x.ndim == 3:
-        n_trials = x.shape[2]
-        n_eval = min(n_points, n_trials)
-        rng = np.random.default_rng(random_seed)
-        idx = rng.choice(n_trials, size=n_eval, replace=False)
-        return x[:, :, idx]
-
-    raise ValueError(f"Unsupported input shape: {x.shape}")
-```
-
-Use this function to encode domain-specific choices (e.g., trajectory sampling,
-feature sweeps, fixed-context slices).
-
-### 5. Configure `experiments/your_task_name/override_config.yaml`
+### 5) Add `override_config.yaml`
 
 ```yaml
 task: your_task_name
@@ -263,25 +212,6 @@ create_train_test_trial_split_fn: experiments.your_task_name.data_parser.create_
 
 diagnostics_path: experiments/your_task_name
 
-data_processing_params:
-  data_path: /path/to/your/data.npy
-
-# Cell selection thresholds
-  activity_threshold: 0.4
-  conc_threshold: 0.55
-
-# Define inputs (names used in models)
-inputs:
-  - name: theta
-    description: "Stimulus orientation angle in radians"
-  # Add more inputs as needed:
-  # - name: contrast
-  #   description: "Stimulus contrast level"
-```
-
-### 6. Configure hyperparameters in `experiments/your_task_name/override_config.yaml`
-
-```yaml
 seed_programs:
   module: experiments.your_task_name.seed_programs
   function_seeds:
@@ -291,178 +221,67 @@ seed_programs:
     - parameter_estimator_1
     - parameter_estimator_2
 
+data_processing_params:
+  data_path: /path/to/data.npy
+
+inputs:
+  - name: stimulus
+    description: "Primary input variable"
+
 experiment_params:
-  n_iterations: 9           # Number of evolution cycles
-  time_limit: 60            # Max runtime in minutes
-  k_max: 2                  # Number of parent models for crossover
-  n_islands: 8              # Number of parallel populations
-  batch_size: 6             # Programs generated per island per iteration
-  max_iter: 1000            # Max optimization iterations per program
-  critical_population_size: 12  # Max programs per island
-  min_wise_population_size: 0   # Reserved slots for large LLM programs
-  n_migrants: 2             # Programs migrating between islands
-  fit_params: true          # Whether to optimize parameters
-  tol: 1e-6                 # Optimization tolerance
-  exploit_point: 0.5        # Fraction of iterations in explore mode
-  param_penalty_weight: 0.01  # Complexity penalty
-  FAILED_PROGRAM_COST: inf  # Loss for failed programs
-  use_image_feedback: true  # Generate diagnostic plots for LLM
-  
-  # Migration topology (which island each island sends migrants to)
-  exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]  # Ring topology
+  num_runs: 1
+  n_iterations: 12
+  time_limit: 60
+  n_islands: 8
+  batch_size: 6
+  max_iter: 1000
+  critical_population_size: 12
+  min_wise_population_size: 0
+  n_migrants: 2
+  fit_params: true
+  tol: 1e-6
+  exploit_point: 0.5
+  learning_rate: 3e-3
+  param_penalty_weight: 0.01
+  FAILED_PROGRAM_COST: .inf
+  use_image_feedback: true
+  exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
   exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
-  
-  # LLM configuration
-  tiny_lm_name: gemini-2.0-flash-lite   # For JAX translation
-  little_lm_name: gemini-2.0-flash      # For most generations
-  large_lm_name: gemini-2.5-flash       # For periodic deep search
-  use_large_every: 3                     # Use large LLM every N iterations
-  
-  # Training parameters
-  training_sample_ratio: 0.5       # Fraction of cells for training (rest for test)
+  tiny_lm_name: gemini-2.0-flash-lite
+  little_lm_name: gemini-2.0-flash
+  large_lm_name: gemini-2.5-flash
+  use_large_every: 3
 ```
 
-### 7. Customize Prompts in `experiments/your_task_name/override_config.yaml`
-
-The prompts control how LLMs generate code. Key sections:
-
-- `program_prompt`: Instructions for generating neuron models
-  - `base`: Core instructions
-  - `explore`: Creative exploration mode
-  - `exploit`: Refinement mode
-  - `image_analysis`: Instructions for interpreting diagnostic plots
-  - `code_guidelines`: Code constraints and JAX compatibility rules
-  - `function_signature`: Required function signature format (X with shape `(n_features, n_trials)`)
-  - `docstring_guidelines`: Documentation format
-
-- `parameter_estimator`: Instructions for parameter estimation functions
-  - Includes `function_signature` for the `(X, spike_counts)` format
-- `jax_translator_prompt`: Instructions for NumPy → JAX conversion
-
-**Important**: Maintain the variable placeholders like `{k}`, `{next_version}`, `{max_lines}`, etc.
-
-## Running Experiments
-
-### Basic Usage
-
-`run.py` defaults to `config.yaml` at repo root, so pass `--config` explicitly in this repository.
+Then run:
 
 ```bash
-# Standard run
-python -m run --config experiments/orientation_tuning/override_config.yaml
-
-# Test mode (reduced iterations for quick validation)
-python -m run --config experiments/synthetic_data/override_config.yaml --test_mode
+python -m run --config experiments/your_task_name/override_config.yaml
 ```
 
-### Environment Variables
+## Useful Commands
 
-Create a `.env` file with your API keys:
-
-```bash
-GOOGLE_API_KEY=your_gemini_api_key
-```
-
-### Monitoring Progress
-
-The system provides real-time feedback:
-- Progress bars show iteration completion
-- Console output displays loss values and success rates
-- Logs are written to `program_databases/MM-DD/HH-MM-SS/hypothesis_engine.log`
-
-### Analyzing Results
-
-After completion, check:
-
-1. **Best programs**: `program_databases/MM-DD/HH-MM-SS/combined/programs_db.csv`
-   - Sorted by mean loss (`mean_loss`)
-   - Contains code, parameters, and genealogy
-
-2. **Diagnostic plots**: `program_databases/MM-DD/HH-MM-SS/combined/top_model_fits.png`
-   - Visual comparison of top models vs data
-
-3. **Learning curves**: `program_databases/MM-DD/HH-MM-SS/combined/train_vs_test_loss.png`
-   - Track overfitting and convergence
-
-4. **Per-iteration snapshots**: `program_databases/MM-DD/HH-MM-SS/iteration_updates/iteration_{i}/`
-   - Monitor evolution progress
-
-## Key Parameters Explained
-
-### Evolution Parameters
-
-- **n_iterations**: More iterations = better solutions but longer runtime
-- **n_islands**: More islands = better exploration but more computation
-- **batch_size**: Programs per island per iteration (higher = more diverse but slower)
-- **critical_population_size**: Island capacity (higher = more diversity, slower migration)
-- **n_migrants**: Programs exchanged between islands (higher = faster convergence, less diversity)
-- **exploit_point**: Fraction of iterations in explore mode (0.5 = half explore, half exploit)
-
-### LLM Strategy
-
-- **use_large_every**: Use expensive large LLM every N iterations for breakthrough ideas
-- **temperature**: Dynamically adjusted, controls creativity vs refinement
-
-### Optimization
-
-- **max_iter**: Gradient descent iterations (higher = better fit but slower)
-- **tol**: Convergence threshold (lower = more precise but slower)
-- **fit_params**: Set false to only use parameter estimator without gradient descent
-
-## Troubleshooting
-
-### Common Issues
-
-**"NonConcreteBooleanIndexError"**
-- Your seed programs or LLM-generated code uses boolean indexing
-- Fix: Replace `array[condition]` with `jnp.where(condition, true_val, false_val)`
-- Update prompts to emphasize JAX constraints
-
-**"Module not found"**
-- Check that `task` name in YAML matches directory name exactly
-- Ensure `__init__.py` files exist if using nested packages
-
-**Programs all fail with FAILED_PROGRAM_COST**
-- Seed programs may have bugs
-- Check logs in `hypothesis_engine.log` for specific errors
-- Validate seed programs can run on your data manually
-
-**Low success rate**
-- LLM may be generating invalid code
-- Review prompts in your experiment config (for example `experiments/orientation_tuning/override_config.yaml`)
-- Check that `code_guidelines` are clear and comprehensive
-- Reduce `batch_size` to focus on quality over quantity
-
-**Out of memory**
-- Reduce `n_islands`, `batch_size`, or number of cells
-- Use smaller models (gemini-2.0-flash-lite)
-
-## Advanced Features
-
-### Custom Loss Functions
-
-Edit `src/loss_functions.py` to add your loss function, then reference it in `src/hypothesis_engine.py`.
-
-### Custom Migration Topologies
-
-Modify `exploration_topology` and `exploitation_topology` in `experiments/your_task_name/override_config.yaml`:
-- Ring: `[1, 2, 3, ..., 0]`
-- Star: `[0, 0, 0, ...]` (all migrate to island 0)
-- Random: `[randint(0, n_islands-1) for _ in range(n_islands)]`
-
-### Validation Testing
+Run all tests:
 
 ```bash
-# Run all tests under tests/
 python -m pytest tests -q
+```
 
-# Run a specific test module
+Run one module:
+
+```bash
 python -m pytest tests/test_orientation_tuning_seed_loss_regression.py -q
 ```
 
-## Citation
+## Common Failure Modes
 
-If you use EDGAR-gamma in your research, please cite:
+- `Config file not found`: you forgot `--config .../override_config.yaml`
+- `There must be exactly 2 ... seeds`: seed list lengths are not exactly 2
+- `FAILED_PROGRAM_COST` for everything: seed code or data parser is broken
+- `NonConcreteBooleanIndexError`: JAX-incompatible code (boolean indexing/control flow)
+- Missing diagnostics plots: `diagnostics_path` invalid or diagnostics module missing required functions
+
+## Citation
 
 ```bibtex
 @article{edgar-gamma,
