@@ -1,4 +1,6 @@
 import numpy as np
+import jax
+import jax.numpy as jnp
 from typing import Tuple
 from src.data_structures import Inputs
 
