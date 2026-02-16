@@ -7,6 +7,17 @@ create_train_test_sample_split_fn: experiments.new_experiment.data_parser.create
 create_train_test_trial_split_fn: experiments.new_experiment.data_parser.create_train_test_trial_split
 training_sample_ratio: 0.5 # Proportion of samples to use for training vs test split (the rest will be used for testing). This is separate from the trial split, which is defined in create_train_test_trial_split_fn and determines the train/test split of trials within each sample.
 
+# Optional: custom per-sample loss function for experiments where input and output trial
+# dimensions differ, or where the default element-wise loss is not appropriate.
+# Signature: sample_loss_fn(model, x_i, y_i, params) -> scalar
+#   model: the JAX model function
+#   x_i: input for one sample, shape (n_features, n_trials_x)
+#   y_i: output for one sample, shape (n_targets, n_trials_y)
+#   params: 1D parameter array, shape (n_params,)
+# Must be JAX-compatible (supports jit, vmap, grad).
+# If not specified, uses the default element-wise loss_func with mean over trials.
+# sample_loss_fn: experiments.your_task.loss.sample_loss
+
 data_processing_params:
   # consider saving some data parsing parameters (thresholds) so that we can save down a yaml copy each time we run an experiment
   data_path: /home/USER/data.npy

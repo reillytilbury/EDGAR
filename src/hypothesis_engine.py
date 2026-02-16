@@ -1429,7 +1429,7 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
 
 
 def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn=None,
-              target_weights=None,
+              target_weights=None, sample_loss_fn=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -1489,6 +1489,7 @@ def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_s
         y=y_outputs,
         create_train_test_trial_split_fn=create_train_test_trial_split_fn,
         target_weights=target_weights,
+        sample_loss_fn=sample_loss_fn,
         param_penalty_weight=param_penalty_weight,
         fit_params=fit_params,
         random_seed=random_seed,
@@ -1502,6 +1503,7 @@ def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_s
 
 def evaluate_param_estimator_loss(model, param_estimator, loss_func, x, y,
                                   create_train_test_trial_split_fn=None,
+                                  sample_loss_fn=None,
                                   param_penalty_weight=0.1, random_seed=0,
                                   trial_batch_size=5000, FAILED_PROGRAM_COST=jnp.inf):
     """
@@ -1527,6 +1529,7 @@ def evaluate_param_estimator_loss(model, param_estimator, loss_func, x, y,
             x=x,
             y=y,
             create_train_test_trial_split_fn=split_fn,
+            sample_loss_fn=sample_loss_fn,
             param_penalty_weight=param_penalty_weight,
             fit_params=False,
             random_seed=random_seed,
@@ -2385,6 +2388,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 log_best_loss = True,
                 trial_batch_size = None,
                 swear_words = None,
+                sample_loss_fn = None,
                 random_seed = 0, # consider setting up a seed_manager to make behaviours more robustly reproducible.
                 ):
     """ 
@@ -2544,10 +2548,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         param_est = param_estimators[i]
         program_jax = jax_programs[i]
         # score the initial program
-        loss_init, params_init, loss, params = objective(program_jax, param_est, 
-                                        loss_func=loss_functions.quadratic_loss, 
-                                        x=inputs_train, y=outputs_train, 
+        loss_init, params_init, loss, params = objective(program_jax, param_est,
+                                        loss_func=loss_functions.quadratic_loss,
+                                        x=inputs_train, y=outputs_train,
                                         create_train_test_trial_split_fn=create_train_test_trial_split_fn,
+                                        sample_loss_fn=sample_loss_fn,
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol, learning_rate=learning_rate,
                                         use_param_estimator=use_param_estimator, max_iter=max_iter, trial_batch_size=trial_batch_size,
                                         random_seed=random_seed)
@@ -2761,13 +2766,14 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 logging.info('-' * 50)
                 continue
             
-            initial_loss, initial_params, loss, optimized_params = objective(model_new, param_est_new, 
+            initial_loss, initial_params, loss, optimized_params = objective(model_new, param_est_new,
                                                                                 loss_func=loss_functions.quadratic_loss,
                                                                                 x=inputs_train, y=outputs_train,
                                                                                 create_train_test_trial_split_fn=create_train_test_trial_split_fn,
+                                                                                sample_loss_fn=sample_loss_fn,
                                                                                 param_penalty_weight=param_penalty_weight,
-                                                                                fit_params=fit_params, tol=tol, 
-                                                                                use_param_estimator=use_param_estimator, 
+                                                                                fit_params=fit_params, tol=tol,
+                                                                                use_param_estimator=use_param_estimator,
                                                                                 max_iter=max_iter, trial_batch_size=trial_batch_size,
                                                                                 random_seed=random_seed)
             if loss == FAILED_PROGRAM_COST:
@@ -2933,12 +2939,13 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             # compute the test loss
             _, _, test_loss, optimized_params = objective(model, param_estimator,
                                                           loss_func=loss_functions.quadratic_loss,
-                                                          x=inputs_test, y=outputs_test, 
+                                                          x=inputs_test, y=outputs_test,
                                                           create_train_test_trial_split_fn=create_train_test_trial_split_fn,
+                                                          sample_loss_fn=sample_loss_fn,
                                                           fit_params=fit_params,
-                                                          max_iter=max_iter, 
+                                                          max_iter=max_iter,
                                                           param_penalty_weight=param_penalty_weight, tol=tol,
-                                                          use_param_estimator=use_param_estimator, 
+                                                          use_param_estimator=use_param_estimator,
                                                           trial_batch_size=trial_batch_size,
                                                           random_seed=random_seed,
                                                           )
