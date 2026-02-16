@@ -579,8 +579,14 @@ def save_data_summary(
         f"(disjoint={sample_stats['disjoint']}, cover_all={sample_stats['cover_all']})"
     )
     print(
-        f"Trial Split:  {n_training_trials}/{n_trials} train, "
-        f"{n_test_trials}/{n_trials} test (per sample, in objective; "
+        f"Input Trial Split:  {n_training_trials_x}/{n_trials_x} train, "
+        f"{n_test_trials_x}/{n_trials_x} test (per sample, in objective; "
+        f"seed={random_seed}, disjoint={trial_stats['disjoint']}, "
+        f"cover_all={trial_stats['cover_all']})"
+    )
+    print(
+        f"Output Trial Split:  {n_training_trials_y}/{n_trials_y} train, "
+        f"{n_test_trials_y}/{n_trials_y} test (per sample, in objective; "
         f"seed={random_seed}, disjoint={trial_stats['disjoint']}, "
         f"cover_all={trial_stats['cover_all']})"
     )
