@@ -26,6 +26,7 @@ from src.hypothesis_engine import (
     objective_vectorized,
     validate_model_output,
     validate_model_execution,
+    _call_trial_split,
 )
 from src.data_structures import Inputs, Outputs, ensure_inputs, ensure_outputs
 from src.loss_functions import quadratic_loss
@@ -481,6 +482,156 @@ class TestIntegration:
             f"Initial loss mismatch: legacy={init_loss_legacy}, vec={init_loss_vec}"
         assert np.isclose(final_loss_legacy, final_loss_vec, rtol=1e-4), \
             f"Final loss mismatch: legacy={final_loss_legacy}, vec={final_loss_vec}"
+
+
+# ============================================================================
+# Test _call_trial_split
+# ============================================================================
+
+class TestCallTrialSplit:
+    """Tests for the _call_trial_split wrapper function."""
+
+    def test_legacy_matched_trials(self):
+        """Legacy split_fn with matched n_trials returns duplicated 4-tuple."""
+        def legacy_split(n_trials, random_seed=0):
+            idx = np.arange(n_trials)
+            return idx[:n_trials // 2], idx[n_trials // 2:]
+
+        x_tr, x_te, y_tr, y_te = _call_trial_split(legacy_split, 100, 100, 42)
+        assert len(x_tr) == 50
+        assert len(x_te) == 50
+        # When matched, x and y indices should be identical
+        np.testing.assert_array_equal(x_tr, y_tr)
+        np.testing.assert_array_equal(x_te, y_te)
+
+    def test_legacy_mismatched_trials_raises(self):
+        """Legacy split_fn with mismatched n_trials raises ValueError."""
+        def legacy_split(n_trials, random_seed=0):
+            idx = np.arange(n_trials)
+            return idx[:n_trials // 2], idx[n_trials // 2:]
+
+        with pytest.raises(ValueError, match="legacy signature"):
+            _call_trial_split(legacy_split, 100, 80, 42)
+
+    def test_generalized_4tuple(self):
+        """Generalized split_fn returning 4-tuple works."""
+        def generalized_split(n_trials_x, n_trials_y, random_seed=0):
+            x_idx = np.arange(n_trials_x)
+            y_idx = np.arange(n_trials_y)
+            return (x_idx[:n_trials_x // 2], x_idx[n_trials_x // 2:],
+                    y_idx[:n_trials_y // 2], y_idx[n_trials_y // 2:])
+
+        x_tr, x_te, y_tr, y_te = _call_trial_split(generalized_split, 100, 80, 42)
+        assert len(x_tr) == 50
+        assert len(x_te) == 50
+        assert len(y_tr) == 40
+        assert len(y_te) == 40
+
+    def test_none_returns_identity(self):
+        """None split_fn returns full identity indices for both x and y."""
+        x_tr, x_te, y_tr, y_te = _call_trial_split(None, 100, 80, 42)
+        np.testing.assert_array_equal(x_tr, np.arange(100))
+        np.testing.assert_array_equal(x_te, np.arange(100))
+        np.testing.assert_array_equal(y_tr, np.arange(80))
+        np.testing.assert_array_equal(y_te, np.arange(80))
+
+
+# ============================================================================
+# Test sample_loss_fn with mismatched trials
+# ============================================================================
+
+class TestMismatchedTrials:
+    """Tests for objective with mismatched input/output trial dimensions."""
+
+    def test_objective_with_sample_loss_fn(self):
+        """Test objective works with custom sample_loss_fn and mismatched trials."""
+        np.random.seed(42)
+        n_samples, n_features = 5, 2
+        n_trials_x, n_trials_y = 100, 80
+
+        x = jnp.array(np.random.randn(n_samples, n_features, n_trials_x))
+        # y has different trial count
+        y = jnp.array(np.random.randn(n_samples, 1, n_trials_y))
+
+        def custom_sample_loss(model, x_i, y_i, params):
+            """Custom loss: compare mean of predictions to mean of targets."""
+            pred = model(x_i, *params)  # (n_trials_x,)
+            # Compare means — works regardless of trial count mismatch
+            return (jnp.mean(pred) - jnp.mean(y_i)) ** 2
+
+        def generalized_split(n_trials_x, n_trials_y, random_seed=0):
+            """Split x and y trials independently."""
+            key = jax.random.PRNGKey(random_seed)
+            k1, k2 = jax.random.split(key)
+            x_idx = jax.random.permutation(k1, jnp.arange(n_trials_x))
+            y_idx = jax.random.permutation(k2, jnp.arange(n_trials_y))
+            x_half = n_trials_x // 2
+            y_half = n_trials_y // 2
+            return x_idx[:x_half], x_idx[x_half:], y_idx[:y_half], y_idx[y_half:]
+
+        initial_loss, initial_params, final_loss, params = objective(
+            model=simple_scalar_model,
+            param_estimator=simple_param_estimator,
+            loss_func=quadratic_loss,  # unused when sample_loss_fn is provided
+            x=x,
+            y=y,
+            create_train_test_trial_split_fn=generalized_split,
+            sample_loss_fn=custom_sample_loss,
+            fit_params=True,
+            max_iter=50,
+            param_penalty_weight=0.01,
+        )
+
+        assert np.isfinite(initial_loss), f"Initial loss is not finite: {initial_loss}"
+        assert np.isfinite(final_loss), f"Final loss is not finite: {final_loss}"
+        assert params.shape == (n_samples, 2)
+
+    def test_matched_trials_backward_compat(self):
+        """Verify that existing tests still work (backward compatibility)."""
+        np.random.seed(42)
+        n_samples, n_features, n_trials = 10, 3, 100
+
+        x = jnp.array(np.random.randn(n_samples, n_features, n_trials))
+        y = jnp.array(np.random.randn(n_samples, n_trials))
+
+        # No sample_loss_fn — uses default element-wise path
+        initial_loss, initial_params, final_loss, params = objective(
+            model=simple_scalar_model,
+            param_estimator=simple_param_estimator,
+            loss_func=quadratic_loss,
+            x=x,
+            y=y,
+            fit_params=False,
+        )
+
+        assert np.isfinite(initial_loss)
+        assert np.isfinite(final_loss)
+        assert params.shape == (n_samples, 2)
+
+    def test_sample_loss_fn_with_matched_trials(self):
+        """sample_loss_fn also works when trials happen to match."""
+        np.random.seed(42)
+        n_samples, n_features, n_trials = 5, 2, 50
+
+        x = jnp.array(np.random.randn(n_samples, n_features, n_trials))
+        y = jnp.array(np.random.randn(n_samples, 1, n_trials))
+
+        def custom_sample_loss(model, x_i, y_i, params):
+            pred = model(x_i, *params)
+            return jnp.mean((pred - y_i[0]) ** 2)
+
+        initial_loss, _, final_loss, params = objective(
+            model=simple_scalar_model,
+            param_estimator=simple_param_estimator,
+            loss_func=quadratic_loss,
+            x=x,
+            y=y,
+            sample_loss_fn=custom_sample_loss,
+            fit_params=False,
+        )
+
+        assert np.isfinite(initial_loss)
+        assert np.isfinite(final_loss)
 
 
 if __name__ == "__main__":
