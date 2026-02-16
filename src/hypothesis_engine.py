@@ -184,10 +184,10 @@ def save_data_summary(
     """
     response_arr = np.asarray(response)
     if response_arr.ndim == 2:
-        n_total_samples, n_trials = response_arr.shape
+        n_total_samples, n_trials_y = response_arr.shape
         n_targets = 1
     elif response_arr.ndim == 3:
-        n_total_samples, n_targets, n_trials = response_arr.shape
+        n_total_samples, n_targets, n_trials_y = response_arr.shape
     else:
         raise ValueError(
             f"Response/outputs must be 2D or 3D, got shape {response_arr.shape}"
@@ -196,6 +196,7 @@ def save_data_summary(
     inputs_arr = np.asarray(inputs)
     if inputs_arr.ndim != 3:
         raise ValueError(f"Inputs must be 3D in canonical pipeline, got {inputs_arr.shape}")
+    n_trials_x = inputs_arr.shape[2]
 
     training_samples_np = np.asarray(training_samples).reshape(-1)
     test_samples_np = np.asarray(test_samples).reshape(-1)
@@ -205,26 +206,6 @@ def save_data_summary(
     # Determine inputs shape and features
     n_features = inputs_arr.shape[1]
     inputs_shape_str = f"({inputs_arr.shape[0]}, {inputs_arr.shape[1]}, {inputs_arr.shape[2]})"
-
-    def _call_trial_split_fn(split_fn, n_trials_value, seed):
-        if split_fn is None:
-            idx = np.arange(n_trials_value, dtype=np.int32)
-            return idx, idx, "default_identity_split"
-        attempts = [
-            lambda: split_fn(n_trials_value, seed),
-            lambda: split_fn(n_trials_value, random_seed=seed),
-            lambda: split_fn(n_trials_value),
-        ]
-        last_exc = None
-        for attempt in attempts:
-            try:
-                tr_idx, te_idx = attempt()
-                return tr_idx, te_idx, "runtime_function_call"
-            except TypeError as exc:
-                last_exc = exc
-        raise TypeError(
-            f"Unable to call trial split function {split_fn} with n_trials/seed."
-        ) from last_exc
 
     def _split_stats(train_idx, test_idx, n_total):
         train_arr = np.asarray(train_idx).reshape(-1)
@@ -253,25 +234,28 @@ def save_data_summary(
 
     # Trial split is the one used inside objective()
     try:
-        training_trials_idx, test_trials_idx, trial_split_call_mode = _call_trial_split_fn(
-            create_train_test_trial_split_fn,
-            n_trials,
-            random_seed,
-        )
+        x_train_trial_idx, x_test_trial_idx, y_train_trial_idx, y_test_trial_idx = \
+            _call_trial_split(create_train_test_trial_split_fn, n_trials_x, n_trials_y, random_seed)
         trial_split_error = None
     except Exception as exc:
-        idx = np.arange(n_trials, dtype=np.int32)
-        training_trials_idx, test_trials_idx = idx, idx
-        trial_split_call_mode = "fallback_identity_due_to_error"
+        x_train_trial_idx = np.arange(n_trials_x, dtype=np.int32)
+        x_test_trial_idx = x_train_trial_idx
+        y_train_trial_idx = np.arange(n_trials_y, dtype=np.int32)
+        y_test_trial_idx = y_train_trial_idx
         trial_split_error = str(exc)
 
-    training_trials_idx_np = np.asarray(training_trials_idx).reshape(-1)
-    test_trials_idx_np = np.asarray(test_trials_idx).reshape(-1)
-    n_training_trials = int(training_trials_idx_np.size)
-    n_test_trials = int(test_trials_idx_np.size)
+    x_train_trial_idx_np = np.asarray(x_train_trial_idx).reshape(-1)
+    x_test_trial_idx_np = np.asarray(x_test_trial_idx).reshape(-1)
+    y_train_trial_idx_np = np.asarray(y_train_trial_idx).reshape(-1)
+    y_test_trial_idx_np = np.asarray(y_test_trial_idx).reshape(-1)
+    n_training_trials_x = int(x_train_trial_idx_np.size)
+    n_test_trials_x = int(x_test_trial_idx_np.size)
+    n_training_trials_y = int(y_train_trial_idx_np.size)
+    n_test_trials_y = int(y_test_trial_idx_np.size)
 
     sample_stats = _split_stats(training_samples_np, test_samples_np, n_total_samples)
-    trial_stats = _split_stats(training_trials_idx_np, test_trials_idx_np, n_trials)
+    # Use input trial indices for trial split stats (representative when matched)
+    trial_stats = _split_stats(x_train_trial_idx_np, x_test_trial_idx_np, n_trials_x)
 
     sample_split_method = (
         f"fn={_describe_fn(create_train_test_sample_split_fn)}; "
@@ -286,7 +270,8 @@ def save_data_summary(
 
     trial_split_method = (
         f"fn={_describe_fn(create_train_test_trial_split_fn)}; "
-        f"random_seed={random_seed}; call_mode={trial_split_call_mode}; "
+        f"random_seed={random_seed}; "
+        f"n_trials_x={n_trials_x}; n_trials_y={n_trials_y}; "
         f"disjoint={trial_stats['disjoint']}; cover_all={trial_stats['cover_all']}; "
         f"overlap={trial_stats['n_overlap']}; uncovered={trial_stats['n_uncovered']}; "
         f"train_has_duplicates={trial_stats['train_has_duplicates']}; "
@@ -360,33 +345,63 @@ def save_data_summary(
     # === TRIAL SPLIT SUMMARY (within objective function) ===
     rows.append({
         'category': 'TRIAL_SPLIT',
-        'matrix_name': 'total_trials',
-        'description': 'Total number of trials per sample',
-        'shape': f"({n_trials},)",
+        'matrix_name': 'total_trials_x',
+        'description': 'Total number of input trials per sample',
+        'shape': f"({n_trials_x},)",
         'dtype': '-',
         'size_bytes': '-',
         'size_human': '-',
-        'n_elements': n_trials
+        'n_elements': n_trials_x
     })
     rows.append({
         'category': 'TRIAL_SPLIT',
-        'matrix_name': 'training_trials',
-        'description': 'Trials used for param fitting in objective()',
-        'shape': f"({n_training_trials},)",
-        'dtype': str(training_trials_idx_np.dtype),
-        'size_bytes': calc_size((n_training_trials,), training_trials_idx_np.dtype),
-        'size_human': format_size(calc_size((n_training_trials,), training_trials_idx_np.dtype)),
-        'n_elements': n_training_trials
+        'matrix_name': 'total_trials_y',
+        'description': 'Total number of output trials per sample',
+        'shape': f"({n_trials_y},)",
+        'dtype': '-',
+        'size_bytes': '-',
+        'size_human': '-',
+        'n_elements': n_trials_y
     })
     rows.append({
         'category': 'TRIAL_SPLIT',
-        'matrix_name': 'test_trials',
-        'description': 'Trials used for loss evaluation in objective()',
-        'shape': f"({n_test_trials},)",
-        'dtype': str(test_trials_idx_np.dtype),
-        'size_bytes': calc_size((n_test_trials,), test_trials_idx_np.dtype),
-        'size_human': format_size(calc_size((n_test_trials,), test_trials_idx_np.dtype)),
-        'n_elements': n_test_trials
+        'matrix_name': 'training_trials_x',
+        'description': 'Input trials used for param fitting in objective()',
+        'shape': f"({n_training_trials_x},)",
+        'dtype': str(x_train_trial_idx_np.dtype),
+        'size_bytes': calc_size((n_training_trials_x,), x_train_trial_idx_np.dtype),
+        'size_human': format_size(calc_size((n_training_trials_x,), x_train_trial_idx_np.dtype)),
+        'n_elements': n_training_trials_x
+    })
+    rows.append({
+        'category': 'TRIAL_SPLIT',
+        'matrix_name': 'test_trials_x',
+        'description': 'Input trials used for loss evaluation in objective()',
+        'shape': f"({n_test_trials_x},)",
+        'dtype': str(x_test_trial_idx_np.dtype),
+        'size_bytes': calc_size((n_test_trials_x,), x_test_trial_idx_np.dtype),
+        'size_human': format_size(calc_size((n_test_trials_x,), x_test_trial_idx_np.dtype)),
+        'n_elements': n_test_trials_x
+    })
+    rows.append({
+        'category': 'TRIAL_SPLIT',
+        'matrix_name': 'training_trials_y',
+        'description': 'Output trials used for param fitting in objective()',
+        'shape': f"({n_training_trials_y},)",
+        'dtype': str(y_train_trial_idx_np.dtype),
+        'size_bytes': calc_size((n_training_trials_y,), y_train_trial_idx_np.dtype),
+        'size_human': format_size(calc_size((n_training_trials_y,), y_train_trial_idx_np.dtype)),
+        'n_elements': n_training_trials_y
+    })
+    rows.append({
+        'category': 'TRIAL_SPLIT',
+        'matrix_name': 'test_trials_y',
+        'description': 'Output trials used for loss evaluation in objective()',
+        'shape': f"({n_test_trials_y},)",
+        'dtype': str(y_test_trial_idx_np.dtype),
+        'size_bytes': calc_size((n_test_trials_y,), y_test_trial_idx_np.dtype),
+        'size_human': format_size(calc_size((n_test_trials_y,), y_test_trial_idx_np.dtype)),
+        'n_elements': n_test_trials_y
     })
     rows.append({
         'category': 'TRIAL_SPLIT',
@@ -413,23 +428,23 @@ def save_data_summary(
         'n_elements': np.prod(response_arr.shape)
     })
     
-    response_train_shape = (n_train_samples, n_targets, n_trials)
+    response_train_shape = (n_train_samples, n_targets, n_trials_y)
     rows.append({
         'category': 'DATA_MATRIX',
         'matrix_name': 'outputs_train',
-        'description': 'Training samples, all targets, all trials',
+        'description': 'Training samples, all targets, all output trials',
         'shape': str(response_train_shape),
         'dtype': str(response_dtype),
         'size_bytes': calc_size(response_train_shape, response_dtype),
         'size_human': format_size(calc_size(response_train_shape, response_dtype)),
         'n_elements': np.prod(response_train_shape)
     })
-    
-    response_test_shape = (n_test_samples, n_targets, n_trials)
+
+    response_test_shape = (n_test_samples, n_targets, n_trials_y)
     rows.append({
         'category': 'DATA_MATRIX',
         'matrix_name': 'outputs_test',
-        'description': 'Test samples, all targets, all trials',
+        'description': 'Test samples, all targets, all output trials',
         'shape': str(response_test_shape),
         'dtype': str(response_dtype),
         'size_bytes': calc_size(response_test_shape, response_dtype),
@@ -450,8 +465,8 @@ def save_data_summary(
         'n_elements': np.prod(inputs_arr.shape)
     })
     
-    inputs_train_shape = (n_train_samples, n_features, n_trials)
-    inputs_test_shape = (n_test_samples, n_features, n_trials)
+    inputs_train_shape = (n_train_samples, n_features, n_trials_x)
+    inputs_test_shape = (n_test_samples, n_features, n_trials_x)
     
     rows.append({
         'category': 'DATA_MATRIX',
@@ -477,11 +492,11 @@ def save_data_summary(
     
     # === OBJECTIVE FUNCTION SUB-MATRICES (within training samples) ===
     # These are created inside objective() for the training samples
-    x_train_shape = (n_train_samples, n_features, n_training_trials)
-    x_test_shape = (n_train_samples, n_features, n_test_trials)
-    
-    y_train_shape = (n_train_samples, n_targets, n_training_trials)
-    y_test_shape = (n_train_samples, n_targets, n_test_trials)
+    x_train_shape = (n_train_samples, n_features, n_training_trials_x)
+    x_test_shape = (n_train_samples, n_features, n_test_trials_x)
+
+    y_train_shape = (n_train_samples, n_targets, n_training_trials_y)
+    y_test_shape = (n_train_samples, n_targets, n_test_trials_y)
     
     rows.append({
         'category': 'OBJECTIVE_SUBMATRIX',
@@ -2446,7 +2461,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     data_dict = load_and_process_data_fn(**data_processing_params)
     inputs, outputs = normalize_loaded_data(data_dict)
 
-    n_good_samples, n_features, n_trials = inputs.shape
+    n_good_samples, n_features, n_trials_x = inputs.shape
+    n_trials_y = outputs.shape[2]
     n_targets = outputs.shape[1]
     if n_targets != 1:
         raise ValueError(
@@ -2454,14 +2470,17 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             f"(n_targets=1) for prompting/diagnostics, got n_targets={n_targets}."
         )
     response = scalar_outputs_view(outputs)  # 2D view for scalar-only boundaries
-    
+
     sample_split_random_seed = 42
-    training_samples, test_samples = create_train_test_sample_split_fn(n_good_samples, training_sample_ratio, random_seed = sample_split_random_seed) # use 42 to keep orientation_gratings result 
+    training_samples, test_samples = create_train_test_sample_split_fn(n_good_samples, training_sample_ratio, random_seed = sample_split_random_seed) # use 42 to keep orientation_gratings result
     inputs_train, inputs_test = inputs[training_samples, :], inputs[test_samples, :]
     outputs_train, outputs_test = outputs[training_samples, :], outputs[test_samples, :]
     response_train, response_test = response[training_samples, :], response[test_samples, :]
     # Use run-level seed for objective() trial split so reporting and runtime align.
-    print(f"Loaded {n_good_samples} samples, {n_trials} trials per sample.")
+    if n_trials_x == n_trials_y:
+        print(f"Loaded {n_good_samples} samples, {n_trials_x} trials per sample.")
+    else:
+        print(f"Loaded {n_good_samples} samples, {n_trials_x} input trials and {n_trials_y} output trials per sample.")
     print(f"Using {len(training_samples)} samples for training and {len(test_samples)} samples for testing.")
 
     jax_program_code_strings = None
