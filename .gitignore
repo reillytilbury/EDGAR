@@ -13,5 +13,7 @@ __pycache__/
 *.pyo
 *.pyd
 
+CLAUDE.md
+
 # my notebook
 dabin_scratchpad.ipynb
