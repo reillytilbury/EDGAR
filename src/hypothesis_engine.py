@@ -1085,7 +1085,7 @@ def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_
 
 
 def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn=None,
-                         target_weights=None,
+                         target_weights=None, sample_loss_fn=None,
                          param_penalty_weight=0.1, fit_params=True, random_seed=0,
                          FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
                          use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -1111,17 +1111,28 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
                           and response has shape (n_trials,) for scalar or (n_targets, n_trials) for vectorized.
         loss_func (function): Element-wise loss function. Applied to (pred, true) arrays.
                           Should return array of same shape as inputs.
+                          Used only when sample_loss_fn is None (the default).
         x: Input data. Can be:
            - 2D array (n_samples, n_trials) - will be auto-expanded to (n_samples, 1, n_trials)
-           - 3D array (n_samples, n_features, n_trials)
+           - 3D array (n_samples, n_features, n_trials_x)
            - Inputs object
         y: Output/response data. Can be:
            - 2D array (n_samples, n_trials) - auto-expanded to (n_samples, 1, n_trials)
-           - 3D array (n_samples, n_targets, n_trials)
+           - 3D array (n_samples, n_targets, n_trials_y)
            - Outputs object
+           n_trials_x and n_trials_y may differ when sample_loss_fn is provided.
         target_weights: Optional weights for each target. Can be:
            - None: uniform weights (1/n_targets for each target, sums to 1)
            - 1D array of shape (n_targets,): custom weights (will be normalized to sum to 1)
+           Only used when sample_loss_fn is None.
+        sample_loss_fn (function or None): Optional per-sample loss function giving
+                          full control over loss computation. When provided, replaces
+                          the default element-wise loss_func path.
+                          Signature: sample_loss_fn(model, x_i, y_i, params) -> scalar
+                          where x_i has shape (n_features, n_trials_x),
+                          y_i has shape (n_targets, n_trials_y),
+                          and params is a 1D array of shape (n_params,).
+                          Must be JAX-compatible (supports jit, vmap, grad).
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
         random_seed (int or None): Random seed for reproducibility. Default is 0.
@@ -1150,10 +1161,12 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
     y_outputs = ensure_outputs(y)
     y_data = y_outputs.data  # shape: (n_samples, n_targets, n_trials)
     
-    n_samples, n_features, n_trials = x_data.shape
+    n_samples, n_features, n_trials_x = x_data.shape
+    n_trials_y = y_data.shape[2]
     n_targets = y_outputs.n_targets
-    
+
     # Set up target weights (normalize to sum to 1)
+    # Only used when sample_loss_fn is None (default element-wise path)
     if target_weights is None:
         target_weights = jnp.ones(n_targets) / n_targets
     else:
@@ -1161,17 +1174,16 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
         if target_weights.shape != (n_targets,):
             raise ValueError(f"target_weights shape {target_weights.shape} does not match n_targets={n_targets}")
         target_weights = target_weights / jnp.sum(target_weights)  # normalize
-    
-    if create_train_test_trial_split_fn is None:
-        raise ValueError("create_train_test_trial_split_fn must be provided to split trials into train/test sets.")
-    else:
-        training_trials_idx, test_trials_idx = create_train_test_trial_split_fn(n_trials, random_seed=random_seed)
 
-    # Split inputs and outputs
-    x_train = x_data[:, :, training_trials_idx]  # (n_samples, n_features, training_size)
-    y_train = y_data[:, :, training_trials_idx]  # (n_samples, n_targets, training_size)
-    x_test = x_data[:, :, test_trials_idx]       # (n_samples, n_features, test_size)
-    y_test = y_data[:, :, test_trials_idx]       # (n_samples, n_targets, test_size)
+    # Split trials for inputs and outputs (may use different indices when mismatched)
+    x_train_trial_idx, x_test_trial_idx, y_train_trial_idx, y_test_trial_idx = \
+        _call_trial_split(create_train_test_trial_split_fn, n_trials_x, n_trials_y, random_seed)
+
+    # Split inputs and outputs using their respective trial indices
+    x_train = x_data[:, :, x_train_trial_idx]  # (n_samples, n_features, n_train_trials_x)
+    y_train = y_data[:, :, y_train_trial_idx]   # (n_samples, n_targets, n_train_trials_y)
+    x_test = x_data[:, :, x_test_trial_idx]     # (n_samples, n_features, n_test_trials_x)
+    y_test = y_data[:, :, y_test_trial_idx]      # (n_samples, n_targets, n_test_trials_y)
     
     # Compute initial parameters
     # param_estimator receives y as (n_targets, n_trials) for each sample
@@ -1215,35 +1227,46 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
         if output.ndim == 1 and n_targets == 1:
             return output[None, :]  # (1, n_trials)
         return output
-    
+
     # Wrapped model that normalizes output
     def model_normalized(x_i, *params):
         output = model(x_i, *params)
         return normalize_model_output(output, n_targets)
-    
-    # Loss for a single sample:
-    # x_i: (n_features, n_trials), y_i: (n_targets, n_trials)
-    # model output: (n_targets, n_trials)
-    # Returns: scalar (weighted sum of per-target MSE)
-    def loss_single_sample(params, x_i, y_i):
-        pred = model_normalized(x_i, *params)  # (n_targets, n_trials)
-        # loss_func returns element-wise loss: (n_targets, n_trials)
-        elementwise_loss = loss_func(pred, y_i)  # (n_targets, n_trials)
-        # Mean over trials for each target: (n_targets,)
-        per_target_mse = jnp.mean(elementwise_loss, axis=-1)
-        # Weighted sum over targets: scalar
-        return jnp.sum(target_weights * per_target_mse)
-    
+
+    # Per-sample loss function: either custom (full control) or default (element-wise)
+    if sample_loss_fn is not None:
+        # Custom loss: experiment has full control over loss computation.
+        # sample_loss_fn(model, x_i, y_i, params) -> scalar
+        def loss_single_sample(params, x_i, y_i):
+            return sample_loss_fn(model, x_i, y_i, params)
+    else:
+        # Default element-wise path (requires matched trial dimensions)
+        # x_i: (n_features, n_trials), y_i: (n_targets, n_trials)
+        # model output: (n_targets, n_trials)
+        # Returns: scalar (weighted sum of per-target MSE)
+        def loss_single_sample(params, x_i, y_i):
+            pred = model_normalized(x_i, *params)  # (n_targets, n_trials)
+            # loss_func returns element-wise loss: (n_targets, n_trials)
+            elementwise_loss = loss_func(pred, y_i)  # (n_targets, n_trials)
+            # Mean over trials for each target: (n_targets,)
+            per_target_mse = jnp.mean(elementwise_loss, axis=-1)
+            # Weighted sum over targets: scalar
+            return jnp.sum(target_weights * per_target_mse)
+
     # Vectorize over samples
-    # params: (n_samples, n_params), x: (n_samples, n_features, n_trials), y: (n_samples, n_targets, n_trials)
+    # params: (n_samples, n_params), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
     # Output: (n_samples,)
     loss_total = jax.vmap(loss_single_sample, in_axes=(0, 0, 0), out_axes=0)
-    
+
     # Mini-batched loss and gradient computation to avoid GPU OOM
-    n_train_trials = x_train.shape[2]
-    effective_trial_batch_size = n_train_trials if trial_batch_size is None else int(trial_batch_size)
+    n_train_trials_x = x_train.shape[2]
+    n_train_trials_y = y_train.shape[2]
+    trials_matched = (n_train_trials_x == n_train_trials_y)
+    effective_trial_batch_size = n_train_trials_x if trial_batch_size is None else int(trial_batch_size)
+    # Scalar single-feature full-batch fast path only when trials match
     use_scalar_single_feature_fullbatch = (
         trial_batch_size is None and n_targets == 1 and n_features == 1
+        and trials_matched and sample_loss_fn is None
     )
     
     @jax.jit
@@ -1251,29 +1274,39 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
         """Compute sum of losses for one batch (JIT-compiled)."""
         batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
         return jnp.sum(batch_losses)
-    
+
     # Combined loss and gradient computation - more efficient than separate calls
     loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
-    
-    def loss_and_grad_batched(params):
-        """Compute loss and gradient by accumulating over trial batches."""
-        params_2d = params.reshape(-1, n_params)
-        total_loss = 0.0
-        total_grad = jnp.zeros_like(params)
-        
-        for start_idx in range(0, n_train_trials, effective_trial_batch_size):
-            end_idx = min(start_idx + effective_trial_batch_size, n_train_trials)
-            batch_weight = (end_idx - start_idx) / n_train_trials
-            x_batch = x_train[:, :, start_idx:end_idx]
-            y_batch = y_train[:, :, start_idx:end_idx]  # Note: 3D now
-            
-            # Compute loss and gradient together in one pass (more efficient)
-            batch_loss, batch_grad = loss_and_grad_single_batch(params_2d, x_batch, y_batch)
-            
-            total_loss += batch_loss * batch_weight
-            total_grad += batch_grad.reshape(-1) * batch_weight
-        
-        return total_loss / n_samples, total_grad / n_samples
+
+    if trials_matched:
+        # Standard path: batch over trial dimension with same indices for x and y
+        n_train_trials = n_train_trials_x  # same as n_train_trials_y
+        def loss_and_grad_batched(params):
+            """Compute loss and gradient by accumulating over trial batches."""
+            params_2d = params.reshape(-1, n_params)
+            total_loss = 0.0
+            total_grad = jnp.zeros_like(params)
+
+            for start_idx in range(0, n_train_trials, effective_trial_batch_size):
+                end_idx = min(start_idx + effective_trial_batch_size, n_train_trials)
+                batch_weight = (end_idx - start_idx) / n_train_trials
+                x_batch = x_train[:, :, start_idx:end_idx]
+                y_batch = y_train[:, :, start_idx:end_idx]
+
+                batch_loss, batch_grad = loss_and_grad_single_batch(params_2d, x_batch, y_batch)
+
+                total_loss += batch_loss * batch_weight
+                total_grad += batch_grad.reshape(-1) * batch_weight
+
+            return total_loss / n_samples, total_grad / n_samples
+    else:
+        # Mismatched trials: no trial mini-batching. Pass full x_train and y_train.
+        # The sample_loss_fn handles the shape relationship internally.
+        def loss_and_grad_batched(params):
+            """Compute loss and gradient over full data (no trial batching)."""
+            params_2d = params.reshape(-1, n_params)
+            loss, grad = loss_and_grad_single_batch(params_2d, x_train, y_train)
+            return loss / n_samples, grad.reshape(-1) / n_samples
     
     if fit_params:
         # Adam optimizer with learning rate schedule
@@ -1353,20 +1386,24 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
             return FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params)), FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params))
     
     # Compute final loss on test set
-    n_test_trials = x_test.shape[2]
-    
-    def eval_loss_batched(params_2d, x_eval, y_eval):
-        """Compute loss by iterating over trial batches."""
-        n_eval_trials = x_eval.shape[2]
-        weighted_sum = 0.0
-        for start_idx in range(0, n_eval_trials, effective_trial_batch_size):
-            end_idx = min(start_idx + effective_trial_batch_size, n_eval_trials)
-            batch_size = end_idx - start_idx
-            x_batch = x_eval[:, :, start_idx:end_idx]
-            y_batch = y_eval[:, :, start_idx:end_idx]  # Note: 3D now
-            batch_losses = loss_total(params_2d, x_batch, y_batch)
-            weighted_sum += jnp.nansum(batch_losses) * (batch_size / n_eval_trials)
-        return weighted_sum / n_samples
+    if trials_matched:
+        def eval_loss_batched(params_2d, x_eval, y_eval):
+            """Compute loss by iterating over trial batches (matched trials)."""
+            n_eval_trials = x_eval.shape[2]
+            weighted_sum = 0.0
+            for start_idx in range(0, n_eval_trials, effective_trial_batch_size):
+                end_idx = min(start_idx + effective_trial_batch_size, n_eval_trials)
+                batch_size = end_idx - start_idx
+                x_batch = x_eval[:, :, start_idx:end_idx]
+                y_batch = y_eval[:, :, start_idx:end_idx]
+                batch_losses = loss_total(params_2d, x_batch, y_batch)
+                weighted_sum += jnp.nansum(batch_losses) * (batch_size / n_eval_trials)
+            return weighted_sum / n_samples
+    else:
+        def eval_loss_batched(params_2d, x_eval, y_eval):
+            """Compute loss over full data (mismatched trials, no batching)."""
+            batch_losses = loss_total(params_2d, x_eval, y_eval)
+            return jnp.nansum(batch_losses) / n_samples
     
     if use_scalar_single_feature_fullbatch:
         initial_loss = jnp.nanmean(loss_total(initial_params, x_test, y_test)) + param_penalty_weight * n_params
