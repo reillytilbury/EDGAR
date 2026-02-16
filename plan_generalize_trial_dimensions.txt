@@ -1,0 +1,218 @@
+# Plan: Generalize Trial Dimension Handling
+
+## Context
+
+The codebase currently enforces `inputs.shape[2] == outputs.shape[2]` (matching `n_trials`). This prevents experiments where input and output trial dimensions differ. The goal: **as long as an experiment can define a loss function given its inputs and outputs, the framework should work — regardless of whether trial dimensions match.**
+
+The change introduces a per-experiment `sample_loss_fn(model, x_i, y_i, params) -> scalar` that gives the experiment full control over how loss is computed for a single sample. When not provided, the existing element-wise loss path is preserved for full backward compatibility.
+
+---
+
+## Changes
+
+### 1. Remove n_trials equality check in `normalize_loaded_data`
+**File:** `src/hypothesis_engine.py` (lines 94-98)
+
+Delete:
+```python
+if inputs_3d.shape[2] != outputs_3d.shape[2]:
+    raise ValueError(...)
+```
+
+Keep the `n_samples` equality check (line 89).
+
+---
+
+### 2. Add `_call_trial_split` wrapper
+**File:** `src/hypothesis_engine.py` (new function, near `normalize_loaded_data`)
+
+Probes the experiment's trial split function to detect its signature:
+- **Legacy** `(n_trials, random_seed)` -> 2-tuple -> duplicated as 4-tuple. Raises `ValueError` if `n_trials_x != n_trials_y`.
+- **Generalized** `(n_trials_x, n_trials_y, random_seed)` -> 4-tuple `(x_train_idx, x_test_idx, y_train_idx, y_test_idx)`.
+
+```python
+def _call_trial_split(split_fn, n_trials_x, n_trials_y, random_seed):
+    # Try generalized 3-arg signature first
+    # Fall back to legacy 2-arg, error if mismatched
+    # Returns (x_train_idx, x_test_idx, y_train_idx, y_test_idx)
+```
+
+---
+
+### 3. Add `sample_loss_fn` parameter to `objective_vectorized`
+**File:** `src/hypothesis_engine.py` (the `objective_vectorized` function, ~line 1036)
+
+New optional parameter: `sample_loss_fn=None`
+
+Signature contract for experiment-defined loss:
+```python
+def sample_loss_fn(model, x_i, y_i, params) -> scalar:
+    """
+    model: the JAX model function
+    x_i: input for one sample, shape (n_features, n_trials_x)
+    y_i: output for one sample, shape (n_targets, n_trials_y) or (n_trials_y,)
+    params: 1D parameter array for this sample, shape (n_params,)
+    Returns: scalar loss
+    """
+```
+
+**When `sample_loss_fn` is provided:** use it directly as the per-sample loss
+**When `sample_loss_fn` is None:** construct the default from `loss_func` (existing element-wise behavior)
+
+```python
+if sample_loss_fn is not None:
+    def loss_single_sample(params, x_i, y_i):
+        return sample_loss_fn(model, x_i, y_i, params)
+else:
+    # Existing element-wise path (unchanged)
+    def loss_single_sample(params, x_i, y_i):
+        pred = model_normalized(x_i, *params)
+        elementwise_loss = loss_func(pred, y_i)
+        per_target_mse = jnp.mean(elementwise_loss, axis=-1)
+        return jnp.sum(target_weights * per_target_mse)
+```
+
+---
+
+### 4. Separate x/y trial splitting in `objective_vectorized`
+**File:** `src/hypothesis_engine.py` (lines 1102-1123)
+
+Replace single `n_trials` with `n_trials_x` and `n_trials_y`:
+```python
+n_samples, n_features, n_trials_x = x_data.shape
+n_trials_y = y_data.shape[2]
+
+x_train_idx, x_test_idx, y_train_idx, y_test_idx = \
+    _call_trial_split(create_train_test_trial_split_fn, n_trials_x, n_trials_y, random_seed)
+
+x_train = x_data[:, :, x_train_idx]
+y_train = y_data[:, :, y_train_idx]
+x_test = x_data[:, :, x_test_idx]
+y_test = y_data[:, :, y_test_idx]
+```
+
+When trials are matched (the common case), `_call_trial_split` returns identical x/y indices -- fully backward compatible.
+
+---
+
+### 5. Update mini-batch loop for mismatched trials
+**File:** `src/hypothesis_engine.py` (lines 1192-1225, 1307-1318)
+
+Add a `trials_matched` flag:
+```python
+n_train_trials_x = x_train.shape[2]
+n_train_trials_y = y_train.shape[2]
+trials_matched = (n_train_trials_x == n_train_trials_y)
+```
+
+- **Matched:** existing mini-batch code (batch x and y with same slices). Unchanged.
+- **Mismatched:** disable trial mini-batching (pass full x_train, y_train). The custom `sample_loss_fn` handles the shape relationship internally.
+
+Also disable the `use_scalar_single_feature_fullbatch` fast path when trials are mismatched (add `and trials_matched` to the condition at line 1194).
+
+---
+
+### 6. Thread `sample_loss_fn` through the call chain
+**Files to update:**
+
+| Function                        | File                      | Change                                                |
+|---------------------------------|---------------------------|-------------------------------------------------------|
+| `objective_vectorized()`        | `src/hypothesis_engine.py`| Add `sample_loss_fn=None` param                       |
+| `objective()`                   | `src/hypothesis_engine.py`| Add `sample_loss_fn=None` param, pass through          |
+| `evaluate_param_estimator_loss()`| `src/hypothesis_engine.py`| Add `sample_loss_fn=None` param, pass through          |
+| `hypothesis_engine()`           | `src/hypothesis_engine.py`| Add `sample_loss_fn=None` param, pass to objective()   |
+| `_run_many()`                   | `run.py`                  | Load from config, pass to `hypothesis_engine()`        |
+
+---
+
+### 7. Apply same pattern to `objective_legacy`
+**File:** `src/hypothesis_engine.py` (lines 724-823)
+
+Same changes as `objective_vectorized`: separate `n_trials_x`/`n_trials_y`, use `_call_trial_split`, separate x/y slicing. Add `sample_loss_fn` parameter for the per-sample loss.
+
+---
+
+### 8. Update `evaluate_param_estimator_loss` default split
+**File:** `src/hypothesis_engine.py` (lines 1426-1432)
+
+The default split function needs to work with `_call_trial_split`. Since `_call_trial_split` auto-detects signatures, the existing default `_default_split(n_trials, random_seed=0)` will continue to work for matched trials. No change needed here unless we want to support mismatched trials in this specific function.
+
+---
+
+### 9. Update `hypothesis_engine()` main function
+**File:** `src/hypothesis_engine.py` (line 2357+)
+
+- Replace `n_good_samples, n_features, n_trials = inputs.shape` with separate `n_trials_x` / `n_trials_y`
+- Update print statement to show both trial counts when different
+- Pass `sample_loss_fn` to all `objective()` calls (lines 2459, 2676, ~2846)
+
+---
+
+### 10. Update `save_data_summary`
+**File:** `src/hypothesis_engine.py` (lines 117-290)
+
+- Extract `n_trials_x` from `inputs_arr.shape[2]` and `n_trials_y` from `response_arr.shape`
+- Use `_call_trial_split` with both trial counts
+- Report separate counts in the summary CSV when they differ
+
+---
+
+### 11. Load `sample_loss_fn` in `run.py`
+**File:** `run.py`
+
+Add dynamic loading following the existing pattern:
+```python
+sample_loss_fn_path = config.pop('sample_loss_fn', None)
+if sample_loss_fn_path:
+    module_path, function_name = sample_loss_fn_path.rsplit('.', 1)
+    loss_module = importlib.import_module(module_path)
+    sample_loss_fn = getattr(loss_module, function_name)
+else:
+    sample_loss_fn = None
+```
+
+Pass to `hypothesis_engine()`.
+
+---
+
+### 12. Update `experiments/DEFAULT/config.yaml`
+**File:** `experiments/DEFAULT/config.yaml`
+
+Add optional config key (commented out by default):
+```yaml
+# Optional: custom per-sample loss function for experiments with mismatched input/output trials.
+# Signature: sample_loss_fn(model, x_i, y_i, params) -> scalar
+# If not specified, uses the default element-wise loss_func with mean over trials.
+# sample_loss_fn: experiments.your_task.loss.sample_loss
+```
+
+---
+
+### 13. Add tests
+**File:** `tests/test_objective_function.py`
+
+- Test `_call_trial_split` with legacy 2-arg function (matched trials -> 4-tuple with duplicated indices)
+- Test `_call_trial_split` with generalized 3-arg function -> correct 4-tuple
+- Test `_call_trial_split` legacy function + mismatched trials -> `ValueError`
+- Test `objective` with `sample_loss_fn` and mismatched trials (synthetic data, custom loss)
+- Run existing tests to verify backward compatibility
+
+---
+
+## Files NOT Changed
+
+- `src/data_structures.py` -- `Inputs`/`Outputs` already support independent shapes
+- `src/loss_functions.py` -- existing element-wise losses are unchanged
+- `src/genetic_helpers_v2.py` -- operates on loss values, not raw trial data
+- `src/llm_helper.py`, `src/prompt_manager.py` -- unrelated to trial dims
+- All existing `experiments/*/data_parser.py` -- legacy signatures auto-detected
+- All existing `experiments/*/seed_programs.py` -- unchanged
+- `validate_model_output`, `validate_model_execution` -- validate model output against INPUT n_trials, which is correct regardless
+
+---
+
+## Verification
+
+1. `python -m pytest tests -q` -- all existing tests pass (backward compat)
+2. `python -m run --config experiments/synthetic_data/override_config.yaml --test_mode` -- existing experiment runs unchanged
+3. New test with mismatched trials + custom `sample_loss_fn` passes
