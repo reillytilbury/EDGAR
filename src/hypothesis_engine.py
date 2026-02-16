@@ -773,6 +773,7 @@ def validate_model_execution(
 
 
 def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn=None,
+              sample_loss_fn=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -822,18 +823,18 @@ def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_
     x_inputs = ensure_inputs(x)
     x_data = x_inputs.to_tensor()  # shape: (n_samples, n_features, n_trials)
     
-    n_samples, n_features, n_trials = x_data.shape
-    
-    if create_train_test_trial_split_fn is None:
-        raise ValueError("create_train_test_trial_split_fn is required for legacy objective.")
-    else:
-        training_trials_idx, test_trials_idx = create_train_test_trial_split_fn(n_trials, random_seed)
+    n_samples, n_features, n_trials_x = x_data.shape
+    n_trials_y = y.shape[1]  # y is 2D: (n_samples, n_trials_y)
 
-    # Split inputs and response: x has shape (n_samples, n_features, n_trials)
-    x_train = x_data[:, :, training_trials_idx]  # (n_samples, n_features, training_size)
-    y_train = y[:, training_trials_idx]           # (n_samples, training_size)
-    x_test = x_data[:, :, test_trials_idx]        # (n_samples, n_features, test_size)
-    y_test = y[:, test_trials_idx]                # (n_samples, test_size)
+    # Split trials for inputs and outputs (may use different indices when mismatched)
+    x_train_trial_idx, x_test_trial_idx, y_train_trial_idx, y_test_trial_idx = \
+        _call_trial_split(create_train_test_trial_split_fn, n_trials_x, n_trials_y, random_seed)
+
+    # Split inputs and response using their respective trial indices
+    x_train = x_data[:, :, x_train_trial_idx]    # (n_samples, n_features, n_train_trials_x)
+    y_train = y[:, y_train_trial_idx]             # (n_samples, n_train_trials_y)
+    x_test = x_data[:, :, x_test_trial_idx]       # (n_samples, n_test_trials_x)
+    y_test = y[:, y_test_trial_idx]                # (n_samples, n_test_trials_y)
 
     # Perform initial param calc. x must be numpy array of shape (n_samples, n_features, n_trials)
     if use_param_estimator:
@@ -889,54 +890,60 @@ def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_
         logging.info(f"Model failed to run or is incompatible with JAX tracing: {e}")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
-    # Loss for a single sample: x_data has shape (n_features, n_trials), y_data has shape (n_trials,)
-    loss_single_cell = lambda params, x_i, y_i: jnp.mean(loss_func(model(x_i, *params), y_i), axis=-1)
-    # vectorize the loss function for all samples. The inputs will have shapes:
-    # - params: (n_samples, n_params)
-    # - x_i: (n_samples, n_features, n_trials) -> batched over axis 0
-    # - y_i: (n_samples, n_trials) -> batched over axis 0
-    # The output will have shape (n_samples,)
+    # Per-sample loss function: either custom (full control) or default (element-wise)
+    if sample_loss_fn is not None:
+        # Custom loss: experiment has full control over loss computation.
+        loss_single_cell = lambda params, x_i, y_i: sample_loss_fn(model, x_i, y_i, params)
+    else:
+        # Default: element-wise loss, mean over trials
+        # x_i: (n_features, n_trials_x), y_i: (n_trials_y,)
+        loss_single_cell = lambda params, x_i, y_i: jnp.mean(loss_func(model(x_i, *params), y_i), axis=-1)
+
+    # Vectorize over samples
     loss_total = jax.vmap(loss_single_cell, in_axes=(0, 0, 0), out_axes=0)
 
     # Mini-batched loss and gradient computation to avoid GPU OOM
-    # Key: we JIT only the per-batch computation, NOT the loop over batches
-    n_train_trials = x_train.shape[2]
-    
+    n_train_trials_x = x_train.shape[2]
+    n_train_trials_y = y_train.shape[1]  # y is 2D in legacy
+    trials_matched = (n_train_trials_x == n_train_trials_y)
+
     # JIT-compiled loss for a single batch
     @jax.jit
     def loss_single_batch(params_2d, x_batch, y_batch):
         """Compute sum of losses for one batch (JIT-compiled)."""
         batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
         return jnp.sum(batch_losses)
-    
-    # Combined loss and gradient computation - more efficient than separate calls
-    # because it reuses forward pass intermediate values during backprop
-    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
-    
-    def loss_and_grad_batched(params):
-        """Compute loss and gradient by accumulating over trial batches (not JIT-compiled)."""
-        params_2d = params.reshape(-1, n_params)
-        total_loss = 0.0
-        total_grad = jnp.zeros_like(params)
 
-        for start_idx in range(0, n_train_trials, trial_batch_size):
-            end_idx = min(start_idx + trial_batch_size, n_train_trials)
-            batch_weight = (end_idx - start_idx) / n_train_trials
-            x_batch = x_train[:, :, start_idx:end_idx]
-            y_batch = y_train[:, start_idx:end_idx]
-            
-            # Compute loss and gradient together in one pass (more efficient)
-            batch_loss, batch_grad = loss_and_grad_single_batch(params_2d, x_batch, y_batch)
-            
-            # Accumulate with proper weighting
-            # We need to batch_weight because loss_single_batch calculates the mean loss per batch. 
-            # An alternative would have been to let loss_single_cell calculate the sum of loss for each cell 
-            # and then divide by n_trials at the end rather than batch_weight.
-            total_loss += batch_loss * batch_weight
-            total_grad += batch_grad.reshape(-1) * batch_weight
-        
-        # Normalize by n_samples
-        return total_loss / n_samples, total_grad / n_samples
+    # Combined loss and gradient computation
+    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
+
+    if trials_matched and trial_batch_size is not None:
+        n_train_trials = n_train_trials_x
+        def loss_and_grad_batched(params):
+            """Compute loss and gradient by accumulating over trial batches."""
+            params_2d = params.reshape(-1, n_params)
+            total_loss = 0.0
+            total_grad = jnp.zeros_like(params)
+
+            for start_idx in range(0, n_train_trials, trial_batch_size):
+                end_idx = min(start_idx + trial_batch_size, n_train_trials)
+                batch_weight = (end_idx - start_idx) / n_train_trials
+                x_batch = x_train[:, :, start_idx:end_idx]
+                y_batch = y_train[:, start_idx:end_idx]
+
+                batch_loss, batch_grad = loss_and_grad_single_batch(params_2d, x_batch, y_batch)
+
+                total_loss += batch_loss * batch_weight
+                total_grad += batch_grad.reshape(-1) * batch_weight
+
+            return total_loss / n_samples, total_grad / n_samples
+    else:
+        # No trial batching: either trials are mismatched or trial_batch_size is None
+        def loss_and_grad_batched(params):
+            """Compute loss and gradient over full data."""
+            params_2d = params.reshape(-1, n_params)
+            loss, grad = loss_and_grad_single_batch(params_2d, x_train, y_train)
+            return loss / n_samples, grad.reshape(-1) / n_samples
 
     if fit_params:
         # 1.  build adam
@@ -1038,40 +1045,33 @@ def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_
             logging.info("Error: params should be a JAX array.")
             return FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params))
 
-    # compute the final loss on the test set for the initial and optimized parameters
-    # Use mini-batched evaluation to avoid GPU OOM
-    n_test_trials = x_test.shape[2]
-    
-    def eval_loss_batched(params_2d, x_eval, y_eval):
-        """Compute loss by iterating over trial batches."""
-        n_eval_trials = x_eval.shape[2]
-        # Accumulate weighted sum: each batch contributes (batch_size / total_trials) weight
-        weighted_sum = 0.0
-        for start_idx in range(0, n_eval_trials, trial_batch_size):
-            end_idx = min(start_idx + trial_batch_size, n_eval_trials)
-            batch_size = end_idx - start_idx
-            x_batch = x_eval[:, :, start_idx:end_idx]
-            y_batch = y_eval[:, start_idx:end_idx]
-            # loss_total returns (n_samples,) - mean loss per sample over trials in this batch
-            batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
-            weighted_sum += jnp.nansum(batch_losses) * (batch_size / n_eval_trials)
-        # Divide by n_samples to get mean over samples  
-        return weighted_sum / n_samples
-
-    if trial_batch_size is None: 
-        initial_loss = jnp.nanmean(loss_total(initial_params, x_test, y_test)) + param_penalty_weight * n_params
-    else:   
+    # Compute the final loss on the test set for the initial and optimized parameters
+    if trials_matched and trial_batch_size is not None:
+        def eval_loss_batched(params_2d, x_eval, y_eval):
+            """Compute loss by iterating over trial batches (matched trials)."""
+            n_eval_trials = x_eval.shape[2]
+            weighted_sum = 0.0
+            for start_idx in range(0, n_eval_trials, trial_batch_size):
+                end_idx = min(start_idx + trial_batch_size, n_eval_trials)
+                batch_size = end_idx - start_idx
+                x_batch = x_eval[:, :, start_idx:end_idx]
+                y_batch = y_eval[:, start_idx:end_idx]
+                batch_losses = loss_total(params_2d, x_batch, y_batch)
+                weighted_sum += jnp.nansum(batch_losses) * (batch_size / n_eval_trials)
+            return weighted_sum / n_samples
         initial_loss = eval_loss_batched(initial_params, x_test, y_test) + param_penalty_weight * n_params
+    else:
+        initial_loss = jnp.nanmean(loss_total(initial_params, x_test, y_test)) + param_penalty_weight * n_params
     # print number of nans in initial_loss
     n_nans = jnp.sum(jnp.isnan(initial_loss))
     if n_nans > 0:
         print(f"Warning: initial loss contains {n_nans} NaNs. This may indicate a problem with the model or data.")
     initial_loss = jnp.nan_to_num(initial_loss, nan=FAILED_PROGRAM_COST, posinf=FAILED_PROGRAM_COST, neginf=FAILED_PROGRAM_COST)
 
-    if trial_batch_size is None:
-        final_loss = jnp.nanmean(loss_total(params, x_test, y_test)) + param_penalty_weight * n_params
-    else:
+    if trials_matched and trial_batch_size is not None:
         final_loss = eval_loss_batched(params, x_test, y_test) + param_penalty_weight * n_params
+    else:
+        final_loss = jnp.nanmean(loss_total(params, x_test, y_test)) + param_penalty_weight * n_params
     # print number of nans in final_loss
     n_nans = jnp.sum(jnp.isnan(final_loss))
     if n_nans > 0:
