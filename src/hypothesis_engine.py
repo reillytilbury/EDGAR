@@ -110,9 +110,7 @@ def _call_trial_split(split_fn, n_trials_x, n_trials_y, random_seed):
         (x_train_idx, x_test_idx, y_train_idx, y_test_idx)
     """
     if split_fn is None:
-        x_idx = np.arange(n_trials_x, dtype=np.int32)
-        y_idx = np.arange(n_trials_y, dtype=np.int32)
-        return x_idx, x_idx, y_idx, y_idx
+        raise ValueError("Trial split function is None. Please provide a valid function for splitting trials.")
 
     # Try the generalized 3-positional-arg signature first:
     # split_fn(n_trials_x, n_trials_y, random_seed) -> 4-tuple
@@ -2548,6 +2546,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         test_samples=test_samples,
         output_dir=full_dir,
         random_seed=random_seed,
+        create_train_test_sample_split_fn=create_train_test_sample_split_fn,
+        create_train_test_trial_split_fn=create_train_test_trial_split_fn,
     )
 
     # census[i] = [generation, island, batch_index, llm_name, loss, time, parent1_id, parent2_id, evaluation_matrix, n_free_params]
