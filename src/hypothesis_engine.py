@@ -91,12 +91,6 @@ def normalize_loaded_data(data_dict: dict) -> tuple[np.ndarray, np.ndarray]:
             "Inputs/outputs sample-count mismatch: "
             f"{inputs_3d.shape[0]} != {outputs_3d.shape[0]}."
         )
-    if inputs_3d.shape[2] != outputs_3d.shape[2]:
-        raise ValueError(
-            "Inputs/outputs trial-count mismatch: "
-            f"{inputs_3d.shape[2]} != {outputs_3d.shape[2]}."
-        )
-
     return inputs_3d, outputs_3d
 
 
