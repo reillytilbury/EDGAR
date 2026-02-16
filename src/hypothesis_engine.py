@@ -94,6 +94,63 @@ def normalize_loaded_data(data_dict: dict) -> tuple[np.ndarray, np.ndarray]:
     return inputs_3d, outputs_3d
 
 
+def _call_trial_split(split_fn, n_trials_x, n_trials_y, random_seed):
+    """
+    Call the trial split function, supporting both legacy and generalized signatures.
+
+    Legacy signature: split_fn(n_trials, random_seed) -> (train_idx, test_idx)
+        Only valid when n_trials_x == n_trials_y.
+        Returns the same indices for both x and y.
+
+    Generalized signature: split_fn(n_trials_x, n_trials_y, random_seed) ->
+        (x_train_idx, x_test_idx, y_train_idx, y_test_idx)
+        Supports mismatched trial counts.
+
+    Returns:
+        (x_train_idx, x_test_idx, y_train_idx, y_test_idx)
+    """
+    if split_fn is None:
+        x_idx = np.arange(n_trials_x, dtype=np.int32)
+        y_idx = np.arange(n_trials_y, dtype=np.int32)
+        return x_idx, x_idx, y_idx, y_idx
+
+    # Try the generalized 3-positional-arg signature first:
+    # split_fn(n_trials_x, n_trials_y, random_seed) -> 4-tuple
+    try:
+        result = split_fn(n_trials_x, n_trials_y, random_seed)
+        if isinstance(result, tuple) and len(result) == 4:
+            return result
+    except TypeError:
+        pass
+
+    # Fall back to legacy 2-arg signature: split_fn(n_trials, random_seed)
+    if n_trials_x != n_trials_y:
+        raise ValueError(
+            f"Trial split function has legacy signature (n_trials, random_seed) "
+            f"but n_trials_x={n_trials_x} != n_trials_y={n_trials_y}. "
+            f"Provide a generalized trial split function that accepts "
+            f"(n_trials_x, n_trials_y, random_seed) and returns 4 index arrays: "
+            f"(x_train_idx, x_test_idx, y_train_idx, y_test_idx)."
+        )
+
+    # Try common legacy calling conventions
+    legacy_attempts = [
+        lambda: split_fn(n_trials_x, random_seed),
+        lambda: split_fn(n_trials_x, random_seed=random_seed),
+        lambda: split_fn(n_trials_x),
+    ]
+    last_exc = None
+    for attempt in legacy_attempts:
+        try:
+            train_idx, test_idx = attempt()
+            return train_idx, test_idx, train_idx, test_idx
+        except TypeError as exc:
+            last_exc = exc
+    raise TypeError(
+        f"Unable to call trial split function {split_fn} with any supported signature."
+    ) from last_exc
+
+
 def scalar_outputs_view(outputs_3d: np.ndarray) -> np.ndarray:
     """
     Return 2D scalar-output view (n_samples, n_trials) from canonical outputs.
