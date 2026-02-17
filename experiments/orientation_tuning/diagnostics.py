@@ -126,7 +126,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     inputs_plot = jnp.asarray(plot_data['inputs_plot'])
     observed_outputs = jnp.asarray(plot_data['observed_outputs'])
     trial_predictions = jnp.asarray(plot_data['trial_predictions'])
-    point_losses = jnp.asarray(plot_data['point_losses'])
+    model_loss_dict = plot_data['model_loss_dict']
     n_models = int(plot_data['n_models'])
     n_samples = int(plot_data['n_samples'])
     n_grid_side = int(plot_data['n_grid_side'])
@@ -164,8 +164,9 @@ def plot_model_fits(plot_data: ModelFitPlotData,
         x_sorted = inputs_plot[c][sort_idx]
         for i in range(n_models):
             y_sorted = trial_predictions[i, c][sort_idx]
+            loss_val = float(model_loss_dict[i][c])
             ax[row, col].plot(x_sorted, y_sorted,
-                              label=labels[i] + f' (loss: {jnp.mean(point_losses[i, c]):.2f})',
+                              label=labels[i] + f' (loss: {loss_val:.2f})',
                               color=colours[i], 
                               alpha=line_alpha, 
                               linewidth=line_width)

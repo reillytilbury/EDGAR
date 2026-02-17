@@ -581,7 +581,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     inputs_subset = jnp.asarray(plot_data['inputs_full'])            # (n_samples, n_features, n_trials)
     response_subset = jnp.asarray(plot_data['observed_outputs'])     # (n_samples, n_trials)
     trial_predictions = jnp.asarray(plot_data['trial_predictions'])  # (n_models, n_samples, n_trials)
-    point_losses = jnp.asarray(plot_data['point_losses'])            # (n_models, n_samples, n_trials)
+    model_loss_dict = plot_data['model_loss_dict']  # dict of model_name -> loss array (n_samples,)
 
     n_samples_plot = int(plot_data['n_samples'])
     n_models = int(plot_data['n_models'])
@@ -639,7 +639,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
         # For each model: prediction and overlay
         for m_idx in range(n_models):
             pred_np = np.asarray(trial_predictions[m_idx, c_idx])
-            loss_val = float(jnp.mean(point_losses[m_idx, c_idx]))
+            loss_val = float(model_loss_dict[m_idx][c_idx])
             
             # Bin model predictions into rate map (no smoothing for model predictions)
             pred_rate_map = _bin_to_rate_map(x_pos, y_pos, pred_np, 

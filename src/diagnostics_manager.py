@@ -49,11 +49,12 @@ class ModelFitPlotData(TypedDict):
     inputs_plot: jnp.ndarray       # (n_samples, n_trials) input values used on the x-axis for 1D plots
     observed_outputs: jnp.ndarray  # (n_samples, n_trials) observed target/output values
     trial_predictions: jnp.ndarray # (n_models, n_samples, n_trials) model predictions on observed trials
-    point_losses: jnp.ndarray      # (n_models, n_samples, n_trials) per-point loss values
+    model_loss_dict: dict          # {model_name: List[float]} list of loss per sample of each model (e.g., MSE on observed trials for each sample)
     n_grid_side: int               # subplot grid side length; n_grid_side^2 == n_samples
     n_models: int                  # number of models being compared
     n_samples: int                 # number of selected samples
-    n_trials: int                  # number of observed trials per sample
+    n_trials_x: int                # number of observed trials per sample (inputs)
+    n_trials_y: int                # number of observed trials per sample (outputs)
     input_idx: int                 # feature index used to build `inputs_plot` for 1D views
 
 

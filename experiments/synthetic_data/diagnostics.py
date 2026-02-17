@@ -67,7 +67,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     inputs_plot = jnp.asarray(plot_data['inputs_plot'])
     observed_outputs = jnp.asarray(plot_data['observed_outputs'])
     trial_predictions = jnp.asarray(plot_data['trial_predictions'])
-    point_losses = jnp.asarray(plot_data['point_losses'])
+    model_loss_dict = plot_data['model_loss_dict'] # dict of model_name -> loss array (n_samples,)
     n_models = int(plot_data['n_models'])
     n_samples = int(plot_data['n_samples'])
     n_grid_side = int(plot_data['n_grid_side'])
@@ -107,7 +107,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
         sort_idx = jnp.argsort(inputs_plot[c])
         x_sorted = np.asarray(inputs_plot[c][sort_idx])
         for i in range(n_models):
-            loss_val = float(jnp.mean(point_losses[i, c]))
+            loss_val = float(model_loss_dict[i][c])
             ax.plot(
                 x_sorted,
                 np.asarray(trial_predictions[i, c][sort_idx]),

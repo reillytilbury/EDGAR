@@ -56,7 +56,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
     inputs_plot = np.asarray(plot_data['inputs_plot'])
     observed_outputs = np.asarray(plot_data['observed_outputs'])
     trial_predictions = np.asarray(plot_data['trial_predictions'])
-    point_losses = np.asarray(plot_data['point_losses'])
+    model_loss_dict = plot_data['model_loss_dict']
     n_models = int(plot_data['n_models'])
     n_samples = int(plot_data['n_samples'])
     n_grid_side = int(plot_data['n_grid_side'])
@@ -91,7 +91,7 @@ def plot_model_fits(plot_data: ModelFitPlotData,
         sort_idx = np.argsort(inputs_plot[c])
         x_sorted = inputs_plot[c][sort_idx]
         for i in range(n_models):
-            loss_val = float(np.mean(point_losses[i, c]))
+            loss_val = float(model_loss_dict[i][c])
             ax.plot(
                 x_sorted,
                 trial_predictions[i, c][sort_idx],

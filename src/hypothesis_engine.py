@@ -9,7 +9,7 @@ import timeout_decorator
 import jaxopt, optax
 import pandas as pd
 from pathlib import Path
-from . import utils, loss_functions, llm_helper
+from . import utils, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .data_structures import Inputs, Outputs, ensure_inputs, ensure_outputs
 from .diagnostics_manager import ModelFitPlotData, plot_train_vs_test_loss as plot_train_vs_test_loss_shared
@@ -1633,11 +1633,12 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
         "inputs_plot",
         "observed_outputs",
         "trial_predictions",
-        "point_losses",
+        "model_loss_dict",
         "n_grid_side",
         "n_models",
         "n_samples",
-        "n_trials",
+        "n_trials_x",
+        "n_trials_y",
         "input_idx",
     )
     missing = [k for k in required_keys if k not in plot_data]
@@ -1646,7 +1647,8 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
 
     n_samples = int(plot_data["n_samples"])
     n_models = int(plot_data["n_models"])
-    n_trials = int(plot_data["n_trials"])
+    n_trials_x = int(plot_data["n_trials_x"])
+    n_trials_y = int(plot_data["n_trials_y"])
     n_grid_side = int(plot_data["n_grid_side"])
 
     sample_selection = np.asarray(plot_data["sample_selection"])
@@ -1654,32 +1656,40 @@ def _validate_model_fit_plot_data(plot_data: ModelFitPlotData) -> ModelFitPlotDa
     inputs_plot = jnp.asarray(plot_data["inputs_plot"])
     observed_outputs = jnp.asarray(plot_data["observed_outputs"])
     trial_predictions = jnp.asarray(plot_data["trial_predictions"])
-    point_losses = jnp.asarray(plot_data["point_losses"])
+    model_loss_dict = plot_data["model_loss_dict"]
 
     if sample_selection.ndim != 1 or sample_selection.shape[0] != n_samples:
         raise ValueError(
             f"plot_data['sample_selection'] must have shape ({n_samples},), got {sample_selection.shape}."
         )
-    if inputs_plot.shape != (n_samples, n_trials):
+    if inputs_plot.shape != (n_samples, n_trials_x):
         raise ValueError(
-            f"plot_data['inputs_plot'] must have shape ({n_samples}, {n_trials}), got {inputs_plot.shape}."
+            f"plot_data['inputs_plot'] must have shape ({n_samples}, {n_trials_x}), got {inputs_plot.shape}."
         )
-    if inputs_full.ndim != 3 or inputs_full.shape[0] != n_samples or inputs_full.shape[2] != n_trials:
+    if inputs_full.ndim != 3 or inputs_full.shape[0] != n_samples or inputs_full.shape[2] != n_trials_x:
         raise ValueError(
-            f"plot_data['inputs_full'] must have shape (n_samples, n_features, n_trials) with "
-            f"n_samples={n_samples}, n_trials={n_trials}, got {inputs_full.shape}."
+            f"plot_data['inputs_full'] must have shape (n_samples, n_features, n_trials_x) with "
+            f"n_samples={n_samples}, n_trials_x={n_trials_x}, got {inputs_full.shape}."
         )
-    if observed_outputs.shape != (n_samples, n_trials):
+    if observed_outputs.shape != (n_samples, n_trials_y):
         raise ValueError(
-            f"plot_data['observed_outputs'] must have shape ({n_samples}, {n_trials}), got {observed_outputs.shape}."
+            f"plot_data['observed_outputs'] must have shape ({n_samples}, {n_trials_y}), got {observed_outputs.shape}."
         )
-    if trial_predictions.shape != (n_models, n_samples, n_trials):
+    if n_trials_x == n_trials_y and trial_predictions is None:
         raise ValueError(
-            f"plot_data['trial_predictions'] must have shape ({n_models}, {n_samples}, {n_trials}), got {trial_predictions.shape}."
+            "plot_data['trial_predictions'] should not be None when n_trials_x == n_trials_y."
         )
-    if point_losses.shape != (n_models, n_samples, n_trials):
+    if n_trials_x != n_trials_y and trial_predictions is not None:
         raise ValueError(
-            f"plot_data['point_losses'] must have shape ({n_models}, {n_samples}, {n_trials}), got {point_losses.shape}."
+            "plot_data['trial_predictions'] should be None when n_trials_x != n_trials_y."
+        )
+    if trial_predictions is not None and trial_predictions.shape != (n_models, n_samples, n_trials_y):
+        raise ValueError(
+            f"plot_data['trial_predictions'] must have shape ({n_models}, {n_samples}, {n_trials_y}), got {trial_predictions.shape}."
+        )
+    if model_loss_dict.keys() != set(range(n_models)):
+        raise ValueError(
+            f"plot_data['model_loss_dict'] keys must be integers from 0 to n_models-1 ({n_models}), got {model_loss_dict.keys()}."
         )
     if n_grid_side * n_grid_side != n_samples:
         raise ValueError(
@@ -1692,22 +1702,23 @@ def prepare_model_fit_plot_data(programs_df,
                                 inputs,
                                 response,
                                 sample_selection,
-                                loss_function,
+                                loss_fn,
                                 input_idx=0) -> ModelFitPlotData:
     """
     Compute canonical plotting tensors for diagnostics `plot_model_fits(plot_data=...)`.
 
     Returned `plot_data` schema:
     - `sample_selection`: `(n_samples,)` original sample ids selected for plotting.
-    - `inputs_full`: `(n_samples, n_features, n_trials)` full input tensor.
-    - `inputs_plot`: `(n_samples, n_trials)` input values used for x-axis plotting.
-    - `observed_outputs`: `(n_samples, n_trials)` observed targets/outputs.
-    - `trial_predictions`: `(n_models, n_samples, n_trials)` model predictions on observed trials.
-    - `point_losses`: `(n_models, n_samples, n_trials)` per-point model loss.
+    - `inputs_full`: `(n_samples, n_features, n_trials_x)` full input tensor.
+    - `inputs_plot`: `(n_samples, n_trials_x)` input values used for x-axis plotting.
+    - `observed_outputs`: `(n_samples, n_trials_y)` observed targets/outputs.
+    - `trial_predictions`: `(n_models, n_samples, n_trials_y)` model predictions on observed trials.
+    - `model_loss_dict`: dict mapping model index to overall loss scalar. The value is a list of per-sample losses that can be averaged or plotted separately.
     - `n_grid_side`: subplot side length (`sqrt(n_samples)`).
     - `n_models`: number of candidate models in `programs_df`.
     - `n_samples`: number of plotted samples.
-    - `n_trials`: number of observed trials per plotted sample.
+    - `n_trials_x`: number of observed trials per plotted sample (inputs).
+    - `n_trials_y`: number of observed trials per plotted sample (outputs).
     - `input_idx`: input feature index used to build `inputs_plot`.
 
     Why both `inputs_full` and `inputs_plot`:
@@ -1744,7 +1755,8 @@ def prepare_model_fit_plot_data(programs_df,
 
     n_models = len(models)
     n_samples = int(inputs_full.shape[0])
-    n_trials = int(inputs_full.shape[2])
+    n_trials_x = int(inputs_full.shape[2])
+    n_trials_y = int(observed_outputs.shape[-1])
 
     def _as_trial_vector(arr, expected_len, name):
         """
@@ -1766,31 +1778,38 @@ def prepare_model_fit_plot_data(programs_df,
             )
         return vec
 
-    trial_predictions = jnp.zeros((n_models, n_samples, n_trials))
-    point_losses = jnp.zeros((n_models, n_samples, n_trials))
-    for i, model in enumerate(models):
-        for c in range(n_samples):
-            params_ic = params_all[i][c]
-            x_cell = inputs_full[c]
-            y_pred_raw = model(x_cell, *params_ic)
-            y_pred = _as_trial_vector(y_pred_raw, n_trials, "model prediction")
-            trial_predictions = trial_predictions.at[i, c].set(y_pred)
-            y_true = _as_trial_vector(observed_outputs[c], n_trials, "response")
-            loss_vec_raw = loss_function(y_pred, y_true)
-            loss_vec = _as_trial_vector(loss_vec_raw, n_trials, "point loss")
-            point_losses = point_losses.at[i, c].set(loss_vec)
+    if n_trials_x == n_trials_y:
+        trial_predictions = jnp.zeros((n_models, n_samples, n_trials_x))
+    else:
+        trial_predictions = None 
 
+    model_loss_dict = {}
+    for i, model in enumerate(models):
+        model_loss_dict[i] = []        
+        for c in range(n_samples):
+            x = inputs_full[c]
+            y = observed_outputs[c]
+            params = params_all[i][c]
+            model_loss_dict[i].append(loss_fn(model, x, y, params))
+
+            # if n_trials_x == n_trials_y, calculate the per trial prediction for diagnostics 
+            if n_trials_x == n_trials_y:
+                y_pred_raw = model(x, *params)
+                y_pred = _as_trial_vector(y_pred_raw, n_trials_x, "model prediction")
+                trial_predictions = trial_predictions.at[i, c].set(y_pred)
+    
     plot_data: ModelFitPlotData = {
         'sample_selection': sample_selection,
         'inputs_full': inputs_full,
         'inputs_plot': inputs_plot,
         'observed_outputs': observed_outputs,
         'trial_predictions': trial_predictions,
-        'point_losses': point_losses,
+        'model_loss_dict': model_loss_dict,
         'n_grid_side': n_side,
         'n_models': n_models,
         'n_samples': n_samples,
-        'n_trials': n_trials,
+        'n_trials_x': n_trials_x,
+        'n_trials_y': n_trials_y,
         'input_idx': int(input_idx),
     }
     return _validate_model_fit_plot_data(plot_data)
@@ -1810,7 +1829,7 @@ def _call_with_supported_kwargs(func, kwargs):
 
 def prepare_and_plot_model_fits(diagnostics_module,
                                 programs_df,
-                                loss_function,
+                                loss_fn,
                                 inputs,
                                 response,
                                 sample_selection,
@@ -1833,7 +1852,7 @@ def prepare_and_plot_model_fits(diagnostics_module,
         inputs=inputs,
         response=response,
         sample_selection=sample_selection,
-        loss_function=loss_function,
+        loss_fn=loss_fn,
         input_idx=plot_kwargs.get('input_idx', 0),
     )
     kwargs = dict(
@@ -1845,6 +1864,7 @@ def prepare_and_plot_model_fits(diagnostics_module,
 
 async def generate_new_model(current_island, llm_name, client, 
                                     spike_matrix, stimuli, prompt_manager,
+                                    loss_fn=None,
                                     mode='explore', k_max=2, temp=1, 
                                     thinking_budget=1, img_dir=None, diagnostics_module=None,
                                     island_chat_manager=None, island_id: int = None,
@@ -1876,7 +1896,7 @@ async def generate_new_model(current_island, llm_name, client,
             prepare_and_plot_model_fits(
                 diagnostics_module=diagnostics_module,
                 programs_df=random_programs,
-                loss_function=loss_functions.quadratic_loss,
+                loss_fn=loss_fn,
                 inputs=stimuli,
                 response=spike_matrix,
                 sample_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
@@ -1972,7 +1992,7 @@ async def generate_new_parameter_estimator(current_island,
             prepare_and_plot_model_fits(
                 diagnostics_module=diagnostics_module,
                 programs_df=random_programs_crude,
-                loss_function=loss_functions.quadratic_loss,
+                loss_fn=loss_fn,
                 inputs=stimuli,
                 response=spike_matrix,
                 sample_selection=np.random.choice(spike_matrix.shape[0], size=4, replace=False),
@@ -2073,7 +2093,7 @@ async def generate_new_parameter_estimator(current_island,
                 prepare_and_plot_model_fits(
                     diagnostics_module=diagnostics_module,
                     programs_df=programs_df,
-                    loss_function=loss_functions.quadratic_loss,
+                    loss_fn=loss_fn,
                     inputs=stimuli,
                     response=spike_matrix,
                     sample_selection=sample_selection,
@@ -2591,7 +2611,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         prepare_and_plot_model_fits(
             diagnostics_module=diagnostics_module,
             programs_df=initial_programs,
-            loss_function=loss_functions.quadratic_loss,
+            loss_fn=loss_fn,
             inputs=inputs_train,
             response=response_train,
             sample_selection=np.random.choice(len(inputs_train), size=9, replace=False),
@@ -2648,6 +2668,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                    spike_matrix=response_train, 
                                                                    stimuli=inputs_train,
                                                                    prompt_manager=prompt_manager,
+                                                                   loss_fn=loss_fn,
                                                                    img_dir=model_image_dirs[island_idx, j],
                                                                    diagnostics_module=diagnostics_module,
                                                                    island_chat_manager=island_chat_manager,
@@ -2771,7 +2792,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 prepare_and_plot_model_fits(
                     diagnostics_module=diagnostics_module,
                     programs_df=pd.DataFrame({'program': [model_new, model_new], 'params': [initial_params, optimized_params]}),
-                    loss_function=loss_functions.quadratic_loss,
+                    loss_fn=loss_fn,
                     inputs=inputs_train,
                     response=response_train,
                     sample_selection=np.random.choice(len(inputs_train), size=4, replace=False),
@@ -2850,7 +2871,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 prepare_and_plot_model_fits(
                     diagnostics_module=diagnostics_module,
                     programs_df=top_df,
-                    loss_function=loss_functions.quadratic_loss,
+                    loss_fn=loss_fn,
                     inputs=inputs_train,
                     response=response_train,
                     sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
@@ -2868,7 +2889,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             prepare_and_plot_model_fits(
                 diagnostics_module=diagnostics_module,
                 programs_df=top_programs,
-                loss_function=loss_functions.quadratic_loss,
+                loss_fn=loss_fn,
                 inputs=inputs_train,
                 response=response_train,
                 sample_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
@@ -2982,7 +3003,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             prepare_and_plot_model_fits(
                 diagnostics_module=diagnostics_module,
                 programs_df=df,
-                loss_function=loss_functions.quadratic_loss,
+                loss_fn=loss_fn,
                 inputs=inputs_test,
                 response=response_test,
                 sample_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
@@ -3002,7 +3023,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 prepare_and_plot_model_fits(
                     diagnostics_module=diagnostics_module,
                     programs_df=model_df,
-                    loss_function=loss_functions.quadratic_loss,
+                    loss_fn=loss_fn,
                     inputs=inputs_test,
                     response=response_test,
                     sample_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
