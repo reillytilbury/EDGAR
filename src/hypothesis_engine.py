@@ -792,7 +792,7 @@ def validate_model_execution(
 
 
 def objective_legacy(model, param_estimator, x, y, create_train_test_trial_split_fn=None,
-              sample_loss_fn=None,
+              loss_fn=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -812,8 +812,8 @@ def objective_legacy(model, param_estimator, x, y, create_train_test_trial_split
         param_estimator (function): Function to estimate initial parameters for the model.
                                 Signature: param_estimator(X, response) -> params
                                 where X has shape (n_features, n_trials) for a single sample.
-        sample_loss_fn (function): Per-sample loss function.
-                                Signature: sample_loss_fn(model, x_i, y_i, params) -> scalar.
+        loss_fn (function): Per-sample loss function.
+                                Signature: loss_fn(model, x_i, y_i, params) -> scalar.
                                 Defaults to MSE over all outputs and trials.
         x: Input data. Can be:
            - 2D array (n_samples, n_trials) - will be auto-expanded to (n_samples, 1, n_trials)
@@ -912,7 +912,7 @@ def objective_legacy(model, param_estimator, x, y, create_train_test_trial_split
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
     # Per-sample loss function
-    loss_single_cell = lambda params, x_i, y_i: sample_loss_fn(model, x_i, y_i, params)
+    loss_single_cell = lambda params, x_i, y_i: loss_fn(model, x_i, y_i, params)
 
     # Vectorize over samples
     loss_total = jax.vmap(loss_single_cell, in_axes=(0, 0, 0), out_axes=0)
@@ -1100,7 +1100,7 @@ def objective_legacy(model, param_estimator, x, y, create_train_test_trial_split
 
 
 def objective_vectorized(model, param_estimator, x, y, create_train_test_trial_split_fn=None,
-                        sample_loss_fn=None,
+                        loss_fn=None,
                          param_penalty_weight=0.1, fit_params=True, random_seed=0,
                          FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
                          use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -1132,10 +1132,10 @@ def objective_vectorized(model, param_estimator, x, y, create_train_test_trial_s
            - 2D array (n_samples, n_trials) - auto-expanded to (n_samples, 1, n_trials)
            - 3D array (n_samples, n_targets, n_trials_y)
            - Outputs object
-           n_trials_x and n_trials_y may differ when a custom sample_loss_fn is provided.
-        sample_loss_fn (function): Per-sample loss function with full control over loss computation.
+           n_trials_x and n_trials_y may differ when a custom loss_fn is provided.
+        loss_fn (function): Per-sample loss function with full control over loss computation.
                           Defaults to MSE averaged over all targets and trials.
-                          Signature: sample_loss_fn(model, x_i, y_i, params) -> scalar
+                          Signature: loss_fn(model, x_i, y_i, params) -> scalar
                           where x_i has shape (n_features, n_trials_x),
                           y_i has shape (n_targets, n_trials_y),
                           and params is a 1D array of shape (n_params,).
@@ -1219,7 +1219,7 @@ def objective_vectorized(model, param_estimator, x, y, create_train_test_trial_s
 
     # Per-sample loss function
     def loss_single_sample(params, x_i, y_i):
-        return sample_loss_fn(model, x_i, y_i, params)
+        return loss_fn(model, x_i, y_i, params)
 
     # Vectorize over samples
     # params: (n_samples, n_params), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
@@ -1276,7 +1276,7 @@ def objective_vectorized(model, param_estimator, x, y, create_train_test_trial_s
             return total_loss / n_samples, total_grad / n_samples
     else:
         # Mismatched trials: no trial mini-batching. Pass full x_train and y_train.
-        # The sample_loss_fn handles the shape relationship internally.
+        # The loss_fn handles the shape relationship internally.
         def loss_and_grad_batched(params):
             """Compute loss and gradient over full data (no trial batching)."""
             params_2d = params.reshape(-1, n_params)
@@ -1402,7 +1402,7 @@ def objective_vectorized(model, param_estimator, x, y, create_train_test_trial_s
 
 
 def objective(model, param_estimator, x, y, create_train_test_trial_split_fn=None,
-              sample_loss_fn=None,
+              loss_fn=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -1430,8 +1430,8 @@ def objective(model, param_estimator, x, y, create_train_test_trial_split_fn=Non
            - 2D array (n_samples, n_trials) - auto-expanded to (n_samples, 1, n_trials)
            - 3D array (n_samples, n_targets, n_trials)
            - Outputs object
-        sample_loss_fn (function): Per-sample loss function.
-                          Signature: sample_loss_fn(model, x_i, y_i, params) -> scalar.
+        loss_fn (function): Per-sample loss function.
+                          Signature: loss_fn(model, x_i, y_i, params) -> scalar.
                           Defaults to MSE over all outputs and trials.
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
@@ -1459,7 +1459,7 @@ def objective(model, param_estimator, x, y, create_train_test_trial_split_fn=Non
         x=x,
         y=y_outputs,
         create_train_test_trial_split_fn=create_train_test_trial_split_fn,
-        sample_loss_fn=sample_loss_fn,
+        loss_fn=loss_fn,
         param_penalty_weight=param_penalty_weight,
         fit_params=fit_params,
         random_seed=random_seed,
@@ -1473,7 +1473,7 @@ def objective(model, param_estimator, x, y, create_train_test_trial_split_fn=Non
 
 def evaluate_param_estimator_loss(model, param_estimator, x, y,
                                   create_train_test_trial_split_fn=None,
-                                  sample_loss_fn=None,
+                                  loss_fn=None,
                                   param_penalty_weight=0.1, random_seed=0,
                                   trial_batch_size=None, FAILED_PROGRAM_COST=jnp.inf):
     """
@@ -1498,7 +1498,7 @@ def evaluate_param_estimator_loss(model, param_estimator, x, y,
             x=x,
             y=y,
             create_train_test_trial_split_fn=split_fn,
-            sample_loss_fn=sample_loss_fn,
+            loss_fn=loss_fn,
             param_penalty_weight=param_penalty_weight,
             fit_params=False,
             random_seed=random_seed,
@@ -1692,7 +1692,7 @@ def prepare_model_fit_plot_data(programs_df,
                                 inputs,
                                 response,
                                 sample_selection,
-                                loss_function,
+                                loss_fn,
                                 input_idx=0) -> ModelFitPlotData:
     """
     Compute canonical plotting tensors for diagnostics `plot_model_fits(plot_data=...)`.
@@ -1810,7 +1810,7 @@ def _call_with_supported_kwargs(func, kwargs):
 
 def prepare_and_plot_model_fits(diagnostics_module,
                                 programs_df,
-                                loss_function,
+                                loss_fn,
                                 inputs,
                                 response,
                                 sample_selection,
@@ -1833,7 +1833,7 @@ def prepare_and_plot_model_fits(diagnostics_module,
         inputs=inputs,
         response=response,
         sample_selection=sample_selection,
-        loss_function=loss_function,
+        loss_fn=loss_fn,
         input_idx=plot_kwargs.get('input_idx', 0),
     )
     kwargs = dict(
@@ -2355,7 +2355,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 log_best_loss = True,
                 trial_batch_size = None,
                 swear_words = None,
-                sample_loss_fn = None,
+                loss_fn = None,
                 random_seed = 0, # consider setting up a seed_manager to make behaviours more robustly reproducible.
                 ):
     """ 
@@ -2373,9 +2373,9 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     if data_processing_params is None:
         data_processing_params = {}
 
-    # Set default sample_loss_fn if none provided
-    if sample_loss_fn is None:
-        raise ValueError("sample_loss_fn must be provided. This is unexpected to be None since we expect to use the default MSE loss specifed in the DEFAULT config")
+    # Set default loss_fn if none provided
+    if loss_fn is None:
+        raise ValueError("loss_fn must be provided. This is unexpected to be None since we expect to use the default MSE loss specifed in the DEFAULT config")
     # load api keys
     load_dotenv()
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -2527,7 +2527,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         loss_init, params_init, loss, params = objective(program_jax, param_est,
                                         x=inputs_train, y=outputs_train,
                                         create_train_test_trial_split_fn=create_train_test_trial_split_fn,
-                                        sample_loss_fn=sample_loss_fn,
+                                        loss_fn=loss_fn,
                                         fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol, learning_rate=learning_rate,
                                         use_param_estimator=use_param_estimator, max_iter=max_iter, trial_batch_size=trial_batch_size,
                                         random_seed=random_seed)
@@ -2744,7 +2744,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             initial_loss, initial_params, loss, optimized_params = objective(model_new, param_est_new,
                                                                                 x=inputs_train, y=outputs_train,
                                                                                 create_train_test_trial_split_fn=create_train_test_trial_split_fn,
-                                                                                sample_loss_fn=sample_loss_fn,
+                                                                                loss_fn=loss_fn,
                                                                                 param_penalty_weight=param_penalty_weight,
                                                                                 fit_params=fit_params, tol=tol,
                                                                                 use_param_estimator=use_param_estimator,
@@ -2914,7 +2914,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             _, _, test_loss, optimized_params = objective(model, param_estimator,
                                                           x=inputs_test, y=outputs_test,
                                                           create_train_test_trial_split_fn=create_train_test_trial_split_fn,
-                                                          sample_loss_fn=sample_loss_fn,
+                                                          loss_fn=loss_fn,
                                                           fit_params=fit_params,
                                                           max_iter=max_iter,
                                                           param_penalty_weight=param_penalty_weight, tol=tol,

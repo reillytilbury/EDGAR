@@ -68,11 +68,19 @@ def create_train_test_trial_split(n_trials: int, random_seed : int = 0) -> Tuple
     test_trials_idx = shuffled_indices[training_size:]
     return training_trials_idx, test_trials_idx
 
-def sample_loss_fn(model, x_i, y_i, params):
+def loss_fn(model, x_i, y_i, params):
     """Default per-sample loss: MSE averaged over all outputs and trials.
 
     Works for both scalar outputs (n_trials,) and vectorized outputs (n_targets, n_trials).
     Equivalent to uniform-weight MSE across all targets and trials.
+
+    Args:
+        model: a function that takes inputs and parameters and produces predictions
+        x_i: input data for the i-th sample, shape (n_trials,) or (n_targets, n_trials)
+        y_i: true output data for the i-th sample, shape (n_trials,) or (n_targets, n_trials)
+        params: parameters to pass to the model
+    Returns:
+         scalar loss value for the i-th sample
     """
     pred = model(x_i, *params)
     if pred.ndim == 1:

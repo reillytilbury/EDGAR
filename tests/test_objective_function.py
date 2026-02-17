@@ -85,7 +85,7 @@ def legacy_split(n_trials_x, random_seed=0):
     idx = np.arange(n_trials_x)
     return idx[:n_trials_x // 2], idx[n_trials_x // 2:]
 
-def default_sample_loss_fn(model, x_i, y_i, params):
+def default_loss_fn(model, x_i, y_i, params):
     """Default per-sample loss: MSE averaged over all outputs and trials.
 
     Works for both scalar outputs (n_trials,) and vectorized outputs (n_targets, n_trials).
@@ -207,7 +207,7 @@ class TestObjectiveLegacy:
             max_iter=100,  # Need >= 51 for warmup schedule
             param_penalty_weight=0.01,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
         
         assert np.isfinite(initial_loss)
@@ -230,7 +230,7 @@ class TestObjectiveLegacy:
             y=y,
             fit_params=False,  # Skip optimization for speed
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
         
         assert np.isfinite(initial_loss)
@@ -261,7 +261,7 @@ class TestObjectiveVectorized:
             max_iter=100,  # Need >= 51 for warmup schedule
             param_penalty_weight=0.01,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
         
         assert np.isfinite(initial_loss)
@@ -286,7 +286,7 @@ class TestObjectiveVectorized:
             max_iter=100,  # Need >= 51 for warmup schedule
             param_penalty_weight=0.01,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
         
         assert np.isfinite(initial_loss)
@@ -309,13 +309,13 @@ class TestObjectiveVectorized:
             y=y,
             fit_params=False,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
 
         assert np.isfinite(loss)
         
-    def test_custom_sample_loss_fn_changes_loss(self):
-        """Test that a custom sample_loss_fn changes the loss value."""
+    def test_custom_loss_fn_changes_loss(self):
+        """Test that a custom loss_fn changes the loss value."""
         np.random.seed(42)
         n_samples, n_features, n_trials = 5, 2, 50
         n_targets = 2
@@ -331,7 +331,7 @@ class TestObjectiveVectorized:
             y=y,
             fit_params=False,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
 
         # Custom loss: MSE only on first target (ignores second target)
@@ -345,7 +345,7 @@ class TestObjectiveVectorized:
             x=x,
             y=y,
             fit_params=False,
-            sample_loss_fn=first_target_only,
+            loss_fn=first_target_only,
             create_train_test_trial_split_fn=legacy_split,
         )
 
@@ -368,7 +368,7 @@ class TestObjectiveVectorized:
             y=y,
             fit_params=False,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
         
         assert np.isfinite(initial_loss)
@@ -398,7 +398,7 @@ class TestObjective:
             y=y_2d,
             fit_params=False,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
         
         assert np.isfinite(initial_loss)
@@ -421,14 +421,14 @@ class TestObjective:
             y=y_3d,
             fit_params=False,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
         
         assert np.isfinite(initial_loss)
         assert np.isfinite(final_loss)
         
-    def test_sample_loss_fn_passed_through(self):
-        """Test that sample_loss_fn is passed through objective to objective_vectorized."""
+    def test_loss_fn_passed_through(self):
+        """Test that loss_fn is passed through objective to objective_vectorized."""
         np.random.seed(42)
         n_samples, n_features, n_trials = 5, 2, 50
 
@@ -443,7 +443,7 @@ class TestObjective:
             param_estimator=simple_param_estimator,
             x=x,
             y=y,
-            sample_loss_fn=always_zero_loss,
+            loss_fn=always_zero_loss,
             fit_params=False,
             create_train_test_trial_split_fn=legacy_split,
             param_penalty_weight=0.0,
@@ -479,7 +479,7 @@ class TestIntegration:
             y=y_2d,
             fit_params=False,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
 
         # Vectorized with n_targets=1
@@ -490,7 +490,7 @@ class TestIntegration:
             y=y_3d,
             fit_params=False,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
         
         # Losses should be very close (numerical precision differences ok)
@@ -550,14 +550,14 @@ class TestCallTrialSplit:
 
 
 # ============================================================================
-# Test sample_loss_fn with mismatched trials
+# Test loss_fn with mismatched trials
 # ============================================================================
 
 class TestMismatchedTrials:
     """Tests for objective with mismatched input/output trial dimensions."""
 
-    def test_objective_with_sample_loss_fn(self):
-        """Test objective works with custom sample_loss_fn and mismatched trials."""
+    def test_objective_with_loss_fn(self):
+        """Test objective works with custom loss_fn and mismatched trials."""
         np.random.seed(42)
         n_samples, n_features = 5, 2
         n_trials_x, n_trials_y = 100, 80
@@ -588,7 +588,7 @@ class TestMismatchedTrials:
             x=x,
             y=y,
             create_train_test_trial_split_fn=generalized_split,
-            sample_loss_fn=custom_sample_loss,
+            loss_fn=custom_sample_loss,
             fit_params=True,
             max_iter=50,
             param_penalty_weight=0.01,
@@ -599,14 +599,14 @@ class TestMismatchedTrials:
         assert params.shape == (n_samples, 2)
 
     def test_matched_trials_default_loss(self):
-        """Verify that the default sample_loss_fn (MSE) works for matched trials."""
+        """Verify that the default loss_fn (MSE) works for matched trials."""
         np.random.seed(42)
         n_samples, n_features, n_trials = 10, 3, 100
 
         x = jnp.array(np.random.randn(n_samples, n_features, n_trials))
         y = jnp.array(np.random.randn(n_samples, n_trials))
 
-        # Default sample_loss_fn (MSE)
+        # Default loss_fn (MSE)
         initial_loss, initial_params, final_loss, params = objective(
             model=simple_scalar_model,
             param_estimator=simple_param_estimator,
@@ -614,15 +614,15 @@ class TestMismatchedTrials:
             y=y,
             fit_params=False,
             create_train_test_trial_split_fn=legacy_split,
-            sample_loss_fn=default_sample_loss_fn,
+            loss_fn=default_loss_fn,
         )
 
         assert np.isfinite(initial_loss)
         assert np.isfinite(final_loss)
         assert params.shape == (n_samples, 2)
 
-    def test_sample_loss_fn_with_matched_trials(self):
-        """sample_loss_fn also works when trials happen to match."""
+    def test_loss_fn_with_matched_trials(self):
+        """loss_fn also works when trials happen to match."""
         np.random.seed(42)
         n_samples, n_features, n_trials = 5, 2, 50
 
@@ -638,7 +638,7 @@ class TestMismatchedTrials:
             param_estimator=simple_param_estimator,
             x=x,
             y=y,
-            sample_loss_fn=custom_sample_loss,
+            loss_fn=custom_sample_loss,
             create_train_test_trial_split_fn=legacy_split,
             fit_params=False,
         )

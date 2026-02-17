@@ -126,13 +126,13 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     else:
         create_train_test_trial_split_fn = None
 
-    sample_loss_fn_path = config.pop('sample_loss_fn', None)
-    if sample_loss_fn_path:
-        module_path, function_name = sample_loss_fn_path.rsplit('.', 1)
+    loss_fn_path = config.pop('loss_fn', None)
+    if loss_fn_path:
+        module_path, function_name = loss_fn_path.rsplit('.', 1)
         loss_module = importlib.import_module(module_path)
-        sample_loss_fn = getattr(loss_module, function_name)
+        loss_fn = getattr(loss_module, function_name)
     else:
-        sample_loss_fn = None
+        loss_fn = None
 
     # Initialize prompt manager with merged config (includes DEFAULT prompts)
     prompt_manager = PromptManager(config=config)
@@ -193,7 +193,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             use_large_model_for_param_estimators=params.get('use_large_model_for_param_estimators', False),
             trial_batch_size=params.get('trial_batch_size', None),
             swear_words=params.get('swear_words'),
-            sample_loss_fn=sample_loss_fn,
+            loss_fn=loss_fn,
         )
 
 if __name__ == "__main__":

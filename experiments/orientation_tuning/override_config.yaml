@@ -3,7 +3,7 @@ task: orientation_tuning # name of the sub directory under experiments
 load_and_process_data_fn: experiments.orientation_tuning.data_parser.load_and_process_data
 create_train_test_sample_split_fn: experiments.orientation_tuning.data_parser.create_train_test_sample_split
 create_train_test_trial_split_fn: experiments.orientation_tuning.data_parser.create_train_test_trial_split
-sample_loss_fn: experiments.orientation_tuning.data_parser.sample_loss_fn # use an override because we have a weird 10x factor 
+loss_fn: experiments.orientation_tuning.data_parser.loss_fn # use an override because we have a weird 10x factor 
 
 data_processing_params:
   # save some data parsing parameters (thresholds) so that we can save down a yaml copy each time we run an experiment
