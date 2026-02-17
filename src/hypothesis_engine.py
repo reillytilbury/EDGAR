@@ -791,7 +791,7 @@ def validate_model_execution(
         return False, f"Model failed to run or is incompatible with JAX tracing: {e}"
 
 
-def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn=None,
+def objective_legacy(model, param_estimator, x, y, create_train_test_trial_split_fn=None,
               sample_loss_fn=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
@@ -812,7 +812,9 @@ def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_
         param_estimator (function): Function to estimate initial parameters for the model.
                                 Signature: param_estimator(X, response) -> params
                                 where X has shape (n_features, n_trials) for a single sample.
-        loss_func (function): The loss function to use for calculating the loss.
+        sample_loss_fn (function): Per-sample loss function.
+                                Signature: sample_loss_fn(model, x_i, y_i, params) -> scalar.
+                                Defaults to MSE over all outputs and trials.
         x: Input data. Can be:
            - 2D array (n_samples, n_trials) - will be auto-expanded to (n_samples, 1, n_trials)
            - 3D array (n_samples, n_features, n_trials)
@@ -909,14 +911,8 @@ def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_
         logging.info(f"Model failed to run or is incompatible with JAX tracing: {e}")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
-    # Per-sample loss function: either custom (full control) or default (element-wise)
-    if sample_loss_fn is not None:
-        # Custom loss: experiment has full control over loss computation.
-        loss_single_cell = lambda params, x_i, y_i: sample_loss_fn(model, x_i, y_i, params)
-    else:
-        # Default: element-wise loss, mean over trials
-        # x_i: (n_features, n_trials_x), y_i: (n_trials_y,)
-        loss_single_cell = lambda params, x_i, y_i: jnp.mean(loss_func(model(x_i, *params), y_i), axis=-1)
+    # Per-sample loss function
+    loss_single_cell = lambda params, x_i, y_i: sample_loss_fn(model, x_i, y_i, params)
 
     # Vectorize over samples
     loss_total = jax.vmap(loss_single_cell, in_axes=(0, 0, 0), out_axes=0)
@@ -1103,8 +1099,8 @@ def objective_legacy(model, param_estimator, loss_func, x, y, create_train_test_
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn=None,
-                         target_weights=None, sample_loss_fn=None,
+def objective_vectorized(model, param_estimator, x, y, create_train_test_trial_split_fn=None,
+                        sample_loss_fn=None,
                          param_penalty_weight=0.1, fit_params=True, random_seed=0,
                          FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
                          use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -1128,9 +1124,6 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
                           Signature: param_estimator(X, response) -> params
                           where X has shape (n_features, n_trials) for a single sample,
                           and response has shape (n_trials,) for scalar or (n_targets, n_trials) for vectorized.
-        loss_func (function): Element-wise loss function. Applied to (pred, true) arrays.
-                          Should return array of same shape as inputs.
-                          Used only when sample_loss_fn is None (the default).
         x: Input data. Can be:
            - 2D array (n_samples, n_trials) - will be auto-expanded to (n_samples, 1, n_trials)
            - 3D array (n_samples, n_features, n_trials_x)
@@ -1139,14 +1132,9 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
            - 2D array (n_samples, n_trials) - auto-expanded to (n_samples, 1, n_trials)
            - 3D array (n_samples, n_targets, n_trials_y)
            - Outputs object
-           n_trials_x and n_trials_y may differ when sample_loss_fn is provided.
-        target_weights: Optional weights for each target. Can be:
-           - None: uniform weights (1/n_targets for each target, sums to 1)
-           - 1D array of shape (n_targets,): custom weights (will be normalized to sum to 1)
-           Only used when sample_loss_fn is None.
-        sample_loss_fn (function or None): Optional per-sample loss function giving
-                          full control over loss computation. When provided, replaces
-                          the default element-wise loss_func path.
+           n_trials_x and n_trials_y may differ when a custom sample_loss_fn is provided.
+        sample_loss_fn (function): Per-sample loss function with full control over loss computation.
+                          Defaults to MSE averaged over all targets and trials.
                           Signature: sample_loss_fn(model, x_i, y_i, params) -> scalar
                           where x_i has shape (n_features, n_trials_x),
                           y_i has shape (n_targets, n_trials_y),
@@ -1183,16 +1171,6 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
     n_samples, n_features, n_trials_x = x_data.shape
     n_trials_y = y_data.shape[2]
     n_targets = y_outputs.n_targets
-
-    # Set up target weights (normalize to sum to 1)
-    # Only used when sample_loss_fn is None (default element-wise path)
-    if target_weights is None:
-        target_weights = jnp.ones(n_targets) / n_targets
-    else:
-        target_weights = jnp.asarray(target_weights)
-        if target_weights.shape != (n_targets,):
-            raise ValueError(f"target_weights shape {target_weights.shape} does not match n_targets={n_targets}")
-        target_weights = target_weights / jnp.sum(target_weights)  # normalize
 
     # Split trials for inputs and outputs (may use different indices when mismatched)
     x_train_trial_idx, x_test_trial_idx, y_train_trial_idx, y_test_trial_idx = \
@@ -1238,39 +1216,10 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
     if not is_valid:
         logging.info(f"Model validation failed: {error_msg}")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
-    
-    # Helper: normalize model output to 2D (n_targets, n_trials)
-    # This handles n_targets=1 case where model might return 1D
-    def normalize_model_output(output, n_targets):
-        """Ensure model output is 2D: (n_targets, n_trials)."""
-        if output.ndim == 1 and n_targets == 1:
-            return output[None, :]  # (1, n_trials)
-        return output
 
-    # Wrapped model that normalizes output
-    def model_normalized(x_i, *params):
-        output = model(x_i, *params)
-        return normalize_model_output(output, n_targets)
-
-    # Per-sample loss function: either custom (full control) or default (element-wise)
-    if sample_loss_fn is not None:
-        # Custom loss: experiment has full control over loss computation.
-        # sample_loss_fn(model, x_i, y_i, params) -> scalar
-        def loss_single_sample(params, x_i, y_i):
-            return sample_loss_fn(model, x_i, y_i, params)
-    else:
-        # Default element-wise path (requires matched trial dimensions)
-        # x_i: (n_features, n_trials), y_i: (n_targets, n_trials)
-        # model output: (n_targets, n_trials)
-        # Returns: scalar (weighted sum of per-target MSE)
-        def loss_single_sample(params, x_i, y_i):
-            pred = model_normalized(x_i, *params)  # (n_targets, n_trials)
-            # loss_func returns element-wise loss: (n_targets, n_trials)
-            elementwise_loss = loss_func(pred, y_i)  # (n_targets, n_trials)
-            # Mean over trials for each target: (n_targets,)
-            per_target_mse = jnp.mean(elementwise_loss, axis=-1)
-            # Weighted sum over targets: scalar
-            return jnp.sum(target_weights * per_target_mse)
+    # Per-sample loss function
+    def loss_single_sample(params, x_i, y_i):
+        return sample_loss_fn(model, x_i, y_i, params)
 
     # Vectorize over samples
     # params: (n_samples, n_params), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
@@ -1282,10 +1231,10 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
     n_train_trials_y = y_train.shape[2]
     trials_matched = (n_train_trials_x == n_train_trials_y)
     effective_trial_batch_size = n_train_trials_x if trial_batch_size is None else int(trial_batch_size)
-    # Scalar single-feature full-batch fast path only when trials match
+    # Scalar single-feature full-batch fast path only when using default loss
     use_scalar_single_feature_fullbatch = (
         trial_batch_size is None and n_targets == 1 and n_features == 1
-        and trials_matched and sample_loss_fn is None
+        and trials_matched 
     )
     
     @jax.jit
@@ -1296,6 +1245,13 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
 
     # Combined loss and gradient computation - more efficient than separate calls
     loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
+
+    # JIT-compiled eval (nansum to ignore NaN losses from bad model outputs)
+    @jax.jit
+    def eval_single_batch(params_2d, x_batch, y_batch):
+        """Compute nansum of losses for one batch (JIT-compiled, no grad)."""
+        batch_losses = loss_total(params_2d, x_batch, y_batch)
+        return jnp.nansum(batch_losses)
 
     if trials_matched:
         # Standard path: batch over trial dimension with same indices for x and y
@@ -1415,14 +1371,12 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
                 batch_size = end_idx - start_idx
                 x_batch = x_eval[:, :, start_idx:end_idx]
                 y_batch = y_eval[:, :, start_idx:end_idx]
-                batch_losses = loss_total(params_2d, x_batch, y_batch)
-                weighted_sum += jnp.nansum(batch_losses) * (batch_size / n_eval_trials)
+                weighted_sum += eval_single_batch(params_2d, x_batch, y_batch) * (batch_size / n_eval_trials)
             return weighted_sum / n_samples
     else:
         def eval_loss_batched(params_2d, x_eval, y_eval):
             """Compute loss over full data (mismatched trials, no batching)."""
-            batch_losses = loss_total(params_2d, x_eval, y_eval)
-            return jnp.nansum(batch_losses) / n_samples
+            return eval_single_batch(params_2d, x_eval, y_eval) / n_samples
     
     if use_scalar_single_feature_fullbatch:
         initial_loss = jnp.nanmean(loss_total(initial_params, x_test, y_test)) + param_penalty_weight * n_params
@@ -1447,8 +1401,8 @@ def objective_vectorized(model, param_estimator, loss_func, x, y, create_train_t
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_split_fn=None,
-              target_weights=None, sample_loss_fn=None,
+def objective(model, param_estimator, x, y, create_train_test_trial_split_fn=None,
+              sample_loss_fn=None,
               param_penalty_weight=0.1, fit_params=True, random_seed=0,
               FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -1468,7 +1422,6 @@ def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_s
         param_estimator (function): Function to estimate initial parameters for the model.
                           Signature: param_estimator(X, response) -> params
                           where X has shape (n_features, n_trials) for a single sample.
-        loss_func (function): The loss function to use for calculating the loss.
         x: Input data. Can be:
            - 2D array (n_samples, n_trials) - will be auto-expanded to (n_samples, 1, n_trials)
            - 3D array (n_samples, n_features, n_trials)
@@ -1477,9 +1430,9 @@ def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_s
            - 2D array (n_samples, n_trials) - auto-expanded to (n_samples, 1, n_trials)
            - 3D array (n_samples, n_targets, n_trials)
            - Outputs object
-        target_weights: Optional weights for each target. Only used for n_targets > 1.
-           - None: uniform weights (1/n_targets for each)
-           - 1D array (n_targets,): custom weights (normalized to sum to 1)
+        sample_loss_fn (function): Per-sample loss function.
+                          Signature: sample_loss_fn(model, x_i, y_i, params) -> scalar.
+                          Defaults to MSE over all outputs and trials.
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
         random_seed (int or None): Random seed for reproducibility. Default is 0.
@@ -1503,11 +1456,9 @@ def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_s
     return objective_vectorized(
         model=model,
         param_estimator=param_estimator,
-        loss_func=loss_func,
         x=x,
         y=y_outputs,
         create_train_test_trial_split_fn=create_train_test_trial_split_fn,
-        target_weights=target_weights,
         sample_loss_fn=sample_loss_fn,
         param_penalty_weight=param_penalty_weight,
         fit_params=fit_params,
@@ -1520,11 +1471,11 @@ def objective(model, param_estimator, loss_func, x, y, create_train_test_trial_s
         trial_batch_size=trial_batch_size,
     )
 
-def evaluate_param_estimator_loss(model, param_estimator, loss_func, x, y,
+def evaluate_param_estimator_loss(model, param_estimator, x, y,
                                   create_train_test_trial_split_fn=None,
                                   sample_loss_fn=None,
                                   param_penalty_weight=0.1, random_seed=0,
-                                  trial_batch_size=5000, FAILED_PROGRAM_COST=jnp.inf):
+                                  trial_batch_size=None, FAILED_PROGRAM_COST=jnp.inf):
     """
     Evaluate parameter estimator loss without gradient descent.
 
@@ -1544,7 +1495,6 @@ def evaluate_param_estimator_loss(model, param_estimator, loss_func, x, y,
         initial_loss, initial_params, _, _ = objective(
             model=model,
             param_estimator=param_estimator,
-            loss_func=loss_func,
             x=x,
             y=y,
             create_train_test_trial_split_fn=split_fn,
@@ -2093,7 +2043,6 @@ async def generate_new_parameter_estimator(current_island,
     current_loss, current_params = evaluate_param_estimator_loss(
         model=model_fn,
         param_estimator=current_func,
-        loss_func=loss_functions.quadratic_loss,
         x=stimuli,
         y=spike_matrix,
         create_train_test_trial_split_fn=create_train_test_trial_split_fn,
@@ -2206,7 +2155,6 @@ async def generate_new_parameter_estimator(current_island,
         new_loss, new_params = evaluate_param_estimator_loss(
             model=model_fn,
             param_estimator=new_func,
-            loss_func=loss_functions.quadratic_loss,
             x=stimuli,
             y=spike_matrix,
             create_train_test_trial_split_fn=create_train_test_trial_split_fn,
@@ -2424,7 +2372,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     """
     if data_processing_params is None:
         data_processing_params = {}
-        
+
+    # Set default sample_loss_fn if none provided
+    if sample_loss_fn is None:
+        raise ValueError("sample_loss_fn must be provided. This is unexpected to be None since we expect to use the default MSE loss specifed in the DEFAULT config")
     # load api keys
     load_dotenv()
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -2574,7 +2525,6 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         program_jax = jax_programs[i]
         # score the initial program
         loss_init, params_init, loss, params = objective(program_jax, param_est,
-                                        loss_func=loss_functions.quadratic_loss,
                                         x=inputs_train, y=outputs_train,
                                         create_train_test_trial_split_fn=create_train_test_trial_split_fn,
                                         sample_loss_fn=sample_loss_fn,
@@ -2792,7 +2742,6 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 continue
             
             initial_loss, initial_params, loss, optimized_params = objective(model_new, param_est_new,
-                                                                                loss_func=loss_functions.quadratic_loss,
                                                                                 x=inputs_train, y=outputs_train,
                                                                                 create_train_test_trial_split_fn=create_train_test_trial_split_fn,
                                                                                 sample_loss_fn=sample_loss_fn,
@@ -2963,7 +2912,6 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             param_estimator = program['parameter_estimator']
             # compute the test loss
             _, _, test_loss, optimized_params = objective(model, param_estimator,
-                                                          loss_func=loss_functions.quadratic_loss,
                                                           x=inputs_test, y=outputs_test,
                                                           create_train_test_trial_split_fn=create_train_test_trial_split_fn,
                                                           sample_loss_fn=sample_loss_fn,

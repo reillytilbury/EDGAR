@@ -8,7 +8,6 @@ import pytest
 from experiments.orientation_tuning import data_parser, seed_programs
 from src.data_structures import ensure_inputs, ensure_outputs
 from src.hypothesis_engine import objective
-from src.loss_functions import quadratic_loss
 
 
 BASELINE_PATH = Path(__file__).parent / "baselines" / "orientation_tuning_seed_losses_test_mode.json"
@@ -69,7 +68,6 @@ def _compute_seed_losses(settings):
         _, _, train_loss, _ = objective(
             model=model,
             param_estimator=estimator,
-            loss_func=quadratic_loss,
             x=inputs_train,
             y=outputs_train,
             create_train_test_trial_split_fn=data_parser.create_train_test_trial_split,
@@ -85,7 +83,6 @@ def _compute_seed_losses(settings):
         _, _, test_loss, _ = objective(
             model=model,
             param_estimator=estimator,
-            loss_func=quadratic_loss,
             x=inputs_test,
             y=outputs_test,
             create_train_test_trial_split_fn=data_parser.create_train_test_trial_split,

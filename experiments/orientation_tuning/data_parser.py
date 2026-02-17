@@ -411,3 +411,10 @@ def load_data(data_dir: Union[str, List[List[str]]],
     response = response[:, reliable_cells, :]
     return response, angles
 
+def sample_loss_fn(model, x_i, y_i, params):
+    """Default per-sample loss: MSE averaged over all outputs and trials but multiplied by 10. This was an arbitrary choice we made when writing the paper. 
+    """
+    pred = model(x_i, *params)
+    if pred.ndim == 1:
+        pred = pred[None, :]  # normalize to (1, n_trials)
+    return jnp.mean(10 * (pred - y_i) ** 2) # times by 10

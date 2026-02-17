@@ -1,4 +1,5 @@
 import numpy as np
+import jax.numpy as jnp
 from typing import Tuple
 
 def target_function(x, a, b, c, k, phi_0):
@@ -66,3 +67,14 @@ def create_train_test_trial_split(n_trials: int, random_seed : int = 0) -> Tuple
     training_trials_idx = shuffled_indices[:training_size]
     test_trials_idx = shuffled_indices[training_size:]
     return training_trials_idx, test_trials_idx
+
+def sample_loss_fn(model, x_i, y_i, params):
+    """Default per-sample loss: MSE averaged over all outputs and trials.
+
+    Works for both scalar outputs (n_trials,) and vectorized outputs (n_targets, n_trials).
+    Equivalent to uniform-weight MSE across all targets and trials.
+    """
+    pred = model(x_i, *params)
+    if pred.ndim == 1:
+        pred = pred[None, :]  # normalize to (1, n_trials)
+    return jnp.mean((pred - y_i) ** 2)
