@@ -1692,7 +1692,7 @@ def prepare_model_fit_plot_data(programs_df,
                                 inputs,
                                 response,
                                 sample_selection,
-                                loss_fn,
+                                loss_function,
                                 input_idx=0) -> ModelFitPlotData:
     """
     Compute canonical plotting tensors for diagnostics `plot_model_fits(plot_data=...)`.
@@ -1810,7 +1810,7 @@ def _call_with_supported_kwargs(func, kwargs):
 
 def prepare_and_plot_model_fits(diagnostics_module,
                                 programs_df,
-                                loss_fn,
+                                loss_function,
                                 inputs,
                                 response,
                                 sample_selection,
@@ -1833,7 +1833,7 @@ def prepare_and_plot_model_fits(diagnostics_module,
         inputs=inputs,
         response=response,
         sample_selection=sample_selection,
-        loss_fn=loss_fn,
+        loss_function=loss_function,
         input_idx=plot_kwargs.get('input_idx', 0),
     )
     kwargs = dict(
