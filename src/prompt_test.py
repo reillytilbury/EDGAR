@@ -302,7 +302,6 @@ class ExperimentValidator:
             'exploit_point': float,
             'param_penalty_weight': float,
             'FAILED_PROGRAM_COST': float,  # Must be float, not string!
-            'use_image_feedback': bool,
             'use_param_estimator': bool,
         }
         

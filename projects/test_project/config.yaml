@@ -1,0 +1,20 @@
+# ========================
+# Project Identity
+# ========================
+
+# Task folder name under projects/.
+task: test_project
+
+
+# ========================
+# Data Defaults
+# ========================
+
+# Data-processing overrides for this task.
+data_processing_params:
+  data_path: /path/to/data.npy
+
+# Input variable definitions used by prompts and model code.
+inputs:
+- name: x
+  description: Input variable

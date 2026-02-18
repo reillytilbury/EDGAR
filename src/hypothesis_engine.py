@@ -65,7 +65,11 @@ def normalize_loaded_data(data_dict: dict) -> tuple[np.ndarray, np.ndarray]:
         inputs_3d: shape (n_samples, n_features, n_trials)
         outputs_3d: shape (n_samples, n_targets, n_trials)
     """
-    if 'inputs' in data_dict:
+    if isinstance(data_dict, (tuple, list)) and len(data_dict) == 2:
+        # Spec-style loaders may return (X, Y) directly.
+        inputs_obj = ensure_inputs(data_dict[0])
+        outputs_obj = ensure_outputs(data_dict[1])
+    elif 'inputs' in data_dict:
         inputs_obj = ensure_inputs(data_dict['inputs'])
     elif 'trials' in data_dict:
         inputs_obj = ensure_inputs(data_dict['trials'])

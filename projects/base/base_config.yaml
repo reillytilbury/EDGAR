@@ -1,82 +1,165 @@
-# This is a template config file for a new experiment. Copy this file to a new directory under experiments/ and edit any necessary fields. 
+# Base defaults for all projects.
+#
+# Do not put task-specific wiring in this file. The runner auto-discovers:
+# - projects/<task>/spec.py
+# - fixed function names inside spec.py
+#
+# Override only what you need in projects/<task>/config.yaml.
 
-# DATA CONFIG 
-task: new_experiment # name of the sub directory under experiments -- update this to make this more descriptive of the experiment
-load_and_process_data_fn: experiments.new_experiment.data_parser.load_and_process_data
-create_train_test_sample_split_fn: experiments.new_experiment.data_parser.create_train_test_sample_split
-create_train_test_trial_split_fn: experiments.new_experiment.data_parser.create_train_test_trial_split
-training_sample_ratio: 0.5 # Proportion of samples to use for training vs test split (the rest will be used for testing). This is separate from the trial split, which is defined in create_train_test_trial_split_fn and determines the train/test split of trials within each sample.
+# ========================
+# Project Identity
+# ========================
+
+# Name of the task folder under projects/.
+# Task configs should override this value.
+task: new_experiment
+
+# Name used in prompts for the evolving model family.
+model_name: neuron_model
+
+# Proportion of samples used for training split (remaining go to test).
+training_sample_ratio: 0.5
+
+
+# ========================
+# Data Defaults
+# ========================
 
 data_processing_params:
-  # consider saving some data parsing parameters (thresholds) so that we can save down a yaml copy each time we run an experiment
+  # Path to task data. Override in each task config.
   data_path: /home/USER/data.npy
 
-# Input configuration - defines the input variables for models
-# Each input should have a name and description for prompt generation
+# Input variable definitions used in prompts.
+# Task configs should replace this list with real inputs.
 inputs:
   - name: stimulus
     description: "Random stimulus"
 
-# HYPERPARAMETER CONFIG 
 
-# Path to experiment-specific diagnostics module (relative to project root)
-# If not specified or file doesn't exist, diagnostics will be disabled
-diagnostics_path: experiments/new_experiment
-
-seed_programs:
-  module: experiments.new_experiment.seed_programs
-  function_seeds:
-    - model_1
-    - model_2
-  parameter_estimator_seeds:
-    - parameter_estimator_1
-    - parameter_estimator_2
+# ========================
+# Experiment Runtime
+# ========================
 
 experiment_params:
+  # Number of full runs.
   num_runs: 1
-  n_iterations : 12
-  time_limit : 60  # in minutes
-  k_max : 2
-  n_islands : 8
-  batch_size : 6
-  max_iter : 1000
-  critical_population_size : 12
-  min_wise_population_size : 0
-  n_migrants : 2
-  fit_params : true
-  tol : 1e-6
-  exploit_point : 0.5
-  learning_rate : 3e-3
-  param_penalty_weight : 0.01
-  FAILED_PROGRAM_COST : .inf
-  use_image_feedback : false
-  use_param_estimator : true
-  param_estimator_refinement_rounds : 3
-  use_chat_mode : false  # If true, uses persistent chat sessions per island (expensive). Default: false (legacy independent queries)
-  chat_token_limit : 50000  # Max tokens per island chat before auto-summarize and reset. 0 = unlimited
-  exploration_topology : [1, 2, 3, 4, 5, 6, 7, 0]
-  exploitation_topology : [1, 2, 3, 4, 5, 6, 7, 0]
-  tiny_lm_name : gemini-2.0-flash-lite
-  little_lm_name : gemini-2.0-flash
-  large_lm_name : gemini-2.5-flash
-  use_large_every : 3
-  use_large_model_for_param_estimators: false # Whether parameter estimators should use the large LM (true) or tiny LM (false). 
+
+  # Number of evolutionary iterations per run.
+  n_iterations: 12
+
+  # Time limit per run in minutes.
+  time_limit: 60
+
+  # Number of models kept for prompting each round.
+  k_max: 2
+
+  # Number of islands in the evolutionary system.
+  n_islands: 8
+
+  # Batch size per island when querying models.
+  batch_size: 6
+
+  # Max optimizer iterations for parameter fitting.
+  max_iter: 1000
+
+  # Hard capacity per island population.
+  critical_population_size: 12
+
+  # Minimum count of "wise" (large-model) programs to preserve.
+  min_wise_population_size: 0
+
+  # Number of migrants exchanged between islands.
+  n_migrants: 2
+
+  # Whether to optimize free parameters.
+  fit_params: true
+
+  # Parameter fitting tolerance.
+  tol: 1e-6
+
+  # Explore/exploit balance point.
+  exploit_point: 0.5
+
+  # Parameter optimizer learning rate.
+  learning_rate: 3e-3
+
+  # Complexity penalty on parameterized programs.
+  param_penalty_weight: 0.01
+
+  # Sentinel cost for failed programs.
+  FAILED_PROGRAM_COST: .inf
+
+  # Whether to use parameter estimators.
+  use_param_estimator: true
+
+  # Number of refinement rounds for parameter estimators.
+  param_estimator_refinement_rounds: 3
+
+  # If true, use persistent per-island chat sessions.
+  use_chat_mode: false
+
+  # Token budget per chat before summarize/reset (0 = unlimited).
+  chat_token_limit: 50000
+
+  # Island graph for exploration exchanges.
+  exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
+
+  # Island graph for exploitation exchanges.
+  exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
+
+  # Small model used for lightweight generation tasks.
+  tiny_lm_name: gemini-2.0-flash-lite
+
+  # Medium model used for normal generation tasks.
+  little_lm_name: gemini-2.0-flash
+
+  # Large model used periodically for stronger proposals.
+  large_lm_name: gemini-2.5-flash
+
+  # Use large model every N iterations.
+  use_large_every: 3
+
+  # If true, parameter-estimator generation uses large model.
+  use_large_model_for_param_estimators: false
+
+  # Banned function calls/fragments during code generation.
   swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
 
-# Evolution algorithm parameters (used by EvolutionConfig)
+
+# ========================
+# Evolution Policy
+# ========================
+
 evolution:
-  capacity_per_island: 12        # Max programs per island (same as critical_population_size)
-  n_migrants: 2                  # Programs to migrate each round
-  overlap_threshold: 6           # Threshold for cross-island deduplication
-  loss_tolerance: 0.01           # Loss difference for similarity detection
-  cosine_tolerance: 0.99         # Behavioral similarity threshold
-  min_wise_programs: 0           # Minimum "wise" (large LLM) programs to preserve
+  # Max programs retained per island.
+  capacity_per_island: 12
+
+  # Programs migrated each round.
+  n_migrants: 2
+
+  # Similarity overlap threshold for deduplication.
+  overlap_threshold: 6
+
+  # Loss tolerance for similarity checks.
+  loss_tolerance: 0.01
+
+  # Cosine tolerance for behavioral similarity checks.
+  cosine_tolerance: 0.99
+
+  # Minimum number of wise programs to preserve.
+  min_wise_programs: 0
+
+  # Large model name for evolution internals.
   large_lm_name: gemini-2.5-flash
-  loss_type: train_loss          # 'train_loss' or 'test_loss'
 
-model_name: neuron_model
+  # Which loss to prioritize in sorting/selection.
+  loss_type: train_loss
 
-# Metadata section for validation
+
+# ========================
+# Prompt Metadata
+# ========================
+
 _metadata:
   required_prompts:
     - prompts.program_prompt.base
@@ -91,15 +174,13 @@ _metadata:
     - prompts.parameter_estimator.function_signature
     - prompts.parameter_estimator.per_model_detail
     - prompts.jax_translator_prompt
-  
+
   optional_prompts:
     - prompts.program_prompt.image_analysis
     - prompts.parameter_estimator.image_analysis
-    
-  # Define allowed variables for each prompt type. If you update the allowed variables, please also update prompt_manager.py accordingly
+
   allowed_variables:
     program_prompt:
-      # Shared across all program_prompts (inherited by children)
       _default:
         - k
         - next_version
@@ -109,6 +190,7 @@ _metadata:
         - model_idx
         - train_loss
         - program_code_string
+
     parameter_estimator:
       _default:
         - k
@@ -118,33 +200,37 @@ _metadata:
         - max_lines
         - next_version
       per_model_detail:
-        - model_idx 
+        - model_idx
         - train_loss
         - program_code_string
         - parameter_estimator_code_string
-    jax_translator_prompt: 
+
+    jax_translator_prompt:
       - function_code
+
+
+# ========================
+# Prompt Defaults
+# ========================
 
 prompts:
   program_prompt:
-    base: | 
-      You are an AI scientist. Below are two models describing a phenomenon, sorted from hightest to lowest loss. 
+    base: |
+      You are an AI scientist. Below are two models describing a phenomenon, sorted from hightest to lowest loss.
       Your task is to create a new model, model_v{next_version}, that has a lower loss than the models below.
       *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
       Always ensure your model outputs are bounded (e.g., by clipping exponential arguments or the final output) to avoid infinite losses.
 
     explore: |
-      Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? 
+      Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss?
       Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
-      
+
     exploit: |
-      Use the models below as a *template* to create a new model. 
-      Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. 
+      Use the models below as a *template* to create a new model.
+      Which features in the models below correlate with lower loss? Find these features and *extrapolate* them.
       Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
       Are the parameter ranges correct? If not, adjust them to be more appropriate.
       You will be *penalized* for complexity, so make the new model as *simple* as possible while still being better than the previous models.
-
-    # image_analysis: -- no default image analysis prompt.
 
     code_guidelines: |
       **Code Generation Guidelines:**
@@ -169,8 +255,8 @@ prompts:
 
     docstring_guidelines: |
       **Docstring Guidelines:**
-      * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. 
-      * Never refer to the models as `model_v1`, `model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
+      * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`.
+      * Never refer to the models as `model_v1`, `model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names.
       * Do not refer to the current model as `model_v{next_version}`. Instead, refer to it as "this model".
       * Provide a simple equation for the model, including all free parameters.
       * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
@@ -181,23 +267,19 @@ prompts:
       \n
       ----------------------------
       \n
-
   parameter_estimator:
     base: |
       You are an AI scientist. Your task is to create a simple parameter estimator function, parameter_estimator_v{next_version}, to estimate the free parameters of the latest model, model_v{next_version}.
-      The parameter should be estimated directly, using statistical principles. 
+      The parameter should be estimated directly, using statistical principles.
       *Analyze* the progression of the parameter estimators, *generalize* the improvements, and *create* a new parameter estimator that is better than *all* previous estimators.
-
-
-    # image_analysis: -- no default image analysis prompt.
 
     code_guidelines: |
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
       * The only arguments to the function should be the inputs (X) and the spike count.
-      * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected. 
-      * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point for the parameter estimation.
+      * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
+      * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`.
 
     function_signature: |
       **Function Signature:**
@@ -213,8 +295,8 @@ prompts:
 
     docstring_guidelines: |
       **Docstring Guidelines:**
-      * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. 
-      * Never refer to the models as `model_v1`, `model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
+      * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`.
+      * Never refer to the models as `model_v1`, `model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names.
       * Do not refer to the current model as `model_v{next_version}`. Instead, refer to it as "this model".
       * Provide a simple equation for the model, including all free parameters.
       * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
@@ -227,26 +309,22 @@ prompts:
       \n
       ----------------------------
       \n
-
-  jax_translator_prompt: | 
+  jax_translator_prompt: |
     Convert the following function to a JAX-compatible function.
 
       Include all necessary imports, and ensure that the function is compatible with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.
-      
+
       CRITICAL JAX compatibility requirements:
       * Replace all boolean indexing (e.g., `array[condition]`) with `jnp.where(condition, true_value, false_value)`
       * Replace NumPy functions with JAX equivalents (np.array → jnp.array, np.sin → jnp.sin, etc.)
       * Avoid Python control flow (if/for) that depends on array values - use `jnp.where`, `jax.lax.cond`, `jax.lax.scan` instead
       * Do not use dynamic array shapes or indexing with non-constant indices
-      * Do not use dynamic array shapes or indexing with non-constant indices
       * Never call Python `int()` / `float()` / `range()` on JAX values (e.g., no `int(jnp.ceil(...))`).
       * For lattice/grid models, avoid data-dependent `jnp.arange(-n, n+1)` where `n` depends on parameters.
-      * Instead, create a fixed static maximum range (e.g., `n_range_max`) and use a mask:
-        compute dynamic `n_eff = jnp.ceil(...)`, build static indices with `jnp.arange(-n_range_max, n_range_max + 1)`,
-        then zero out contributions where `abs(index) > n_eff` using `jnp.where`.
-      * `jnp.where(condition, x, y)` requires broadcast-compatible shapes. If `x` is flattened (e.g., `(N, 2)`), flatten/reshape masks to match (e.g., `(N, 1)`), rather than using unflattened masks like `(H, W, 1)`.      * Use `jnp.clip()` instead of boolean masking for bounds
-      
-      Do not include any text other than the code. 
-      Update the function name to be the original name without "_v*". For example, `def neuron_model_v1(X, param1=0.5):` should become `def neuron_model(X, param1=0.5):`.
+      * Instead, create a fixed static maximum range (e.g., `n_range_max`) and use a mask.
+      * Use `jnp.clip()` instead of boolean masking for bounds.
+
+      Do not include any text other than the code.
+      Update the function name to be the original name without "_v*".
       Here is the code to translate:
       {function_code}
