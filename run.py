@@ -3,11 +3,9 @@ import yaml
 from pathlib import Path
 import importlib
 import os, argparse
-import types
 import inspect
 import numpy as np
 from src import hypothesis_engine 
-from src.diagnostics_manager import load_diagnostics
 from src.prompt_manager import PromptManager
 
 def _default_sample_split(n_samples: int, training_sample_ratio: float = 0.5, random_seed: int = 0):
@@ -132,21 +130,25 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         ) from e
 
     numpy_programs = [getattr(spec_module, 'model_v1'), getattr(spec_module, 'model_v2')]
-    jax_programs = None
     param_estimators = [getattr(spec_module, 'param_est_v1'), getattr(spec_module, 'param_est_v2')]
 
     # assert that we have exactly 2 of each
     if len(numpy_programs) != 2:
         raise ValueError("There must be exactly 2 numpy function seeds.")
-    if jax_programs is not None and len(jax_programs) != 2:
-        raise ValueError("There must be exactly 2 jax function seeds when provided.")
     if len(param_estimators) != 2:  
         raise ValueError("There must be exactly 2 parameter estimator seeds.")
 
-    # Data extraction/splits: fixed-name default from spec module.
+    # Data extraction/splits: prefer unified split API if provided.
     load_and_process_data_fn = getattr(spec_module, 'load_and_process_data')
-    create_train_test_sample_split_fn = getattr(spec_module, 'create_train_test_sample_split', _default_sample_split)
-    create_train_test_trial_split_fn = getattr(spec_module, 'create_train_test_trial_split', _default_trial_split)
+    create_train_test_split_fn = getattr(spec_module, 'train_test_split', None)
+    if not callable(create_train_test_split_fn):
+        create_train_test_split_fn = getattr(spec_module, 'create_train_test_split', None)
+    if callable(create_train_test_split_fn):
+        create_train_test_sample_split_fn = None
+        create_train_test_trial_split_fn = None
+    else:
+        create_train_test_sample_split_fn = getattr(spec_module, 'create_train_test_sample_split', _default_sample_split)
+        create_train_test_trial_split_fn = getattr(spec_module, 'create_train_test_trial_split', _default_trial_split)
 
     # Image diagnostics are enabled automatically if spec defines plot_model_fits.
     spec_plot_fn = getattr(spec_module, "plot_model_fits", None)
@@ -162,44 +164,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
         return func(**filtered_kwargs)
 
-    # Optional selector from diagnostics.py (if available); plotting comes from spec.py.
-    diagnostics_path = None
-    if (project_root / "projects" / task_name / "diagnostics.py").exists():
-        diagnostics_path = f"projects/{task_name}"
-    legacy_diagnostics_module = load_diagnostics(diagnostics_path)
-
-    diagnostics_module = None
-    if use_image_feedback:
-        def _plot_model_fits_adapter(plot_data, programs_df, save_path="", **kwargs):
-            x = np.asarray(plot_data["inputs_full"])
-            y = np.asarray(plot_data["observed_outputs"])[:, np.newaxis, :]
-            point_losses = np.asarray(plot_data["point_losses"])
-
-            programs_list = []
-            for i in range(len(programs_df)):
-                model_fn = programs_df.iloc[i]["program"]
-                params_arr = np.asarray(programs_df.iloc[i]["params"])
-                losses_arr = np.mean(point_losses[i], axis=-1)
-                programs_list.append(
-                    {
-                        "model": model_fn,
-                        "params": params_arr,
-                        "losses": losses_arr,
-                    }
-                )
-
-            spec_kwargs = {
-                "X": x,
-                "Y": y,
-                "programs_list": programs_list,
-                "save_path": save_path,
-                **kwargs,
-            }
-            return _call_with_supported_kwargs(spec_plot_fn, spec_kwargs)
-
-        diagnostics_module = types.SimpleNamespace(plot_model_fits=_plot_model_fits_adapter)
-        if legacy_diagnostics_module is not None and hasattr(legacy_diagnostics_module, "select_evaluation_points"):
-            diagnostics_module.select_evaluation_points = legacy_diagnostics_module.select_evaluation_points
+    diagnostics_module = spec_module if use_image_feedback else None
 
     loss_fn_path = config.pop('loss_fn', None)
     if loss_fn_path:
@@ -256,9 +221,9 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             chat_token_limit=params.get('chat_token_limit', 50000),  # Max tokens per chat before auto-reset
             param_estimator_refinement_rounds=params.get('param_estimator_refinement_rounds', 0),
             numpy_programs=numpy_programs,
-            jax_programs=jax_programs,
             param_estimators=param_estimators,
             load_and_process_data_fn=load_and_process_data_fn,
+            create_train_test_split_fn=create_train_test_split_fn,
             create_train_test_sample_split_fn=create_train_test_sample_split_fn,
             create_train_test_trial_split_fn=create_train_test_trial_split_fn,
             training_sample_ratio=params.get('training_sample_ratio', 0.5),
@@ -269,6 +234,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             trial_batch_size=params.get('trial_batch_size', None),
             swear_words=params.get('swear_words'),
             loss_fn=loss_fn,
+            random_seed=params.get('random_seed', 42),
         )
 
 if __name__ == "__main__":

@@ -28,6 +28,54 @@ class PromptManager:
 
         self.prompts = self.config['prompts']
 
+    @staticmethod
+    def _normalize_template_text(text: str) -> str:
+        """
+        Normalize escaped newlines from YAML strings and trim edges.
+        """
+        if text is None:
+            return ""
+        return str(text).replace("\\n", "\n").strip()
+
+    def _render_template(self, template_text: str, **kwargs) -> str:
+        """
+        Format a template section and normalize whitespace.
+        """
+        normalized = self._normalize_template_text(template_text)
+        if not normalized:
+            return ""
+        return normalized.format(**kwargs)
+
+    @staticmethod
+    def _format_loss(train_loss) -> str:
+        try:
+            return f"{float(train_loss):.2f}"
+        except Exception:
+            return str(train_loss)
+
+    @staticmethod
+    def _signature_hint_block(kind: str, next_version: str) -> str:
+        if kind == "program":
+            return f"* Required function header: `def model_v{next_version}(X, ...):` and return shape `(n_trials,)`."
+        return f"* Required function header: `def parameter_estimator_v{next_version}(X, spike_counts):`."
+
+    def _render_image_analysis(self, templates: dict, prompt_key: str, k: int, use_image: bool) -> str:
+        """
+        Render image-analysis prompt section or raise a clear error if missing.
+        """
+        if not use_image:
+            return ""
+        image_analysis = templates.get('image_analysis')
+        if image_analysis is None or str(image_analysis).strip() == "":
+            raise ValueError(
+                "Image diagnostics are enabled, but prompt template "
+                f"`prompts.{prompt_key}.image_analysis` is missing.\n"
+                "This run is attaching diagnostic plots to the LLM call, so the prompt must "
+                "explain how to interpret the image.\n"
+                f"Add `prompts.{prompt_key}.image_analysis` to your config."
+            )
+        return self._render_template(image_analysis, k=f"{k}", next_version=f"{k+1}")
+
     def _load_config(self, path):
         with open(path) as f:
             return yaml.safe_load(f)
@@ -66,28 +114,29 @@ class PromptManager:
         templates = self.config['prompts']['program_prompt']
 
         # Format with variables
-        prompt = templates['base'].format(k=f"{k}", next_version=f"{k+1}")
         max_lines = 100
+        next_version = f"{k+1}"
+        sections = [
+            self._render_template(templates['base'], k=f"{k}", next_version=next_version),
+            self._render_template(templates['exploit'] if mode == 'exploit' else templates['explore'], k=f"{k}", next_version=next_version),
+            self._render_image_analysis(templates, "program_prompt", k, use_image),
+            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}") + "\n" + self._signature_hint_block("program", next_version),
+            self._render_template(templates['docstring_guidelines'], next_version=next_version),
+            "**Parent Models:**",
+        ]
+        prompt = "\n\n".join([s for s in sections if s])
 
-        if mode == 'exploit':
-            prompt = prompt + templates['exploit'].format(k=f"{k}", next_version=f"{k+1}")
-        else:        
-            prompt = prompt + templates['explore'].format(k=f"{k}", next_version=f"{k+1}")
-        
-        # Add optional sections
-        if use_image:
-            prompt += templates['image_analysis'].format(k=f"{k}", next_version=f"{k+1}")
-        
-        prompt += templates['code_guidelines'].format(max_lines=f"{max_lines}")
-        prompt += templates['function_signature'].format(next_version=f"{k+1}")
-        prompt += templates['docstring_guidelines'].format(next_version=f"{k+1}")
-        
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
             program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
-            per_model_prompt = templates['per_model_detail'].format(model_idx=f"{model_idx}", train_loss=f'{train_loss}: .2f', program_code_string=program_code_string)
-            prompt += per_model_prompt
+            per_model_prompt = self._render_template(
+                templates['per_model_detail'],
+                model_idx=f"{model_idx}",
+                train_loss=self._format_loss(train_loss),
+                program_code_string=program_code_string,
+            )
+            prompt += "\n\n" + per_model_prompt
         
         return prompt
     
@@ -109,25 +158,32 @@ class PromptManager:
         k = len(programs_df)
         model_name = self.get_model_name()
         templates = self.config['prompts']['parameter_estimator']
-        prompt = templates['base'].format(k=f"{k}", next_version=f"{k+1}")
-
-        if use_image:
-            prompt += templates['image_analysis'].format(k=f"{k}", next_version=f"{k+1}")
-        
-        prompt += templates['code_guidelines'].format(max_lines=f"{max_lines}")
-        prompt += templates['function_signature'].format(next_version=f"{k+1}")
-        prompt += templates['docstring_guidelines'].format(next_version=f"{k+1}")
+        next_version = f"{k+1}"
+        sections = [
+            self._render_template(templates['base'], k=f"{k}", next_version=next_version),
+            self._render_image_analysis(templates, "parameter_estimator", k, use_image),
+            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}") + "\n" + self._signature_hint_block("parameter_estimator", next_version),
+            self._render_template(templates['docstring_guidelines'], next_version=next_version),
+            "**Parent Models and Estimators:**",
+        ]
+        prompt = "\n\n".join([s for s in sections if s])
 
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
             program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
             parameter_estimator_code_string = programs_df.iloc[i]['parameter_estimator_code_string'].replace('def parameter_estimator(', f'def parameter_estimator_v{model_idx}(')
-            per_model_prompt = templates['per_model_detail'].format(model_idx=f"{model_idx}", train_loss=f'{train_loss}: .2f', program_code_string=program_code_string, parameter_estimator_code_string=parameter_estimator_code_string)
-            prompt += per_model_prompt
+            per_model_prompt = self._render_template(
+                templates['per_model_detail'],
+                model_idx=f"{model_idx}",
+                train_loss=self._format_loss(train_loss),
+                program_code_string=program_code_string,
+                parameter_estimator_code_string=parameter_estimator_code_string,
+            )
+            prompt += "\n\n" + per_model_prompt
 
         # add the model code string to the prompt
-        prompt += model_code_string + "\n"
+        prompt += "\n\n**New Model:**\n\n" + model_code_string + "\n"
 
         return prompt
 
@@ -163,24 +219,30 @@ class PromptManager:
 
         # Mode-specific instructions
         if mode == 'exploit':
-            prompt_parts.append(templates['exploit'].format(k=f"{k}", next_version=f"{k+1}"))
+            prompt_parts.append(self._render_template(templates['exploit'], k=f"{k}", next_version=f"{k+1}"))
         else:        
-            prompt_parts.append(templates['explore'].format(k=f"{k}", next_version=f"{k+1}"))
+            prompt_parts.append(self._render_template(templates['explore'], k=f"{k}", next_version=f"{k+1}"))
         
         # Image analysis if applicable
-        if use_image:
-            prompt_parts.append(templates['image_analysis'].format(k=f"{k}", next_version=f"{k+1}"))
+        image_analysis = self._render_image_analysis(templates, "program_prompt", k, use_image)
+        if image_analysis:
+            prompt_parts.append(image_analysis)
         
         # Parent model details
-        prompt_parts.append("\n**Parent Models:**\n")
+        prompt_parts.append("**Parent Models:**")
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
             program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
-            per_model_prompt = templates['per_model_detail'].format(model_idx=f"{model_idx}", train_loss=f'{train_loss}: .2f', program_code_string=program_code_string)
+            per_model_prompt = self._render_template(
+                templates['per_model_detail'],
+                model_idx=f"{model_idx}",
+                train_loss=self._format_loss(train_loss),
+                program_code_string=program_code_string,
+            )
             prompt_parts.append(per_model_prompt)
         
-        return "\n".join(prompt_parts)
+        return "\n\n".join([p for p in prompt_parts if p])
     
     def get_parameter_estimator_prompt(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100, use_image : bool = True) -> str:
         """Build parameter estimator prompt for chat mode (dynamic content only).
@@ -207,24 +269,31 @@ class PromptManager:
         # Brief context line
         prompt_parts.append(f"Now create parameter_estimator_v{k+1} for the new {model_name} below.")
 
-        if use_image:
-            prompt_parts.append(templates['image_analysis'].format(k=f"{k}", next_version=f"{k+1}"))
+        image_analysis = self._render_image_analysis(templates, "parameter_estimator", k, use_image)
+        if image_analysis:
+            prompt_parts.append(image_analysis)
 
         # Parent model details
-        prompt_parts.append("\n**Parent Models and Estimators:**\n")
+        prompt_parts.append("**Parent Models and Estimators:**")
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
             program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
             parameter_estimator_code_string = programs_df.iloc[i]['parameter_estimator_code_string'].replace('def parameter_estimator(', f'def parameter_estimator_v{model_idx}(')
-            per_model_prompt = templates['per_model_detail'].format(model_idx=f"{model_idx}", train_loss=f'{train_loss}: .2f', program_code_string=program_code_string, parameter_estimator_code_string=parameter_estimator_code_string)
+            per_model_prompt = self._render_template(
+                templates['per_model_detail'],
+                model_idx=f"{model_idx}",
+                train_loss=self._format_loss(train_loss),
+                program_code_string=program_code_string,
+                parameter_estimator_code_string=parameter_estimator_code_string,
+            )
             prompt_parts.append(per_model_prompt)
 
         # Add the new model code string
-        prompt_parts.append(f"\n**New {model_name} to create parameter estimator for:**\n")
+        prompt_parts.append(f"**New {model_name} to create parameter estimator for:**")
         prompt_parts.append(model_code_string)
 
-        return "\n".join(prompt_parts)
+        return "\n\n".join([p for p in prompt_parts if p])
 
     def get_jax_translator_prompt(self, function_code):
         template = self.config['prompts']['jax_translator_prompt']
@@ -260,13 +329,11 @@ class PromptManager:
             program_templates['base'].format(k="N", next_version="N+1"),
             f"\n# CURRENT MODE: {mode.upper()}",
             program_templates[mode].format(k="N", next_version="N+1"),
-            program_templates['code_guidelines'].format(max_lines="100"),
-            program_templates['function_signature'].format(next_version="N+1"),
+            self._render_template(program_templates['code_guidelines'], max_lines="100") + "\n" + self._signature_hint_block("program", "N+1"),
             program_templates['docstring_guidelines'].format(next_version="N+1"),
             "\n# PARAMETER ESTIMATOR GUIDELINES",
             param_est_templates['base'].format(k="N", next_version="N+1"),
-            param_est_templates['code_guidelines'].format(max_lines="100"),
-            param_est_templates['function_signature'].format(next_version="N+1"),
+            self._render_template(param_est_templates['code_guidelines'], max_lines="100") + "\n" + self._signature_hint_block("parameter_estimator", "N+1"),
             param_est_templates['docstring_guidelines'].format(next_version="N+1"),
         ]
         

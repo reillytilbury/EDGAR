@@ -28,7 +28,8 @@ data_processing_params:
 # Runtime overrides for this task.
 experiment_params:
   swear_words: []
-
+  param_estimator_refinement_rounds: 0
+ 
 
 # ========================
 # Prompt Defaults
@@ -37,6 +38,24 @@ experiment_params:
 # Prompt text overrides for this task.
 prompts:
   program_prompt:
+    image_analysis: |
+      **Image Analysis Instructions:**
+
+      Attached is a 3x3 diagnostic plot of model fits on a rich dataset.
+      For each subplot (sample):
+      * Black points are raw observed data `(x, y)`.
+      * Blue line is the binned mean response over x.
+      * Model_v1 is in green, model_v2 is in red. 
+
+      Use the image to identify systematic failure modes across multiple samples:
+      * Where do model curves miss the blue trend (bias, wrong curvature, wrong oscillation shape)?
+      * Are errors concentrated near specific x-ranges (edges vs center)?
+      * Do models underfit or overfit high-amplitude regions?
+      * Explicitly cite at least 2 poorly fit samples by sample number (e.g., "Sample 123") and describe what fails there.
+
+      Use this analysis to design `model_v{next_version}` with lower loss.
+      Include concise image-based reasoning in the docstring.
+
     code_guidelines: '**Code Generation Guidelines:**
 
       * Import any packages you use.
@@ -45,73 +64,18 @@ prompts:
 
       * Ensure all free parameters are numeric, not strings.
 
-      * This synthetic dataset has exactly one input feature. Only use `X[0]`.
-
-      * Never access `X[1]` or higher indices.
-
-      * IMPORTANT: Your code will be translated to JAX. Avoid boolean indexing (e.g.,
-      `array[condition]`), dynamic shapes, and control flow based on array values.
-      Use `jnp.where()` instead of boolean indexing.
-
-      '
-    function_signature: '**Function Signature:**
-
-      Your model must have this signature:
-
-      ```
-
-      def model_v{next_version}(X, param1=default1, param2=default2, ...):
-
-      ```
-
-      where:
-
-      * `X` is a 2D array with shape `(1, n_trials)`.
-
-      * Use only `x = X[0]`.
-
-      * Do not reference `X[1]` or any other feature index.
-
-      * Return shape: `(n_trials,)`.
-
       '
   parameter_estimator:
+    
     code_guidelines: '**Code Generation Guidelines:**
 
       * Import any packages you use.
 
       * Do not include any text other than the code.
 
-      * The only arguments to the function should be the inputs (X) and the spike
-      count.
-
-      * This synthetic dataset has exactly one input feature. Only use `X[0]`.
-
-      * Never access `X[1]` or higher indices.
+      * The only arguments to the function should be the inputs (X) and outputs (Y).
 
       * Your response **must** be less than {max_lines} lines (including imports).
       If it is longer, it will be immediately rejected.
-
-      '
-    function_signature: '**Function Signature:**
-
-      Your parameter estimator must have this signature:
-
-      ```
-
-      def parameter_estimator_v{next_version}(X, spike_counts):
-
-      ```
-
-      where:
-
-      * `X` is a 2D array with shape `(1, n_trials)`.
-
-      * Use only `x = X[0]`.
-
-      * Do not reference `X[1]` or any other feature index.
-
-      * Return: a 1D array of estimated parameter values matching the model''s free
-      parameters.
 
       '

@@ -389,7 +389,8 @@ def plot_model_fits(
 
     n_samples = x_arr.shape[0]
     n_show = min(9, n_samples)
-    show_idx = np.random.default_rng(0).choice(n_samples, size=n_show, replace=False)
+    # Intentionally unseeded so displayed samples vary across calls/runs.
+    show_idx = np.random.default_rng().choice(n_samples, size=n_show, replace=False)
 
     n_models = len(programs_list)
     fig, axes = plt.subplots(n_show, 1 + n_models, figsize=(4 * (1 + n_models), 3 * n_show))

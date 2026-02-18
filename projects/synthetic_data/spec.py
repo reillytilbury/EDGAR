@@ -118,8 +118,53 @@ def train_test_split(
 # ========================
 # 2. SEED MODELS
 # ========================
-
 def model_v1(X, a=1.0, b=0.0):
+    """
+    Independent variable:
+    X = [x]  # scalar input
+
+    A RELU model:
+    y = a * relu(x-b) = a * max(0, x-b)
+    Args:
+        X (np.ndarray): Input array with shape (1, n_trials)
+        a (float): Scaling factor.
+        b (float): Threshold for RELU.
+    Returns:
+        np.ndarray: Predicted output, shape (n_trials,).
+    """
+    x = X[0]
+    return a * np.maximum(0, x - b)
+
+def param_est_v1(X, Y):
+    """
+    Estimate parameters for model_v1 using a simple grid search.
+
+    Args:
+        X (np.ndarray): Input array with shape (1, n_trials) or (n_trials,).
+        Y (np.ndarray): Target values with shape (n_trials,).
+
+    Returns:
+        np.ndarray: Estimated parameters [a, b].
+    """
+    y = np.asarray(Y)
+
+    a_values = np.linspace(0.1, 5.0, 20)
+    b_values = np.linspace(-1.0, 1.0, 20)
+
+    best_loss = float("inf")
+    best_params = (1.0, 0.0)
+
+    for a in a_values:
+        for b in b_values:
+            y_pred = model_v1(X, a=a, b=b)
+            loss = np.mean((y - y_pred) ** 2)
+            if loss < best_loss:
+                best_loss = loss
+                best_params = (a, b)
+
+    return np.array(best_params)
+
+def model_v2(X, a=1.0, b=0.0):
     """
     Independent variable:
     X = [x]  # scalar input
@@ -139,9 +184,9 @@ def model_v1(X, a=1.0, b=0.0):
     return a * x + b
 
 
-def param_est_v1(X, Y):
+def param_est_v2(X, Y):
     """
-    Estimate parameters for model_v1 using least squares.
+    Estimate parameters for model_v2 using least squares.
 
     Args:
         X (np.ndarray): Input array with shape (1, n_trials) or (n_trials,).
@@ -157,70 +202,6 @@ def param_est_v1(X, Y):
     a, b = np.linalg.lstsq(A, y, rcond=None)[0]
     return np.array([a, b])
 
-
-def model_v2(X, a=1.0, b=0.0, lam=0.1):
-    """
-    Independent variable:
-    X = [x]  # scalar input
-
-    A nonlinear baseline model:
-    y = (a*x + b) * exp(lam*x)
-
-    Args:
-        X (np.ndarray): Input array with shape (1, n_trials) or (n_trials,).
-        a (float): Linear coefficient.
-        b (float): Offset coefficient.
-        lam (float): Exponential growth/decay parameter.
-
-    Returns:
-        np.ndarray: Predicted output, shape (n_trials,).
-    """
-    x = X[0]
-    exp_term = np.exp(np.clip(lam * x, -10.0, 10.0))
-    return (a * x + b) * exp_term
-
-
-def param_est_v2(X, Y):
-    """
-    Estimate parameters for model_v2 via a polynomial approximation.
-
-    Uses the local approximation exp(lam*x) ~ 1 + lam*x and fits
-    y ≈ p2*x^2 + p1*x + p0 by least squares, then maps coefficients
-    back to [a, b, lam].
-
-    Args:
-        X (np.ndarray): Input array with shape (1, n_trials) or (n_trials,).
-        Y (np.ndarray): Target values with shape (n_trials,).
-
-    Returns:
-        np.ndarray: Estimated parameters [a, b, lam].
-    """
-    x = X[0]
-    y = np.asarray(Y)
-
-    A = np.vstack([x, x**2, np.ones(len(x))]).T
-    p1, p2, p0 = np.linalg.lstsq(A, y, rcond=None)[0]
-
-    b = p0
-    if np.abs(p2) < 1e-8:
-        a = p1
-        lam = 0.0
-    else:
-        # Approximate solve for a and lam using p2 = a*lam and p1 = a + b*lam
-        # Rearranged quadratic in a: a^2 - p1*a + b*p2 = 0
-        disc = np.clip(p1**2 - 4.0 * b * p2, 0.0, None)
-        a_cand_1 = 0.5 * (p1 + np.sqrt(disc))
-        a_cand_2 = 0.5 * (p1 - np.sqrt(disc))
-        a = a_cand_1 if np.abs(a_cand_1) > 1e-6 else a_cand_2
-        if np.abs(a) < 1e-8:
-            a = p1
-            lam = 0.0
-        else:
-            lam = p2 / a
-
-    return np.array([a, b, lam])
-
-
 # ========================
 # 3. DIAGNOSTICS
 # ========================
@@ -232,6 +213,9 @@ def plot_model_fits(
     n_bins=50,
     domain=(-1.0, 1.0),
     save_path="",
+    labels=("model_v1", "model_v2"),
+    colours=("green", "red", "orange", "purple", "cyan", "magenta", "brown", "olive"),
+    binned_colour="deepskyblue",
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
 ):
     """
@@ -261,9 +245,11 @@ def plot_model_fits(
     x_arr = _to_array3d(X)
     y_arr = _to_array3d(Y)
     n_samples = x_arr.shape[0]
+    colours = list(colours)
 
     n_show = min(9, n_samples)
-    idx = np.random.default_rng(0).choice(n_samples, size=n_show, replace=False)
+    # Intentionally unseeded so diagnostic samples vary across calls/runs.
+    idx = np.random.default_rng().choice(n_samples, size=n_show, replace=False)
 
     fig, axes = plt.subplots(3, 3, figsize=(18, 18))
     axes = axes.reshape(3, 3)
@@ -279,27 +265,41 @@ def plot_model_fits(
         y_obs = y_arr[s, 0]
 
         x_eval, y_mean = compute_binned_means(x, y_obs, n_bins=n_bins, domain=domain)
-        ax.scatter(x, y_obs, s=8, c="black", alpha=0.15, label="Observed")
-        ax.plot(x_eval, y_mean, color="blue", linewidth=2, label="Binned mean")
+        ax.scatter(x, y_obs, s=10, c="black", alpha=0.15, label="Observed")
+        ax.plot(x_eval, y_mean, color=binned_colour, linewidth=4, label="Binned mean", alpha=0.8)
 
         for j, program in enumerate(programs_list):
             model = program["model"]
             params = program["params"][s]
             y_pred = model(np.array([x_eval]), *params)
 
-            label = f"Model {j+1}"
+            label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
             if "losses" in program:
                 label += f" (loss={program['losses'][s]:.2f})"
-            ax.plot(x_eval, np.asarray(y_pred).flatten(), linewidth=2, label=label)
+            ax.plot(
+                x_eval,
+                np.asarray(y_pred).flatten(),
+                color=colours[j % len(colours)],
+                linewidth=3,
+                label=label,
+                alpha=0.8,
+            )
 
         ax.set_xlim(domain)
         ax.set_title(f"Sample {s}")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=16)
 
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    mean_loss_parts = []
+    for j, program in enumerate(programs_list):
+        if "losses" in program and np.size(program["losses"]) > 0:
+            mean_loss_parts.append(f"Model {j+1}: {np.mean(program['losses']):.2f}")
+        else:
+            mean_loss_parts.append(f"Model {j+1}: n/a")
+    summary = "\n".join(mean_loss_parts) if mean_loss_parts else "n/a"
+    plt.suptitle(f"Model Fits\n{summary}", fontsize=24)
+    plt.savefig(save_path, dpi=100.0, bbox_inches="tight")
     plt.close(fig)
 
 

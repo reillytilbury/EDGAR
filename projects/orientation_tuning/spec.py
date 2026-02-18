@@ -15,6 +15,8 @@ OPTIONAL COMPONENTS:
 - plot_model_fits(X, Y, model_list, params_list)
 """
 import numpy as np
+import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from typing import List, Tuple
 from src.data_structures import Inputs, Outputs
@@ -110,14 +112,20 @@ def train_test_split(
     train_samples: np.ndarray of length n_samples//2
     train_trials: np.ndarray of length n_trials//2
     """
+    n_samples, _, n_trials = X.shape
     assert n_samples >= 2, 'Need at least 2 samples for cross-validated model optimzation/eval'
     assert n_trials >= 2, 'Need at least 2 trials for cross-validated params optimzation/eval'
-    n_samples, _, n_trials = X.shape
-    rng = np.random.default_rng(random_seed)
 
-    # choose random half of samples and random half of trials
-    train_samples = rng.choice(np.arange(n_samples), n_samples // 2, replace=False)
-    train_trials = rng.choice(np.arange(n_trials), n_trials // 2, replace=False)
+    # Match legacy behavior:
+    # - sample split uses JAX permutation with seed=random_seed (config defaults to 42)
+    # - trial split uses JAX permutation with fixed seed=0
+    sample_key = jax.random.PRNGKey(random_seed)
+    shuffled_samples = jax.random.permutation(sample_key, jnp.arange(n_samples))
+    train_samples = np.asarray(shuffled_samples[: n_samples // 2], dtype=np.int64)
+
+    trial_key = jax.random.PRNGKey(0)
+    shuffled_trials = jax.random.permutation(trial_key, jnp.arange(n_trials))
+    train_trials = np.asarray(shuffled_trials[: n_trials // 2], dtype=np.int64)
 
     return train_samples, train_trials
 
@@ -303,7 +311,15 @@ def plot_model_fits(X, Y, programs_list, n_bins=50, domain=(0, 2*np.pi), save_pa
             params = program['params'][sample_idx]
             loss = program['losses'][sample_idx]
             y_pred_eval = model(x_eval_model, *params)
-            ax.plot(x_eval_model, y_pred_eval.flatten(), color=colours[j], label=f'Model {j+1}, loss={loss:.2f}')
+            x_plot = np.asarray(x_eval).reshape(-1)
+            y_plot = np.asarray(y_pred_eval).reshape(-1)
+            n_plot = min(x_plot.shape[0], y_plot.shape[0])
+            ax.plot(
+                x_plot[:n_plot],
+                y_plot[:n_plot],
+                color=colours[j],
+                label=f'Model {j+1}, loss={loss:.2f}',
+            )
 
         ax.set_title(f'Sample {sample_idx}')
         ax.set_xlabel('Theta (radians)')

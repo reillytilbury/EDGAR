@@ -511,7 +511,8 @@ def plot_model_fits(
 
     n_samples = x_arr.shape[0]
     n_show = min(9, n_samples)
-    rng = np.random.default_rng(0)
+    # Intentionally unseeded so displayed samples vary across calls/runs.
+    rng = np.random.default_rng()
     show_idx = rng.choice(n_samples, size=n_show, replace=False)
 
     n_models = len(programs_list)
