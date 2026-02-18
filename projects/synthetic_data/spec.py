@@ -275,7 +275,7 @@ def plot_model_fits(
 
             label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
             if "losses" in program:
-                label += f" (loss={program['losses'][s]:.2f})"
+                label += f" (loss={program['losses'][s]:.4f})"
             ax.plot(
                 x_eval,
                 np.asarray(y_pred).flatten(),

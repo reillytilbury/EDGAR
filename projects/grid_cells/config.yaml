@@ -43,6 +43,9 @@ experiment_params:
   learning_rate: 1e-3
   trial_batch_size: 5000
   use_large_model_for_param_estimators: true
+  x_min: [-1.0, -1.0]
+  x_max: [1.0, 1.0]
+  n_bins: 100
 
 
 # ========================

@@ -3,31 +3,12 @@ import yaml
 from pathlib import Path
 import importlib
 import os, argparse
-import inspect
-import numpy as np
 from src import hypothesis_engine 
 from src.prompt_manager import PromptManager
 
-def _default_sample_split(n_samples: int, training_sample_ratio: float = 0.5, random_seed: int = 0):
-    rng = np.random.default_rng(random_seed)
-    training_size = int(n_samples * training_sample_ratio)
-    all_idx = np.arange(n_samples)
-    train_idx = rng.choice(all_idx, size=training_size, replace=False)
-    test_idx = np.setdiff1d(all_idx, train_idx, assume_unique=False)
-    return train_idx, test_idx
-
-
-def _default_trial_split(n_trials: int, random_seed: int = 0):
-    rng = np.random.default_rng(random_seed)
-    training_size = n_trials // 2
-    shuffled_indices = rng.permutation(n_trials)
-    training_trials_idx = shuffled_indices[:training_size]
-    test_trials_idx = shuffled_indices[training_size:]
-    return training_trials_idx, test_trials_idx
-
-
 FORBIDDEN_WIRING_KEYS = {
     "load_and_process_data_fn",
+    "create_train_test_split_fn",
     "create_train_test_sample_split_fn",
     "create_train_test_trial_split_fn",
     "seed_programs",
@@ -138,31 +119,17 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     if len(param_estimators) != 2:  
         raise ValueError("There must be exactly 2 parameter estimator seeds.")
 
-    # Data extraction/splits: prefer unified split API if provided.
+    # Data extraction/splits: require unified split API from spec.
     load_and_process_data_fn = getattr(spec_module, 'load_and_process_data')
-    create_train_test_split_fn = getattr(spec_module, 'train_test_split', None)
-    if not callable(create_train_test_split_fn):
-        create_train_test_split_fn = getattr(spec_module, 'create_train_test_split', None)
-    if callable(create_train_test_split_fn):
-        create_train_test_sample_split_fn = None
-        create_train_test_trial_split_fn = None
-    else:
-        create_train_test_sample_split_fn = getattr(spec_module, 'create_train_test_sample_split', _default_sample_split)
-        create_train_test_trial_split_fn = getattr(spec_module, 'create_train_test_trial_split', _default_trial_split)
+    train_test_split_fn = getattr(spec_module, 'train_test_split', None)
+    if not callable(train_test_split_fn):
+        raise ValueError(
+            f"{spec_module_path} must define callable train_test_split(X, random_seed)."
+        )
 
     # Image diagnostics are enabled automatically if spec defines plot_model_fits.
     spec_plot_fn = getattr(spec_module, "plot_model_fits", None)
     use_image_feedback = callable(spec_plot_fn)
-
-    def _call_with_supported_kwargs(func, kwargs):
-        sig = inspect.signature(func)
-        accepts_kwargs = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-        )
-        if accepts_kwargs:
-            return func(**kwargs)
-        filtered_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
-        return func(**filtered_kwargs)
 
     diagnostics_module = spec_module if use_image_feedback else None
 
@@ -213,6 +180,9 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             fit_params=params['fit_params'],
             tol=params['tol'],
             learning_rate=params['learning_rate'],
+            x_min=params.get('x_min'),
+            x_max=params.get('x_max'),
+            n_bins=params.get('n_bins', 100),
             FAILED_PROGRAM_COST=params['FAILED_PROGRAM_COST'],
             tiny_lm_name=params['tiny_lm_name'],
             little_lm_name=params['little_lm_name'],
@@ -223,10 +193,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             numpy_programs=numpy_programs,
             param_estimators=param_estimators,
             load_and_process_data_fn=load_and_process_data_fn,
-            create_train_test_split_fn=create_train_test_split_fn,
-            create_train_test_sample_split_fn=create_train_test_sample_split_fn,
-            create_train_test_trial_split_fn=create_train_test_trial_split_fn,
-            training_sample_ratio=params.get('training_sample_ratio', 0.5),
+            train_test_split_fn=train_test_split_fn,
             data_processing_params=data_processing_params,
             diagnostics_module=diagnostics_module,
             prompt_manager=prompt_manager,

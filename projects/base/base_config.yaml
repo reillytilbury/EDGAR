@@ -86,6 +86,12 @@ experiment_params:
   # Random seed used for sample/trial splitting and related stochastic operations.
   random_seed: 42
 
+  # Evaluation grid bounds for diagnostics/evaluation matrices.
+  # Scalar applies to all input features; list must match n_features.
+  x_min: -1.0
+  x_max: 1.0
+  n_bins: 100
+
   # Complexity penalty on parameterized programs.
   param_penalty_weight: 0.01
 

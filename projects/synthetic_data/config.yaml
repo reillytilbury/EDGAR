@@ -29,6 +29,9 @@ data_processing_params:
 experiment_params:
   swear_words: []
   param_estimator_refinement_rounds: 0
+  x_min: -1.0
+  x_max: 1.0
+  n_bins: 100
  
 
 # ========================

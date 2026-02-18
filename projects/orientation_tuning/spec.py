@@ -262,9 +262,15 @@ def param_est_v2(X, Y):
 # 3. DIAGNOSTICS
 # ========================
 
-def plot_model_fits(X, Y, programs_list, n_bins=50, domain=(0, 2*np.pi), save_path=''
-                    # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
-                    ):
+def plot_model_fits(
+    X,
+    Y,
+    programs_list,
+    n_bins=50,
+    domain=(0, 2*np.pi),
+    save_path="",
+    # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
+):
     """
     Plot orientation-tuning fits of 9 randomly chosen cells in a 3 x 3 grid. 
     

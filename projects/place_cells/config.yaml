@@ -47,6 +47,9 @@ inputs:
 # Runtime overrides for this task.
 experiment_params:
   n_iterations: 3
+  x_min: [-1.0, -1.0]
+  x_max: [1.0, 1.0]
+  n_bins: 100
 
 
 # ========================
