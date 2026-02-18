@@ -201,6 +201,14 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         if legacy_diagnostics_module is not None and hasattr(legacy_diagnostics_module, "select_evaluation_points"):
             diagnostics_module.select_evaluation_points = legacy_diagnostics_module.select_evaluation_points
 
+    loss_fn_path = config.pop('loss_fn', None)
+    if loss_fn_path:
+        module_path, function_name = loss_fn_path.rsplit('.', 1)
+        loss_module = importlib.import_module(module_path)
+        loss_fn = getattr(loss_module, function_name)
+    else:
+        loss_fn = None
+
     # Initialize prompt manager with merged config (includes DEFAULT prompts)
     prompt_manager = PromptManager(config=config)
 
@@ -259,7 +267,8 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             prompt_manager=prompt_manager,
             use_large_model_for_param_estimators=params.get('use_large_model_for_param_estimators', False),
             trial_batch_size=params.get('trial_batch_size', None),
-            swear_words=params.get('swear_words')
+            swear_words=params.get('swear_words'),
+            loss_fn=loss_fn,
         )
 
 if __name__ == "__main__":
