@@ -11,9 +11,8 @@ import pandas as pd
 from pathlib import Path
 from . import utils, llm_helper, loss_functions
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
-from .data_structures import Inputs, Outputs, ensure_inputs, ensure_outputs
+from .data_structures import ensure_inputs, ensure_outputs
 from .evolution_diagnostics import plot_train_vs_test_loss as plot_train_vs_test_loss_shared
-from .data_summary import save_data_summary
 from tqdm import tqdm
 from google import genai
 from dotenv import load_dotenv
@@ -30,142 +29,6 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(relativeCreated)dms | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-
-
-def normalize_loaded_data(data_obj) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Normalize loaded data into canonical 3D tensors for inputs and outputs.
-
-    This function ensures that the input and output data are converted into the
-    canonical 3D tensor format:
-    - Inputs: (n_samples, n_features, n_trials)
-    - Outputs: (n_samples, n_targets, n_trials)
-
-    Args:
-        data_obj (tuple | list | dict): The loaded data, which can be:
-            - A tuple or list of (inputs, outputs).
-            - A dictionary with keys "inputs" and "outputs".
-
-    Returns:
-        tuple[np.ndarray, np.ndarray]:
-            - inputs_3d: The normalized input data. Shape: (n_samples, n_features, n_trials).
-            - outputs_3d: The normalized output data. Shape: (n_samples, n_targets, n_trials).
-
-    Raises:
-        ValueError: If the input data is not in the expected format or has inconsistent shapes.
-    """
-    if isinstance(data_obj, (tuple, list)) and len(data_obj == 2):
-        inputs_obj = ensure_inputs(data_obj[0])
-        outputs_obj = ensure_outputs(data_obj[1])
-    elif isinstance(data_obj, dict):
-        if "inputs" not in data_obj or "outputs" not in data_obj:
-            raise ValueError(
-                "Loaded data dict must contain exactly standardized keys: 'inputs' and 'outputs'."
-            )
-        inputs_obj = ensure_inputs(data_obj["inputs"])
-        outputs_obj = ensure_outputs(data_obj["outputs"])
-    else:
-        raise ValueError(
-            "Loaded data must be either (inputs, outputs) or {'inputs': ..., 'outputs': ...}."
-        )
-
-    inputs_3d = np.asarray(inputs_obj.to_tensor())
-    outputs_3d = np.asarray(outputs_obj.to_tensor())
-
-    if inputs_3d.ndim != 3:
-        raise ValueError(f"Canonical inputs must be 3D, got shape {inputs_3d.shape}.")
-    if outputs_3d.ndim != 3:
-        raise ValueError(f"Canonical outputs must be 3D, got shape {outputs_3d.shape}.")
-    if inputs_3d.shape[0] != outputs_3d.shape[0]:
-        raise ValueError(
-            "Inputs/outputs sample-count mismatch: "
-            f"{inputs_3d.shape[0]} != {outputs_3d.shape[0]}."
-        )
-    return inputs_3d, outputs_3d
-
-
-def _resolve_train_test_split(
-    train_test_split_fn,
-    inputs_3d: np.ndarray,
-    random_seed: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Resolve train/test sample and trial splits using a train-test split function.
-
-    This function applies the provided `train_test_split_fn` to determine the
-    train/test splits for both samples and trials.
-
-    Args:
-        train_test_split_fn (callable): A function that splits the data into training
-                                        and testing sets. Signature:
-                                        train_test_split_fn(Inputs, random_seed) -> (train_samples, train_trials).
-        inputs_3d (np.ndarray): The input data in canonical 3D format.
-                                Shape: (n_samples, n_features, n_trials).
-        random_seed (int): The random seed for reproducibility.
-
-    Returns:
-        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-            - train_samples: Indices of training samples. Shape: (n_train_samples,).
-            - test_samples: Indices of testing samples. Shape: (n_test_samples,).
-            - train_trials: Indices of training trials. Shape: (n_train_trials,).
-            - test_trials: Indices of testing trials. Shape: (n_test_trials,).
-
-    Raises:
-        ValueError: If the `train_test_split_fn` is None or does not return the expected format.
-    """
-    if train_test_split_fn is None:
-        raise ValueError("train_test_split_fn is required but was None.")
-
-    split_result = train_test_split_fn(Inputs.from_array(inputs_3d), random_seed)
-    if not (isinstance(split_result, tuple) and len(split_result) == 2):
-        raise ValueError(
-            "train_test_split must return (train_samples, train_trials)."
-        )
-    train_samples_raw, train_trials_raw = split_result
-
-    n_samples = int(inputs_3d.shape[0])
-    n_trials = int(inputs_3d.shape[2])
-    train_samples = np.asarray(train_samples_raw).reshape(-1).astype(np.int64, copy=False)
-    train_trials = np.asarray(train_trials_raw).reshape(-1).astype(np.int64, copy=False)
-
-    test_samples = np.setdiff1d(
-        np.arange(n_samples, dtype=np.int64),
-        train_samples,
-        assume_unique=False,
-    )
-    test_trials = np.setdiff1d(
-        np.arange(n_trials, dtype=np.int64),
-        train_trials,
-        assume_unique=False,
-    )
-    return train_samples, test_samples, train_trials, test_trials
-
-
-def scalar_outputs_view(outputs_3d: np.ndarray) -> np.ndarray:
-    """
-    Extract a 2D scalar-output view from canonical 3D outputs.
-
-    This function converts the canonical 3D output tensor into a 2D array
-    for scalar outputs, where the second dimension (n_targets) is reduced.
-
-    Args:
-        outputs_3d (np.ndarray): The canonical 3D output tensor.
-                                 Shape: (n_samples, n_targets, n_trials).
-
-    Returns:
-        np.ndarray: The 2D scalar-output view. Shape: (n_samples, n_trials).
-
-    Raises:
-        ValueError: If the input is not 3D or does not have exactly one target.
-    """
-    arr = np.asarray(outputs_3d)
-    if arr.ndim != 3:
-        raise ValueError(f"Expected 3D outputs tensor, got shape {arr.shape}.")
-    if arr.shape[1] != 1:
-        raise ValueError(
-            f"Scalar output view requires n_targets=1, got n_targets={arr.shape[1]}."
-        )
-    return arr[:, 0, :]
 
 def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
     """
@@ -365,50 +228,7 @@ def _default_model_loss_fn(model, x_i, y_i, params):
     return jnp.mean(loss_functions.quadratic_loss(pred, y_i))
 
 
-def _coerce_model_loss_fn(loss_fn):
-    """
-    Normalize loss_fn to engine signature: loss_fn(model, x_i, y_i, params) -> scalar.
-
-    Accepted user-facing signatures:
-    - loss_fn(model, x_i, y_i, params): engine-native
-    - loss_fn(y_pred, y_true): spec-style
-    """
-    if loss_fn is None:
-        return _default_model_loss_fn
-
-    sig = inspect.signature(loss_fn)
-    params = list(sig.parameters.values())
-    has_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
-    n_positional = sum(
-        p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-        for p in params
-    )
-
-    if has_varargs or n_positional >= 4:
-        return loss_fn
-
-    if n_positional == 2:
-        def _wrapped(model, x_i, y_i, model_params):
-            y_pred = model(x_i, *model_params)
-            if y_i.ndim == 1:
-                y_i = y_i[None, :]
-            if y_pred.ndim == 1:
-                y_pred = y_pred[None, :]
-            per_element = loss_fn(y_pred, y_i)
-            per_element_arr = jnp.asarray(per_element)
-            if per_element_arr.ndim == 0:
-                return per_element_arr
-            return jnp.mean(per_element_arr)
-
-        return _wrapped
-
-    raise ValueError(
-        "Invalid loss_fn signature. Expected either "
-        "loss_fn(model, x_i, y_i, params) or loss_fn(y_pred, y_true)."
-    )
-
-
-def objective(model, param_estimator, x, y, trial_split_indices=None,
+def objective(model, param_estimator, x, y,
               loss_fn=None, param_penalty_weight=0.1, fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
@@ -432,24 +252,19 @@ def objective(model, param_estimator, x, y, trial_split_indices=None,
                           Signature: param_estimator(X, response) -> params
                           where X has shape (n_features, n_trials) for a single sample,
                           and response has shape (n_trials,) for scalar or (n_targets, n_trials) for vectorized.
-        x: Input data. Can be:
-           - 2D array (n_samples, n_trials) - will be auto-expanded to (n_samples, 1, n_trials)
-           - 3D array (n_samples, n_features, n_trials_x)
-           - Inputs object
-        y: Output/response data. Can be:
-           - 2D array (n_samples, n_trials) - auto-expanded to (n_samples, 1, n_trials)
-           - 3D array (n_samples, n_targets, n_trials_y)
-           - Outputs object
-           n_trials_x and n_trials_y may differ when a custom loss_fn is provided.
-        loss_fn (function): Per-sample loss function with full control over loss computation.
-                          Defaults to MSE averaged over all targets and trials.
-                          Supported signatures:
-                          - loss_fn(model, x_i, y_i, params) -> scalar
-                          - loss_fn(y_pred, y_true) -> elementwise or scalar
-                          where x_i has shape (n_features, n_trials_x),
-                          y_i has shape (n_targets, n_trials_y),
-                          and params is a 1D array of shape (n_params,).
-                          Must be JAX-compatible (supports jit, vmap, grad).
+        x: Trial-split inputs for one sample split. Expected length-2 container:
+           - x[0]: train-trial inputs
+           - x[1]: test-trial inputs
+           Each element can be an Inputs object or array with shape
+           (n_samples, n_features, n_trials_split).
+        y: Trial-split outputs for one sample split. Expected length-2 container:
+           - y[0]: train-trial outputs
+           - y[1]: test-trial outputs
+           Each element can be an Outputs object or array with shape
+           (n_samples, n_targets, n_trials_split).
+        loss_fn (function): Per-sample loss function.
+                          Signature: loss_fn(model, x_i, y_i, params) -> scalar.
+                          If None, defaults to quadratic loss.
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
         FAILED_PROGRAM_COST (float): Cost assigned to failed models. Default is np.inf.
@@ -466,39 +281,23 @@ def objective(model, param_estimator, x, y, trial_split_indices=None,
             - jnp.ndarray: The optimized parameters (n_samples, n_params).
     """
     t_start = time.time()
-    loss_fn = _coerce_model_loss_fn(loss_fn)
+    if loss_fn is None:
+        loss_fn = _default_model_loss_fn
     
-    # Normalize inputs to Inputs format: (n_samples, n_features, n_trials)
-    x_inputs = ensure_inputs(x)
-    x_data = x_inputs.to_tensor()  # shape: (n_samples, n_features, n_trials)
-    
-    # Normalize outputs to Outputs format: (n_samples, n_targets, n_trials)
-    y_outputs = ensure_outputs(y)
-    y_data = y_outputs.data  # shape: (n_samples, n_targets, n_trials)
-    
-    n_samples, n_features, n_trials_x = x_data.shape
-    n_trials_y = y_data.shape[2]
-    n_targets = y_outputs.n_targets
+    if not (isinstance(x, (list, tuple, np.ndarray)) and len(x) == 2):
+        raise ValueError("objective expects x as length-2 container: [x_train_trials, x_test_trials].")
+    if not (isinstance(y, (list, tuple, np.ndarray)) and len(y) == 2):
+        raise ValueError("objective expects y as length-2 container: [y_train_trials, y_test_trials].")
 
-    if trial_split_indices is None:
-        raise ValueError(
-            "trial_split_indices is required. Pass (x_train_idx, x_test_idx, y_train_idx, y_test_idx)."
-        )
-    if len(trial_split_indices) != 4:
-        raise ValueError(
-            "trial_split_indices must have 4 arrays: (x_train_idx, x_test_idx, y_train_idx, y_test_idx)."
-        )
-    x_train_trial_idx, x_test_trial_idx, y_train_trial_idx, y_test_trial_idx = trial_split_indices
-    x_train_trial_idx = np.asarray(x_train_trial_idx).reshape(-1).astype(np.int64, copy=False)
-    x_test_trial_idx = np.asarray(x_test_trial_idx).reshape(-1).astype(np.int64, copy=False)
-    y_train_trial_idx = np.asarray(y_train_trial_idx).reshape(-1).astype(np.int64, copy=False)
-    y_test_trial_idx = np.asarray(y_test_trial_idx).reshape(-1).astype(np.int64, copy=False)
+    x_train = ensure_inputs(x[0]).to_tensor()
+    x_test = ensure_inputs(x[1]).to_tensor()
+    y_train_outputs = ensure_outputs(y[0])
+    y_test_outputs = ensure_outputs(y[1])
+    y_train = y_train_outputs.data
+    y_test = y_test_outputs.data
 
-    # Split inputs and outputs using their respective trial indices
-    x_train = x_data[:, :, x_train_trial_idx]  # (n_samples, n_features, n_train_trials_x)
-    y_train = y_data[:, :, y_train_trial_idx]   # (n_samples, n_targets, n_train_trials_y)
-    x_test = x_data[:, :, x_test_trial_idx]     # (n_samples, n_features, n_test_trials_x)
-    y_test = y_data[:, :, y_test_trial_idx]      # (n_samples, n_targets, n_test_trials_y)
+    n_samples, n_features, _ = x_train.shape
+    n_targets = y_train_outputs.n_targets
     
     # Compute initial parameters
     # param_estimator receives y as (n_targets, n_trials) for each sample
@@ -527,7 +326,7 @@ def objective(model, param_estimator, x, y, trial_split_indices=None,
     
     # Validate model execution and output shape
     is_valid, error_msg = validate_model_execution(
-        model, x_data, initial_params, n_samples,
+        model, x_train, initial_params, n_samples,
         expected_n_targets=n_targets,
         n_validation_samples=10
     )
@@ -720,112 +519,12 @@ def objective(model, param_estimator, x, y, trial_split_indices=None,
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-def _to_plot_outputs(y):
-    """
-    Ensure plotting outputs are 3D: (n_samples, n_targets, n_trials).
-    """
-    y_arr = np.asarray(y)
-    if y_arr.ndim == 2:
-        return y_arr[:, None, :]
-    return y_arr
-
-
-def _broadcast_model_loss(loss_value, n_samples: int):
-    """
-    Convert a scalar/array loss representation into per-sample losses.
-    """
-    if loss_value is None:
-        return None
-    loss_arr = np.asarray(loss_value)
-    if loss_arr.size == 0:
-        return None
-    if loss_arr.ndim == 0:
-        return np.full(n_samples, float(loss_arr))
-    flat = loss_arr.reshape(-1)
-    if flat.size == 1:
-        return np.full(n_samples, float(flat[0]))
-    if flat.size != n_samples:
-        logging.info(
-            f"Skipping loss annotation: expected scalar or length {n_samples}, got shape {loss_arr.shape}."
-        )
-        return None
-    return flat
-
-
-def _programs_df_to_programs_list(
-    programs_df: pd.DataFrame,
-    n_samples: int,
-    params_col: str = "params",
-    loss_col: str | None = "train_loss",
-):
-    """
-    Convert internal island/program DataFrame rows into the spec plotting format.
-    """
-    programs_list = []
-    if programs_df is None or len(programs_df) == 0:
-        return programs_list
-
-    for _, row in programs_df.iterrows():
-        model = row.get("program")
-        params = row.get(params_col)
-        if model is None or params is None:
-            continue
-        program_dict = {
-            "model": model,
-            "params": np.asarray(params),
-        }
-        if loss_col is not None and loss_col in row.index:
-            losses = _broadcast_model_loss(row[loss_col], n_samples=n_samples)
-            if losses is not None:
-                program_dict["losses"] = losses
-        programs_list.append(program_dict)
-    return programs_list
-
-
-def _call_plot_model_fits(
-    plot_model_fits_fn,
-    *,
-    X,
-    Y,
-    programs_list,
-    save_path: str,
-    **kwargs,
-):
-    """
-    Call project-specific plot_model_fits while filtering unsupported kwargs.
-    """
-    if plot_model_fits_fn is None:
-        return
-    if save_path is None or save_path == "":
-        return
-    if len(programs_list) == 0:
-        logging.info("Skipping diagnostic plot: no programs to plot.")
-        return
-
-    call_kwargs = {
-        "X": X,
-        "Y": _to_plot_outputs(Y),
-        "programs_list": programs_list,
-        "save_path": save_path,
-        **kwargs,
-    }
-    sig = inspect.signature(plot_model_fits_fn)
-    accepts_var_kwargs = any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-    )
-    if not accepts_var_kwargs:
-        allowed = set(sig.parameters.keys())
-        call_kwargs = {k: v for k, v in call_kwargs.items() if k in allowed}
-
-    plot_model_fits_fn(**call_kwargs)
-
-
 async def generate_new_model(current_island, llm_name, client, 
                                     spike_matrix, stimuli, prompt_manager,
                                     loss_fn=None,
                                     mode='explore', k_max=2, temp=1, 
                                     thinking_budget=1, img_dir=None,
-                                    plot_model_fits_fn=None,
+                                    plot_model_fits=None,
                                     island_chat_manager=None, island_id: int = None,
                                     batch_id: int = 0,
                                     use_large_model: bool = True):
@@ -841,7 +540,7 @@ async def generate_new_model(current_island, llm_name, client,
                   random_programs['batch_index'][1])
     use_image = (
         img_dir is not None
-        and plot_model_fits_fn is not None
+        and plot_model_fits is not None
     )
     use_chat_mode = island_chat_manager is not None and island_id is not None
     model_name = prompt_manager.get_model_name()
@@ -855,19 +554,14 @@ async def generate_new_model(current_island, llm_name, client,
     if use_image:
         try:
             sup_title = "".join([f"{model_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            programs_list = _programs_df_to_programs_list(
-                random_programs,
-                n_samples=spike_matrix.shape[0],
-                params_col="params",
-                loss_col="train_loss",
-            )
-            _call_plot_model_fits(
-                plot_model_fits_fn,
+            plot_model_fits(
                 X=stimuli,
                 Y=spike_matrix,
-                programs_list=programs_list,
+                programs_df=random_programs,
+                params_col="params",
+                loss_col="train_loss",
                 save_path=img_dir,
-                labels=[f"{model_name}_v_{i+1}" for i in range(len(programs_list))],
+                labels=[f"{model_name}_v_{i+1}" for i in range(len(random_programs))],
                 colours=['tab:green', 'tab:red'],
                 title=sup_title,
             )
@@ -923,9 +617,9 @@ async def generate_new_parameter_estimator(current_island,
                                            swear_words=None,
                                            refine_rounds: int = 0,
                                            param_penalty_weight: float = 0.1,
-                                           trial_split_indices=None,
-                                           random_seed: int = 0,
-                                           plot_model_fits_fn=None,
+                                           objective_X=None,
+                                           objective_Y=None,
+                                           plot_model_fits=None,
                                            island_chat_manager=None, island_id: int = None,
                                            batch_id: int = 0,
                                            use_large_model: bool = False,
@@ -933,13 +627,16 @@ async def generate_new_parameter_estimator(current_island,
     if model_code_string is None:
         logging.info("No model code string provided, skipping parameter estimator generation.")
         return None, None
+    if objective_X is None or objective_Y is None:
+        logging.info("No objective split data provided, skipping parameter estimator generation.")
+        return None, None
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
     # sort from worst to best (loss descending)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
     use_image = (
         img_dir is not None
-        and plot_model_fits_fn is not None
+        and plot_model_fits is not None
     )
     use_chat_mode = island_chat_manager is not None and island_id is not None
     
@@ -961,19 +658,14 @@ async def generate_new_parameter_estimator(current_island,
     if use_image:
         try:
             sup_title = "".join([f"model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
-            programs_list = _programs_df_to_programs_list(
-                random_programs_crude,
-                n_samples=spike_matrix.shape[0],
-                params_col="params",
-                loss_col="train_loss",
-            )
-            _call_plot_model_fits(
-                plot_model_fits_fn,
+            plot_model_fits(
                 X=stimuli,
                 Y=spike_matrix,
-                programs_list=programs_list,
+                programs_df=random_programs_crude,
+                params_col="params",
+                loss_col="train_loss",
                 save_path=img_dir,
-                labels=[f"v_{i+1}" for i in range(len(programs_list))],
+                labels=[f"v_{i+1}" for i in range(len(random_programs_crude))],
                 colours=['tab:green', 'tab:red'],
                 title=sup_title,
             )
@@ -1038,13 +730,11 @@ async def generate_new_parameter_estimator(current_island,
     current_loss, current_params, _, _ = objective(
         model=model_fn,
         param_estimator=current_func,
-        x=stimuli,
-        y=spike_matrix,
+        x=objective_X,
+        y=objective_Y,
         loss_fn=loss_fn,
         fit_params=False,  # Don't fit parameters during refinement evaluation
-        trial_split_indices=trial_split_indices,
         param_penalty_weight=param_penalty_weight,
-        random_seed=random_seed,
     )
 
     if current_loss < best_loss:
@@ -1055,17 +745,17 @@ async def generate_new_parameter_estimator(current_island,
     for r in range(refine_rounds):
         img_bytes = None
         refine_img_path = None
-        if plot_model_fits_fn is not None and img_dir is not None and current_params is not None:
+        if plot_model_fits is not None and img_dir is not None and current_params is not None:
             try:
                 base_path = Path(img_dir)
                 refine_img_path = base_path.with_name(f"{base_path.stem}_refine_{r+1}{base_path.suffix}")
+                current_losses = np.full(spike_matrix.shape[0], float(current_loss))
                 programs_list = [{
                     "model": model_fn,
                     "params": np.asarray(current_params),
-                    "losses": _broadcast_model_loss(current_loss, n_samples=spike_matrix.shape[0]),
+                    "losses": current_losses,
                 }]
-                _call_plot_model_fits(
-                    plot_model_fits_fn,
+                plot_model_fits(
                     X=stimuli,
                     Y=spike_matrix,
                     programs_list=programs_list,
@@ -1146,13 +836,11 @@ async def generate_new_parameter_estimator(current_island,
         new_loss, new_params, _, _ = objective(
             model=model_fn,
             param_estimator=new_func,
-            x=stimuli,
-            y=spike_matrix,
+            x=objective_X,
+            y=objective_Y,
             loss_fn=loss_fn,
             fit_params=False,  # Don't fit parameters during refinement evaluation
-            trial_split_indices=trial_split_indices,
             param_penalty_weight=param_penalty_weight,
-            random_seed=random_seed,
         )
 
         current_code = new_code
@@ -1195,77 +883,84 @@ async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='g
     return jax_code_string, func
 
 
-def check_jax_translation(np_func, jax_func, param_estimator, inputs, outputs, sample_idx: int = 0, max_trials: int = 32):
+def _run_translation_check_on_eval(
+    np_func,
+    jax_func,
+    param_estimator,
+    x_train_trials,
+    y_train_trials,
+    x_eval,
+    max_samples: int = 3,
+    max_eval_trials: int = 32,
+):
     """
-    Validate a NumPy model and JAX model produce matching outputs on one sample.
+    Validate NumPy/JAX agreement on a small subset of evaluation points.
+    Parameters are estimated from observed train-trial data for the same subset.
     """
-    x_full = np.asarray(inputs[sample_idx])
-    y_full = np.asarray(outputs[sample_idx, 0]) if outputs.ndim == 3 else np.asarray(outputs[sample_idx])
+    x_obs = np.asarray(ensure_inputs(x_train_trials).to_tensor())
+    y_obs = np.asarray(ensure_outputs(y_train_trials).to_tensor())
+    eval_points = np.asarray(x_eval)
+    if eval_points.ndim != 3:
+        raise ValueError(
+            f"X_eval must have shape (n_samples, n_features, n_eval_trials), got {eval_points.shape}."
+        )
 
-    n_trials = x_full.shape[-1]
-    if max_trials is not None and n_trials > max_trials:
-        trial_idx = np.linspace(0, n_trials - 1, num=max_trials, dtype=int)
-        x_check = x_full[..., trial_idx]
-        y_check = y_full[..., trial_idx]
-    else:
-        x_check = x_full
-        y_check = y_full
+    n_samples = min(x_obs.shape[0], y_obs.shape[0], eval_points.shape[0])
+    if n_samples <= 0:
+        raise ValueError("No samples available for translation check.")
 
-    params = np.asarray(param_estimator(x_check, y_check)).reshape(-1)
-    utils.check_jax_translation(np_func, jax_func, x_check, params)
+    n_check = min(max_samples, n_samples)
+    sample_idx = np.linspace(0, n_samples - 1, num=n_check, dtype=int)
+    params_subset = compute_initial_params(
+        param_estimator,
+        np_func,
+        x_obs[sample_idx],
+        y_obs[sample_idx],
+    )
+    if params_subset is None:
+        raise ValueError("Failed to compute parameters for translation check.")
+
+    utils.check_jax_translation(
+        np_func=np_func,
+        jax_func=jax_func,
+        eval_points=eval_points[sample_idx],
+        params=np.asarray(params_subset),
+        max_eval_trials=max_eval_trials,
+    )
 
 
-async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
-                critical_population_size=12, min_wise_population_size=0, 
-                n_migrants=2, fit_params=True, exploit_point=0.5,
-                param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
-                use_image_feedback=True, use_param_estimator=True,
-                use_chat_mode=False,  # If True, use persistent chat sessions per island (expensive)
-                chat_token_limit=50000,  # Max tokens per chat before auto-summarize and reset. 0 = unlimited
-                param_estimator_refinement_rounds=0,
-                exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
-                exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
-                tiny_lm_name = 'gemini-2.0-flash-lite',
-                little_lm_name = 'gemini-2.0-flash',
-                large_lm_name = 'gemini-2.5-flash',
-                use_large_every = 3,
-                max_iter = 1_000,
-                learning_rate = 3e-3,
-                x_min = None,
-                x_max = None,
-                n_bins = 100,
-                use_large_model_for_param_estimators=False,
-                numpy_programs = None,
-                param_estimators = None,
-                load_and_process_data_fn = None,
-                train_test_split_fn = None,
-                data_processing_params = None,
-                plot_model_fits_fn = None,
-                prompt_manager = None,
-                log_best_loss = True,
-                trial_batch_size = None,
-                swear_words = None,
-                loss_fn = None,
-                random_seed = 42, # consider setting up a seed_manager to make behaviours more robustly reproducible.
-                ):
+async def hypothesis_engine(
+        n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
+        critical_population_size=12, min_wise_population_size=0, 
+        n_migrants=2, fit_params=True, use_param_estimator=True, exploit_point=0.5,
+        param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
+        use_chat_mode=False,  # If True, use persistent chat sessions per island (expensive)
+        chat_token_limit=50000,  # Max tokens per chat before auto-summarize and reset. 0 = unlimited
+        param_estimator_refinement_rounds=0,
+        exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0], exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
+        tiny_lm_name = 'gemini-2.0-flash-lite', little_lm_name = 'gemini-2.0-flash', large_lm_name = 'gemini-2.5-flash',
+        use_large_every = 3, max_iter = 1_000, learning_rate = 3e-3,
+        use_large_model_for_param_estimators=False,
+        numpy_programs = None, param_estimators = None,
+        X = None, Y = None, X_eval = None,
+        plot_model_fits = None, loss_fn = None, 
+        prompt_manager = None, trial_batch_size = None, swear_words = None,
+        random_seed = 42, # consider setting up a seed_manager to make behaviours more robustly reproducible.
+        ):
     """ 
     Main function to run the hypothesis engine.
     
     Args:
-        data_processing_params: Dict containing all data loading parameters. This is passed
-                     directly to load_and_process_data_fn, which extracts whatever
-                     parameters it needs. This allows different experiments to have
-                     different parameter sets without changing hypothesis_engine.
-        plot_model_fits_fn: Optional plot callback callable.
-        log_best_loss: If True, logs the best loss at each iteration to a CSV file
-                       for live monitoring. The file is saved to the experiment
-                       output directory as 'best_loss_log.csv'.
+        X: Trial-split data container with shape (2, 2):
+           X[0, 0]=train samples/train trials, X[0, 1]=train samples/test trials,
+           X[1, 0]=test samples/train trials,  X[1, 1]=test samples/test trials.
+           Entries are Inputs (or Inputs-compatible tensors).
+        Y: Same structure as X but Outputs entries.
+        X_eval: Precomputed evaluation grid for diagnostics.
+        plot_model_fits: Optional plot callback callable.
     """
-    if data_processing_params is None:
-        data_processing_params = {}
+    has_spec_plotter = plot_model_fits is not None
 
-    # Accept both engine-style and spec-style loss signatures.
-    loss_fn = _coerce_model_loss_fn(loss_fn)
     # load api keys
     load_dotenv()
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -1295,51 +990,18 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         logging.info("Chat mode disabled: using independent LLM queries")
         print("Chat mode disabled: using independent LLM queries")
 
-    # raise error if numpy_programs or param_estimators are invalid
-    if numpy_programs is None or len(numpy_programs) != 2:
-        raise ValueError("numpy_programs must be a list of 2 functions.")
-    if param_estimators is None or len(param_estimators) != 2:
-        raise ValueError("param_estimators must be a list of 2 functions.")
-    # Seed JAX programs are always generated from NumPy seeds at runtime.
+    X = np.asarray(X, dtype=object)
+    Y = np.asarray(Y, dtype=object)
+    if X.shape != (2, 2):
+        raise ValueError(f"X must have shape (2, 2), got {X.shape}.")
+    if Y.shape != (2, 2):
+        raise ValueError(f"Y must have shape (2, 2), got {Y.shape}.")
 
-    data_dict = load_and_process_data_fn(**data_processing_params)
-    inputs, outputs = normalize_loaded_data(data_dict)
+    n_training_samples, _, n_training_trials = X[0, 0].shape
+    n_test_samples, _, n_test_trials = X[1, 1].shape
 
-    n_good_samples, n_features, n_trials_x = inputs.shape
-    n_trials_y = outputs.shape[2]
-    n_targets = outputs.shape[1]
-    if n_targets != 1:
-        raise ValueError(
-            "Current hypothesis_engine evolutionary loop assumes scalar targets "
-            f"(n_targets=1) for prompting/diagnostics, got n_targets={n_targets}."
-        )
-    if n_trials_x != n_trials_y:
-        raise ValueError(
-            "train_test_split currently requires n_trials_x == n_trials_y; got "
-            f"n_trials_x={n_trials_x}, n_trials_y={n_trials_y}."
-        )
-    training_samples, test_samples, x_train_trial_idx, x_test_trial_idx = _resolve_train_test_split(
-        train_test_split_fn=train_test_split_fn,
-        inputs_3d=inputs,
-        random_seed=random_seed,
-    )
-    y_train_trial_idx = x_train_trial_idx
-    y_test_trial_idx = x_test_trial_idx
-    trial_split_indices = (
-        x_train_trial_idx,
-        x_test_trial_idx,
-        y_train_trial_idx,
-        y_test_trial_idx,
-    )
-
-    inputs_train, inputs_test = inputs[training_samples, :], inputs[test_samples, :]
-    outputs_train, outputs_test = outputs[training_samples, :], outputs[test_samples, :]
-    # Use run-level seed for objective() trial split so reporting and runtime align.
-    if n_trials_x == n_trials_y:
-        print(f"Loaded {n_good_samples} samples, {n_trials_x} trials per sample.")
-    else:
-        print(f"Loaded {n_good_samples} samples, {n_trials_x} input trials and {n_trials_y} output trials per sample.")
-    print(f"Using {len(training_samples)} samples for training and {len(test_samples)} samples for testing.")
+    print(f"Using {n_training_trials} training trials and {n_test_trials} test trials.")
+    print(f"Using {n_training_samples} samples for training and {n_test_samples} samples for testing.")
 
     logging.info("Translating NumPy seeds to JAX via LLM.")
     model_name = prompt_manager.get_model_name()
@@ -1354,19 +1016,16 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     jax_results = await asyncio.gather(*translation_tasks)
 
     jax_programs = []
-    jax_program_code_strings = []
-    for i, (jax_code_string, jax_func) in enumerate(jax_results):
-        if jax_func is None or jax_code_string is None:
-            raise ValueError(f"JAX translation failed for seed program {i + 1}.")
-        _run_translation_check(
-            numpy_programs[i],
-            jax_func,
-            param_estimators[i],
-            inputs_train,
-            outputs_train,
+    for i, (_, jax_func) in enumerate(jax_results):
+        _run_translation_check_on_eval(
+            np_func=numpy_programs[i],
+            jax_func=jax_func,
+            param_estimator=param_estimators[i],
+            x_train_trials=X[0, 0],
+            y_train_trials=Y[0, 0],
+            x_eval=X_eval,
         )
         jax_programs.append(jax_func)
-        jax_program_code_strings.append(jax_code_string)
 
     # create a dataframe to store the programs in each island
     islands = []
@@ -1390,34 +1049,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     os.makedirs(image_feedback_dir, exist_ok=True)
     print("Created image feedback folder:", image_feedback_dir)
 
-    # Save data summary CSV for inspection
-    save_data_summary(
-        response=outputs,
-        inputs=inputs,
-        training_samples=training_samples,
-        test_samples=test_samples,
-        x_train_trial_idx=x_train_trial_idx,
-        x_test_trial_idx=x_test_trial_idx,
-        y_train_trial_idx=y_train_trial_idx,
-        y_test_trial_idx=y_test_trial_idx,
-        output_dir=full_dir,
-        random_seed=random_seed,
-        train_test_split_fn=train_test_split_fn,
-    )
-
     # census[i] = [generation, island, batch_index, llm_name, loss, time, parent1_id, parent2_id, evaluation_matrix, n_free_params]
     census = []
     
     # Initialize best loss tracking for live monitoring
     best_loss_log = []  # List of dicts: {iteration, timestamp, best_train_loss, best_island, ...}
     best_loss_path = os.path.join(full_dir, 'best_loss_log.csv') if log_best_loss else None
-    evaluation_points_train = utils.build_evaluation_points(
-        inputs=Inputs.from_array(inputs_train),
-        x_min=x_min,
-        x_max=x_max,
-        n_bins=n_bins,
-    )
-    
     # store and compute loss of 2 initial programs
     t_start = time.time()
     seed_losses = np.zeros(2)
@@ -1428,12 +1065,19 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         param_est = param_estimators[i]
         program_jax = jax_programs[i]
         # score the initial program
-        loss_init, params_init, loss, params = objective(program_jax, param_est,
-                                        x=inputs_train, y=outputs_train,
-                                        trial_split_indices=trial_split_indices,
-                                        loss_fn=loss_fn,
-                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight, learning_rate=learning_rate,
-                                        use_param_estimator=use_param_estimator, max_iter=max_iter, trial_batch_size=trial_batch_size)
+        loss_init, params_init, loss, params = objective(
+            program_jax,
+            param_est,
+            x=X[0],
+            y=Y[0],
+            loss_fn=loss_fn,
+            fit_params=fit_params,
+            param_penalty_weight=param_penalty_weight,
+            learning_rate=learning_rate,
+            use_param_estimator=use_param_estimator,
+            max_iter=max_iter,
+            trial_batch_size=trial_batch_size,
+        )
         print(f"Initial program {i + 1} loss before parameter fitting: {loss_init:.2f} and loss after fitting: {loss:.2f}")
 
         seed_losses[i] = loss
@@ -1444,16 +1088,10 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         parameter_estimator_code_string = utils.format_function_source(
             param_est, f'parameter_estimator_v{i+1}', 'import numpy as np'
         )
-        if jax_program_code_strings is not None:
-            program_jax_code_string = jax_program_code_strings[i]
-        else:
-            program_jax_code_string = utils.format_function_source(
-                program_jax, f'{model_name}_v{i+1}', 'import jax.numpy as jnp'
-            )
         y_eval = utils.compute_evaluation_matrix(
             program_jax,
             params,
-            eval_points=evaluation_points_train,
+            eval_points=X_eval,
         )
 
         new_program_df = pd.DataFrame({'program_code_string': program_code_string,
@@ -1491,16 +1129,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
         island_chat_manager.log_configuration()
     
     if has_spec_plotter:
-        _call_plot_model_fits(
-            plot_model_fits_fn,
-            X=inputs_train,
-            Y=outputs_train,
-            programs_list=_programs_df_to_programs_list(
-                initial_programs,
-                n_samples=inputs_train.shape[0],
-                params_col="params",
-                loss_col="train_loss",
-            ),
+        plot_model_fits(
+            X=X[0, 0],
+            Y=Y[0, 0],
+            programs_df=initial_programs,
+            params_col="params",
+            loss_col="train_loss",
             save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
             labels=['seed_1', 'seed_2'],
             colours=['tab:green', 'tab:red'],
@@ -1547,12 +1181,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                    mode=mode, 
                                                                    k_max=k_max, 
                                                                    temp=temperature,
-                                                                   spike_matrix=outputs_train, 
-                                                                   stimuli=inputs_train,
+                                                                   spike_matrix=Y[0,0], 
+                                                                   stimuli=X[0,0],
                                                                    prompt_manager=prompt_manager,
                                                                    loss_fn=loss_fn,
                                                                    img_dir=model_image_dirs[island_idx, j],
-                                                                   plot_model_fits_fn=plot_model_fits_fn,
+                                                                   plot_model_fits=plot_model_fits,
                                                                    island_chat_manager=island_chat_manager,
                                                                    island_id=island_idx,
                                                                    batch_id=j,
@@ -1578,8 +1212,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 model_fn=model_results[island_idx * batch_size + j][3],
                 llm_name=little_lm_name,
                 client=client,
-                spike_matrix=outputs_train,
-                stimuli=inputs_train,
+                spike_matrix=Y[0,0],
+                stimuli=X[0,0],
                 prompt_manager=prompt_manager,
                 mode=mode,
                 k_max=2,
@@ -1588,10 +1222,11 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 img_dir=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_estimator.png') if use_large_model_for_param_estimators else None,
                 refine_rounds=param_estimator_refinement_rounds,
                 param_penalty_weight=param_penalty_weight,
-                trial_split_indices=trial_split_indices,
+                objective_X=X[0],
+                objective_Y=Y[0],
                 random_seed=random_seed,
                 swear_words=swear_words,
-                plot_model_fits_fn=plot_model_fits_fn,
+                plot_model_fits=plot_model_fits,
                 island_chat_manager=island_chat_manager,
                 island_id=island_idx,
                 batch_id=j,
@@ -1636,12 +1271,13 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 logging.info('-' * 50)
                 continue
             try:
-                _run_translation_check(
-                    model_np,
-                    model_new,
-                    param_est_new,
-                    inputs_train,
-                    outputs_train,
+                _run_translation_check_on_eval(
+                    np_func=model_np,
+                    jax_func=model_new,
+                    param_estimator=param_est_new,
+                    x_train_trials=X[0, 0],
+                    y_train_trials=Y[0, 0],
+                    x_eval=X_eval,
                 )
             except Exception as e:
                 logging.info(
@@ -1650,14 +1286,18 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 logging.info('-' * 50)
                 continue
             
-            initial_loss, initial_params, loss, optimized_params = objective(model_new, param_est_new,
-                                                                                x=inputs_train, y=outputs_train,
-                                                                                trial_split_indices=trial_split_indices,
-                                                                                loss_fn=loss_fn,
-                                                                                param_penalty_weight=param_penalty_weight,
-                                                                                fit_params=fit_params,
-                                                                                use_param_estimator=use_param_estimator,
-                                                                                max_iter=max_iter, trial_batch_size=trial_batch_size)
+            initial_loss, initial_params, loss, optimized_params = objective(
+                model_new,
+                param_est_new,
+                x=X[0],
+                y=Y[0],
+                loss_fn=loss_fn,
+                param_penalty_weight=param_penalty_weight,
+                fit_params=fit_params,
+                use_param_estimator=use_param_estimator,
+                max_iter=max_iter,
+                trial_batch_size=trial_batch_size,
+            )
             if loss == FAILED_PROGRAM_COST:
                 logging.info('-' * 50)
                 continue
@@ -1665,7 +1305,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             y_eval = utils.compute_evaluation_matrix(
                 model_new,
                 optimized_params,
-                eval_points=evaluation_points_train,
+                eval_points=X_eval,
             )
             logging.info(f"Loss: {loss:.2f}\n")
 
@@ -1687,20 +1327,19 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                         f"param_est_vs_gd: param deltas (iter={i}, island={island_idx}, batch={j}) "
                         f"mean_abs={mean_abs_delta:.6g}, max_abs={max_abs_delta:.6g}"
                     )
-                _call_plot_model_fits(
-                    plot_model_fits_fn,
-                    X=inputs_train,
-                    Y=outputs_train,
+                plot_model_fits(
+                    X=X[0, 0],
+                    Y=Y[0, 0],
                     programs_list=[
                         {
                             "model": model_new,
                             "params": initial_params_plot,
-                            "losses": _broadcast_model_loss(initial_loss, n_samples=inputs_train.shape[0]),
+                            "losses": np.full(X[0, 0].shape[0], float(initial_loss)),
                         },
                         {
                             "model": model_new,
                             "params": optimized_params_plot,
-                            "losses": _broadcast_model_loss(loss, n_samples=inputs_train.shape[0]),
+                            "losses": np.full(X[0, 0].shape[0], float(loss)),
                         },
                     ],
                     save_path=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est_vs_gd.png'),
@@ -1773,16 +1412,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                 top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
                 sup_title = f"Iteration {i}, Island {island_idx}, Top {len(top_df)} Programs\n"
                 sup_title += "\n".join([f"model {j+1}: iter {top_df['iteration_number'][j]}, birth island {top_df['birth_island'][j]}, batch {top_df['batch_index'][j]}, loss: {top_df['train_loss'][j]:.2f}" for j in range(len(top_df))])
-                _call_plot_model_fits(
-                    plot_model_fits_fn,
-                    X=inputs_train,
-                    Y=outputs_train,
-                    programs_list=_programs_df_to_programs_list(
-                        top_df,
-                        n_samples=inputs_train.shape[0],
-                        params_col="params",
-                        loss_col="train_loss",
-                    ),
+                plot_model_fits(
+                    X=X[0, 0],
+                    Y=Y[0, 0],
+                    programs_df=top_df,
+                    params_col="params",
+                    loss_col="train_loss",
                     save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
                     title=sup_title,
                 )
@@ -1793,16 +1428,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
             sup_title = f"Iteration {i}, Top 3 Programs Overall\n"
             sup_title += "\n".join([f"model {j+1}: iter {top_programs['iteration_number'][j]}, birth island {top_programs['birth_island'][j]}, batch {top_programs['batch_index'][j]}, loss: {top_programs['train_loss'][j]:.2f}" for j in range(len(top_programs))])
-            _call_plot_model_fits(
-                plot_model_fits_fn,
-                X=inputs_train,
-                Y=outputs_train,
-                programs_list=_programs_df_to_programs_list(
-                    top_programs,
-                    n_samples=inputs_train.shape[0],
-                    params_col="params",
-                    loss_col="train_loss",
-                ),
+            plot_model_fits(
+                X=X[0, 0],
+                Y=Y[0, 0],
+                programs_df=top_programs,
+                params_col="params",
+                loss_col="train_loss",
                 save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
                 title=sup_title,
             )
@@ -1841,16 +1472,18 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             model = program['program']
             param_estimator = program['parameter_estimator']
             # compute the test loss
-            _, _, test_loss, optimized_params = objective(model, param_estimator,
-                                                          x=inputs_test, y=outputs_test,
-                                                          trial_split_indices=trial_split_indices,
-                                                          loss_fn=loss_fn,
-                                                          fit_params=fit_params,
-                                                          max_iter=max_iter,
-                                                          param_penalty_weight=param_penalty_weight,
-                                                          use_param_estimator=use_param_estimator,
-                                                          trial_batch_size=trial_batch_size,
-                                                          )
+            _, _, test_loss, optimized_params = objective(
+                model,
+                param_estimator,
+                x=X[1],
+                y=Y[1],
+                loss_fn=loss_fn,
+                fit_params=fit_params,
+                max_iter=max_iter,
+                param_penalty_weight=param_penalty_weight,
+                use_param_estimator=use_param_estimator,
+                trial_batch_size=trial_batch_size,
+            )
             islands[island_idx].at[j, 'test_loss'] = test_loss
             islands[island_idx].at[j, 'params'] = optimized_params
             islands[island_idx].at[j, 'mean_loss'] = np.mean(test_loss)
@@ -1886,7 +1519,7 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
 
     # ---------------------------
     # save losses plot    
-    if use_image_feedback:
+    if has_spec_plotter:
         plot_train_vs_test_loss_shared(
             programs_df=combined_programs_dataframe,
             island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
@@ -1908,16 +1541,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
             df = df.head(3)
             df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
             df_sup += "".join([f"model {len(df) - i}: iter {df['iteration_number'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, total loss {0.5 * (df['test_loss'][i] + df['train_loss'][i]):.2f}\n" for i in range(min(3, len(df)))])
-            _call_plot_model_fits(
-                plot_model_fits_fn,
-                X=inputs_test,
-                Y=outputs_test,
-                programs_list=_programs_df_to_programs_list(
-                    df,
-                    n_samples=inputs_test.shape[0],
-                    params_col="params",
-                    loss_col="test_loss",
-                ),
+            plot_model_fits(
+                X=X[1, 1],
+                Y=Y[1, 1],
+                programs_df=df,
+                params_col="params",
+                loss_col="test_loss",
                 save_path=os.path.join(df_dirs[i], 'top_model_fits.png'),
                 title=df_sup,
             )
@@ -1931,16 +1560,12 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                     f"Island {birth_island}, Iteration {iteration_number}, "
                     f"Batch {batch_index}, loss: {df['test_loss'][j]:.2f}"
                 )
-                _call_plot_model_fits(
-                    plot_model_fits_fn,
-                    X=inputs_test,
-                    Y=outputs_test,
-                    programs_list=_programs_df_to_programs_list(
-                        model_df,
-                        n_samples=inputs_test.shape[0],
-                        params_col="params",
-                        loss_col="test_loss",
-                    ),
+                plot_model_fits(
+                    X=X[1, 1],
+                    Y=Y[1, 1],
+                    programs_df=model_df,
+                    params_col="params",
+                    loss_col="test_loss",
                     save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png'),
                     labels=['model'],
                     colours=['tab:green'],
@@ -1950,3 +1575,5 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
     # Log final token usage summary (if using chat mode)
     if island_chat_manager is not None:
         island_chat_manager.log_final_summary()
+
+    return full_dir

@@ -122,29 +122,84 @@ def str_to_func(code_string: Union[str, None], needle: str) -> Union[Callable, N
             return None
 
 
-def check_jax_translation(np_func, jax_func, inputs, params, rtol=1e-4, atol=1e-4):
+def check_jax_translation(
+    np_func,
+    jax_func,
+    eval_points,
+    params,
+    sample_indices=None,
+    max_eval_trials=32,
+    rtol=1e-4,
+    atol=1e-4,
+):
     """
-    Check if the outputs of a NumPy function and its JAX translation match.
+    Check NumPy vs JAX model agreement on a subset of eval points and samples.
 
     Args:
-        np_func: The original NumPy function.
-        jax_func: The translated JAX function.
-        inputs: Input NumPy array to test the functions.
-        params: Parameters to pass to the functions.
+        np_func: Original NumPy model function with signature model(X, *params).
+        jax_func: Translated JAX model function with signature model(X, *params).
+        eval_points: Array with shape (n_samples, n_features, n_eval_trials) or
+            (n_features, n_eval_trials) for a single sample.
+        params: Array with shape (n_samples, n_params) or (n_params,).
+        sample_indices: Optional sample indices to validate. If None, checks up to 3 samples.
+        max_eval_trials: Max number of eval-trial points per sample used for comparison.
         rtol: Relative tolerance for numeric comparison.
         atol: Absolute tolerance for numeric comparison.
 
     Raises:
-        ValueError: If there is a shape mismatch or numeric mismatch between the outputs.
+        ValueError: If shapes are incompatible or predictions mismatch.
     """
-    np_pred = np.asarray(np_func(inputs, *params))
-    jax_pred = np.asarray(jax_func(jnp.asarray(inputs), *params))
+    eval_arr = np.asarray(eval_points)
+    if eval_arr.ndim == 2:
+        eval_arr = eval_arr[None, :, :]
+    if eval_arr.ndim != 3:
+        raise ValueError(
+            f"eval_points must have shape (n_samples, n_features, n_eval_trials), got {eval_arr.shape}."
+        )
 
-    if np_pred.shape != jax_pred.shape:
-        raise ValueError(f"Shape mismatch: numpy={np_pred.shape}, jax={jax_pred.shape}")
+    params_arr = np.asarray(params)
+    if params_arr.ndim == 1:
+        params_arr = np.broadcast_to(params_arr[None, :], (eval_arr.shape[0], params_arr.shape[0]))
+    elif params_arr.ndim == 2:
+        if params_arr.shape[0] == 1 and eval_arr.shape[0] > 1:
+            params_arr = np.broadcast_to(params_arr, (eval_arr.shape[0], params_arr.shape[1]))
+    else:
+        raise ValueError(f"params must be 1D or 2D, got {params_arr.shape}.")
 
-    if not np.allclose(np_pred, jax_pred, rtol=rtol, atol=atol):
-        raise ValueError(f"Numeric mismatch: max_diff={np.max(np.abs(np_pred - jax_pred)):.6g}")
+    if params_arr.shape[0] != eval_arr.shape[0]:
+        raise ValueError(
+            f"Sample mismatch between eval_points ({eval_arr.shape[0]}) and params ({params_arr.shape[0]})."
+        )
+
+    n_samples = eval_arr.shape[0]
+    if sample_indices is None:
+        n_check = min(3, n_samples)
+        sample_indices = np.linspace(0, n_samples - 1, num=n_check, dtype=int)
+    else:
+        sample_indices = np.asarray(sample_indices).reshape(-1).astype(np.int64, copy=False)
+
+    for sample_idx in sample_indices:
+        if sample_idx < 0 or sample_idx >= n_samples:
+            raise ValueError(f"sample index {sample_idx} out of range for n_samples={n_samples}.")
+        x_eval = eval_arr[sample_idx]
+        if max_eval_trials is not None and x_eval.shape[1] > max_eval_trials:
+            keep_idx = np.linspace(0, x_eval.shape[1] - 1, num=max_eval_trials, dtype=int)
+            x_eval = x_eval[:, keep_idx]
+
+        sample_params = params_arr[sample_idx]
+        np_pred = np.asarray(np_func(x_eval, *sample_params))
+        jax_pred = np.asarray(jax_func(jnp.asarray(x_eval), *sample_params))
+
+        if np_pred.shape != jax_pred.shape:
+            raise ValueError(
+                f"Shape mismatch at sample {sample_idx}: numpy={np_pred.shape}, jax={jax_pred.shape}"
+            )
+
+        if not np.allclose(np_pred, jax_pred, rtol=rtol, atol=atol):
+            max_diff = np.max(np.abs(np_pred - jax_pred))
+            raise ValueError(
+                f"Numeric mismatch at sample {sample_idx}: max_diff={max_diff:.6g}"
+            )
 
 
 def build_evaluation_points(inputs: Inputs, x_min = None, x_max = None, n_bins = 100):
@@ -193,4 +248,3 @@ def compute_evaluation_matrix(program, params, eval_points):
 
     program_vmap = vmap_over_samples(program)
     return program_vmap(eval_arr, params_arr)
-

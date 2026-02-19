@@ -3,8 +3,13 @@ import yaml
 from pathlib import Path
 import importlib
 import os, argparse
-from src import hypothesis_engine 
+import inspect
+import numpy as np
+import jax.numpy as jnp
+from src import hypothesis_engine, utils
 from src.prompt_manager import PromptManager
+from src.data_structures import Inputs, Outputs, ensure_inputs, ensure_outputs
+from src.data_summary import save_data_summary
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -63,6 +68,213 @@ def load_config_with_defaults(config_path: Path, project_root: Path) -> dict:
 
     # Merge default and project-specific configs, with project-specific values taking precedence
     return deep_merge(default_config, experiment_config)
+
+
+def _build_load_and_process_data_fn(spec_load_and_process_data_fn):
+    """
+    Wrap spec.load_and_process_data so hypothesis_engine always receives
+    canonical NumPy tensors:
+      - inputs:  (n_samples, n_features, n_trials)
+      - outputs: (n_samples, n_targets, n_trials)
+    """
+    def _wrapped_load_and_process_data_fn(**kwargs):
+        data_obj = spec_load_and_process_data_fn(**kwargs)
+        if isinstance(data_obj, (tuple, list)) and len(data_obj) == 2:
+            inputs_obj = ensure_inputs(data_obj[0])
+            outputs_obj = ensure_outputs(data_obj[1])
+        elif isinstance(data_obj, dict):
+            inputs_obj = ensure_inputs(data_obj["inputs"])
+            outputs_obj = ensure_outputs(data_obj["outputs"])
+        else:
+            raise ValueError(
+                "load_and_process_data must return (inputs, outputs) or "
+                "{'inputs': ..., 'outputs': ...}."
+            )
+
+        inputs = np.asarray(inputs_obj.to_tensor())
+        outputs = np.asarray(outputs_obj.to_tensor())
+        if inputs.ndim != 3 or outputs.ndim != 3:
+            raise ValueError(
+                "Expected canonical tensors with shapes "
+                "(n_samples, n_features, n_trials) and (n_samples, n_targets, n_trials)."
+            )
+        if inputs.shape[0] != outputs.shape[0]:
+            raise ValueError("Input/output sample count mismatch.")
+        if outputs.shape[1] != 1:
+            raise ValueError(f"Current engine expects scalar targets (n_targets=1), got {outputs.shape[1]}.")
+        if inputs.shape[2] != outputs.shape[2]:
+            raise ValueError(
+                "Current engine expects matching input/output trial counts, got "
+                f"n_trials_x={inputs.shape[2]}, n_trials_y={outputs.shape[2]}."
+            )
+        return inputs, outputs
+
+    return _wrapped_load_and_process_data_fn
+
+
+def _build_train_test_split_fn(spec_train_test_split_fn):
+    """
+    Wrap spec.train_test_split so hypothesis_engine gets fully materialized
+    sample+trial train/test indices.
+    """
+    def _wrapped_train_test_split_fn(inputs_3d: np.ndarray, random_seed: int):
+        train_samples_raw, train_trials_raw = spec_train_test_split_fn(
+            Inputs.from_array(inputs_3d),
+            random_seed,
+        )
+        n_samples = int(inputs_3d.shape[0])
+        n_trials = int(inputs_3d.shape[2])
+        train_samples = np.asarray(train_samples_raw).reshape(-1).astype(np.int64, copy=False)
+        train_trials = np.asarray(train_trials_raw).reshape(-1).astype(np.int64, copy=False)
+        test_samples = np.setdiff1d(np.arange(n_samples, dtype=np.int64), train_samples, assume_unique=False)
+        test_trials = np.setdiff1d(np.arange(n_trials, dtype=np.int64), train_trials, assume_unique=False)
+        return train_samples, test_samples, train_trials, test_trials
+
+    return _wrapped_train_test_split_fn
+
+
+def _build_loss_fn(raw_loss_fn):
+    """
+    Normalize loss signatures to the engine contract:
+      loss_fn(model, x_i, y_i, params) -> scalar
+
+    Supported incoming signatures:
+      1) loss_fn(model, x_i, y_i, params)
+      2) loss_fn(y_pred, y_true)
+    """
+    if raw_loss_fn is None:
+        return None
+
+    sig = inspect.signature(raw_loss_fn)
+    params = list(sig.parameters.values())
+    has_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
+    n_positional = sum(
+        p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        for p in params
+    )
+
+    if has_varargs or n_positional >= 4:
+        return raw_loss_fn
+
+    if n_positional != 2:
+        raise ValueError(
+            "loss_fn must be either loss_fn(model, x_i, y_i, params) "
+            "or loss_fn(y_pred, y_true)."
+        )
+
+    def _wrapped_loss_fn(model, x_i, y_i, model_params):
+        y_pred = model(x_i, *model_params)
+        if y_i.ndim == 1:
+            y_i = y_i[None, :]
+        if y_pred.ndim == 1:
+            y_pred = y_pred[None, :]
+        loss_vals = raw_loss_fn(y_pred, y_i)
+        loss_arr = jnp.asarray(loss_vals)
+        if loss_arr.ndim == 0:
+            return loss_arr
+        return jnp.mean(loss_arr)
+
+    return _wrapped_loss_fn
+
+
+def _to_plot_outputs(y):
+    y_arr = np.asarray(y)
+    if y_arr.ndim == 2:
+        return y_arr[:, None, :]
+    return y_arr
+
+
+def _broadcast_model_loss(loss_value, n_samples: int):
+    if loss_value is None:
+        return None
+    loss_arr = np.asarray(loss_value)
+    if loss_arr.size == 0:
+        return None
+    if loss_arr.ndim == 0:
+        return np.full(n_samples, float(loss_arr))
+    flat = loss_arr.reshape(-1)
+    if flat.size == 1:
+        return np.full(n_samples, float(flat[0]))
+    if flat.size != n_samples:
+        return None
+    return flat
+
+
+def _programs_df_to_programs_list(programs_df, n_samples: int, params_col: str, loss_col: str | None):
+    programs_list = []
+    if programs_df is None or len(programs_df) == 0:
+        return programs_list
+
+    for _, row in programs_df.iterrows():
+        model = row.get("program")
+        params = row.get(params_col)
+        if model is None or params is None:
+            continue
+        program_dict = {"model": model, "params": np.asarray(params)}
+        if loss_col is not None and loss_col in row.index:
+            losses = _broadcast_model_loss(row[loss_col], n_samples=n_samples)
+            if losses is not None:
+                program_dict["losses"] = losses
+        programs_list.append(program_dict)
+    return programs_list
+
+
+def _build_plot_model_fits_fn(spec_plot_fn):
+    """
+    Build a stable plotting interface for hypothesis_engine.
+
+    Engine-facing contract:
+      plot_fn(X, Y, save_path, programs_df=None, programs_list=None, params_col="params", loss_col="train_loss", **kwargs)
+    """
+    if not callable(spec_plot_fn):
+        return None
+
+    sig = inspect.signature(spec_plot_fn)
+    accepts_var_kwargs = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+    allowed_kwargs = set(sig.parameters.keys())
+
+    def _wrapped_plot_fn(
+        *,
+        X,
+        Y,
+        save_path: str,
+        programs_df=None,
+        programs_list=None,
+        params_col: str = "params",
+        loss_col: str | None = "train_loss",
+        **kwargs,
+    ):
+        if save_path is None or save_path == "":
+            return
+
+        if programs_list is None:
+            n_samples = np.asarray(X).shape[0]
+            programs_list_local = _programs_df_to_programs_list(
+                programs_df=programs_df,
+                n_samples=n_samples,
+                params_col=params_col,
+                loss_col=loss_col,
+            )
+        else:
+            programs_list_local = programs_list
+
+        if len(programs_list_local) == 0:
+            return
+
+        call_kwargs = {
+            "X": X,
+            "Y": _to_plot_outputs(Y),
+            "programs_list": programs_list_local,
+            "save_path": save_path,
+            **kwargs,
+        }
+        if not accepts_var_kwargs:
+            call_kwargs = {k: v for k, v in call_kwargs.items() if k in allowed_kwargs}
+        spec_plot_fn(**call_kwargs)
+
+    return _wrapped_plot_fn
 
 async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     """
@@ -158,21 +370,36 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         raise ValueError("There must be exactly 2 parameter estimator seeds.")
 
     # Data extraction/splits: require unified split API from spec.
-    load_and_process_data_fn = getattr(spec_module, 'load_and_process_data')
-    train_test_split_fn = getattr(spec_module, 'train_test_split', None)
-    if not callable(train_test_split_fn):
+    spec_load_and_process_data_fn = getattr(spec_module, 'load_and_process_data')
+    spec_train_test_split_fn = getattr(spec_module, 'train_test_split', None)
+    if not callable(spec_train_test_split_fn):
         raise ValueError(
             f"{spec_module_path} must define callable train_test_split(X, random_seed)."
         )
+    load_and_process_data_fn = _build_load_and_process_data_fn(spec_load_and_process_data_fn)
+    train_test_split_fn = _build_train_test_split_fn(spec_train_test_split_fn)
+
     # Loss function: required in spec
     spec_loss_fn = getattr(spec_module, "loss_fn", None)
     if spec_loss_fn is None or not callable(spec_loss_fn):
-        raise ValueError(f"{spec_module_path} must define callable loss_fn(y_true, y_pred).")
+        raise ValueError(f"{spec_module_path} must define callable loss_fn(Y_pred, Y_true).")
 
     # Image diagnostics are enabled automatically if spec defines plot_model_fits.
     spec_plot_fn = getattr(spec_module, "plot_model_fits", None)
     use_image_feedback = callable(spec_plot_fn)
-    plot_model_fits_fn = spec_plot_fn if use_image_feedback else None
+    plot_model_fits_fn = _build_plot_model_fits_fn(spec_plot_fn) if use_image_feedback else None
+
+    # Optional config-level loss override still supported.
+    loss_fn_path = config.get("loss_fn")
+    if loss_fn_path:
+        module_path, function_name = loss_fn_path.rsplit(".", 1)
+        loss_module = importlib.import_module(module_path)
+        raw_loss_fn = getattr(loss_module, function_name)
+        if not callable(raw_loss_fn):
+            raise ValueError(f"Configured loss_fn '{loss_fn_path}' is not callable.")
+    else:
+        raw_loss_fn = spec_loss_fn
+    loss_fn = _build_loss_fn(raw_loss_fn)
 
     # Initialize prompt manager with merged config (includes DEFAULT prompts)
     prompt_manager = PromptManager(config=config)
@@ -194,11 +421,49 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         params['max_iter'] = 100 # --- USE WHEN JUST CHECKING THAT THE SCRIPT RUNS ---
 
     for i in range(params['num_runs']):
+        random_seed = params.get('random_seed', 42)
+        inputs, outputs = load_and_process_data_fn(**data_processing_params)
+        train_samples, test_samples, train_trials, test_trials = train_test_split_fn(
+            inputs,
+            random_seed,
+        )
+        train_samples = np.asarray(train_samples).reshape(-1).astype(np.int64, copy=False)
+        test_samples = np.asarray(test_samples).reshape(-1).astype(np.int64, copy=False)
+        train_trials = np.asarray(train_trials).reshape(-1).astype(np.int64, copy=False)
+        test_trials = np.asarray(test_trials).reshape(-1).astype(np.int64, copy=False)
+
+        X_train_train_trials = inputs[train_samples][:, :, train_trials]
+        X_train_test_trials = inputs[train_samples][:, :, test_trials]
+        X_test_train_trials = inputs[test_samples][:, :, train_trials]
+        X_test_test_trials = inputs[test_samples][:, :, test_trials]
+
+        Y_train_train_trials = outputs[train_samples][:, :, train_trials]
+        Y_train_test_trials = outputs[train_samples][:, :, test_trials]
+        Y_test_train_trials = outputs[test_samples][:, :, train_trials]
+        Y_test_test_trials = outputs[test_samples][:, :, test_trials]
+
+        X = np.empty((2, 2), dtype=object)
+        Y = np.empty((2, 2), dtype=object)
+        X[0, 0] = Inputs.from_array(X_train_train_trials)
+        X[0, 1] = Inputs.from_array(X_train_test_trials)
+        X[1, 0] = Inputs.from_array(X_test_train_trials)
+        X[1, 1] = Inputs.from_array(X_test_test_trials)
+        Y[0, 0] = Outputs.from_array(Y_train_train_trials)
+        Y[0, 1] = Outputs.from_array(Y_train_test_trials)
+        Y[1, 0] = Outputs.from_array(Y_test_train_trials)
+        Y[1, 1] = Outputs.from_array(Y_test_test_trials)
+
+        X_eval = utils.build_evaluation_points(
+            inputs=X[0, 0],
+            x_min=params.get('x_min'),
+            x_max=params.get('x_max'),
+            n_bins=params.get('n_bins', 100),
+        )
+
         print("running with standard params")
-        await hypothesis_engine.hypothesis_engine(
+        full_dir = await hypothesis_engine.hypothesis_engine(
             n_iterations=params['n_iterations'],
             time_limit=params['time_limit'],
-            use_image_feedback=use_image_feedback,
             use_large_every=params['use_large_every'],
             param_penalty_weight=params['param_penalty_weight'],
             exploration_topology=params['exploration_topology'],
@@ -211,10 +476,8 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             min_wise_population_size=params['min_wise_population_size'],
             n_migrants=params['n_migrants'],
             fit_params=params['fit_params'],
+            use_param_estimator=params.get('use_param_estimator', True),
             learning_rate=params['learning_rate'],
-            x_min=params.get('x_min'),
-            x_max=params.get('x_max'),
-            n_bins=params.get('n_bins', 100),
             FAILED_PROGRAM_COST=params['FAILED_PROGRAM_COST'],
             tiny_lm_name=params['tiny_lm_name'],
             little_lm_name=params['little_lm_name'],
@@ -224,16 +487,30 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             param_estimator_refinement_rounds=params.get('param_estimator_refinement_rounds', 0),
             numpy_programs=models,
             param_estimators=param_estimators,
-            load_and_process_data_fn=load_and_process_data_fn,
-            train_test_split_fn=train_test_split_fn,
-            data_processing_params=data_processing_params,
-            plot_model_fits_fn=plot_model_fits_fn,
+            X=X,
+            Y=Y,
+            X_eval=X_eval,
+            plot_model_fits=plot_model_fits_fn,
             prompt_manager=prompt_manager,
             use_large_model_for_param_estimators=params.get('use_large_model_for_param_estimators', False),
             trial_batch_size=params.get('trial_batch_size', None),
             swear_words=params.get('swear_words'),
-            loss_fn=spec_loss_fn,
-            random_seed=params.get('random_seed', 42),
+            loss_fn=loss_fn,
+            random_seed=random_seed,
+        )
+        # Save split/data summary from preprocessed run-level data.
+        save_data_summary(
+            response=outputs,
+            inputs=inputs,
+            training_samples=train_samples,
+            test_samples=test_samples,
+            x_train_trial_idx=train_trials,
+            x_test_trial_idx=test_trials,
+            y_train_trial_idx=train_trials,
+            y_test_trial_idx=test_trials,
+            output_dir=full_dir,
+            random_seed=random_seed,
+            train_test_split_fn=spec_train_test_split_fn,
         )
 
 if __name__ == "__main__":
