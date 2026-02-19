@@ -11,6 +11,9 @@ Seed Programs:
 - model_v1(X, *params) and param_est_v1(X, Y)
 - model_v2(X, *params) and param_est_v2(X, Y)
 
+Loss:
+- loss_fn(Y_pred, Y_true) -> loss values
+
 OPTIONAL COMPONENTS:
 - plot_model_fits(X, Y, model_list, params_list)
 """
@@ -345,7 +348,18 @@ def param_est_v2(X, Y):
 
 
 # ========================
-# 3. DIAGNOSTICS
+# 3. LOSS
+# ========================
+
+def loss_fn(Y_pred, Y_true):
+    """
+    Elementwise squared-error loss.
+    """
+    return (Y_true - Y_pred) ** 2
+
+
+# ========================
+# 4. DIAGNOSTICS
 # ========================
 
 def plot_model_fits(
@@ -437,7 +451,7 @@ def plot_model_fits(
 
 
 # ========================
-# 4. OPTIONAL PROJECT-SPECIFIC HELPERS
+# 5. OPTIONAL PROJECT-SPECIFIC HELPERS
 # ========================
 
 def _to_array3d(obj) -> np.ndarray:

@@ -11,7 +11,12 @@ Seed Programs:
 - model_v1(X, *params) and param_est_v1(X, Y)
 - model_v2(X, *params) and param_est_v2(X, Y)
 
-OPTIONAL COMPONENTS:
+Loss:
+- loss_fn(Y_pred, Y_true) -> loss values
+
+OPTIONAL COMPONENTS (for enhanced diagnostics and visualization):
+
+Plotting:
 - plot_model_fits(X, Y, model_list, params_list)
 """
 
@@ -183,7 +188,6 @@ def model_v2(X, a=1.0, b=0.0):
     x = X[0]
     return a * x + b
 
-
 def param_est_v2(X, Y):
     """
     Estimate parameters for model_v2 using least squares.
@@ -202,8 +206,26 @@ def param_est_v2(X, Y):
     a, b = np.linalg.lstsq(A, y, rcond=None)[0]
     return np.array([a, b])
 
+
 # ========================
-# 3. DIAGNOSTICS
+# 3. LOSS
+# ========================
+
+def loss_fn(Y_pred, Y_true):
+    """
+    Scaled squared error loss function.
+
+    Args:
+        Y_pred (jnp.ndarray): Predicted values, shape (1, n_trials)
+        Y_true (jnp.ndarray): True values, shape (1, n_trials)
+
+    Returns:
+        jnp.ndarray: Scalar loss values for each trial, shape (1, n_trials).
+    """
+    return 10 * (Y_true - Y_pred) ** 2
+
+# ========================
+# 4. DIAGNOSTICS
 # ========================
 
 def plot_model_fits(
@@ -214,10 +236,9 @@ def plot_model_fits(
     domain=(-1.0, 1.0),
     save_path="",
     labels=("model_v1", "model_v2"),
+    # project-specific aesthetics
     colours=("green", "red", "orange", "purple", "cyan", "magenta", "brown", "olive"),
-    binned_colour="deepskyblue",
-    # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
-):
+    binned_colour="deepskyblue"):
     """
     Plot observed synthetic data and model predictions for 9 random samples.
 
@@ -231,7 +252,7 @@ def plot_model_fits(
         List of dictionaries with model metadata. Expected keys include:
         - 'model': callable model(X_one, *params)
         - 'params': array of shape (n_samples, n_params)
-        - optionally 'losses': array of shape (n_samples,)
+        - 'losses': array of shape (n_samples,)
     n_bins : int
         Number of bins for plotting binned means of observed data.
     domain : tuple[float, float]
@@ -302,9 +323,8 @@ def plot_model_fits(
     plt.savefig(save_path, dpi=100.0, bbox_inches="tight")
     plt.close(fig)
 
-
 # ========================
-# 4. OPTIONAL PROJECT-SPECIFIC HELPERS
+# 5. OPTIONAL PROJECT-SPECIFIC HELPERS
 # ========================
 
 def target_function(x, a, b, c, k, phi_0):

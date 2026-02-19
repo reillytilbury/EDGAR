@@ -11,6 +11,9 @@ Seed Programs:
 - model_v1(X, *params) and param_est_v1(X, Y)
 - model_v2(X, *params) and param_est_v2(X, Y)
 
+Loss:
+- loss_fn(Y_pred, Y_true) -> loss values
+
 OPTIONAL COMPONENTS:
 - plot_model_fits(X, Y, model_list, params_list)
 """
@@ -258,8 +261,20 @@ def param_est_v2(X, Y):
     tuning_width = full_width_half_max / (2.0 * np.sqrt(2 * np.log(2)))
     return np.array([theta_pref, baseline, amplitude_1, amplitude_2, tuning_width])
 
+
 # ========================
-# 3. DIAGNOSTICS
+# 3. LOSS
+# ========================
+
+def loss_fn(Y_pred, Y_true):
+    """
+    Elementwise squared-error loss.
+    """
+    return (Y_true - Y_pred) ** 2
+
+
+# ========================
+# 4. DIAGNOSTICS
 # ========================
 
 def plot_model_fits(
@@ -340,7 +355,7 @@ def plot_model_fits(
 
     
 # ========================
-# 4. OPTIONAL PROJECT-SPECIFIC HELPERS
+# 5. OPTIONAL PROJECT-SPECIFIC HELPERS
 # ========================
 
 def extract_stimulus_related_response(data: dict, n_pcs: int = 8, z_score: bool = False, spont_mean_removal: bool = False) -> np.ndarray:
