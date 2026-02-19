@@ -203,6 +203,7 @@ def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
         logging.info("Error: Unable to compute default parameters for the neuron model.")
         return None
 
+
 def compute_default_params(model) -> jnp.ndarray:
     """
     Compute default parameters for the model based on its signature.
@@ -330,9 +331,8 @@ def validate_model_execution(
 
 
 def objective(model, param_estimator, x, y, trial_split_indices=None,
-              loss_fn=None,
-              param_penalty_weight=0.1, fit_params=True, random_seed=0,
-              FAILED_PROGRAM_COST=jnp.inf, tol=1e-2, max_iter=1_000, learning_rate=3e-3,
+              loss_fn=None, param_penalty_weight=0.1, fit_params=True,
+              FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate model loss using the unified Outputs representation.
@@ -372,9 +372,7 @@ def objective(model, param_estimator, x, y, trial_split_indices=None,
                           Must be JAX-compatible (supports jit, vmap, grad).
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
-        random_seed (int or None): Random seed for reproducibility. Default is 0.
         FAILED_PROGRAM_COST (float): Cost assigned to failed models. Default is np.inf.
-        tol (float): Tolerance for optimization convergence. Default is 1e-2.
         max_iter (int): Maximum number of iterations for optimization. Default is 1_000.
         use_param_estimator (bool): Whether to use the parameter estimator to compute initial parameters. Default is True.
         trial_batch_size (int | None): Ignored. Trial batching is disabled.
@@ -641,84 +639,21 @@ def objective(model, param_estimator, x, y, trial_split_indices=None,
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-def evaluate_param_estimator_loss(model, param_estimator, x, y,
-                                  trial_split_indices=None,
-                                  loss_fn=None,
-                                  param_penalty_weight=0.1, random_seed=0,
-                                  trial_batch_size=None, FAILED_PROGRAM_COST=jnp.inf):
-    """
-    Evaluate parameter estimator loss without gradient descent.
-
-    Returns:
-        (loss, params) where loss is computed using the objective pipeline with
-        fit_params=False and params are the initial parameters from the estimator.
-    """
-    try:
-        initial_loss, initial_params, _, _ = objective(
-            model=model,
-            param_estimator=param_estimator,
-            x=x,
-            y=y,
-            trial_split_indices=trial_split_indices,
-            loss_fn=loss_fn,
-            param_penalty_weight=param_penalty_weight,
-            fit_params=False,
-            random_seed=random_seed,
-            FAILED_PROGRAM_COST=FAILED_PROGRAM_COST,
-            use_param_estimator=True,
-            trial_batch_size=trial_batch_size,
-        )
-        return float(initial_loss), initial_params
-    except Exception as e:
-        logging.info(f"Error evaluating parameter estimator loss: {e}")
-        return float(FAILED_PROGRAM_COST), None
-
-
 def build_evaluation_points(inputs, x_min, x_max, n_bins):
     """
     Build evaluation grid from config bounds.
-
-    - Scalar `x_min`/`x_max`: broadcast to all features.
-    - Sequence `x_min`/`x_max`: must have one value per feature.
     """
-    x_arr = np.asarray(inputs)
-    if x_arr.ndim != 3:
-        raise ValueError(f"Expected inputs with shape (n_samples, n_features, n_trials), got {x_arr.shape}.")
-    n_samples, n_features, _ = x_arr.shape
-
-    if x_min is None or x_max is None:
-        raise ValueError("Both `x_min` and `x_max` must be set in config for evaluation grid.")
-    if n_bins is None or int(n_bins) < 2:
-        raise ValueError("`n_bins` must be an integer >= 2 for evaluation grid.")
-
-    def _as_feature_vector(v, name):
-        arr = np.asarray(v, dtype=float)
-        if arr.ndim == 0:
-            return np.full((n_features,), float(arr), dtype=float)
-        arr = arr.reshape(-1)
-        if arr.size != n_features:
-            raise ValueError(
-                f"{name} must be scalar or have exactly {n_features} entries, got {arr.size}."
-            )
-        return arr
-
-    x_min_vec = _as_feature_vector(x_min, "x_min")
-    x_max_vec = _as_feature_vector(x_max, "x_max")
-    if np.any(x_max_vec <= x_min_vec):
-        raise ValueError(
-            f"Each feature must satisfy x_max > x_min, got x_min={x_min_vec.tolist()}, x_max={x_max_vec.tolist()}."
-        )
-
+    n_samples, n_features, _ = inputs.shape
+    x_min_vec = np.full(n_features, x_min) if np.isscalar(x_min) else np.asarray(x_min)
+    x_max_vec = np.full(n_features, x_max) if np.isscalar(x_max) else np.asarray(x_max)
     per_feature = np.stack(
-        [np.linspace(x_min_vec[i], x_max_vec[i], int(n_bins), dtype=float) for i in range(n_features)],
+        [np.linspace(x_min_vec[i], x_max_vec[i], n_bins) for i in range(n_features)],
         axis=0,
-    )  # (n_features, n_bins)
-    return np.broadcast_to(per_feature[None, :, :], (n_samples, n_features, int(n_bins)))
+    )
+    return np.broadcast_to(per_feature[None, :, :], (n_samples, n_features, n_bins))
 
 
-def compute_evaluation_matrix(program,
-                              params,
-                              eval_points):
+def compute_evaluation_matrix(program, params, eval_points):
     """
     Compute model evaluations used for logging/comparison.
     """
@@ -726,120 +661,20 @@ def compute_evaluation_matrix(program,
         raise ValueError("eval_points must be provided.")
 
     params_arr = jnp.asarray(params)
-    n_samples = params_arr.shape[0]
-    program_vmap = utils.vmap_over_cells(program)
     eval_arr = jnp.asarray(eval_points)
 
     if eval_arr.ndim == 1:
-        eval_arr = jnp.broadcast_to(eval_arr, (n_samples, eval_arr.shape[0]))
+        eval_arr = eval_arr[:, None]
 
-    if eval_arr.ndim == 2:
-        if eval_arr.shape[0] != n_samples:
-            raise ValueError(
-                f"eval_points first dimension must match n_samples={n_samples}, got {eval_arr.shape}."
-            )
-        # Backward compatibility: some models expect 1D, others (1, n_trials).
-        try:
-            return program_vmap(eval_arr, params_arr)
-        except Exception:
-            return program_vmap(eval_arr[:, jnp.newaxis, :], params_arr)
-
-    if eval_arr.ndim != 3:
-        raise ValueError(
-            f"eval_points must be 1D, 2D, or 3D, got shape {eval_arr.shape}."
-        )
-    if eval_arr.shape[0] != n_samples:
-        raise ValueError(
-            f"eval_points first dimension must match n_samples={n_samples}, got {eval_arr.shape}."
-        )
-
-    try:
-        return program_vmap(eval_arr, params_arr)
-    except Exception:
-        if eval_arr.shape[1] == 1:
-            return program_vmap(eval_arr[:, 0, :], params_arr)
-        raise
-
-
-def _call_with_supported_kwargs(func, kwargs):
-    """Call a function with only supported keyword args unless it accepts **kwargs."""
-    sig = inspect.signature(func)
-    accepts_kwargs = any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-    )
-    if accepts_kwargs:
-        return func(**kwargs)
-    filtered_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
-    return func(**filtered_kwargs)
-
-
-def prepare_and_plot_model_fits(diagnostics_module,
-                                programs_df,
-                                loss_fn,
-                                inputs,
-                                response,
-                                sample_selection,
-                                **plot_kwargs):
-    """
-    Prepare inputs and render model-fit diagnostics.
-
-    This wrapper intentionally owns the `diagnostics_module is None` guard so
-    the hypothesis engine can run in configurations where image diagnostics are
-    disabled. When diagnostics are enabled, it passes raw inputs/outputs plus
-    program parameters to `diagnostics_module.plot_model_fits(...)`.
-    """
-    if diagnostics_module is None:
-        return
-
-    plot_fn = diagnostics_module.plot_model_fits
-    x = np.asarray(inputs)
-    y = np.asarray(response)
-    if y.ndim == 2:
-        y = y[:, np.newaxis, :]
-
-    n_samples = x.shape[0]
-    programs_list = []
-    for i in range(len(programs_df)):
-        model_fn = programs_df.iloc[i]["program"]
-        params_arr = np.asarray(programs_df.iloc[i]["params"])
-        if loss_fn is None:
-            losses_arr = np.zeros(n_samples)
-        else:
-            losses = []
-            for s in range(n_samples):
-                x_i = x[s]
-                y_i = y[s, 0]
-                params = params_arr[s]
-                try:
-                    losses.append(float(loss_fn(model_fn, x_i, y_i, params)))
-                except Exception:
-                    losses.append(float("inf"))
-            losses_arr = np.asarray(losses)
-        programs_list.append(
-            {
-                "model": model_fn,
-                "params": params_arr,
-                "losses": losses_arr,
-            }
-        )
-
-    kwargs = dict(
-        X=x,
-        Y=y,
-        programs_list=programs_list,
-        **plot_kwargs,
-    )
-    try:
-        _call_with_supported_kwargs(plot_fn, kwargs)
-    except Exception as e:
-        logging.info(f"Skipping plot_model_fits due to diagnostics error: {e}")
+    program_vmap = utils.vmap_over_samples(program)
+    return program_vmap(eval_arr, params_arr)
 
 
 async def generate_new_model(current_island, llm_name, client, 
                                     spike_matrix, stimuli, prompt_manager,
                                     loss_fn=None,
                                     mode='explore', k_max=2, temp=1, 
-                                    thinking_budget=1, img_dir=None, diagnostics_module=None,
+                                    thinking_budget=1, img_dir=None,
                                     island_chat_manager=None, island_id: int = None,
                                     batch_id: int = 0,
                                     use_large_model: bool = True):
@@ -863,11 +698,10 @@ async def generate_new_model(current_island, llm_name, client,
     else:
         program_prompt = prompt_manager.get_program_prompt_legacy(random_programs, mode=mode, use_image=use_image)
 
-    if use_image and diagnostics_module is not None:
+    if use_image:
         try:
             sup_title = "".join([f"{model_name}_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             prepare_and_plot_model_fits(
-                diagnostics_module=diagnostics_module,
                 programs_df=random_programs,
                 loss_fn=loss_fn,
                 inputs=stimuli,
@@ -926,6 +760,7 @@ async def generate_new_model(current_island, llm_name, client,
     
     return code_string, program_prompt, (parent1_id, parent2_id)
 
+
 async def generate_new_parameter_estimator(current_island, 
                                            model_code_string: str,
                                            model_fn,
@@ -940,8 +775,8 @@ async def generate_new_parameter_estimator(current_island,
                                            random_seed: int = 0,
                                            island_chat_manager=None, island_id: int = None,
                                            batch_id: int = 0,
-                                           diagnostics_module=None,
-                                           use_large_model: bool = False):                                           
+                                           use_large_model: bool = False,
+                                           loss_fn=None,):                                           
     if model_code_string is None:
         logging.info("No model code string provided, skipping parameter estimator generation.")
         return None, None
@@ -967,11 +802,10 @@ async def generate_new_parameter_estimator(current_island,
     random_programs_crude = random_programs.copy()
     random_programs_crude['params'] = random_programs['initial_params']
     # now try generating an image from the random programs
-    if use_image and diagnostics_module is not None:
+    if use_image:
         try:
             sup_title = "".join([f"model_v{i+1}: Loss = {random_programs['train_loss'][i]:.2f} \n" for i in range(min(3, len(random_programs)))])
             prepare_and_plot_model_fits(
-                diagnostics_module=diagnostics_module,
                 programs_df=random_programs_crude,
                 loss_fn=loss_fn,
                 inputs=stimuli,
@@ -1047,11 +881,13 @@ async def generate_new_parameter_estimator(current_island,
 
     current_code = code_string
     current_func = func
-    current_loss, current_params = evaluate_param_estimator_loss(
+    current_loss, current_params, _, _ = objective(
         model=model_fn,
         param_estimator=current_func,
         x=stimuli,
         y=spike_matrix,
+        loss_fn=loss_fn,
+        fit_params=False,  # Don't fit parameters during refinement evaluation
         trial_split_indices=trial_split_indices,
         param_penalty_weight=param_penalty_weight,
         random_seed=random_seed,
@@ -1159,11 +995,13 @@ async def generate_new_parameter_estimator(current_island,
             logging.info("Failed to parse refined parameter estimator; keeping current.")
             continue
 
-        new_loss, new_params = evaluate_param_estimator_loss(
+        new_loss, new_params, _, _ = objective(
             model=model_fn,
             param_estimator=new_func,
             x=stimuli,
             y=spike_matrix,
+            loss_fn=loss_fn,
+            fit_params=False,  # Don't fit parameters during refinement evaluation
             trial_split_indices=trial_split_indices,
             param_penalty_weight=param_penalty_weight,
             random_seed=random_seed,
@@ -1180,6 +1018,7 @@ async def generate_new_parameter_estimator(current_island,
             best_func = new_func
 
     return best_code, best_func
+
 
 async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='gemini-2.0-flash-lite') -> tuple[str, callable]:
     """
@@ -1230,68 +1069,26 @@ def _prepare_seed_translation_check_data(inputs, response, sample_idx=0, max_tri
     return x_full, y_full, x_check, trial_idx
 
 
-def _check_jax_translation(np_func, jax_func, param_estimator, inputs, response,
-                           max_trials=32, rtol=1e-4, atol=1e-4) -> None:
-    def _coerce_trial_vector(pred, n_trials, label):
-        """
-        Normalize scalar-model predictions to shape (n_trials,).
+def _check_jax_translation(np_func, jax_func, param_estimator, inputs, response, max_trials=32, rtol=1e-4, atol=1e-4):
+    x_full, y_full, x_check, _ = _prepare_seed_translation_check_data(inputs, response, sample_idx=0, max_trials=max_trials)
+    params = np.asarray(param_estimator(x_full, y_full)).reshape(-1)
 
-        Accepts:
-        - (n_trials,)
-        - (1, n_trials)
-        """
-        arr = np.asarray(pred)
-        if arr.ndim == 1 and arr.shape[0] == n_trials:
-            return arr
-        if arr.ndim == 2 and arr.shape == (1, n_trials):
-            return arr[0]
-        raise ValueError(
-            f"{label} output has unsupported shape {arr.shape}; "
-            f"expected one of ({n_trials},), (1, {n_trials})."
-        )
+    np_pred = np.asarray(np_func(x_check, *params))
+    jax_pred = np.asarray(jax_func(jnp.asarray(x_check), *params))
 
-    x_full, y_full, x_check, _ = _prepare_seed_translation_check_data(
-        inputs, response, sample_idx=0, max_trials=max_trials
-    )
-    try:
-        params = param_estimator(x_full, y_full)
-    except Exception as e:
-        n_features = int(np.asarray(x_full).shape[0])
-        raise ValueError(
-            f"Parameter estimator failed during translation check: {e}. "
-            f"Input has {n_features} feature(s); ensure code only accesses valid X[i] indices."
-        ) from e
-    params = np.asarray(params).reshape(-1)
-
-    try:
-        np_pred = np.asarray(np_func(x_check, *params))
-        jax_pred = np.asarray(jax_func(jnp.asarray(x_check), *params))
-    except Exception as e:
-        n_features = int(np.asarray(x_check).shape[0])
-        raise ValueError(
-            f"Model execution failed during translation check: {e}. "
-            f"Input has {n_features} feature(s); ensure code only accesses valid X[i] indices."
-        ) from e
-
-    n_trials = int(np.asarray(x_check).shape[-1])
-    np_pred = _coerce_trial_vector(np_pred, n_trials, "NumPy model")
-    jax_pred = _coerce_trial_vector(jax_pred, n_trials, "JAX model")
+    np_pred = np_pred[0] if np_pred.ndim == 2 else np_pred
+    jax_pred = jax_pred[0] if jax_pred.ndim == 2 else jax_pred
 
     if np_pred.shape != jax_pred.shape:
-        raise ValueError(
-            f"JAX translation shape mismatch: numpy={np_pred.shape}, jax={jax_pred.shape}."
-        )
+        raise ValueError(f"Shape mismatch: numpy={np_pred.shape}, jax={jax_pred.shape}")
 
     if not np.allclose(np_pred, jax_pred, rtol=rtol, atol=atol):
-        max_abs_diff = float(np.max(np.abs(np_pred - jax_pred)))
-        raise ValueError(
-            "JAX translation failed numeric check for seed program. "
-            f"max_abs_diff={max_abs_diff:.6g}, rtol={rtol}, atol={atol}."
-        )
+        raise ValueError(f"Numeric mismatch: max_diff={np.max(np.abs(np_pred - jax_pred)):.6g}")
+
 
 async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
                 critical_population_size=12, min_wise_population_size=0, 
-                n_migrants=2, fit_params=True, tol=1e-6, exploit_point=0.5,
+                n_migrants=2, fit_params=True, exploit_point=0.5,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
                 use_image_feedback=True, use_param_estimator=True,
                 use_chat_mode=False,  # If True, use persistent chat sessions per island (expensive)
@@ -1516,9 +1313,8 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                         x=inputs_train, y=outputs_train,
                                         trial_split_indices=trial_split_indices,
                                         loss_fn=loss_fn,
-                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight, tol=tol, learning_rate=learning_rate,
-                                        use_param_estimator=use_param_estimator, max_iter=max_iter, trial_batch_size=trial_batch_size,
-                                        random_seed=random_seed)
+                                        fit_params=fit_params, param_penalty_weight=param_penalty_weight, learning_rate=learning_rate,
+                                        use_param_estimator=use_param_estimator, max_iter=max_iter, trial_batch_size=trial_batch_size)
         print(f"Initial program {i + 1} loss before parameter fitting: {loss_init:.2f} and loss after fitting: {loss:.2f}")
 
         seed_losses[i] = loss
@@ -1741,10 +1537,9 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                                                 trial_split_indices=trial_split_indices,
                                                                                 loss_fn=loss_fn,
                                                                                 param_penalty_weight=param_penalty_weight,
-                                                                                fit_params=fit_params, tol=tol,
+                                                                                fit_params=fit_params,
                                                                                 use_param_estimator=use_param_estimator,
-                                                                                max_iter=max_iter, trial_batch_size=trial_batch_size,
-                                                                                random_seed=random_seed)
+                                                                                max_iter=max_iter, trial_batch_size=trial_batch_size)
             if loss == FAILED_PROGRAM_COST:
                 logging.info('-' * 50)
                 continue
@@ -1926,10 +1721,9 @@ async def hypothesis_engine(n_iterations=9, time_limit=60, k_max=2, n_islands=8,
                                                           loss_fn=loss_fn,
                                                           fit_params=fit_params,
                                                           max_iter=max_iter,
-                                                          param_penalty_weight=param_penalty_weight, tol=tol,
+                                                          param_penalty_weight=param_penalty_weight,
                                                           use_param_estimator=use_param_estimator,
                                                           trial_batch_size=trial_batch_size,
-                                                          random_seed=random_seed,
                                                           )
             islands[island_idx].at[j, 'test_loss'] = test_loss
             islands[island_idx].at[j, 'params'] = optimized_params
