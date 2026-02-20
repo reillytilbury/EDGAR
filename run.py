@@ -250,6 +250,14 @@ def _build_plot_model_fits_fn(spec_plot_fn):
         if len(programs_list_local) == 0:
             return
 
+        labels = kwargs.get("labels")
+        n_programs = len(programs_list_local)
+        if labels is None:
+            kwargs["labels"] = tuple(f"model_{i+1}" for i in range(n_programs))
+        elif len(labels) < n_programs:
+            padded = list(labels) + [f"model_{i+1}" for i in range(len(labels), n_programs)]
+            kwargs["labels"] = tuple(padded)
+
         call_kwargs = {
             "X": x_plot,
             "Y": y_plot,
