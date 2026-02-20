@@ -53,12 +53,6 @@ class PromptManager:
         except Exception:
             return str(train_loss)
 
-    @staticmethod
-    def _signature_hint_block(kind: str, next_version: str) -> str:
-        if kind == "program":
-            return f"* Required function header: `def model_v{next_version}(X, ...):` and return shape `(n_trials,)`."
-        return f"* Required function header: `def parameter_estimator_v{next_version}(X, spike_counts):`."
-
     def _render_image_analysis(self, templates: dict, prompt_key: str, k: int, use_image: bool) -> str:
         """
         Render image-analysis prompt section or raise a clear error if missing.
@@ -120,7 +114,7 @@ class PromptManager:
             self._render_template(templates['base'], k=f"{k}", next_version=next_version),
             self._render_template(templates['exploit'] if mode == 'exploit' else templates['explore'], k=f"{k}", next_version=next_version),
             self._render_image_analysis(templates, "program_prompt", k, use_image),
-            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}") + "\n" + self._signature_hint_block("program", next_version),
+            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}"),
             self._render_template(templates['docstring_guidelines'], next_version=next_version),
             "**Parent Models:**",
         ]
@@ -140,7 +134,7 @@ class PromptManager:
         
         return prompt
     
-    def get_parameter_estimator_prompt_legacy(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100, use_image : bool = True) -> str:
+    def get_parameter_estimator_prompt_legacy(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100) -> str:
         """Build full parameter estimator prompt from config (legacy mode).
         
         This creates a self-contained prompt with all guidelines included.
@@ -150,8 +144,6 @@ class PromptManager:
             programs_df (pd.DataFrame): DataFrame of existing parameter estimators.
             model_code_string (str): The code string of the model to be used.
             max_lines (int): Maximum number of lines for the generated code.
-            use_image (bool): Whether to include image analysis section.
-
         Returns:
             prompt (str): The full prompt string for the AI to generate a new parameter estimator.
         """
@@ -161,8 +153,7 @@ class PromptManager:
         next_version = f"{k+1}"
         sections = [
             self._render_template(templates['base'], k=f"{k}", next_version=next_version),
-            self._render_image_analysis(templates, "parameter_estimator", k, use_image),
-            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}") + "\n" + self._signature_hint_block("parameter_estimator", next_version),
+            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}"),
             self._render_template(templates['docstring_guidelines'], next_version=next_version),
             "**Parent Models and Estimators:**",
         ]
@@ -244,7 +235,7 @@ class PromptManager:
         
         return "\n\n".join([p for p in prompt_parts if p])
     
-    def get_parameter_estimator_prompt(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100, use_image : bool = True) -> str:
+    def get_parameter_estimator_prompt(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100) -> str:
         """Build parameter estimator prompt for chat mode (dynamic content only).
         
         This creates a shorter prompt containing only the dynamic parts.
@@ -255,8 +246,6 @@ class PromptManager:
             programs_df (pd.DataFrame): DataFrame of existing parameter estimators.
             model_code_string (str): The code string of the model to be used.
             max_lines (int): Maximum number of lines for the generated code.
-            use_image (bool): Whether to include image analysis section.
-
         Returns:
             prompt (str): The dynamic prompt for generating a new parameter estimator.
         """
@@ -268,10 +257,6 @@ class PromptManager:
         
         # Brief context line
         prompt_parts.append(f"Now create parameter_estimator_v{k+1} for the new {model_name} below.")
-
-        image_analysis = self._render_image_analysis(templates, "parameter_estimator", k, use_image)
-        if image_analysis:
-            prompt_parts.append(image_analysis)
 
         # Parent model details
         prompt_parts.append("**Parent Models and Estimators:**")
@@ -307,7 +292,6 @@ class PromptManager:
         - Role description for model generation
         - Mode-specific guidance (explore vs exploit)
         - Code guidelines
-        - Function signature requirements
         - Docstring guidelines
         - Parameter estimator guidelines
         
@@ -329,11 +313,11 @@ class PromptManager:
             program_templates['base'].format(k="N", next_version="N+1"),
             f"\n# CURRENT MODE: {mode.upper()}",
             program_templates[mode].format(k="N", next_version="N+1"),
-            self._render_template(program_templates['code_guidelines'], max_lines="100") + "\n" + self._signature_hint_block("program", "N+1"),
+            self._render_template(program_templates['code_guidelines'], max_lines="100"),
             program_templates['docstring_guidelines'].format(next_version="N+1"),
             "\n# PARAMETER ESTIMATOR GUIDELINES",
             param_est_templates['base'].format(k="N", next_version="N+1"),
-            self._render_template(param_est_templates['code_guidelines'], max_lines="100") + "\n" + self._signature_hint_block("parameter_estimator", "N+1"),
+            self._render_template(param_est_templates['code_guidelines'], max_lines="100"),
             param_est_templates['docstring_guidelines'].format(next_version="N+1"),
         ]
         

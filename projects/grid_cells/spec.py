@@ -15,7 +15,7 @@ Loss:
 - loss_fn(Y_pred, Y_true) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(X, Y, model_list, params_list)
+- plot_model_fits(X, Y, programs_list, X_eval, save_path, labels)
 """
 
 import numpy as np
@@ -366,9 +366,9 @@ def plot_model_fits(
     X,
     Y,
     programs_list,
-    n_bins=50,
-    domain=(-1.0, 1.0),
+    X_eval,
     save_path="",
+    labels=("model_v1", "model_v2"),
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
 ):
     """
@@ -385,10 +385,8 @@ def plot_model_fits(
         - `'model'`: callable model function
         - `'params'`: `(n_samples, n_params)` parameter matrix
         - optionally `'losses'`: per-sample losses
-    n_bins : int
-        Number of bins per axis for each rate map.
-    domain : tuple[float, float]
-        Plotting domain for both x and y axes.
+    X_eval : array-like or Inputs
+        Evaluation grid with shape `(n_samples, n_features, n_eval_trials)`.
     save_path : str
         Output figure path.
     """
@@ -397,6 +395,7 @@ def plot_model_fits(
 
     x_arr = _to_array3d(X)
     y_arr = _to_array3d(Y)
+    x_eval_arr = _to_array3d(X_eval)
 
     if x_arr.shape[1] < 2:
         raise ValueError("Grid-cell diagnostics require at least 2 input features (x,y)")
@@ -414,13 +413,18 @@ def plot_model_fits(
         x = x_arr[s, 0]
         y = x_arr[s, 1]
         y_obs = y_arr[s, 0]
+        n_bins = int(x_eval_arr.shape[2])
+        x_domain = (float(np.min(x_eval_arr[s, 0])), float(np.max(x_eval_arr[s, 0])))
+        y_domain = (float(np.min(x_eval_arr[s, 1])), float(np.max(x_eval_arr[s, 1])))
 
-        rm_obs = _bin_to_rate_map(x, y, y_obs, n_bins=n_bins, domain=domain)
+        rm_obs = _bin_to_rate_map(
+            x, y, y_obs, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain
+        )
         ax = axes[row, 0]
         im = ax.imshow(
             rm_obs.T,
             origin="lower",
-            extent=[domain[0], domain[1], domain[0], domain[1]],
+            extent=[x_domain[0], x_domain[1], y_domain[0], y_domain[1]],
             cmap="viridis",
         )
         ax.set_title(f"Sample {s} data")
@@ -430,16 +434,18 @@ def plot_model_fits(
             model = program["model"]
             params = program["params"][s]
             y_pred = model(x_arr[s], *params)
-            rm_pred = _bin_to_rate_map(x, y, y_pred, n_bins=n_bins, domain=domain)
+            rm_pred = _bin_to_rate_map(
+                x, y, y_pred, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain
+            )
 
             axm = axes[row, m_idx + 1]
             imm = axm.imshow(
                 rm_pred.T,
                 origin="lower",
-                extent=[domain[0], domain[1], domain[0], domain[1]],
+                extent=[x_domain[0], x_domain[1], y_domain[0], y_domain[1]],
                 cmap="viridis",
             )
-            label = f"Model {m_idx + 1}"
+            label = labels[m_idx] if labels is not None and m_idx < len(labels) else f"Model {m_idx + 1}"
             if "losses" in program:
                 label += f" (loss={program['losses'][s]:.2f})"
             axm.set_title(label)
@@ -536,9 +542,11 @@ def _bin_to_rate_map(
     y: np.ndarray,
     values: np.ndarray,
     n_bins: int = 50,
-    domain: Tuple[float, float] = (-1.0, 1.0),
+    x_domain: Tuple[float, float] = (-1.0, 1.0),
+    y_domain: Tuple[float, float] = (-1.0, 1.0),
 ) -> np.ndarray:
-    edges = np.linspace(domain[0], domain[1], n_bins + 1)
-    occ, _, _ = np.histogram2d(x, y, bins=[edges, edges])
-    weighted, _, _ = np.histogram2d(x, y, bins=[edges, edges], weights=values)
+    edges_x = np.linspace(x_domain[0], x_domain[1], n_bins + 1)
+    edges_y = np.linspace(y_domain[0], y_domain[1], n_bins + 1)
+    occ, _, _ = np.histogram2d(x, y, bins=[edges_x, edges_y])
+    weighted, _, _ = np.histogram2d(x, y, bins=[edges_x, edges_y], weights=values)
     return weighted / (occ + 1e-8)

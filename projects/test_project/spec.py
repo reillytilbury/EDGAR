@@ -15,7 +15,7 @@ Loss:
 - loss_fn(Y_pred, Y_true) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(X, Y, model_list, params_list)
+- plot_model_fits(X, Y, programs_list, X_eval, save_path, labels)
 """
 import numpy as np
 from typing import Tuple
@@ -80,7 +80,7 @@ def loss_fn(Y_pred, Y_true):
 # 4. DIAGNOSTICS
 # ========================
 
-def plot_model_fits(X, Y, programs_list, save_path=""):
+def plot_model_fits(X, Y, programs_list, X_eval, save_path="", labels=("model_v1", "model_v2")):
     raise NotImplementedError
 
 

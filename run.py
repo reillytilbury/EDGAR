@@ -177,11 +177,14 @@ def _build_loss_fn(raw_loss_fn):
     return _wrapped_loss_fn
 
 
-def _to_plot_outputs(y):
-    y_arr = np.asarray(y)
-    if y_arr.ndim == 2:
-        return y_arr[:, None, :]
-    return y_arr
+def _to_plot_array(obj):
+    if hasattr(obj, "to_tensor"):
+        arr = np.asarray(obj.to_tensor())
+    else:
+        arr = np.asarray(obj)
+    if arr.ndim == 2:
+        arr = arr[:, None, :]
+    return arr
 
 
 def _broadcast_model_loss(loss_value, n_samples: int):
@@ -224,7 +227,7 @@ def _build_plot_model_fits_fn(spec_plot_fn):
     Build a stable plotting interface for hypothesis_engine.
 
     Engine-facing contract:
-      plot_fn(X, Y, save_path, programs_df=None, programs_list=None, params_col="params", loss_col="train_loss", **kwargs)
+      plot_fn(X, Y, programs_list, X_eval, save_path, labels=None)
     """
     if not callable(spec_plot_fn):
         return None
@@ -239,6 +242,7 @@ def _build_plot_model_fits_fn(spec_plot_fn):
         *,
         X,
         Y,
+        X_eval,
         save_path: str,
         programs_df=None,
         programs_list=None,
@@ -249,8 +253,12 @@ def _build_plot_model_fits_fn(spec_plot_fn):
         if save_path is None or save_path == "":
             return
 
+        x_plot = _to_plot_array(X)
+        y_plot = _to_plot_array(Y)
+        x_eval_plot = _to_plot_array(X_eval)
+
         if programs_list is None:
-            n_samples = np.asarray(X).shape[0]
+            n_samples = x_plot.shape[0]
             programs_list_local = _programs_df_to_programs_list(
                 programs_df=programs_df,
                 n_samples=n_samples,
@@ -264,9 +272,10 @@ def _build_plot_model_fits_fn(spec_plot_fn):
             return
 
         call_kwargs = {
-            "X": X,
-            "Y": _to_plot_outputs(Y),
+            "X": x_plot,
+            "Y": y_plot,
             "programs_list": programs_list_local,
+            "X_eval": x_eval_plot,
             "save_path": save_path,
             **kwargs,
         }
@@ -492,7 +501,6 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             X_eval=X_eval,
             plot_model_fits=plot_model_fits_fn,
             prompt_manager=prompt_manager,
-            use_large_model_for_param_estimators=params.get('use_large_model_for_param_estimators', False),
             trial_batch_size=params.get('trial_batch_size', None),
             swear_words=params.get('swear_words'),
             loss_fn=loss_fn,

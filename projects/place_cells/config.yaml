@@ -63,12 +63,10 @@ _metadata:
   - prompts.program_prompt.exploit
   - prompts.program_prompt.explore
   - prompts.program_prompt.code_guidelines
-  - prompts.program_prompt.function_signature
   - prompts.program_prompt.docstring_guidelines
   - prompts.program_prompt.per_model_detail
   - prompts.parameter_estimator.base
   - prompts.parameter_estimator.code_guidelines
-  - prompts.parameter_estimator.function_signature
   - prompts.parameter_estimator.per_model_detail
   - prompts.jax_translator_prompt
 

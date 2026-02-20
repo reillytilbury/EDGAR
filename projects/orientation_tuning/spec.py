@@ -15,7 +15,7 @@ Loss:
 - loss_fn(Y_pred, Y_true) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(X, Y, model_list, params_list)
+- plot_model_fits(X, Y, programs_list, X_eval, save_path, labels)
 """
 import numpy as np
 import jax
@@ -281,9 +281,9 @@ def plot_model_fits(
     X,
     Y,
     programs_list,
-    n_bins=50,
-    domain=(0, 2*np.pi),
+    X_eval,
     save_path="",
+    labels=("model_v1", "model_v2"),
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
 ):
     """
@@ -296,33 +296,41 @@ def plot_model_fits(
         'model': a callable with signature model(x, *params) 
         'params': a (n_samples, n_params) array of parameters for each sample
         'losses': a (n_samples,) array of losses for each sample
-    n_bins: number of bins to use for computing binned means and points to evaluate model fits at.
-    domain: tuple defining the domain to compute binned means and model fits over. Should be a subset of [0, 2pi] for this problem.
+    X_eval: evaluation grid with shape (n_samples, n_features, n_eval_trials).
     save_path: path to save the resulting plot. If empty string, will not save.
     """
     colours = ['blue', 'green', 'red', 'purple', 'orange',
                'brown', 'pink', 'gray']
     assert len(colours) >= len(programs_list) + 1, 'Not enough colours for the number of models being plotted'
-    assert X.shape[0] == Y.shape[0], 'Number of samples in X and Y must match'
     assert save_path != '', 'Please provide a save path for the plot'
 
-    theta = np.asarray(X)[:, 0, :]
-    y_obs = np.asarray(Y)[:, 0, :]
+    x_arr = np.asarray(X.to_tensor()) if hasattr(X, "to_tensor") else np.asarray(X)
+    y_arr = np.asarray(Y.to_tensor()) if hasattr(Y, "to_tensor") else np.asarray(Y)
+    x_eval_arr = np.asarray(X_eval.to_tensor()) if hasattr(X_eval, "to_tensor") else np.asarray(X_eval)
+    assert x_arr.shape[0] == y_arr.shape[0], 'Number of samples in X and Y must match'
+
+    theta = x_arr[:, 0, :]
+    y_obs = y_arr[:, 0, :]
     n_samples = theta.shape[0]
-    idx = np.random.choice(n_samples, size=9, replace=False)
+    n_show = min(9, n_samples)
+    idx = np.random.choice(n_samples, size=n_show, replace=False)
 
 
     fig, axes = plt.subplots(3, 3, figsize=(20, 20))
     axes = axes.reshape(3, 3)
 
-    for i, sample_idx in enumerate(idx):
+    for i in range(9):
         ax = axes[i // 3, i % 3]
+        if i >= n_show:
+            ax.axis("off")
+            continue
+        sample_idx = idx[i]
         theta_sample = theta[sample_idx]
         y_sample = y_obs[sample_idx]
+        x_eval = np.asarray(x_eval_arr[sample_idx, 0]).reshape(-1)
 
         # plot binned means of data
-        x_eval, y_mean = compute_binned_means(theta_sample, y_sample, n_bins=n_bins, domain=domain)
-        # also store x_eval in a form that can be passed to the model for evaluation
+        y_mean = compute_binned_means(theta_sample, y_sample, n_bins=x_eval.size, domain=(float(np.min(x_eval)), float(np.max(x_eval))))
         x_eval_model = np.array([x_eval])
         ax.plot(x_eval, y_mean, color='black', label='Data binned means')
 
@@ -330,21 +338,24 @@ def plot_model_fits(
         for j, program in enumerate(programs_list):
             model = program['model']
             params = program['params'][sample_idx]
-            loss = program['losses'][sample_idx]
             y_pred_eval = model(x_eval_model, *params)
             x_plot = np.asarray(x_eval).reshape(-1)
             y_plot = np.asarray(y_pred_eval).reshape(-1)
             n_plot = min(x_plot.shape[0], y_plot.shape[0])
+            label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
+            if "losses" in program:
+                label += f", loss={program['losses'][sample_idx]:.2f}"
             ax.plot(
                 x_plot[:n_plot],
                 y_plot[:n_plot],
                 color=colours[j],
-                label=f'Model {j+1}, loss={loss:.2f}',
+                label=label,
             )
 
         ax.set_title(f'Sample {sample_idx}')
         ax.set_xlabel('Theta (radians)')
         ax.set_ylabel('Response')
+        ax.set_xlim((float(np.min(x_eval)), float(np.max(x_eval))))
         ax.legend()
     
     plt.tight_layout()

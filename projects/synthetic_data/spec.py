@@ -17,7 +17,7 @@ Loss:
 OPTIONAL COMPONENTS (for enhanced diagnostics and visualization):
 
 Plotting:
-- plot_model_fits(X, Y, model_list, params_list)
+- plot_model_fits(X, Y, programs_list, X_eval, save_path, labels)
 """
 
 import numpy as np
@@ -232,13 +232,10 @@ def plot_model_fits(
     X,
     Y,
     programs_list,
-    n_bins=50,
-    domain=(-1.0, 1.0),
+    X_eval,
     save_path="",
     labels=("model_v1", "model_v2"),
-    # project-specific aesthetics
-    colours=("green", "red", "orange", "purple", "cyan", "magenta", "brown", "olive"),
-    binned_colour="deepskyblue"):
+):
     """
     Plot observed synthetic data and model predictions for 9 random samples.
 
@@ -253,10 +250,8 @@ def plot_model_fits(
         - 'model': callable model(X_one, *params)
         - 'params': array of shape (n_samples, n_params)
         - 'losses': array of shape (n_samples,)
-    n_bins : int
-        Number of bins for plotting binned means of observed data.
-    domain : tuple[float, float]
-        x-domain over which binned means are computed.
+    X_eval : array-like or Inputs
+        Evaluation grid with shape (n_samples, n_features, n_eval_trials).
     save_path : str
         Output path. If empty, raises an error.
     """
@@ -265,8 +260,10 @@ def plot_model_fits(
 
     x_arr = _to_array3d(X)
     y_arr = _to_array3d(Y)
+    x_eval_arr = _to_array3d(X_eval)
     n_samples = x_arr.shape[0]
-    colours = list(colours)
+    colours = ["green", "red", "orange", "purple", "cyan", "magenta", "brown", "olive"]
+    binned_colour = "deepskyblue"
 
     n_show = min(9, n_samples)
     # Intentionally unseeded so diagnostic samples vary across calls/runs.
@@ -284,8 +281,9 @@ def plot_model_fits(
         s = idx[i]
         x = x_arr[s, 0]
         y_obs = y_arr[s, 0]
+        x_eval = np.asarray(x_eval_arr[s, 0]).reshape(-1)
 
-        x_eval, y_mean = compute_binned_means(x, y_obs, n_bins=n_bins, domain=domain)
+        y_mean = compute_binned_means_on_eval(x, y_obs, x_eval)
         ax.scatter(x, y_obs, s=10, c="black", alpha=0.15, label="Observed")
         ax.plot(x_eval, y_mean, color=binned_colour, linewidth=4, label="Binned mean", alpha=0.8)
 
@@ -306,7 +304,7 @@ def plot_model_fits(
                 alpha=0.8,
             )
 
-        ax.set_xlim(domain)
+        ax.set_xlim((float(np.min(x_eval)), float(np.max(x_eval))))
         ax.set_title(f"Sample {s}")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
@@ -369,3 +367,39 @@ def compute_binned_means(theta, y, n_bins=20, domain=(-1.0, 1.0)):
     counts = np.bincount(idx, minlength=n_bins)
     mean = sums / (counts + 1e-8)
     return centres, mean
+
+
+def compute_binned_means_on_eval(theta, y, x_eval):
+    """
+    Compute binned means of y at a provided evaluation grid.
+    """
+    x_eval = np.asarray(x_eval).reshape(-1)
+    if x_eval.size == 0:
+        return x_eval
+    if x_eval.size == 1:
+        return np.array([float(np.mean(y))])
+
+    edges = np.empty(x_eval.size + 1, dtype=float)
+    edges[1:-1] = 0.5 * (x_eval[:-1] + x_eval[1:])
+    edges[0] = x_eval[0] - 0.5 * (x_eval[1] - x_eval[0])
+    edges[-1] = x_eval[-1] + 0.5 * (x_eval[-1] - x_eval[-2])
+
+    idx = np.digitize(theta, edges) - 1
+    y_mean = np.full(x_eval.size, np.nan, dtype=float)
+    for i in range(x_eval.size):
+        vals = y[idx == i]
+        if vals.size > 0:
+            y_mean[i] = float(np.mean(vals))
+
+    valid = np.isfinite(y_mean)
+    if np.any(valid):
+        y_mean = np.interp(
+            x_eval,
+            x_eval[valid],
+            y_mean[valid],
+            left=float(y_mean[valid][0]),
+            right=float(y_mean[valid][-1]),
+        )
+    else:
+        y_mean = np.zeros_like(x_eval, dtype=float)
+    return y_mean
