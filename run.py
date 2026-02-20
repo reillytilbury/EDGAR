@@ -5,7 +5,6 @@ import importlib
 import os, argparse
 import inspect
 import numpy as np
-import jax.numpy as jnp
 from src import hypothesis_engine, utils
 from src.prompt_manager import PromptManager
 from src.data_structures import Inputs, Outputs, ensure_inputs, ensure_outputs
@@ -135,12 +134,8 @@ def _build_train_test_split_fn(spec_train_test_split_fn):
 
 def _build_loss_fn(raw_loss_fn):
     """
-    Normalize loss signatures to the engine contract:
-      loss_fn(model, x_i, y_i, params) -> scalar
-
-    Supported incoming signatures:
-      1) loss_fn(model, x_i, y_i, params)
-      2) loss_fn(y_pred, y_true)
+    Validate loss signature for the engine contract:
+      loss_fn(y_pred, y_true)
     """
     if raw_loss_fn is None:
         return None
@@ -153,28 +148,12 @@ def _build_loss_fn(raw_loss_fn):
         for p in params
     )
 
-    if has_varargs or n_positional >= 4:
-        return raw_loss_fn
-
-    if n_positional != 2:
+    if has_varargs or n_positional != 2:
         raise ValueError(
-            "loss_fn must be either loss_fn(model, x_i, y_i, params) "
-            "or loss_fn(y_pred, y_true)."
+            "loss_fn must use signature loss_fn(y_pred, y_true)."
         )
 
-    def _wrapped_loss_fn(model, x_i, y_i, model_params):
-        y_pred = model(x_i, *model_params)
-        if y_i.ndim == 1:
-            y_i = y_i[None, :]
-        if y_pred.ndim == 1:
-            y_pred = y_pred[None, :]
-        loss_vals = raw_loss_fn(y_pred, y_i)
-        loss_arr = jnp.asarray(loss_vals)
-        if loss_arr.ndim == 0:
-            return loss_arr
-        return jnp.mean(loss_arr)
-
-    return _wrapped_loss_fn
+    return raw_loss_fn
 
 
 def _to_plot_array(obj):
@@ -284,6 +263,7 @@ def _build_plot_model_fits_fn(spec_plot_fn):
         spec_plot_fn(**call_kwargs)
 
     return _wrapped_plot_fn
+
 
 async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     """
@@ -520,6 +500,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             random_seed=random_seed,
             train_test_split_fn=spec_train_test_split_fn,
         )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Hypothesis Engine")

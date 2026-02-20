@@ -30,7 +30,7 @@ inputs:
 experiment_params:
   x_min: 0.0
   x_max: 6.283185307179586
-  n_bins: 100
+  n_bins: 40
 
 
 # ========================
@@ -50,67 +50,62 @@ prompts:
       *create* a new model that is better than *all* previous models.
 
       '
-    explore: "Use the models below as inspiration, but be *creative* and *invent*\
-      \ something new. Which features in the models below correlate with lower loss?\
-      \ \nFind these features and *extrapolate* them. You should also *combine* features\
-      \ from several models, and *experiment* with new ideas.\n"
-    exploit: "Use the models below as a *template* to create a new model. \nWhich\
+    explore: 'Use the models below as *inspiration*, but be *creative* and *invent*
+      something new. Which features in the models below correlate with lower loss?
+      Find these features and *extrapolate* them. You should also *combine* features
+      from several models, and *experiment* with new ideas.'
+    exploit: 'Use the models below as a *template* to create a new model. \nWhich\
       \ features in the models below correlate with lower loss? Find these features\
       \ and *extrapolate* them. \nFocus on *exploiting* the strengths of the existing\
       \ models and *eliminating* their weaknesses or *redundancies*.\nAre the parameter\
       \ ranges correct? If not, adjust them to be more appropriate.\nYou will be *penalized*\
       \ for complexity, so make the new model as *simple* as possible while still\
-      \ being better than the previous models.\n"
-    image_analysis: "**Image Analysis Instructions:**\n\nAttached is a scatter plot\
-      \ of the neuron models' performance on top of raw neural data. The binned mean\
-      \ is plotted in **sky-blue**, `neuron_model_v1` is plotted in **green**, and\
-      \ `neuron_model_v2` is plotted in **red**. \n\nAnalyse the models' fits to the\
-      \ data in the image below. Identify systematic weaknesses of the models by observing\
-      \ patterns across multiple cell plots. For instance, consider:\n*   **Model\
-      \ Comparisons:** Which models are better for each cell? That is to say, which\
-      \ models track the blue curve better? Which features of the models are responsible\
-      \ for improving the fit?\n*   **Model Fit:** How well do the models fit the\
-      \ binned data mean? Look for places where even the models (**red** curve for\
-      \ best model, **green** for second best model) deviate most from the binned\
-      \ data mean (**blue** curve). This is where the models are weakest, and where\
-      \ you should focus your improvements.\n*   **Model Shape:** Do the models' shapes\
-      \ (e.g., peak sharpness, width, skewness, amplitude, etc.) align with the binned\
-      \ data mean (**blue**) and raw data scatter points (**black**)? If not, how\
-      \ do they differ? How can you change the model to better match the data shape?\n\
-      *   **Parameter Flexibility:** Are there free parameters that could be introduced\
-      \ or modified to better capture the observed response profiles? Utilize your\
-      \ analysis of the shortcomings of the current models' shapes and add free parameters\
-      \ or modify existing ones to address these issues.\n\nUse this analysis to inform\
-      \ the design of a new neuron model, `neuron_model_v{next_version}`, that improves\
-      \ upon the previous models. \n\nInclude your analysis of the image in the docstring\
-      \ of your new model. Point to specific subplots in the image that illustrate\
-      \ the *strengths* and *weaknesses* of the parent models. Explain how you plan\
-      \ to **fix** the weaknesses of the parent models.\n"
-    code_guidelines: '**Code Generation Guidelines:**
+      \ being better than the previous models.\n'
+    image_analysis: "**Image Analysis Instructions:**\n\n
+      Attached is a scatter plot of the neuron models' performance on top of raw neural data. 
+      The binned mean is plotted in **sky-blue**, `neuron_model_v1` is plotted in **green**, 
+      and `neuron_model_v2` is plotted in **red**.\n
 
+      Analyse the models' fits to the data in the image below. Identify systematic weaknesses 
+      of the models by observing patterns across multiple cell plots. For instance, consider:\n
+         **Model Comparisons:** Which models are better for each cell? That is to say, which 
+        models track the blue curve better? Which features of the models are responsible 
+        for improving the fit?\n
+         **Model Fit:** How well do the models fit the binned data mean? Look for places where 
+        even the models (**red** curve for best model, **green** for second best model) deviate 
+        most from the binned data mean (**blue** curve). This is where the models are weakest, 
+        and where you should focus your improvements. \n
+         **Model Shape:** Do the models' shapes (e.g., peak sharpness, width, skewness, amplitude, etc.) 
+        align with the binned data mean (**blue**) and raw data scatter points (**black**)? If not, how 
+        do they differ? How can you change the model to better match the data shape? \n
+         **Parameter Flexibility:** Are there free parameters that could be introduced or modified to 
+        better capture the observed response profiles? Utilize your analysis of the shortcomings of 
+        the current models' shapes and add free parameters or modify existing ones to address these issues.\n
+
+      Use this analysis to inform the design of a new neuron model, `neuron_model_v{next_version}`, that 
+      improves upon the previous models.\n
+
+      Start by documenting the strengths and weaknesses of the existing models based on the image analysis, 
+      making reference to specific cells and the features that are well or poorly captured by the models. 
+      Then say how you will address the weaknesses in the new model.\n
+
+      For every innovation you make, explicitly link it to a part of the plot that inspired it. For example,
+      you might say 'Added independent widths between peaks, this will improve the fit for cells 1, 3 and 5 
+      where the peaks have different widths and the current models fail to capture this.'\n
+      
+      Finally, implement the new model in code."
+    code_guidelines: '**Code Generation Guidelines:**
 
       * Import any packages you use.
 
-      * Do not include any text other than the code.
+      * Do NOT include any text other than the code.
 
       * Ensure all free parameters are numeric, not strings.
 
       * At the beginning of the code, clip the free parameters to a biologically plausible
       range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
 
-      * IMPORTANT: Your code will be translated to JAX. Avoid boolean indexing (e.g.,
-      `array[condition]`), dynamic shapes, and control flow based on array values.
-      Use `jnp.where()` instead of boolean indexing.
-
       '
-    function_signature: "**Function Signature:**\n\nYour neuron model must have this\
-      \ signature:\n```\ndef neuron_model_v{next_version}(X, param1=default1, param2=default2,\
-      \ ...):\n```\nwhere:\n* `X` is a 2D array with shape `(n_features, n_trials)`.\
-      \ Each row `X[i]` is a different input variable.\n* For orientation tuning,\
-      \ `X[0]` is the stimulus angle (theta) in radians.\n* Access inputs by index:\
-      \ `theta = X[0]`, `contrast = X[1]`, etc.\n* The remaining arguments are free\
-      \ parameters with default values.\n* Return shape: `(n_trials,)` \u2014 the\
-      \ predicted response for each trial.\n"
     docstring_guidelines: '**Docstring Guidelines:**
 
       * Begin by listing the parent models and give them a name that describes their
@@ -136,30 +131,7 @@ prompts:
       \ the parameters represent biologically. \n*Analyze* the progression of the\
       \ parameter estimators, *generalize* the improvements, and *create* a new parameter\
       \ estimator that is better than *all* previous estimators.\n"
-    image_analysis: '**Image Analysis Instructions:**
-
-
-      Attached is a scatter plot where each neuron model curve is drawn **using the
-      parameters produced by its corresponding parameter estimator function**. The
-      binned mean is **sky blue**, `neuron_model_v1` is **green**, and `neuron_model_v2`
-      is **red**.
-
-
-      Focus on how *parameter values* affect model fit:
-
-      * **Mismatch Regions:** Where do the best (red) and worst (green) curves deviate
-      most from the blue mean? Which parameters control those regions?
-
-      * **Sensitivity:** Determine which parameters the output is most sensitive to
-      in poorly fitting zones.
-
-      * **Biological Plausibility:** Keep estimates within realistic biological ranges.
-
-
-      Summarise this analysis **inside the docstring** of `parameter_estimator_v{next_version}`
-      and explain how your estimator addresses identified weaknesses.
-
-      '
+    
     code_guidelines: "**Code Generation Guidelines:**\n* Import any packages you use.\n\
       * Do not include any text other than the code.\n* The only arguments to the\
       \ function should be the inputs (X) and the spike count.\n* Your response **must**\
@@ -167,32 +139,7 @@ prompts:
       \ be immediately rejected. \n* Do not attempt to fit the parameters using complex\
       \ fitting functions like `curve_fit`, `least_squares` or `minimize`. This function\
       \ should be a simple starting point for the parameter estimation.\n"
-    function_signature: '**Function Signature:**
 
-
-      Your parameter estimator must have this signature:
-
-      ```
-
-      def parameter_estimator_v{next_version}(X, spike_counts):
-
-      ```
-
-      where:
-
-      * `X` is a 2D array with shape `(n_features, n_trials)`. Each row `X[i]` is
-      a different input variable.
-
-      * For orientation tuning, `X[0]` is the stimulus angle (theta) in radians.
-
-      * Access inputs by index: `theta = X[0]`, `contrast = X[1]`, etc.
-
-      * `spike_counts` has shape `(n_trials,)`.
-
-      * Return: a 1D array of estimated parameter values matching the neuron model''s
-      free parameters.
-
-      '
     docstring_guidelines: '**Docstring Guidelines:**
 
       * Begin by listing the parent models and give them a name that describes their

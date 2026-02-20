@@ -9,7 +9,7 @@ import timeout_decorator
 import optax
 import pandas as pd
 from pathlib import Path
-from . import utils, llm_helper, loss_functions
+from . import utils, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .data_structures import ensure_inputs, ensure_outputs
 from .evolution_diagnostics import plot_train_vs_test_loss as plot_train_vs_test_loss_shared
@@ -216,28 +216,6 @@ def validate_model_execution(
         return False, f"Model failed to run or is incompatible with JAX tracing: {e}"
 
 
-def _default_model_loss_fn(model, x_i, y_i, params):
-    """
-    Compute default per-sample quadratic loss.
-
-    Args:
-        model (callable): Model function with signature ``model(x_i, *params)``.
-        x_i (array-like): Single-sample input ``(n_features, n_trials)``.
-        y_i (array-like): Single-sample target ``(n_targets, n_trials)`` or
-            ``(n_trials,)``.
-        params (array-like): Parameter vector for the sample.
-
-    Returns:
-        jnp.ndarray: Scalar mean squared error over targets and trials.
-    """
-    pred = model(x_i, *params)
-    if y_i.ndim == 1:
-        y_i = y_i[None, :]
-    if pred.ndim == 1:
-        pred = pred[None, :]
-    return jnp.mean(loss_functions.quadratic_loss(pred, y_i))
-
-
 def objective(model, param_estimator, x, y,
               loss_fn=None, param_penalty_weight=0.1, fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000, learning_rate=3e-3,
@@ -273,7 +251,7 @@ def objective(model, param_estimator, x, y,
            Each element can be an Outputs object or array with shape
            (n_samples, n_targets, n_trials_split).
         loss_fn (function): Per-sample loss function.
-                          Signature: loss_fn(model, x_i, y_i, params) -> scalar.
+                          Signature: loss_fn(y_pred, y_true) -> scalar/array.
                           If None, defaults to quadratic loss.
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
@@ -292,8 +270,8 @@ def objective(model, param_estimator, x, y,
     """
     t_start = time.time()
     if loss_fn is None:
-        loss_fn = _default_model_loss_fn
-    
+        loss_fn = lambda y_pred, y_true: (y_true - y_pred) ** 2
+
     if not (isinstance(x, (list, tuple, np.ndarray)) and len(x) == 2):
         raise ValueError("objective expects x as length-2 container: [x_train_trials, x_test_trials].")
     if not (isinstance(y, (list, tuple, np.ndarray)) and len(y) == 2):
@@ -346,7 +324,15 @@ def objective(model, param_estimator, x, y,
 
     # Per-sample loss function
     def loss_single_sample(params, x_i, y_i):
-        return loss_fn(model, x_i, y_i, params)
+        y_pred = model(x_i, *params)
+        if y_i.ndim == 1:
+            y_i = y_i[None, :]
+        if y_pred.ndim == 1:
+            y_pred = y_pred[None, :]
+        sample_loss = jnp.asarray(loss_fn(y_pred, y_i))
+        if sample_loss.ndim == 0:
+            return sample_loss
+        return jnp.mean(sample_loss)
 
     # Vectorize over samples
     # params: (n_samples, n_params), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
@@ -528,43 +514,67 @@ def objective(model, param_estimator, x, y,
     print(f"Time taken for optimization: {t_end - t_start:.4f} seconds")
     return float(initial_loss), initial_params, float(final_loss), params
 
-
-def _broadcast_loss_to_samples(loss_value, n_samples: int):
-    """
-    Convert scalar/array loss values to a per-sample 1D array when possible.
-    """
-    if loss_value is None:
-        return None
-    arr = np.asarray(loss_value)
-    if arr.size == 0:
-        return None
-    if arr.ndim == 0:
-        return np.full(n_samples, float(arr))
-    flat = arr.reshape(-1)
-    if flat.size == 1:
-        return np.full(n_samples, float(flat[0]))
-    if flat.size != n_samples:
-        return None
-    return flat
-
-
-def _programs_df_to_programs_list(programs_df: pd.DataFrame, n_samples: int, loss_col: str = "train_loss"):
+def _programs_df_to_programs_list(programs_df: pd.DataFrame, 
+                                    loss_func: callable,
+                                    x: jnp.ndarray, y: jnp.ndarray,
+                                    complexity_penalty: float = 0.0) -> list[dict]:
     """
     Convert a programs dataframe to the canonical programs_list plotting payload.
+    Compute per sample losses for each program using the provided loss function, 
+    and include them in the programs_list dicts under the key 'losses'. 
+    This allows the plotting function to visualize the performance of each program.
+
+    Args:
+    programs_df (pd.DataFrame): DataFrame containing program information with columns 'model' and 'params'.
+    loss_func (callable): Loss function ``loss_func(y_pred, y_true)``.
+    x (jnp.ndarray): (n_samples, n_features, n_trials) input data used for computing losses.
+    y (jnp.ndarray): (n_samples, n_targets, n_trials) true output data used for computing losses.
+    complexity_penalty (float): Additive complexity penalty multiplier.
+        Each sample loss is increased by ``complexity_penalty * n_free_params``.
     """
     programs_list = []
     if programs_df is None or len(programs_df) == 0:
         return programs_list
+    x_arr = jnp.asarray(ensure_inputs(x).to_tensor())
+    y_arr = jnp.asarray(ensure_outputs(y).to_tensor())
+    n_samples = x_arr.shape[0]
+
+    if loss_func is None:
+        loss_func = lambda y_pred, y_true: (y_true - y_pred) ** 2
+
     for _, row in programs_df.iterrows():
-        model = row.get("program")
-        params = row.get("params")
+        model = row.get('program', row.get('model'))
+        params = row.get('params')
         if model is None or params is None:
             continue
-        program = {"model": model, "params": np.asarray(params)}
-        losses = _broadcast_loss_to_samples(row.get(loss_col), n_samples=n_samples)
-        if losses is not None:
-            program["losses"] = losses
-        programs_list.append(program)
+        params_arr = jnp.asarray(params)
+        n_free_params = int(params_arr.shape[1]) if params_arr.ndim >= 2 else int(params_arr.size)
+        y_pred = utils.vmap_over_samples(model)(x_arr, params_arr)
+        if y_pred.ndim == 2 and y_arr.ndim == 3 and y_arr.shape[1] == 1:
+            y_pred = y_pred[:, None, :]
+        raw_losses = jnp.asarray(loss_func(y_pred, y_arr))
+
+        if raw_losses.ndim == 0:
+            losses = jnp.full((n_samples,), raw_losses)
+        else:
+            # Reduce all non-sample dimensions so each sample has one loss value.
+            if raw_losses.shape[0] == n_samples:
+                losses = jnp.mean(raw_losses.reshape(n_samples, -1), axis=1)
+            else:
+                flat = raw_losses.reshape(-1)
+                if flat.size == n_samples:
+                    losses = flat
+                elif flat.size == 1:
+                    losses = jnp.full((n_samples,), flat[0])
+                else:
+                    losses = jnp.full((n_samples,), jnp.mean(flat))
+        losses = losses + float(complexity_penalty) * n_free_params
+        programs_list.append({
+            'model': model,
+            'params': params_arr,
+            'losses': losses
+        })
+
     return programs_list
 
 
@@ -592,6 +602,10 @@ async def generate_new_model(current_island, llm_name, client,
                             plot_model_fits=None,
                             island_chat_manager=None, island_id: int = None,
                             batch_id: int = 0,
+                            loss_fn=None,
+                            loss_x=None,
+                            loss_y=None,
+                            complexity_penalty: float = 0.0,
                             use_large_model: bool = True):
     """
     Propose a new model program by querying the LLM from island context.
@@ -618,6 +632,12 @@ async def generate_new_model(current_island, llm_name, client,
         island_chat_manager (IslandChatManager | None): Optional chat-session manager.
         island_id (int | None): Island id for chat mode.
         batch_id (int): Batch id for chat mode.
+        loss_fn (callable | None): Loss function used for per-sample diagnostics
+            when building `programs_list` for plot feedback.
+        loss_x: Optional input tensor to use specifically for diagnostics loss.
+        loss_y: Optional output tensor to use specifically for diagnostics loss.
+        complexity_penalty (float): Complexity-penalty multiplier used when
+            computing diagnostics losses.
         use_large_model (bool): Whether chat mode should use large model path.
 
     Returns:
@@ -649,10 +669,14 @@ async def generate_new_model(current_island, llm_name, client,
 
     if use_image:
         try:
+            x_for_loss = x if loss_x is None else loss_x
+            y_for_loss = y if loss_y is None else loss_y
             programs_list = _programs_df_to_programs_list(
                 random_programs,
-                n_samples=np.asarray(ensure_inputs(x).to_tensor()).shape[0],
-                loss_col="train_loss",
+                loss_func=loss_fn,
+                x=x_for_loss,
+                y=y_for_loss,
+                complexity_penalty=complexity_penalty,
             )
             plot_model_fits(
                 X=x,
@@ -660,7 +684,7 @@ async def generate_new_model(current_island, llm_name, client,
                 programs_list=programs_list,
                 X_eval=x_eval,
                 save_path=img_dir,
-                labels=[f"{model_name}_v_{i+1}" for i in range(len(random_programs))],
+                labels=[f"v_{i+1}" for i in range(len(random_programs))],
             )
             
             img_path = Path(img_dir)
@@ -1259,8 +1283,10 @@ async def hypothesis_engine(
     if has_spec_plotter:
         seed_programs_list = _programs_df_to_programs_list(
             initial_programs,
-            n_samples=X[0, 0].shape[0],
-            loss_col="train_loss",
+            loss_func=loss_fn,
+            x=X[0, 1],
+            y=Y[0, 1],
+            complexity_penalty=param_penalty_weight,
         )
         plot_model_fits(
             X=X[0, 0],
@@ -1320,6 +1346,10 @@ async def hypothesis_engine(
                                                     island_chat_manager=island_chat_manager,
                                                     island_id=island_idx,
                                                     batch_id=j,
+                                                    loss_fn=loss_fn,
+                                                    loss_x=X[0, 1],
+                                                    loss_y=Y[0, 1],
+                                                    complexity_penalty=param_penalty_weight,
                                                     use_large_model=use_large_model) 
                                          for island_idx in range(n_islands) for j in range(batch_size)]
         logging.info(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
@@ -1469,7 +1499,7 @@ async def hypothesis_engine(
                     ],
                     X_eval=X_eval_train,
                     save_path=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est_vs_gd.png'),
-                    labels=['Param Estimator', 'Gradient Descent'],
+                    labels=['PE', 'GD'],
                 )
             
             param_names = [n for n in inspect.signature(model_new).parameters if n != "theta"]
@@ -1531,8 +1561,10 @@ async def hypothesis_engine(
                 top_df = top_df.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
                 top_programs_list = _programs_df_to_programs_list(
                     top_df,
-                    n_samples=X[0, 0].shape[0],
-                    loss_col="train_loss",
+                    loss_func=loss_fn,
+                    x=X[0, 1],
+                    y=Y[0, 1],
+                    complexity_penalty=param_penalty_weight,
                 )
                 plot_model_fits(
                     X=X[0, 0],
@@ -1548,8 +1580,10 @@ async def hypothesis_engine(
             top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
             top_programs_list = _programs_df_to_programs_list(
                 top_programs,
-                n_samples=X[0, 0].shape[0],
-                loss_col="train_loss",
+                loss_func=loss_fn,
+                x=X[0, 1],
+                y=Y[0, 1],
+                complexity_penalty=param_penalty_weight,
             )
             plot_model_fits(
                 X=X[0, 0],
@@ -1648,8 +1682,10 @@ async def hypothesis_engine(
             df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
             programs_list = _programs_df_to_programs_list(
                 df,
-                n_samples=X[1, 1].shape[0],
-                loss_col="test_loss",
+                loss_func=loss_fn,
+                x=X[1, 1],
+                y=Y[1, 1],
+                complexity_penalty=param_penalty_weight,
             )
             plot_model_fits(
                 X=X[1, 1],
@@ -1666,8 +1702,10 @@ async def hypothesis_engine(
                     Y=Y[1, 1],
                     programs_list=_programs_df_to_programs_list(
                         model_df,
-                        n_samples=X[1, 1].shape[0],
-                        loss_col="test_loss",
+                        loss_func=loss_fn,
+                        x=X[1, 1],
+                        y=Y[1, 1],
+                        complexity_penalty=param_penalty_weight,
                     ),
                     X_eval=X_eval_test,
                     save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png'),

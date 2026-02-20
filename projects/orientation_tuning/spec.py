@@ -22,6 +22,7 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from typing import List, Tuple
+from projects.synthetic_data.spec import compute_binned_means_on_eval
 from src.data_structures import Inputs, Outputs
 
 
@@ -270,7 +271,7 @@ def loss_fn(Y_pred, Y_true):
     """
     Elementwise squared-error loss.
     """
-    return (Y_true - Y_pred) ** 2
+    return 10 * (Y_true - Y_pred) ** 2
 
 
 # ========================
@@ -284,39 +285,48 @@ def plot_model_fits(
     X_eval,
     save_path="",
     labels=("model_v1", "model_v2"),
-    # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
 ):
     """
-    Plot orientation-tuning fits of 9 randomly chosen cells in a 3 x 3 grid. 
-    
-    Params: 
-    X: (n_samples, n_features_in, n_trials) Input data 
-    Y: (n_samples, n_features_out, n_trials) Output data 
-    programs_list: list of dictionaries (length n_models_plot), each containing:
-        'model': a callable with signature model(x, *params) 
-        'params': a (n_samples, n_params) array of parameters for each sample
-        'losses': a (n_samples,) array of losses for each sample
-    X_eval: evaluation grid with shape (n_samples, n_features, n_eval_trials).
-    save_path: path to save the resulting plot. If empty string, will not save.
+    Plot observed synthetic data and model predictions for 9 random samples.
+
+    Parameters
+    ----------
+    X : array-like or Inputs
+        Input tensor with shape (n_samples, n_features, n_trials).
+    Y : array-like or Outputs
+        Output tensor with shape (n_samples, 1, n_trials).
+    programs_list : list[dict]
+        List of dictionaries with model metadata. Expected keys include:
+        - 'model': callable model(X_one, *params)
+        - 'params': array of shape (n_samples, n_params)
+        - 'losses': array of shape (n_samples,)
+    X_eval : array-like or Inputs
+        Evaluation grid with shape (n_samples, n_features, n_eval_trials).
+    save_path : str
+        Output path. If empty, raises an error.
     """
-    colours = ['blue', 'green', 'red', 'purple', 'orange',
-               'brown', 'pink', 'gray']
-    assert len(colours) >= len(programs_list) + 1, 'Not enough colours for the number of models being plotted'
-    assert save_path != '', 'Please provide a save path for the plot'
+    if save_path == "":
+        raise ValueError("Please provide a save path for the plot")
+    x_eval_fine = np.linspace(0, 2 * np.pi, 200)
 
-    x_arr = np.asarray(X.to_tensor()) if hasattr(X, "to_tensor") else np.asarray(X)
-    y_arr = np.asarray(Y.to_tensor()) if hasattr(Y, "to_tensor") else np.asarray(Y)
-    x_eval_arr = np.asarray(X_eval.to_tensor()) if hasattr(X_eval, "to_tensor") else np.asarray(X_eval)
-    assert x_arr.shape[0] == y_arr.shape[0], 'Number of samples in X and Y must match'
+    x_arr = _to_array3d(X)
+    y_arr = _to_array3d(Y)
+    x_eval_arr = _to_array3d(X_eval)
+    n_samples = x_arr.shape[0]
+    # diff colours for 1, 2 or 3 models
+    if len(programs_list) == 1:
+        colours = ["tab:red"]
+    elif len(programs_list) == 2:
+        colours = ["tab:green", "tab:red"]
+    else:
+        colours = ["tab:orange", "tab:green", "tab:red"]
+    binned_colour = "deepskyblue"
 
-    theta = x_arr[:, 0, :]
-    y_obs = y_arr[:, 0, :]
-    n_samples = theta.shape[0]
     n_show = min(9, n_samples)
-    idx = np.random.choice(n_samples, size=n_show, replace=False)
+    # Intentionally unseeded so diagnostic samples vary across calls/runs.
+    idx = np.random.default_rng().choice(n_samples, size=n_show, replace=False)
 
-
-    fig, axes = plt.subplots(3, 3, figsize=(20, 20))
+    fig, axes = plt.subplots(3, 3, figsize=(18, 18))
     axes = axes.reshape(3, 3)
 
     for i in range(9):
@@ -324,45 +334,50 @@ def plot_model_fits(
         if i >= n_show:
             ax.axis("off")
             continue
-        sample_idx = idx[i]
-        theta_sample = theta[sample_idx]
-        y_sample = y_obs[sample_idx]
-        x_eval = np.asarray(x_eval_arr[sample_idx, 0]).reshape(-1)
 
-        # plot binned means of data
-        y_mean = compute_binned_means(theta_sample, y_sample, n_bins=x_eval.size, domain=(float(np.min(x_eval)), float(np.max(x_eval))))
-        x_eval_model = np.array([x_eval])
-        ax.plot(x_eval, y_mean, color='black', label='Data binned means')
+        s = idx[i]
+        x = x_arr[s, 0]
+        y_obs = y_arr[s, 0]
+        x_eval = np.asarray(x_eval_arr[s, 0]).reshape(-1)
 
-        # plot model fits
+        y_mean = compute_binned_means_on_eval(x, y_obs, x_eval)
+        ax.scatter(x, y_obs, s=10, c="black", alpha=0.2, label="Observed")
+        ax.plot(x_eval, y_mean, color=binned_colour, linewidth=4, label="Binned mean", alpha=0.8)
+
         for j, program in enumerate(programs_list):
-            model = program['model']
-            params = program['params'][sample_idx]
-            y_pred_eval = model(x_eval_model, *params)
-            x_plot = np.asarray(x_eval).reshape(-1)
-            y_plot = np.asarray(y_pred_eval).reshape(-1)
-            n_plot = min(x_plot.shape[0], y_plot.shape[0])
-            label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
-            if "losses" in program:
-                label += f", loss={program['losses'][sample_idx]:.2f}"
+            model = program["model"]
+            params = program["params"][s]
+            loss = program["losses"][s]
+            y_pred = model(np.array([x_eval_fine]), *params)
+
+            label = labels[j] + f" (loss={loss:.2f})"
             ax.plot(
-                x_plot[:n_plot],
-                y_plot[:n_plot],
-                color=colours[j],
+                x_eval_fine,
+                np.asarray(y_pred).flatten(),
+                color=colours[j % len(colours)],
+                linewidth=3,
                 label=label,
+                alpha=0.8,
             )
 
-        ax.set_title(f'Sample {sample_idx}')
-        ax.set_xlabel('Theta (radians)')
-        ax.set_ylabel('Response')
         ax.set_xlim((float(np.min(x_eval)), float(np.max(x_eval))))
-        ax.legend()
-    
-    plt.tight_layout()
-    mean_losses = [np.mean(program['losses']) for program in programs_list]
-    plt.suptitle('Model fits to orientation tuning curves\n' + '\n'.join([f'Model {j+1} mean loss: {mean_loss:.2f}' for j, mean_loss in enumerate(mean_losses)]), fontsize=16)
-    plt.savefig(save_path)
-    plt.close()
+        ax.set_ylim((0, np.max(y_mean) * 1.5))
+        ax.set_title(f"Cell {s}")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.legend(fontsize=12)
+
+    mean_loss_parts = []
+    for j, program in enumerate(programs_list):
+        if "losses" in program and np.size(program["losses"]) > 0:
+            mean_loss_parts.append(f"Model {j+1}: {np.mean(program['losses']):.2f}")
+        else:
+            mean_loss_parts.append(f"Model {j+1}: n/a")
+    summary = "\n".join(mean_loss_parts) if mean_loss_parts else "n/a"
+    plt.suptitle(f"Model Fits\n{summary}", fontsize=24)
+    plt.savefig(save_path, dpi=100.0, bbox_inches="tight")
+    plt.close(fig)
+
 
     
 # ========================
@@ -407,13 +422,38 @@ def normalize_response(response: np.ndarray) -> np.ndarray:
     normalized_response = 100 * response / np.linalg.norm(response, axis=1, keepdims=True)  # multiply the response by 100 and normalize
     return normalized_response
 
-def compute_binned_means(theta, y, n_bins=20, domain=(0, 2*np.pi)):
+
+def target_function(x, a, b, c, k, phi_0):
     """
-    theta: (n_trials,)
-    y:     (n_trials,)
-    Returns:
-        x_eval: (n_bins,) bin centres
-        y_mean: (n_bins,) binned mean
+    Synthetic ground-truth function.
+
+    f(x) = (a*x^2 + b*x + c) * sin(k*x + phi_0)
+    """
+    return (a * x**2 + b * x + c) * np.sin(k * x + phi_0)
+
+
+def _to_array3d(obj) -> np.ndarray:
+    """
+    Convert Inputs/Outputs/ndarray-like objects to a 3D ndarray.
+    """
+    if hasattr(obj, "to_tensor"):
+        return np.asarray(obj.to_tensor())
+    arr = np.asarray(obj)
+    if arr.ndim == 2:
+        return arr[:, np.newaxis, :]
+    return arr
+
+
+def compute_binned_means(theta, y, n_bins=20, domain=(-1.0, 1.0)):
+    """
+    Compute binned means of y over theta for visualization.
+
+    Returns
+    -------
+    x_eval : np.ndarray
+        Bin centers.
+    y_mean : np.ndarray
+        Mean y per bin.
     """
     edges = np.linspace(domain[0], domain[1], n_bins + 1)
     centres = 0.5 * (edges[:-1] + edges[1:])
@@ -424,5 +464,40 @@ def compute_binned_means(theta, y, n_bins=20, domain=(0, 2*np.pi)):
     sums = np.bincount(idx, weights=y, minlength=n_bins)
     counts = np.bincount(idx, minlength=n_bins)
     mean = sums / (counts + 1e-8)
-
     return centres, mean
+
+
+def compute_binned_means_on_eval(theta, y, x_eval):
+    """
+    Compute binned means of y at a provided evaluation grid.
+    """
+    x_eval = np.asarray(x_eval).reshape(-1)
+    if x_eval.size == 0:
+        return x_eval
+    if x_eval.size == 1:
+        return np.array([float(np.mean(y))])
+
+    edges = np.empty(x_eval.size + 1, dtype=float)
+    edges[1:-1] = 0.5 * (x_eval[:-1] + x_eval[1:])
+    edges[0] = x_eval[0] - 0.5 * (x_eval[1] - x_eval[0])
+    edges[-1] = x_eval[-1] + 0.5 * (x_eval[-1] - x_eval[-2])
+
+    idx = np.digitize(theta, edges) - 1
+    y_mean = np.full(x_eval.size, np.nan, dtype=float)
+    for i in range(x_eval.size):
+        vals = y[idx == i]
+        if vals.size > 0:
+            y_mean[i] = float(np.mean(vals))
+
+    valid = np.isfinite(y_mean)
+    if np.any(valid):
+        y_mean = np.interp(
+            x_eval,
+            x_eval[valid],
+            y_mean[valid],
+            left=float(y_mean[valid][0]),
+            right=float(y_mean[valid][-1]),
+        )
+    else:
+        y_mean = np.zeros_like(x_eval, dtype=float)
+    return y_mean
