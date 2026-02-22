@@ -175,6 +175,7 @@ _metadata:
     - prompts.parameter_estimator.base
     - prompts.parameter_estimator.code_guidelines
     - prompts.parameter_estimator.per_model_detail
+    - prompts.parameter_estimator.refinement_image_instructions
     - prompts.jax_translator_prompt
 
   optional_prompts:
@@ -302,6 +303,13 @@ prompts:
       * Do not refer to the current model as `model_v{next_version}`. Instead, refer to it as "this model".
       * Provide a simple equation for the model, including all free parameters.
       * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+
+    refinement_image_instructions: |
+      Image instructions:
+      - Compare predicted outputs to the data across multiple samples.
+      - Identify systematic mismatches (bias, scale, shape, timing, or phase depending on task).
+      - Propose parameter-estimation changes that address consistent failures seen across samples.
+      - Base changes on repeated patterns, not single-sample outliers.
 
     per_model_detail: |
       loss of model {model_idx}: {train_loss}

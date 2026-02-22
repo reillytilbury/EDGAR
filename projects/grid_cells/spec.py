@@ -35,10 +35,16 @@ def load_and_process_data(
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
     time_start: float = 27826,
     time_end: float = 31223,
-    time_bin_ms: int = 10,
-    min_spikes: int = 100,
+    time_bin_ms: int = 100,
+    min_spikes: int = 200,
     speed_threshold: float = 2.5,
     max_trials: int = 5000,
+    min_active_frac: float = 0.02,
+    min_modulation: float = 1.0,
+    min_spatial_reliability: float = 0.2,
+    normalize_per_sample: bool = True,
+    target_l2_norm: float = 1.0,
+    min_l2_norm: float = 1e-6,
 ) -> Tuple[Inputs, Outputs]:
     """
     Load and preprocess grid-cell data, returning canonical Inputs/Outputs.
@@ -128,8 +134,14 @@ def load_and_process_data(
     firing_rates = firing_rates[:, keep_speed]
     features = {name: arr[keep_speed] for name, arr in features.items()}
 
-    # Spike-count filter
-    good_neurons = total_spikes_per_neuron >= min_spikes
+    # Spike-count filter (raw window) + activity/modulation filters (post-speed)
+    active_frac = np.mean(firing_rates > 0, axis=1)
+    modulation = np.percentile(firing_rates, 95, axis=1) - np.percentile(firing_rates, 5, axis=1)
+    good_neurons = (
+        (total_spikes_per_neuron >= min_spikes)
+        & (active_frac >= min_active_frac)
+        & (modulation >= min_modulation)
+    )
     firing_rates = firing_rates[good_neurons]
     n_cells = firing_rates.shape[0]
 
@@ -141,6 +153,46 @@ def load_and_process_data(
         keep_idx = np.linspace(0, firing_rates.shape[1] - 1, max_trials).astype(int)
         firing_rates = firing_rates[:, keep_idx]
         features = {name: arr[keep_idx] for name, arr in features.items()}
+
+    # Spatial reliability filter: split trials into two halves and correlate rate maps
+    if firing_rates.shape[1] >= 4:
+        n_trials = firing_rates.shape[1]
+        half = n_trials // 2
+        idx_a = np.arange(0, half)
+        idx_b = np.arange(half, n_trials)
+        n_spatial_bins = int(np.ceil((2 * wall_val * 100) / spatial_bin_cm))
+        rm_a = _compute_rate_maps(
+            features["x"][idx_a],
+            features["y"][idx_a],
+            firing_rates[:, idx_a],
+            n_spatial_bins,
+            smoothing_sigma,
+        )
+        rm_b = _compute_rate_maps(
+            features["x"][idx_b],
+            features["y"][idx_b],
+            firing_rates[:, idx_b],
+            n_spatial_bins,
+            smoothing_sigma,
+        )
+        a_flat = rm_a.reshape(rm_a.shape[0], -1)
+        b_flat = rm_b.reshape(rm_b.shape[0], -1)
+        a_mean = a_flat.mean(axis=1, keepdims=True)
+        b_mean = b_flat.mean(axis=1, keepdims=True)
+        a_centered = a_flat - a_mean
+        b_centered = b_flat - b_mean
+        denom = np.linalg.norm(a_centered, axis=1) * np.linalg.norm(b_centered, axis=1)
+        corr = np.where(denom > 0, np.sum(a_centered * b_centered, axis=1) / denom, 0.0)
+        good_reliability = corr >= min_spatial_reliability
+        firing_rates = firing_rates[good_reliability]
+        n_cells = firing_rates.shape[0]
+
+    if normalize_per_sample and n_cells > 0:
+        target = float(target_l2_norm)
+        min_l2 = float(min_l2_norm)
+        l2 = np.linalg.norm(firing_rates, axis=1, keepdims=True)
+        scale = np.maximum(l2, min_l2)
+        firing_rates = firing_rates * (target / scale)
 
     # Compute and lightly smooth rate maps (kept for consistency with the original workflow)
     n_spatial_bins = int(np.ceil((2 * wall_val * 100) / spatial_bin_cm))
@@ -184,7 +236,21 @@ def train_test_split(
 
     rng = np.random.default_rng(random_seed)
     train_samples = rng.choice(np.arange(n_samples), n_samples // 2, replace=False)
-    train_trials = rng.choice(np.arange(n_trials), n_trials // 2, replace=False)
+
+    # Split trials into contiguous blocks, then select blocks for train/test.
+    n_blocks = 10
+    block_size = max(1, n_trials // n_blocks)
+    blocks = []
+    for start in range(0, n_trials, block_size):
+        end = min(start + block_size, n_trials)
+        blocks.append(np.arange(start, end))
+    blocks = np.array(blocks, dtype=object)
+
+    perm = rng.permutation(len(blocks))
+    n_train_blocks = len(blocks) // 2
+    train_blocks = blocks[perm[:n_train_blocks]]
+    train_trials = np.concatenate(train_blocks) if len(train_blocks) > 0 else np.array([], dtype=int)
+
     return train_samples, train_trials
 
 
@@ -192,160 +258,497 @@ def train_test_split(
 # 2. SEED MODELS
 # ========================
 
-def model_v1(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, amplitude=1.0):
+
+def model_v1(
+    X,
+    lam=0.6,
+    theta=0.0,
+    phi_x=0.0,
+    phi_y=0.0,
+    baseline=0.0,
+    amplitude=1.0,
+    sigma=0.12,
+):
     """
-    Independent variable:
-    X = [x, y]  # position (normalized to [-1, 1])
+    Hexagonal grid-cell model with isotropic Gaussian fields.
 
-    Grid model as sum of 3 cosines 60 degrees apart.
+    This model defines firing rate as
 
-    Args:
-        X (np.ndarray): Shape (2, n_trials), with `x = X[0]`, `y = X[1]`.
-        lam (float): Grid spacing parameter.
-        theta (float): Grid orientation in radians (periodic modulo pi/3).
-        phi_x (float): Phase offset along x.
-        phi_y (float): Phase offset along y.
-        baseline (float): Baseline firing rate.
-        amplitude (float): Modulation amplitude.
+        r(x) = baseline + amplitude * Σ_{n,m} exp( -||x - c_{n,m}||^2 / (2σ^2) )
 
-    Returns:
-        np.ndarray: Predicted firing rates, shape (n_trials,).
+    where {c_{n,m}} form a hexagonal lattice with spacing `lam`,
+    rotated by `theta`, and shifted by (phi_x, phi_y).
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (2, n_trials)
+        Position array with X[0]=x and X[1]=y (typically normalized to [-1,1]).
+    lam : float
+        Lattice spacing (distance between neighboring field centers).
+    theta : float
+        Lattice orientation (radians).
+    phi_x, phi_y : float
+        Global spatial phase shift.
+    baseline : float
+        Additive baseline firing rate.
+    amplitude : float
+        Scaling of summed Gaussian bumps.
+    sigma : float
+        Isotropic Gaussian width.
+    K_MAX = 10
+        Fixed lattice truncation radius. Centers use indices n,m ∈ [-K_MAX, K_MAX].
+
+    Returns
+    -------
+    np.ndarray, shape (n_trials,)
+        Predicted firing rates.
     """
     x = X[0]
     y = X[1]
 
-    lam = np.clip(lam, 0.1, 2.0)
-    theta = np.clip(theta, 0, np.pi / 3)
-    baseline = np.clip(baseline, 0, None)
-    amplitude = np.clip(amplitude, 0, None)
+    # Rotated hexagonal basis vectors
+    c, s = np.cos(theta), np.sin(theta)
+    v1x, v1y = lam * c, lam * s
+    v2x = 0.5 * lam * c - 0.5 * np.sqrt(3.0) * lam * s
+    v2y = 0.5 * lam * s + 0.5 * np.sqrt(3.0) * lam * c
 
-    q = 4.0 * np.pi / (np.sqrt(3.0) * lam)
-    angles = theta + 2.0 * np.pi * np.arange(3) / 3.0
-    ux = np.cos(angles)
-    uy = np.sin(angles)
+    K_MAX = 10
+    ns = np.arange(-K_MAX, K_MAX + 1)
+    ms = np.arange(-K_MAX, K_MAX + 1)
+    nn, mm = np.meshgrid(ns, ms, indexing="ij")
 
-    dx = x - phi_x
-    dy = y - phi_y
-    proj = np.outer(ux, dx) + np.outer(uy, dy)
-    s = np.sum(np.cos(q * proj), axis=0)
+    cx = nn * v1x + mm * v2x
+    cy = nn * v1y + mm * v2y
+    cx = cx.reshape(-1)[:, None]
+    cy = cy.reshape(-1)[:, None]
 
-    return baseline + amplitude * s
+    dx = (x - phi_x)[None, :] - cx
+    dy = (y - phi_y)[None, :] - cy
+    dist2 = dx * dx + dy * dy
+
+    inv2sig2 = 1.0 / (2.0 * sigma * sigma + 1e-12)
+    bumps = np.exp(-dist2 * inv2sig2)
+
+    return baseline + amplitude * np.sum(bumps, axis=0)
 
 
 def param_est_v1(X, Y):
     """
-    Estimate parameters for `model_v1` using FFT/ring heuristics.
+    Autocorr-based initializer for an isotropic hex-grid Gaussian-bump model.
 
-    Args:
-        X (np.ndarray): Input array with shape (2, n_trials).
-        Y (np.ndarray): Observed firing rates, shape (n_trials,).
+    Intended model family (for context):
+        r(x,y) = baseline + amplitude * Σ_{n,m} exp(-||[x,y]-c_{n,m}||^2 / (2*sigma^2)),
+    where {c_{n,m}} is a rotated hexagonal lattice with spacing `lam`, orientation `theta`,
+    and global phase shift (phi_x, phi_y).
 
-    Returns:
-        np.ndarray: Estimated [lam, theta, phi_x, phi_y, baseline, amplitude].
+    What this estimator does (self-contained, robust-ish):
+    1) Bin samples into a 2D rate map R over [-1,1]^2 and lightly smooth it.
+    2) Compute 2D autocorrelation A of (masked, windowed, zero-mean) R via FFT.
+       For grid structure, A has a central peak and a first ring of 6 peaks.
+    3) Estimate:
+       - `lam` from radius (in bins -> coordinate units) of the nearest non-central peak.
+       - `theta` from the angle of that peak, reduced modulo π/3.
+    4) Estimate (phi_x, phi_y) by FFT cross-correlation between R and a hex-lattice
+       template (built with the estimated lam/theta and a default sigma), taking the
+       argmax shift.
+    5) baseline/amplitude from Y percentiles; sigma proportional to lam.
+
+    Returns
+    -------
+    np.ndarray, shape (7,)
+        [lam, theta, phi_x, phi_y, baseline, amplitude, sigma]
     """
-    x = X[0]
-    y = X[1]
-    rm, occ = _make_ratemap(x, y, Y, nbins=60, sigma=1.5)
-    F, py, px, rad, ang, cy, cx = _fft_peak_candidates(rm, occ)
+    from scipy.ndimage import gaussian_filter
 
-    if len(py) < 6:
-        baseline = max(0.0, np.percentile(rm, 5))
-        return np.array([0.5, 0.0, 0.0, 0.0, baseline, 1.0])
+    x = np.asarray(X[0], float)
+    y = np.asarray(X[1], float)
+    yobs = np.asarray(Y, float)
 
-    baseline = np.percentile(Y, 10)
-    amplitude = max(0.0, np.percentile(Y, 95) - baseline)
+    # ---------- fixed internal hyperparameters ----------
+    nbins = 48
+    smooth_sigma = 2.5
+    occ_prct = 20          # occupancy mask threshold percentile
+    peak_excl_frac = 0.08  # exclude small radii in autocorr
+    topk = 120             # peak candidates in autocorr band
+    # ----------------------------------------------------
 
-    r0 = np.median(rad[:10])
-    cand = np.where(np.abs(rad - r0) < 0.15 * max(r0, 1e-6))[0]
-    if len(cand) == 0:
-        cand = np.arange(min(len(rad), 10))
+    # Robust baseline/amplitude init
+    baseline = float(np.percentile(yobs, 10))
+    amplitude = float(max(1e-6, np.percentile(yobs, 95) - baseline))
 
-    theta = float(ang[cand[0]] % (np.pi / 3))
+    # --- build smoothed rate map R over [-1,1]^2 ---
+    edges = np.linspace(-1.0, 1.0, nbins + 1)
+    occ, _, _ = np.histogram2d(x, y, bins=[edges, edges])
+    heat, _, _ = np.histogram2d(x, y, bins=[edges, edges], weights=yobs)
+    R = heat / (occ + 1e-8)
 
-    arena = 2.0
-    fx = (px[cand[0]] - cx) / arena
-    fy = (py[cand[0]] - cy) / arena
-    k_mag = 2 * np.pi * np.sqrt(fx * fx + fy * fy)
-    q = k_mag if k_mag > 1e-6 else 4 * np.pi / (np.sqrt(3.0) * 0.5)
-    lam = float(np.clip(4.0 * np.pi / (np.sqrt(3.0) * q), 0.1, 2.0))
+    # Smooth in occupancy-normalized way (reduces sampling noise)
+    Rs = gaussian_filter(R, smooth_sigma)
+    Os = gaussian_filter(occ, smooth_sigma)
+    Rm = Rs / (Os + 1e-8)
 
-    phase = np.angle(F[py[cand[0]], px[cand[0]]])
-    phi_x = float(np.clip(-phase / (q + 1e-8), -1.0, 1.0))
-    phi_y = 0.0
+    # Occupancy mask (ignore sparse bins)
+    if np.any(occ > 0):
+        thr = np.percentile(occ[occ > 0], occ_prct)
+        mask = (occ >= thr).astype(float)
+    else:
+        mask = np.ones_like(Rm)
 
-    return np.array([lam, theta, phi_x, phi_y, baseline, amplitude])
+    # --- autocorrelation via FFT of windowed, masked, zero-mean map ---
+    wy = np.hanning(nbins)
+    wx = np.hanning(nbins)
+    win = wy[:, None] * wx[None, :]
+    w = mask * win
+    mu = np.sum(Rm * w) / (np.sum(w) + 1e-12)
+    Z = (Rm - mu) * w
 
+    F = np.fft.fft2(Z)
+    A = np.fft.ifft2(np.abs(F) ** 2).real
+    A = np.fft.fftshift(A)
+    A = A / (np.max(A) + 1e-12)
 
-def model_v2(X, lam=0.5, theta=0.0, phi_x=0.0, phi_y=0.0, baseline=0.0, amplitude=1.0, sigma=0.08):
-    """
-    Independent variable:
-    X = [x, y]  # position (normalized to [-1, 1])
+    # --- pick nearest-ring peak in autocorr to estimate lam, theta ---
+    cy, cx = nbins // 2, nbins // 2
+    yy, xx = np.indices((nbins, nbins))
+    dy = yy - cy
+    dx = xx - cx
+    rr = np.sqrt(dx * dx + dy * dy)
 
-    Grid model as Gaussian bumps on a rotated hexagonal lattice.
+    r_excl = peak_excl_frac * np.max(rr)
+    rmin = max(r_excl, 0.15 * np.max(rr))
+    rmax = 0.6 * np.max(rr)
+    band = (rr >= rmin) & (rr <= rmax)
+    Ab = np.where(band, A, -np.inf)
 
-    Args:
-        X (np.ndarray): Shape (2, n_trials), with `x = X[0]`, `y = X[1]`.
-        lam (float): Lattice spacing.
-        theta (float): Lattice orientation (radians, modulo pi/3).
-        phi_x (float): Phase offset in x.
-        phi_y (float): Phase offset in y.
-        baseline (float): Baseline firing rate.
-        amplitude (float): Peak amplitude per lattice point.
-        sigma (float): Width of Gaussian bumps.
+    flat = Ab.ravel()
+    k = min(topk, flat.size)
+    idx = np.argpartition(flat, -k)[-k:]
+    py, px = np.unravel_index(idx, (nbins, nbins))
+    vals = Ab[py, px]
+    order = np.argsort(vals)[::-1]
+    py, px = py[order], px[order]
 
-    Returns:
-        np.ndarray: Predicted firing rates, shape (n_trials,).
-    """
-    x = X[0]
-    y = X[1]
+    if len(py) == 0 or not np.isfinite(vals).any():
+        lam = 0.6
+        theta = 0.0
+    else:
+        # pick the strongest peak in the annulus as the ring representative
+        py0, px0 = py[0], px[0]
+        r0 = float(rr[py0, px0])
+        ang0 = float(np.arctan2(py0 - cy, px0 - cx))
 
-    lam = np.clip(lam, 0.1, 2.0)
-    theta = np.clip(theta, 0, np.pi / 3)
-    sigma = np.clip(sigma, 0.01, 0.5)
-    baseline = np.clip(baseline, 0, None)
-    amplitude = np.clip(amplitude, 0, None)
+        binw = 2.0 / nbins
+        lam = float(np.clip(r0 * binw, 1.0, 1.5))
+        theta = float(ang0 % (np.pi / 3))
+
+    sigma = float(np.clip(0.20 * lam, 0.01, 0.6))
+
+    # --- phase (phi_x,phi_y) via FFT cross-correlation with a small lattice template ---
+    xs = (np.arange(nbins) + 0.5) * (2.0 / nbins) - 1.0
+    ys = (np.arange(nbins) + 0.5) * (2.0 / nbins) - 1.0
+    Xg, Yg = np.meshgrid(xs, ys, indexing="ij")
 
     c, s = np.cos(theta), np.sin(theta)
-    R = np.array([[c, -s], [s, c]])
-    v1 = R @ np.array([lam, 0.0])
-    v2 = R @ np.array([0.5 * lam, 0.5 * np.sqrt(3.0) * lam])
+    v1 = np.array([lam * c, lam * s])
+    v2 = np.array([0.5 * lam * c - 0.5 * np.sqrt(3.0) * lam * s,
+                   0.5 * lam * s + 0.5 * np.sqrt(3.0) * lam * c])
 
-    dx = x - phi_x
-    dy = y - phi_y
+    K = int(np.clip(np.ceil(2.0 / max(lam, 1e-3)), 2, 5))
+    ns = np.arange(-K, K + 1)
+    ms = np.arange(-K, K + 1)
+    nn, mm = np.meshgrid(ns, ms, indexing="ij")
+    centers = nn[..., None] * v1 + mm[..., None] * v2
+    centers = centers.reshape(-1, 2)
 
-    extent = 2.0
-    step = min(np.linalg.norm(v1), np.linalg.norm(v2))
-    n_range = int(np.ceil((extent + 2.0 * lam) / max(step, 1e-6))) + 2
+    inv2 = 1.0 / (2.0 * sigma * sigma + 1e-12)
+    dx0 = Xg[None, :, :] - centers[:, 0][:, None, None]
+    dy0 = Yg[None, :, :] - centers[:, 1][:, None, None]
+    T = np.exp(-(dx0 * dx0 + dy0 * dy0) * inv2).sum(axis=0)
 
-    inv2sig2 = 1.0 / (2.0 * sigma * sigma)
-    r = np.full_like(x, baseline, dtype=float)
+    Rz = (Rm - Rm.mean()) / (Rm.std() + 1e-12)
+    Tz = (T - T.mean()) / (T.std() + 1e-12)
+    C = np.fft.ifft2(np.fft.fft2(Rz) * np.conj(np.fft.fft2(Tz))).real
+    iy, ix = np.unravel_index(np.argmax(C), C.shape)
 
-    for n in range(-n_range, n_range + 1):
-        for m in range(-n_range, n_range + 1):
-            cx, cy = n * v1 + m * v2
-            ddx = dx - cx
-            ddy = dy - cy
-            r += amplitude * np.exp(-(ddx * ddx + ddy * ddy) * inv2sig2)
+    sy = iy if iy <= nbins // 2 else iy - nbins
+    sx = ix if ix <= nbins // 2 else ix - nbins
+    binw = 2.0 / nbins
+    shift_x = sx * binw
+    shift_y = sy * binw
+    phi_x = float(np.clip(-shift_x, -1.0, 1.0))
+    phi_y = float(np.clip(-shift_y, -1.0, 1.0))
 
-    return r
+    return np.array([lam, theta, phi_x, phi_y, baseline, amplitude, sigma])
+
+
+def model_v2(
+    X,
+    lam=0.6,
+    theta=0.0,
+    phi_x=0.0,
+    phi_y=0.0,
+    baseline=0.0,
+    amplitude=1.0,
+    sigma_par=0.14,
+    sigma_perp=0.10,
+):
+    """
+    Hexagonal grid-cell model with anisotropic (elliptical) Gaussian fields.
+
+    This model generalizes model_v1 by allowing elliptical receptive fields
+    aligned to the lattice frame. Firing rate is
+
+        r(x) = baseline + amplitude * Σ_{n,m}
+               exp( - (u^2 / (2σ_par^2) + v^2 / (2σ_perp^2)) )
+
+    where (u,v) are coordinates of x - c_{n,m} expressed in the rotated
+    lattice frame (angle theta).
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (2, n_trials)
+        Positions.
+    lam : float
+        Lattice spacing.
+    theta : float
+        Lattice orientation (radians).
+    phi_x, phi_y : float
+        Spatial phase shift.
+    baseline : float
+        Additive baseline firing rate.
+    amplitude : float
+        Global scaling.
+    sigma_par : float
+        Gaussian width parallel to lattice axis.
+    sigma_perp : float
+        Gaussian width perpendicular to lattice axis.
+    K_MAX = 10
+        Fixed lattice truncation radius.
+
+    Returns
+    -------
+    np.ndarray, shape (n_trials,)
+        Predicted firing rates.
+    """
+    x = X[0]
+    y = X[1]
+
+    c, s = np.cos(theta), np.sin(theta)
+    v1x, v1y = lam * c, lam * s
+    v2x = 0.5 * lam * c - 0.5 * np.sqrt(3.0) * lam * s
+    v2y = 0.5 * lam * s + 0.5 * np.sqrt(3.0) * lam * c
+
+    K_MAX = 10
+    ns = np.arange(-K_MAX, K_MAX + 1)
+    ms = np.arange(-K_MAX, K_MAX + 1)
+    nn, mm = np.meshgrid(ns, ms, indexing="ij")
+
+    cx = nn * v1x + mm * v2x
+    cy = nn * v1y + mm * v2y
+    cx = cx.reshape(-1)[:, None]
+    cy = cy.reshape(-1)[:, None]
+
+    dx = (x - phi_x)[None, :] - cx
+    dy = (y - phi_y)[None, :] - cy
+
+    # Rotate displacement into lattice frame
+    u =  c * dx + s * dy
+    v = -s * dx + c * dy
+
+    inv2sp2 = 1.0 / (2.0 * sigma_par * sigma_par + 1e-12)
+    inv2st2 = 1.0 / (2.0 * sigma_perp * sigma_perp + 1e-12)
+
+    dist2 = u * u * inv2sp2 + v * v * inv2st2
+    bumps = np.exp(-dist2)
+
+    return baseline + amplitude * np.sum(bumps, axis=0)
 
 
 def param_est_v2(X, Y):
     """
-    Estimate parameters for `model_v2` from a smoothed rate-map template.
+    Autocorr-based initializer for an anisotropic hex-grid Gaussian-bump model.
 
-    Args:
-        X (np.ndarray): Input array with shape (2, n_trials).
-        Y (np.ndarray): Observed firing rates, shape (n_trials,).
+    Intended model family (for context):
+        r(x,y) = baseline + amplitude * Σ exp(-(u^2/(2σ_par^2) + v^2/(2σ_perp^2))),
+    where (u,v) are coordinates of (x,y) in the lattice-aligned frame (rotation `theta`).
 
-    Returns:
-        np.ndarray: Estimated [lam, theta, phi_x, phi_y, baseline, amplitude, sigma].
+    What this estimator does (self-contained):
+    - Same autocorrelation + template-shift steps as v1 to get (lam, theta, phi_x, phi_y).
+    - Then estimates anisotropy (σ_par, σ_perp) by computing a weighted second moment
+      of the local neighborhood around a strong peak of the smoothed rate map, and
+      rotating that covariance into the lattice frame.
+
+    Returns
+    -------
+    np.ndarray, shape (8,)
+        [lam, theta, phi_x, phi_y, baseline, amplitude, sigma_par, sigma_perp]
     """
-    p1 = param_est_v1(X, Y)
-    lam, theta, phi_x, phi_y, baseline, amplitude = p1
-    sigma = 0.08
-    return np.array([lam, theta, phi_x, phi_y, baseline, amplitude, sigma])
+    from scipy.ndimage import gaussian_filter
 
+    x = np.asarray(X[0], float)
+    y = np.asarray(X[1], float)
+    yobs = np.asarray(Y, float)
+
+    # ---------- fixed internal hyperparameters ----------
+    nbins = 48
+    smooth_sigma = 2.5
+    occ_prct = 20
+    peak_excl_frac = 0.08
+    topk = 120
+    # ----------------------------------------------------
+
+    baseline = float(np.percentile(yobs, 10))
+    amplitude = float(max(1e-6, np.percentile(yobs, 95) - baseline))
+
+    # --- rate map ---
+    edges = np.linspace(-1.0, 1.0, nbins + 1)
+    occ, _, _ = np.histogram2d(x, y, bins=[edges, edges])
+    heat, _, _ = np.histogram2d(x, y, bins=[edges, edges], weights=yobs)
+    R = heat / (occ + 1e-8)
+
+    Rs = gaussian_filter(R, smooth_sigma)
+    Os = gaussian_filter(occ, smooth_sigma)
+    Rm = Rs / (Os + 1e-8)
+
+    if np.any(occ > 0):
+        thr = np.percentile(occ[occ > 0], occ_prct)
+        mask = (occ >= thr).astype(float)
+    else:
+        mask = np.ones_like(Rm)
+
+    # --- autocorr ---
+    wy = np.hanning(nbins)
+    wx = np.hanning(nbins)
+    win = wy[:, None] * wx[None, :]
+    w = mask * win
+    mu = np.sum(Rm * w) / (np.sum(w) + 1e-12)
+    Z = (Rm - mu) * w
+
+    F = np.fft.fft2(Z)
+    A = np.fft.ifft2(np.abs(F) ** 2).real
+    A = np.fft.fftshift(A)
+    A = A / (np.max(A) + 1e-12)
+
+    cy, cx = nbins // 2, nbins // 2
+    yy, xx = np.indices((nbins, nbins))
+    dy = yy - cy
+    dx = xx - cx
+    rr = np.sqrt(dx * dx + dy * dy)
+
+    r_excl = peak_excl_frac * np.max(rr)
+    rmin = max(r_excl, 0.15 * np.max(rr))
+    rmax = 0.6 * np.max(rr)
+    band = (rr >= rmin) & (rr <= rmax)
+    Ab = np.where(band, A, -np.inf)
+
+    flat = Ab.ravel()
+    k = min(topk, flat.size)
+    idx = np.argpartition(flat, -k)[-k:]
+    py, px = np.unravel_index(idx, (nbins, nbins))
+    vals = Ab[py, px]
+    order = np.argsort(vals)[::-1]
+    py, px = py[order], px[order]
+
+    if len(py) == 0 or not np.isfinite(vals).any():
+        lam = 0.6
+        theta = 0.0
+    else:
+        py0, px0 = py[0], px[0]
+        r0 = float(rr[py0, px0])
+        ang0 = float(np.arctan2(py0 - cy, px0 - cx))
+
+        binw = 2.0 / nbins
+        lam = float(np.clip(r0 * binw, 1.0, 1.5))
+        theta = float(ang0 % (np.pi / 3))
+
+    sigma0 = float(np.clip(0.20 * lam, 0.01, 0.6))
+
+    # --- phase via FFT cross-correlation with a small lattice template ---
+    xs = (np.arange(nbins) + 0.5) * (2.0 / nbins) - 1.0
+    ys = (np.arange(nbins) + 0.5) * (2.0 / nbins) - 1.0
+    Xg, Yg = np.meshgrid(xs, ys, indexing="ij")
+
+    c, s = np.cos(theta), np.sin(theta)
+    v1 = np.array([lam * c, lam * s])
+    v2 = np.array([0.5 * lam * c - 0.5 * np.sqrt(3.0) * lam * s,
+                   0.5 * lam * s + 0.5 * np.sqrt(3.0) * lam * c])
+
+    K = int(np.clip(np.ceil(2.0 / max(lam, 1e-3)), 2, 5))
+    ns = np.arange(-K, K + 1)
+    ms = np.arange(-K, K + 1)
+    nn, mm = np.meshgrid(ns, ms, indexing="ij")
+    centers = nn[..., None] * v1 + mm[..., None] * v2
+    centers = centers.reshape(-1, 2)
+
+    inv2 = 1.0 / (2.0 * sigma0 * sigma0 + 1e-12)
+    dx0 = Xg[None, :, :] - centers[:, 0][:, None, None]
+    dy0 = Yg[None, :, :] - centers[:, 1][:, None, None]
+    T = np.exp(-(dx0 * dx0 + dy0 * dy0) * inv2).sum(axis=0)
+
+    Rz = (Rm - Rm.mean()) / (Rm.std() + 1e-12)
+    Tz = (T - T.mean()) / (T.std() + 1e-12)
+    Ccorr = np.fft.ifft2(np.fft.fft2(Rz) * np.conj(np.fft.fft2(Tz))).real
+    iy, ix = np.unravel_index(np.argmax(Ccorr), Ccorr.shape)
+
+    sy = iy if iy <= nbins // 2 else iy - nbins
+    sx = ix if ix <= nbins // 2 else ix - nbins
+    binw = 2.0 / nbins
+    shift_x = sx * binw
+    shift_y = sy * binw
+
+    phi_x = float(np.clip(-shift_x, -1.0, 1.0))
+    phi_y = float(np.clip(-shift_y, -1.0, 1.0))
+
+    # --- anisotropy from local second moments around a strong peak ---
+    # pick peak in smoothed map
+    iy0, ix0 = np.unravel_index(np.argmax(Rm), Rm.shape)
+
+    # local window size scaled by lam (in bins)
+    lam_bins = max(1.0, lam / binw)
+    rad = int(np.clip(np.round(0.6 * lam_bins), 3, 12))
+
+    y0, y1 = max(0, iy0 - rad), min(nbins, iy0 + rad + 1)
+    x0, x1 = max(0, ix0 - rad), min(nbins, ix0 + rad + 1)
+    patch = Rm[y0:y1, x0:x1].copy()
+
+    # weights: positive part above a floor
+    floor = np.percentile(patch, 30)
+    wgt = np.maximum(patch - floor, 0.0) + 1e-12
+    wgt /= np.sum(wgt)
+
+    # physical coordinates centered at the peak-bin center
+    ys_loc = (np.arange(y0, y1) - (iy0 + 0.0)) * binw
+    xs_loc = (np.arange(x0, x1) - (ix0 + 0.0)) * binw
+    YY, XX = np.meshgrid(ys_loc, xs_loc, indexing="ij")  # note YY first
+
+    mx = np.sum(wgt * XX)
+    my = np.sum(wgt * YY)
+    DX = XX - mx
+    DY = YY - my
+
+    Cxx = np.sum(wgt * DX * DX)
+    Cyy = np.sum(wgt * DY * DY)
+    Cxy = np.sum(wgt * DX * DY)
+
+    # rotate covariance into lattice frame: [u;v] = [[c,s],[-s,c]] [x;y]
+    c, s = np.cos(theta), np.sin(theta)
+    Rmat = np.array([[c, s], [-s, c]])
+    Cmat = np.array([[Cxx, Cxy], [Cxy, Cyy]])
+    Cuv = Rmat @ Cmat @ Rmat.T
+
+    sigma_par = float(np.clip(np.sqrt(max(Cuv[0, 0], 1e-8)), 0.01, 0.8))
+    sigma_perp = float(np.clip(np.sqrt(max(Cuv[1, 1], 1e-8)), 0.01, 0.8))
+
+    # avoid extreme anisotropy; shrink toward sigma0 for stability
+    ratio = sigma_par / max(sigma_perp, 1e-8)
+    if ratio > 2.5 or ratio < 0.4:
+        sigma_par = 0.5 * sigma_par + 0.5 * sigma0
+        sigma_perp = 0.5 * sigma_perp + 0.5 * sigma0
+    else:
+        sigma_par = 0.7 * sigma_par + 0.3 * sigma0
+        sigma_perp = 0.7 * sigma_perp + 0.3 * sigma0
+
+    return np.array([lam, theta, phi_x, phi_y, baseline, amplitude, sigma_par, sigma_perp])
 
 # ========================
 # 3. LOSS
@@ -369,6 +772,10 @@ def plot_model_fits(
     X_eval,
     save_path="",
     labels=("model_v1", "model_v2"),
+    n_bins: int = 40,
+    smoothing_sigma: float = 1.0,
+    max_show: int = 6,
+    show_colorbar: bool = False,
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
 ):
     """
@@ -401,7 +808,7 @@ def plot_model_fits(
         raise ValueError("Grid-cell diagnostics require at least 2 input features (x,y)")
 
     n_samples = x_arr.shape[0]
-    n_show = min(9, n_samples)
+    n_show = min(max_show, n_samples)
     # Intentionally unseeded so displayed samples vary across calls/runs.
     show_idx = np.random.default_rng().choice(n_samples, size=n_show, replace=False)
 
@@ -409,16 +816,31 @@ def plot_model_fits(
     fig, axes = plt.subplots(n_show, 1 + n_models, figsize=(4 * (1 + n_models), 3 * n_show))
     axes = np.atleast_2d(axes)
 
+    # Normalize params shape per program to avoid indexing mismatches.
+    params_by_model = []
+    for program in programs_list:
+        params_all = np.asarray(program["params"])
+        if params_all.ndim == 1:
+            params_all = np.broadcast_to(params_all[None, :], (n_samples, params_all.size))
+        elif params_all.shape[0] != n_samples:
+            if params_all.shape[0] == 1:
+                params_all = np.broadcast_to(params_all, (n_samples, params_all.shape[1]))
+            else:
+                raise ValueError(
+                    f"params shape {params_all.shape} does not match n_samples={n_samples}"
+                )
+        params_by_model.append(params_all)
+
     for row, s in enumerate(show_idx):
         x = x_arr[s, 0]
         y = x_arr[s, 1]
         y_obs = y_arr[s, 0]
-        n_bins = int(x_eval_arr.shape[2])
         x_domain = (float(np.min(x_eval_arr[s, 0])), float(np.max(x_eval_arr[s, 0])))
         y_domain = (float(np.min(x_eval_arr[s, 1])), float(np.max(x_eval_arr[s, 1])))
 
         rm_obs = _bin_to_rate_map(
-            x, y, y_obs, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain
+            x, y, y_obs, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain,
+            smoothing_sigma=smoothing_sigma
         )
         ax = axes[row, 0]
         im = ax.imshow(
@@ -428,14 +850,16 @@ def plot_model_fits(
             cmap="viridis",
         )
         ax.set_title(f"Sample {s} data")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        if show_colorbar:
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
         for m_idx, program in enumerate(programs_list):
             model = program["model"]
-            params = program["params"][s]
+            params = params_by_model[m_idx][s]
             y_pred = model(x_arr[s], *params)
             rm_pred = _bin_to_rate_map(
-                x, y, y_pred, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain
+                x, y, y_pred, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain,
+                smoothing_sigma=smoothing_sigma
             )
 
             axm = axes[row, m_idx + 1]
@@ -449,10 +873,11 @@ def plot_model_fits(
             if "losses" in program:
                 label += f" (loss={program['losses'][s]:.2f})"
             axm.set_title(label)
-            fig.colorbar(imm, ax=axm, fraction=0.046, pad=0.04)
+            if show_colorbar:
+                fig.colorbar(imm, ax=axm, fraction=0.046, pad=0.04)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.savefig(save_path, dpi=100.0, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -544,9 +969,13 @@ def _bin_to_rate_map(
     n_bins: int = 50,
     x_domain: Tuple[float, float] = (-1.0, 1.0),
     y_domain: Tuple[float, float] = (-1.0, 1.0),
+    smoothing_sigma: float = 1.0,
 ) -> np.ndarray:
     edges_x = np.linspace(x_domain[0], x_domain[1], n_bins + 1)
     edges_y = np.linspace(y_domain[0], y_domain[1], n_bins + 1)
     occ, _, _ = np.histogram2d(x, y, bins=[edges_x, edges_y])
     weighted, _, _ = np.histogram2d(x, y, bins=[edges_x, edges_y], weights=values)
+    if smoothing_sigma and smoothing_sigma > 0:
+        occ = gaussian_filter(occ, sigma=smoothing_sigma)
+        weighted = gaussian_filter(weighted, sigma=smoothing_sigma)
     return weighted / (occ + 1e-8)

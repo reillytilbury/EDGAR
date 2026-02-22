@@ -238,6 +238,12 @@ prompts:
       that is better than *all* previous estimators.
 
       '
+    refinement_image_instructions: |
+      Image instructions:
+      - Compare predicted place fields to data across multiple cells.
+      - Identify mismatches in field centers, widths, and baseline activity.
+      - Adjust parameter estimation to correct consistent spatial shifts or width errors.
+      - Base changes on repeated patterns, not single-cell outliers.
     image_analysis: '**Image Analysis Instructions:**
 
 

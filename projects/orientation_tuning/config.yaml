@@ -131,6 +131,12 @@ prompts:
       \ the parameters represent biologically. \n*Analyze* the progression of the\
       \ parameter estimators, *generalize* the improvements, and *create* a new parameter\
       \ estimator that is better than *all* previous estimators.\n"
+    refinement_image_instructions: |
+      Image instructions:
+      - Compare predicted tuning curves to binned means across multiple cells.
+      - Identify systematic mismatches in preferred orientation, bandwidth, and baseline.
+      - Adjust parameter estimation to correct consistent shifts or width errors.
+      - Base changes on repeated patterns, not single-cell outliers.
     
     code_guidelines: "**Code Generation Guidelines:**\n* Import any packages you use.\n\
       * Do not include any text other than the code.\n* The only arguments to the\

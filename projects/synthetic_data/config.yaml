@@ -82,3 +82,9 @@ prompts:
       If it is longer, it will be immediately rejected.
 
       '
+    refinement_image_instructions: |
+      Image instructions:
+      - Compare predicted curves to data across multiple samples.
+      - Identify systematic mismatches in scale, curvature, and phase/oscillation.
+      - Adjust parameter estimation to fix consistent errors across samples.
+      - Base changes on repeated patterns, not single-sample outliers.

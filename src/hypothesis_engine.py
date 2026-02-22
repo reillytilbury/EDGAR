@@ -66,28 +66,29 @@ def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
             return yi_arr[0]
         return yi_arr
 
-    try:
-        # any call taking >5s will raise timeout_decorator.TimeoutError
-        # xi has shape (n_features, n_trials)
-        # yi has shape (n_trials,) for scalar or (n_targets, n_trials) for vectorized
-        return jnp.array([
-            _safe_estimate(param_estimator, x[i], _estimator_response_arg(y[i]))
-            for i in range(y.shape[0])
-        ])
-    except timeout_decorator.TimeoutError:
-        logging.warning("param_estimator timed out, falling back to defaults")
-    except Exception as e:
-        logging.info(f"Error during parameter estimation: {e}")
-
-    # If parameter estimation fails, compute default parameters based on the model's signature
-    params = compute_default_params(model)
-    if params is not None:
-        # default params is a 2D array with shape (1, n_params), so we need to repeat it for each sample
-        n_samples = y.shape[0]
-        return jnp.repeat(params, n_samples, axis=0)
-    else:
+    # Compute defaults once for per-sample fallback.
+    defaults = compute_default_params(model)
+    if defaults is None:
         logging.info("Error: Unable to compute default parameters for the neuron model.")
         return None
+
+    params_list = []
+    n_samples = y.shape[0]
+    for i in range(n_samples):
+        try:
+            # any call taking >5s will raise timeout_decorator.TimeoutError
+            # xi has shape (n_features, n_trials)
+            # yi has shape (n_trials,) for scalar or (n_targets, n_trials) for vectorized
+            params_i = _safe_estimate(param_estimator, x[i], _estimator_response_arg(y[i]))
+        except timeout_decorator.TimeoutError:
+            logging.warning(f"param_estimator timed out for sample {i}, using defaults")
+            params_i = defaults[0]
+        except Exception as e:
+            logging.info(f"Error during parameter estimation for sample {i}: {e}")
+            params_i = defaults[0]
+        params_list.append(params_i)
+
+    return jnp.array(params_list)
 
 
 def compute_default_params(model) -> jnp.ndarray:
@@ -742,7 +743,10 @@ async def generate_new_parameter_estimator(current_island,
                                            random_seed: int | None = None,
                                            island_chat_manager=None, island_id: int = None,
                                            batch_id: int = 0,
-                                           loss_fn=None,):                                           
+                                           loss_fn=None,
+                                           plot_model_fits=None,
+                                           x_eval=None,
+                                           image_feedback_dir=None,):                                           
     """
     Generate and optionally refine a parameter-estimator function via LLM.
 
@@ -796,31 +800,22 @@ async def generate_new_parameter_estimator(current_island,
     random_programs = current_island.sample(k, replace=False, random_state=sample_seed).reset_index(drop=True)
     # sort from worst to best (loss descending)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-    use_chat_mode = island_chat_manager is not None and island_id is not None
-    
-    # Use appropriate prompt function based on mode
-    if use_chat_mode:
-        prompt = prompt_manager.get_parameter_estimator_prompt(random_programs,
-                                                        model_code_string=model_code_string,
-                                                        max_lines=param_estimator_max_lines)
-    else:
-        prompt = prompt_manager.get_parameter_estimator_prompt_legacy(random_programs,
-                                                        model_code_string=model_code_string,
-                                                        max_lines=param_estimator_max_lines)
+    # Chat mode is not supported for parameter estimator generation/refinement.
+    prompt = prompt_manager.get_parameter_estimator_prompt_legacy(
+        random_programs,
+        model_code_string=model_code_string,
+        max_lines=param_estimator_max_lines,
+    )
     
     # Use chat-based or legacy LLM call
-    if island_chat_manager is not None and island_id is not None:
-        llm_output = await island_chat_manager.ask_island(
-            island_id, prompt,
-            batch_id=batch_id,
-            mode=mode,
-            use_large_model=False,
-            png_img=None
-        )
-    else:
-        # Legacy: independent query
-        llm_output = await llm_helper.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
-                                                thinking_budget=0.25, img_bytes=None)
+    llm_output = await llm_helper.call_llm_async(
+        prompt,
+        model_name=llm_name,
+        client=client,
+        temperature=temp,
+        thinking_budget=0.25,
+        img_bytes=None,
+    )
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -855,7 +850,7 @@ async def generate_new_parameter_estimator(current_island,
 
     current_code = code_string
     current_func = func
-    current_loss, _, _, _ = objective(
+    current_loss, current_params, _, _ = objective(
         model=model_fn,
         param_estimator=current_func,
         x=x,
@@ -871,6 +866,36 @@ async def generate_new_parameter_estimator(current_island,
         best_func = current_func
 
     for r in range(refine_rounds):
+        if plot_model_fits is None or x_eval is None or image_feedback_dir is None:
+            raise ValueError(
+                "Parameter estimator refinement requires image feedback. "
+                "Missing plot_model_fits/x_eval/image_feedback_dir."
+            )
+        img_bytes = None
+        try:
+            img_path = os.path.join(
+                image_feedback_dir,
+                f"param_est_refine_island_{island_id}_batch_{batch_id}_r{r+1}.png",
+            )
+            plot_model_fits(
+                X=x[0],
+                Y=y[0],
+                programs_list=[
+                    {
+                        "model": model_fn,
+                        "params": np.asarray(current_params),
+                        "losses": np.full(x[0].shape[0], float(current_loss)),
+                    }
+                ],
+                X_eval=x_eval,
+                save_path=img_path,
+                labels=['PE'],
+            )
+            with open(img_path, "rb") as f:
+                img_bytes = f.read()
+        except Exception as e:
+            raise RuntimeError(f"Param-estimator image generation failed: {e}") from e
+
         # Build refinement prompt using current estimator as the only parent
         refinement_df = pd.DataFrame({
             'train_loss': [current_loss],
@@ -878,45 +903,24 @@ async def generate_new_parameter_estimator(current_island,
             'parameter_estimator_code_string': [current_code],
         })
 
-        refine_header = (
-            f"Refinement round {r+1}/{refine_rounds}.\n"
-            f"Current no-GD loss: {current_loss:.4f}.\n"
-            "Improve the parameter estimator without using gradient descent or external optimizers.\n"
-            "Return only the updated parameter_estimator code.\n"
+        refine_prompt = prompt_manager.get_parameter_estimator_refinement_prompt_legacy(
+            refinement_df,
+            model_code_string=model_code_string,
+            max_lines=param_estimator_max_lines,
+            refine_round=r + 1,
+            refine_rounds=refine_rounds,
+            current_loss=current_loss,
         )
 
-        if use_chat_mode:
-            refine_prompt = prompt_manager.get_parameter_estimator_prompt(
-                refinement_df,
-                model_code_string=model_code_string,
-                max_lines=param_estimator_max_lines,
-            )
-        else:
-            refine_prompt = prompt_manager.get_parameter_estimator_prompt_legacy(
-                refinement_df,
-                model_code_string=model_code_string,
-                max_lines=param_estimator_max_lines,
-            )
-        refine_prompt = refine_header + "\n" + refine_prompt
-
         # Call LLM for refinement
-        if island_chat_manager is not None and island_id is not None:
-            llm_output = await island_chat_manager.ask_island(
-                island_id, refine_prompt,
-                batch_id=batch_id,
-                mode=mode,
-                use_large_model=False,
-                png_img=None
-            )
-        else:
-            llm_output = await llm_helper.call_llm_async(
-                refine_prompt,
-                model_name=llm_name,
-                client=client,
-                temperature=temp,
-                thinking_budget=0.25,
-                img_bytes=None
-            )
+        llm_output = await llm_helper.call_llm_async(
+            refine_prompt,
+            model_name=llm_name,
+            client=client,
+            temperature=temp,
+            thinking_budget=0.25,
+            img_bytes=img_bytes,
+        )
 
         new_code = utils.extract_code_block(llm_output)
         if new_code is None:
@@ -942,13 +946,18 @@ async def generate_new_parameter_estimator(current_island,
             param_penalty_weight=param_penalty_weight,
         )
 
-        current_code = new_code
-        current_func = new_func
-        current_loss = new_loss
-        if new_loss < best_loss:
-            best_loss = new_loss
-            best_code = new_code
-            best_func = new_func
+        if new_loss < current_loss:
+            current_code = new_code
+            current_func = new_func
+            current_loss = new_loss
+            if new_loss < best_loss:
+                best_loss = new_loss
+                best_code = new_code
+                best_func = new_func
+        else:
+            logging.info(
+                f"Refinement did not improve loss ({new_loss:.4f} >= {current_loss:.4f}); keeping current."
+            )
 
     return best_code, best_func
 
@@ -1365,6 +1374,11 @@ async def hypothesis_engine(
         model_results = [(model_code_strings[j], model_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
         # build parameter‑estimator tasks
+        if param_estimator_refinement_rounds > 0 and not has_spec_plotter:
+            raise ValueError(
+                "Parameter estimator refinement requires image diagnostics. "
+                "Define plot_model_fits in the project spec or disable refinement."
+            )
         param_estimation_tasks = [
             generate_new_parameter_estimator(
                 current_island=islands[island_idx],
@@ -1386,6 +1400,9 @@ async def hypothesis_engine(
                 island_chat_manager=island_chat_manager,
                 island_id=island_idx,
                 batch_id=j,
+                plot_model_fits=plot_model_fits,
+                x_eval=X_eval_train,
+                image_feedback_dir=image_feedback_dir,
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)

@@ -383,8 +383,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
 
     # Image diagnostics are enabled automatically if spec defines plot_model_fits.
     spec_plot_fn = getattr(spec_module, "plot_model_fits", None)
-    use_image_feedback = callable(spec_plot_fn)
-    plot_model_fits_fn = _build_plot_model_fits_fn(spec_plot_fn) if use_image_feedback else None
+    plot_model_fits_fn = _build_plot_model_fits_fn(spec_plot_fn) if callable(spec_plot_fn) else None
 
     # Optional config-level loss override still supported.
     loss_fn_path = config.get("loss_fn")
@@ -416,6 +415,8 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         params['exploration_topology'] = [1, 0]
         params['exploitation_topology'] = [1, 0]
         params['max_iter'] = 100 # --- USE WHEN JUST CHECKING THAT THE SCRIPT RUNS ---
+
+        params['param_estimator_refinement_rounds'] = 0
 
     for i in range(params['num_runs']):
         random_seed = params.get('random_seed', 42)
