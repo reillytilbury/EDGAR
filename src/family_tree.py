@@ -248,9 +248,9 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None):
 <style>
   body {{ margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; display: flex; height: 100vh; overflow: hidden; }}
   #graph-container {{ flex: 1; position: relative; }}
-  #sidebar {{ width: 0; overflow-y: auto; overflow-x: hidden; background: #f8f9fa; border-left: 2px solid #dee2e6;
-              transition: width 0.3s ease; padding: 0; box-sizing: border-box; }}
-  #sidebar.open {{ width: 450px; padding: 16px; }}
+  #sidebar {{ width: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; background: #f8f9fa; border-left: 2px solid #dee2e6;
+              transition: width 0.3s ease, min-width 0.3s ease, padding 0.3s ease; padding: 0; box-sizing: border-box; }}
+  #sidebar.open {{ width: 33.33vw; min-width: 33.33vw; padding: 20px; }}
   #sidebar h2 {{ margin-top: 0; color: #333; font-size: 18px; }}
   #sidebar .field {{ margin-bottom: 12px; }}
   #sidebar .field-label {{ font-weight: 600; color: #555; font-size: 13px; margin-bottom: 2px; }}
@@ -398,10 +398,16 @@ function showSidebar(nodeId) {{
 
   sc.innerHTML = h;
   sb.classList.add('open');
+  resizeGraph();
+}}
+
+function resizeGraph() {{
+  setTimeout(function() {{ Plotly.Plots.resize(graphDiv); }}, 350);
 }}
 
 function closeSidebar() {{
   document.getElementById('sidebar').classList.remove('open');
+  resizeGraph();
 }}
 </script>
 </body>
