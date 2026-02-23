@@ -294,7 +294,7 @@ def plot_model_fits(
 
             label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
             if "losses" in program:
-                label += f" (loss={program['losses'][s]:.4f})"
+                label += f" (loss={program['losses'][s]:.2f})"
             ax.plot(
                 x_eval,
                 np.asarray(y_pred).flatten(),
@@ -308,14 +308,14 @@ def plot_model_fits(
         ax.set_title(f"Sample {s}")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
-        ax.legend(fontsize=16)
+        ax.legend(fontsize=12)
 
     mean_loss_parts = []
     for j, program in enumerate(programs_list):
         if "losses" in program and np.size(program["losses"]) > 0:
-            mean_loss_parts.append(f"Model {j+1}: {np.mean(program['losses']):.2f}")
+            mean_loss_parts.append(f"Model {j+1} Loss: {np.mean(program['losses']):.2f}")
         else:
-            mean_loss_parts.append(f"Model {j+1}: n/a")
+            mean_loss_parts.append(f"Model {j+1} Loss: n/a")
     summary = "\n".join(mean_loss_parts) if mean_loss_parts else "n/a"
     plt.suptitle(f"Model Fits\n{summary}", fontsize=24)
     plt.savefig(save_path, dpi=100.0, bbox_inches="tight")

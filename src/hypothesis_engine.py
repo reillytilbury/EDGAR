@@ -712,6 +712,9 @@ async def generate_new_model(current_island, llm_name, client,
     
     # Use chat-based or legacy LLM call
     if island_chat_manager is not None and island_id is not None:
+        logging.info(
+            f"Model generation prompt (island={island_id}, batch={batch_id}):\n{program_prompt}\n"
+        )
         llm_output = await island_chat_manager.ask_island(
             island_id, program_prompt,
             batch_id=batch_id,
@@ -721,8 +724,14 @@ async def generate_new_model(current_island, llm_name, client,
         )
     else:
         # Legacy: independent query
+        logging.info(
+            f"Model generation prompt (island={island_id}, batch={batch_id}):\n{program_prompt}\n"
+        )
         llm_output = await llm_helper.call_llm_async(program_prompt, model_name=llm_name, client=client, temperature=temp, 
                                                 thinking_budget=thinking_budget, img_bytes=img_bytes)
+    logging.info(
+        f"Model generation output (island={island_id}, batch={batch_id}):\n{llm_output}\n"
+    )
     
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -818,8 +827,18 @@ async def generate_new_parameter_estimator(current_island,
         model_code_string=model_code_string,
         max_lines=param_estimator_max_lines,
     )
+    if swear_words:
+        banned_list = "\n".join(f"- {word}" for word in swear_words)
+        prompt = (
+            f"{prompt}\n\n"
+            "**Banned tokens (do not use in code):**\n"
+            f"{banned_list}\n"
+        )
     
     # Use chat-based or legacy LLM call
+    logging.info(
+        f"Parameter estimator prompt (island={island_id}, batch={batch_id}):\n{prompt}\n"
+    )
     llm_output = await llm_helper.call_llm_async(
         prompt,
         model_name=llm_name,
@@ -827,6 +846,9 @@ async def generate_new_parameter_estimator(current_island,
         temperature=temp,
         thinking_budget=0.25,
         img_bytes=None,
+    )
+    logging.info(
+        f"Parameter estimator output (island={island_id}, batch={batch_id}):\n{llm_output}\n"
     )
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
@@ -840,7 +862,8 @@ async def generate_new_parameter_estimator(current_island,
         logging.info(f"Parameter estimator code contains swear word: {swear_word}, skipping.")
         logging.info(f"Code string was:\n{code_string}")
         return None, None
-    code_string = code_string.replace(f'def parameter_estimator_v{k+1}(', 'def parameter_estimator(')
+    code_string = re.sub(r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", code_string)
+    code_string = re.sub(r"def\s+parameter_estimator_prev\s*\(", "def parameter_estimator(", code_string)
     func = utils.str_to_func(code_string, 'parameter_estimator')
 
     if func is None:
@@ -943,6 +966,17 @@ async def generate_new_parameter_estimator(current_island,
             refine_rounds=refine_rounds,
             current_loss=current_loss,
         )
+        if swear_words:
+            banned_list = "\n".join(f"- {word}" for word in swear_words)
+            refine_prompt = (
+                f"{refine_prompt}\n\n"
+                "**Banned tokens (do not use in code):**\n"
+                f"{banned_list}\n"
+            )
+        logging.info(
+            f"Param-est refinement prompt (iter={iter_label}, island={island_id}, "
+            f"batch={batch_id}, round={r+1}):\n{refine_prompt}\n"
+        )
 
         # Call LLM for refinement
         llm_output = await llm_helper.call_llm_async(
@@ -952,6 +986,10 @@ async def generate_new_parameter_estimator(current_island,
             temperature=temp,
             thinking_budget=0.25,
             img_bytes=img_bytes,
+        )
+        logging.info(
+            f"Param-est refinement output (iter={iter_label}, island={island_id}, "
+            f"batch={batch_id}, round={r+1}):\n{llm_output}\n"
         )
 
         new_code = utils.extract_code_block(llm_output)
@@ -963,6 +1001,11 @@ async def generate_new_parameter_estimator(current_island,
             continue
 
         new_code = re.sub(r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", new_code)
+        new_code = re.sub(r"def\s+parameter_estimator_prev\s*\(", "def parameter_estimator(", new_code)
+        logging.info(
+            f"Param-est refinement code (iter={iter_label}, island={island_id}, "
+            f"batch={batch_id}, round={r+1}):\n{new_code}\n"
+        )
         new_func = utils.str_to_func(new_code, 'parameter_estimator')
         if new_func is None:
             logging.info("Failed to parse refined parameter estimator; keeping current.")
@@ -1023,11 +1066,12 @@ async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='g
         return None, None
     
     prompt = prompt_manager.get_jax_translator_prompt(code_string)
-    # print(f"Translating neuron model to JAX with prompt:\n{prompt}")
+    logging.info(f"JAX translation prompt:\n{prompt}\n")
     if prompt is None:
         return None, None
     
     jax_code_string = await llm_helper.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
+    logging.info(f"JAX translation output:\n{jax_code_string}\n")
     jax_code_string = utils.extract_code_block(jax_code_string)
     model_name = prompt_manager.get_model_name()
     func = utils.str_to_func(jax_code_string, model_name)
@@ -1452,6 +1496,7 @@ async def hypothesis_engine(
                 island_id=island_idx,
                 batch_id=j,
                 iteration=i,
+                loss_fn=loss_fn,
                 plot_model_fits=plot_model_fits,
                 x_eval=X_eval_train,
                 image_refinement_dir=image_param_est_refine_dir,
