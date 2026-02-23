@@ -27,8 +27,9 @@ data_processing_params:
 
 # Runtime overrides for this task.
 experiment_params:
+  iterations: 3
   swear_words: []
-  param_estimator_refinement_rounds: 0
+  param_estimator_refinement_rounds: 3
   x_min: -1.0
   x_max: 1.0
   n_bins: 100
@@ -84,7 +85,7 @@ prompts:
       '
     refinement_image_instructions: |
       Image instructions:
-      - Compare predicted curves to data across multiple samples.
-      - Identify systematic mismatches in scale, curvature, and phase/oscillation.
-      - Adjust parameter estimation to fix consistent errors across samples.
-      - Base changes on repeated patterns, not single-sample outliers.
+      - How does the current parameter_estimator fail to capture the true parameters across samples?
+      - Which parts of the parameter_estimator code are causing these failures?
+      - Propose specific code changes to fix these failures, citing samples and code lines in your analysis.
+      - Include these analyses in the docstring of the next parameter_estimator version. 

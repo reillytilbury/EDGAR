@@ -12,6 +12,7 @@ REQUIRED_SPEC_FUNCTIONS = [
     "param_est_v1",
     "model_v2",
     "param_est_v2",
+    "loss_fn",
 ]
 
 FORBIDDEN_CONFIG_KEYS = {
@@ -20,6 +21,7 @@ FORBIDDEN_CONFIG_KEYS = {
     "create_train_test_trial_split_fn",
     "seed_programs",
     "use_image_feedback",
+    "loss_fn",
 }
 
 
@@ -37,6 +39,9 @@ SPEC_TEMPLATE = dedent(
     Seed Programs:
     - model_v1(X, *params) and param_est_v1(X, Y)
     - model_v2(X, *params) and param_est_v2(X, Y)
+
+    LOSS FUNCTION:
+    - loss_fn(Y_pred, Y_true) -> loss values
 
     OPTIONAL COMPONENTS:
     - plot_model_fits(X, Y, model_list, params_list)
@@ -93,7 +98,15 @@ SPEC_TEMPLATE = dedent(
 
 
     # ========================
-    # 3. DIAGNOSTICS
+    # 3. LOSS
+    # ========================
+
+    def loss_fn(Y_pred, Y_true):
+        raise NotImplementedError
+
+
+    # ========================
+    # 4. DIAGNOSTICS
     # ========================
 
     def plot_model_fits(X, Y, programs_list, save_path=""):
@@ -247,7 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None) -> int:
+def run_cli(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -260,4 +273,4 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_cli())

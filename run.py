@@ -178,7 +178,9 @@ def _broadcast_model_loss(loss_value, n_samples: int):
     if flat.size == 1:
         return np.full(n_samples, float(flat[0]))
     if flat.size != n_samples:
-        return None
+        raise ValueError(
+            f"Loss array size mismatch: got {flat.size}, expected {n_samples}."
+        )
     return flat
 
 
@@ -293,7 +295,6 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             - If the required `spec` module for the task cannot be imported.
             - If there are not exactly two numpy function seeds or two parameter estimator seeds.
             - If the `train_test_split` function is not callable.
-            - If the `loss_fn` specified in the configuration is not callable.
     Details:
         - Resolves the configuration file path relative to the project root if not absolute.
         - Loads the configuration file and merges it with default values.
@@ -304,7 +305,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             - `load_and_process_data`: Data loading and processing function.
             - `train_test_split`: Function for splitting data into training and testing sets.
             - `plot_model_fits` (optional): Function for generating diagnostic plots.
-            - `loss_fn` (optional): Loss function for the hypothesis engine.
+            - `loss_fn`: Loss function for the hypothesis engine.
         - Initializes a `PromptManager` for managing prompts during the experiment.
         - Supports multi-input configurations by extracting input names from the configuration.
         - Configures and runs the hypothesis engine with the specified parameters.
@@ -385,16 +386,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     spec_plot_fn = getattr(spec_module, "plot_model_fits", None)
     plot_model_fits_fn = _build_plot_model_fits_fn(spec_plot_fn) if callable(spec_plot_fn) else None
 
-    # Optional config-level loss override still supported.
-    loss_fn_path = config.get("loss_fn")
-    if loss_fn_path:
-        module_path, function_name = loss_fn_path.rsplit(".", 1)
-        loss_module = importlib.import_module(module_path)
-        raw_loss_fn = getattr(loss_module, function_name)
-        if not callable(raw_loss_fn):
-            raise ValueError(f"Configured loss_fn '{loss_fn_path}' is not callable.")
-    else:
-        raw_loss_fn = spec_loss_fn
+    raw_loss_fn = spec_loss_fn
     loss_fn = _build_loss_fn(raw_loss_fn)
 
     # Initialize prompt manager with merged config (includes DEFAULT prompts)
@@ -415,8 +407,6 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         params['exploration_topology'] = [1, 0]
         params['exploitation_topology'] = [1, 0]
         params['max_iter'] = 100 # --- USE WHEN JUST CHECKING THAT THE SCRIPT RUNS ---
-
-        params['param_estimator_refinement_rounds'] = 0
 
     for i in range(params['num_runs']):
         random_seed = params.get('random_seed', 42)

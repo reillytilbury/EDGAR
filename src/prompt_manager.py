@@ -134,8 +134,8 @@ class PromptManager:
         
         return prompt
     
-    def get_parameter_estimator_prompt_legacy(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100) -> str:
-        """Build full parameter estimator prompt from config (legacy mode).
+    def get_parameter_estimator_prompt(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100) -> str:
+        """Build full parameter estimator prompt from config (non-chat mode).
         
         This creates a self-contained prompt with all guidelines included.
         Use this when NOT using chat mode.
@@ -235,7 +235,7 @@ class PromptManager:
         
         return "\n\n".join([p for p in prompt_parts if p])
     
-    def get_parameter_estimator_prompt(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100) -> str:
+    def get_parameter_estimator_prompt_chat(self, programs_df : pd.DataFrame, model_code_string : str, max_lines : int = 100) -> str:
         """Build parameter estimator prompt for chat mode (dynamic content only).
         
         This creates a shorter prompt containing only the dynamic parts.

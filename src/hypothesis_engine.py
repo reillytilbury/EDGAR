@@ -253,7 +253,7 @@ def objective(model, param_estimator, x, y,
            (n_samples, n_targets, n_trials_split).
         loss_fn (function): Per-sample loss function.
                           Signature: loss_fn(y_pred, y_true) -> scalar/array.
-                          If None, defaults to quadratic loss.
+                          Required; no default.
         param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
         FAILED_PROGRAM_COST (float): Cost assigned to failed models. Default is np.inf.
@@ -271,7 +271,7 @@ def objective(model, param_estimator, x, y,
     """
     t_start = time.time()
     if loss_fn is None:
-        loss_fn = lambda y_pred, y_true: (y_true - y_pred) ** 2
+        raise ValueError("objective requires a loss_fn; none was provided.")
 
     if not (isinstance(x, (list, tuple, np.ndarray)) and len(x) == 2):
         raise ValueError("objective expects x as length-2 container: [x_train_trials, x_test_trials].")
@@ -541,7 +541,7 @@ def _programs_df_to_programs_list(programs_df: pd.DataFrame,
     n_samples = x_arr.shape[0]
 
     if loss_func is None:
-        loss_func = lambda y_pred, y_true: (y_true - y_pred) ** 2
+        raise ValueError("_programs_df_to_programs_list requires a loss_func; none was provided.")
 
     for _, row in programs_df.iterrows():
         model = row.get('program', row.get('model'))
@@ -743,10 +743,11 @@ async def generate_new_parameter_estimator(current_island,
                                            random_seed: int | None = None,
                                            island_chat_manager=None, island_id: int = None,
                                            batch_id: int = 0,
+                                           iteration: int | None = None,
                                            loss_fn=None,
                                            plot_model_fits=None,
                                            x_eval=None,
-                                           image_feedback_dir=None,):                                           
+                                           image_refinement_dir=None,):                                           
     """
     Generate and optionally refine a parameter-estimator function via LLM.
 
@@ -801,7 +802,7 @@ async def generate_new_parameter_estimator(current_island,
     # sort from worst to best (loss descending)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
     # Chat mode is not supported for parameter estimator generation/refinement.
-    prompt = prompt_manager.get_parameter_estimator_prompt_legacy(
+    prompt = prompt_manager.get_parameter_estimator_prompt(
         random_programs,
         model_code_string=model_code_string,
         max_lines=param_estimator_max_lines,
@@ -844,6 +845,17 @@ async def generate_new_parameter_estimator(current_island,
     if refine_rounds <= 0 or model_fn is None:
         return code_string, func
 
+    iter_label = "?" if iteration is None else str(iteration)
+    logging.info(
+        f"Param-est refinement start (iter={iter_label}, island={island_id}, "
+        f"batch={batch_id}, rounds={refine_rounds})."
+    )
+    print(
+        f"Param-est refinement start (iter={iter_label}, island={island_id}, "
+        f"batch={batch_id}, rounds={refine_rounds}).",
+        flush=True,
+    )
+
     best_code = code_string
     best_func = func
     best_loss = float(jnp.inf)
@@ -866,15 +878,24 @@ async def generate_new_parameter_estimator(current_island,
         best_func = current_func
 
     for r in range(refine_rounds):
-        if plot_model_fits is None or x_eval is None or image_feedback_dir is None:
+        logging.info(
+            f"Param-est refinement round {r+1}/{refine_rounds} "
+            f"(iter={iter_label}, island={island_id}, batch={batch_id})."
+        )
+        print(
+            f"Param-est refinement round {r+1}/{refine_rounds} "
+            f"(iter={iter_label}, island={island_id}, batch={batch_id}).",
+            flush=True,
+        )
+        if plot_model_fits is None or x_eval is None or image_refinement_dir is None:
             raise ValueError(
                 "Parameter estimator refinement requires image feedback. "
-                "Missing plot_model_fits/x_eval/image_feedback_dir."
+                "Missing plot_model_fits/x_eval/image_refinement_dir."
             )
         img_bytes = None
         try:
             img_path = os.path.join(
-                image_feedback_dir,
+                image_refinement_dir,
                 f"param_est_refine_island_{island_id}_batch_{batch_id}_r{r+1}.png",
             )
             plot_model_fits(
@@ -944,6 +965,16 @@ async def generate_new_parameter_estimator(current_island,
             loss_fn=loss_fn,
             fit_params=False,  # Don't fit parameters during refinement evaluation
             param_penalty_weight=param_penalty_weight,
+        )
+
+        logging.info(
+            f"Param-est refinement eval (iter={iter_label}, island={island_id}, "
+            f"batch={batch_id}, round={r+1}): loss={new_loss:.6g}."
+        )
+        print(
+            f"Param-est refinement eval (iter={iter_label}, island={island_id}, "
+            f"batch={batch_id}, round={r+1}): loss={new_loss:.6g}.",
+            flush=True,
         )
 
         if new_loss < current_loss:
@@ -1213,7 +1244,16 @@ async def hypothesis_engine(
     # create a directory for image diagnostics
     image_feedback_dir = os.path.join(full_dir, 'image_feedback')
     os.makedirs(image_feedback_dir, exist_ok=True)
+    image_prompts_dir = os.path.join(image_feedback_dir, 'prompts')
+    image_param_est_vs_gd_dir = os.path.join(image_feedback_dir, 'param_est_vs_gd')
+    image_param_est_refine_dir = os.path.join(image_feedback_dir, 'param_est_refinement')
+    os.makedirs(image_prompts_dir, exist_ok=True)
+    os.makedirs(image_param_est_vs_gd_dir, exist_ok=True)
+    os.makedirs(image_param_est_refine_dir, exist_ok=True)
     print("Created image feedback folder:", image_feedback_dir)
+    print("Created image prompts folder:", image_prompts_dir)
+    print("Created param-est vs gd folder:", image_param_est_vs_gd_dir)
+    print("Created param-est refinement folder:", image_param_est_refine_dir)
 
     # Initialize best loss tracking for live monitoring
     best_loss_log = []  # List of dicts: {iteration, timestamp, best_train_loss, best_island, ...}
@@ -1302,7 +1342,7 @@ async def hypothesis_engine(
             Y=Y[0, 0],
             programs_list=seed_programs_list,
             X_eval=X_eval_train,
-            save_path=os.path.join(image_feedback_dir, 'initial_programs.png'),
+            save_path=os.path.join(image_prompts_dir, 'initial_programs.png'),
             labels=['seed_1', 'seed_2'],
         )
 
@@ -1334,7 +1374,7 @@ async def hypothesis_engine(
         for island_idx in range(n_islands):
             for j in range(batch_size):
                 if has_spec_plotter:
-                    model_image_dirs[island_idx, j] = os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}.png')
+                    model_image_dirs[island_idx, j] = os.path.join(image_prompts_dir, f'iter_{i}_island_{island_idx}_batch_{j}.png')
                     # param_est_image_dirs[island_idx, j] = os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est.png')
                 else:
                     model_image_dirs[island_idx, j] = None
@@ -1400,9 +1440,10 @@ async def hypothesis_engine(
                 island_chat_manager=island_chat_manager,
                 island_id=island_idx,
                 batch_id=j,
+                iteration=i,
                 plot_model_fits=plot_model_fits,
                 x_eval=X_eval_train,
-                image_feedback_dir=image_feedback_dir,
+                image_refinement_dir=image_param_est_refine_dir,
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)
@@ -1515,7 +1556,7 @@ async def hypothesis_engine(
                         },
                     ],
                     X_eval=X_eval_train,
-                    save_path=os.path.join(image_feedback_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est_vs_gd.png'),
+                    save_path=os.path.join(image_param_est_vs_gd_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est_vs_gd.png'),
                     labels=['PE', 'GD'],
                 )
             
