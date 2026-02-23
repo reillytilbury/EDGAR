@@ -66,6 +66,7 @@ def _build_seed_nodes():
             "train_fit_image_path": None,
             "test_fit_image_path": None,
             "is_seed": True,
+            "is_winner": False,
         })
     return seeds
 
@@ -125,6 +126,7 @@ def _build_sidebar_data(records_by_id):
             "island": rec.get("birth_island"),
             "batch": rec.get("batch_index"),
             "train_loss": rec.get("train_loss"),
+            "test_loss": rec.get("test_loss"),
             "initial_loss": rec.get("initial_loss"),
             "mode": rec.get("mode"),
             "temperature": rec.get("temperature"),
@@ -175,6 +177,16 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
     node_labels = []
     node_hover = []
     node_colors = []
+    node_symbols = []
+    node_sizes = []
+
+    # Find the winning node (marked with is_winner flag)
+    best_node = None
+    for node in G.nodes():
+        rec = records_by_id.get(node, {})
+        if rec.get("is_winner", False):
+            best_node = node
+            break
 
     # Compute loss range for coloring
     losses = [r.get("train_loss") for r in records_by_id.values()
@@ -198,6 +210,7 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
         iteration = rec.get("iteration_number", "?")
         batch = rec.get("batch_index", "?")
         loss = rec.get("train_loss")
+        test_loss = rec.get("test_loss")
         mode = rec.get("mode", "")
         llm = rec.get("llm_name", "")
 
@@ -209,13 +222,22 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
 
         hover_parts = [f"<b>{label}</b>"]
         if loss is not None:
-            hover_parts.append(f"loss: {loss:.4f}")
+            hover_parts.append(f"train loss: {loss:.4f}")
+        if test_loss is not None:
+            hover_parts.append(f"test loss: {test_loss:.4f}")
         hover_parts.append(f"mode: {mode}")
         if llm:
             hover_parts.append(f"LLM: {llm}")
         node_hover.append("<br>".join(hover_parts))
 
         node_colors.append(_loss_to_color(loss, min_loss, max_loss))
+
+        if node == best_node:
+            node_symbols.append("star")
+            node_sizes.append(22)
+        else:
+            node_symbols.append("circle")
+            node_sizes.append(14)
 
     # Build sidebar data as JSON for embedding
     sidebar_data = _build_sidebar_data(records_by_id)
@@ -239,6 +261,8 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
     node_labels_json = json.dumps(node_labels)
     node_hover_json = json.dumps(node_hover)
     node_colors_json = json.dumps(node_colors)
+    node_symbols_json = json.dumps(node_symbols)
+    node_sizes_json = json.dumps(node_sizes)
     title_json = json.dumps(title)
 
     html_content = f"""<!DOCTYPE html>
@@ -302,7 +326,8 @@ const nodeTrace = {{
   hoverinfo: 'text',
   marker: {{
     color: {node_colors_json},
-    size: 14,
+    symbol: {node_symbols_json},
+    size: {node_sizes_json},
     line: {{ width: 1.5, color: '#333' }}
   }},
   type: 'scatter'
@@ -357,6 +382,7 @@ function showSidebar(nodeId) {{
   h += '<div class="field"><span class="field-label">Island:</span> <span class="field-value">' + escapeHtml(d.island) + '</span></div>';
   h += '<div class="field"><span class="field-label">Batch:</span> <span class="field-value">' + escapeHtml(d.batch) + '</span></div>';
   h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Mode:</span> <span class="field-value">' + escapeHtml(d.mode) + '</span></div>';
   h += '<div class="field"><span class="field-label">Temperature:</span> <span class="field-value">' + escapeHtml(d.temperature) + '</span></div>';

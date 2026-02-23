@@ -1112,6 +1112,53 @@ def _append_generation_record(filepath, record):
         f.write(json.dumps(record, default=str) + '\n')
 
 
+def _update_generation_log_test_losses_and_mark_winner(filepath, islands):
+    """Update JSONL records in-place with test_loss values and mark the winner.
+
+    Args:
+        filepath: Path to the JSONL generation log
+        islands: List of island dataframes with test_loss values
+    """
+    if not os.path.isfile(filepath):
+        return
+    # Build lookup: (iteration, island, batch) -> test_loss
+    test_loss_lookup = {}
+    for island_idx, island_df in enumerate(islands):
+        for _, row in island_df.iterrows():
+            key = (int(row['iteration_number']), int(row['birth_island']), int(row['batch_index']))
+            tl = row.get('test_loss')
+            if tl is not None and not (isinstance(tl, float) and np.isinf(tl)):
+                test_loss_lookup[key] = float(tl)
+
+    # from test_loss_lookup, find the best test loss (i.e. smallest) and corresponding key 
+    best_test_loss = float('inf')
+    best_key = None
+    for key, tl in test_loss_lookup.items():
+        if tl < best_test_loss:
+            best_test_loss = tl
+            best_key = key
+    logging.info(f"Best test loss found: {best_test_loss:.6g} for program {best_key}.")
+
+    # compare best_key to winner_id if provided
+    winner_id = best_key    
+
+    # Read, update, rewrite
+    with open(filepath, 'r') as f:
+        lines = f.readlines()
+    with open(filepath, 'w') as f:
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            key = (rec['iteration_number'], rec['birth_island'], rec['batch_index'])
+            if key in test_loss_lookup:
+                rec['test_loss'] = test_loss_lookup[key]
+            # Mark the winner
+            rec['is_winner'] = (winner_id is not None and key == winner_id)
+            f.write(json.dumps(rec, default=str) + '\n')
+
+
 async def hypothesis_engine(
         n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
         critical_population_size=12, min_wise_population_size=0, n_migrants=2, 
@@ -1795,6 +1842,9 @@ async def hypothesis_engine(
     # combined_programs_dataframe = combined_programs_dataframe.sort_values(by='test_loss').reset_index(drop=True)
     # sort by mean loss
     combined_programs_dataframe = combined_programs_dataframe.sort_values(by='mean_loss').reset_index(drop=True)
+
+    # Update generation log with test losses and winner flag for family tree visualization
+    _update_generation_log_test_losses_and_mark_winner(generation_log_path, islands)
     # save the combined programs dataframe, reordering columns to have order:
     # iteration_number, birth_island, batch_index, train_loss, test_loss, program_code_string, parameter_estimator_code_string, program, parameter_estimator, params, parent1_id, parent2_id
     combined_programs_dataframe = combined_programs_dataframe[['iteration_number', 'birth_island', 'batch_index',
