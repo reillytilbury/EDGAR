@@ -1,4 +1,5 @@
 import inspect
+import json
 import re
 import os
 import logging
@@ -653,7 +654,8 @@ async def generate_new_model(current_island, llm_name, client,
         use_large_model (bool): Whether chat mode should use large model path.
 
     Returns:
-        tuple[str | None, str | None, tuple]: ``(code_string, prompt, parent_ids)``.
+        tuple[str | None, str | None, str | None, tuple]:
+            ``(code_string, prompt, llm_output, parent_ids)``.
             ``code_string`` is ``None`` when no valid code block is produced.
     """
     k = min(k_max, len(current_island))
@@ -729,15 +731,15 @@ async def generate_new_model(current_island, llm_name, client,
         logging.info(
             f"Model generation returned no code block (island={island_id}, batch={batch_id})."
         )
-        return None, None, (parent1_id, parent2_id)
+        return None, None, None, (parent1_id, parent2_id)
     code_string = code_string.replace(f'def {model_name}_v{k+1}(', f'def {model_name}(')
     logging.info(
         f"Generated model candidate (island={island_id}, batch={batch_id}):\n"
         f"Prompt:\n{program_prompt}\n\n"
         f"Model (NumPy):\n{code_string}\n"
     )
-    
-    return code_string, program_prompt, (parent1_id, parent2_id)
+
+    return code_string, program_prompt, llm_output, (parent1_id, parent2_id)
 
 
 async def generate_new_parameter_estimator(current_island, 
@@ -791,18 +793,21 @@ async def generate_new_parameter_estimator(current_island,
         loss_fn (callable | None): Loss function forwarded to ``objective``.
 
     Returns:
-        tuple[str | None, callable | None]: Best estimator code string and parsed
-            callable. Returns ``(None, None)`` when generation/validation fails.
+        tuple[str | None, callable | None, dict]: Best estimator code string, parsed
+            callable, and metadata dict with prompt/response info.
+            Returns ``(None, None, pe_metadata)`` when generation/validation fails.
     """
+    pe_metadata = {"initial_prompt": None, "initial_response": None,
+                   "refinement_prompts": [], "refinement_responses": []}
     if model_code_string is None:
         logging.info("No model code string provided, skipping parameter estimator generation.")
-        return None, None
+        return None, None, pe_metadata
     if not (isinstance(x, (list, tuple, np.ndarray)) and len(x) == 2):
         logging.info("Parameter estimator generation expects x split as [train_trials, test_trials].")
-        return None, None
+        return None, None, pe_metadata
     if not (isinstance(y, (list, tuple, np.ndarray)) and len(y) == 2):
         logging.info("Parameter estimator generation expects y split as [train_trials, test_trials].")
-        return None, None
+        return None, None, pe_metadata
 
     k = min(k_max, len(current_island))
     sample_seed = None
@@ -828,24 +833,26 @@ async def generate_new_parameter_estimator(current_island,
         thinking_budget=0.25,
         img_bytes=None,
     )
+    pe_metadata["initial_prompt"] = prompt
+    pe_metadata["initial_response"] = llm_output
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
         logging.info("No code block found in the LLM output for parameter estimator, skipping.")
-        return None, None
+        return None, None, pe_metadata
     contains_swear_word = any(word in code_string for word in swear_words)
     if contains_swear_word:
         # find the word that is in the code_string
         swear_word = next((word for word in swear_words if word in code_string), None)
         logging.info(f"Parameter estimator code contains swear word: {swear_word}, skipping.")
         logging.info(f"Code string was:\n{code_string}")
-        return None, None
+        return None, None, pe_metadata
     code_string = code_string.replace(f'def parameter_estimator_v{k+1}(', 'def parameter_estimator(')
     func = utils.str_to_func(code_string, 'parameter_estimator')
 
     if func is None:
         logging.info("Failed to parse parameter estimator code, skipping.")
-        return None, None
+        return None, None, pe_metadata
 
     logging.info(
         f"Generated initial parameter estimator candidate (island={island_id}, batch={batch_id}):\n"
@@ -854,7 +861,7 @@ async def generate_new_parameter_estimator(current_island,
     )
 
     if refine_rounds <= 0 or model_fn is None:
-        return code_string, func
+        return code_string, func, pe_metadata
 
     iter_label = "?" if iteration is None else str(iteration)
     logging.info(
@@ -953,6 +960,8 @@ async def generate_new_parameter_estimator(current_island,
             thinking_budget=0.25,
             img_bytes=img_bytes,
         )
+        pe_metadata["refinement_prompts"].append(refine_prompt)
+        pe_metadata["refinement_responses"].append(llm_output)
 
         new_code = utils.extract_code_block(llm_output)
         if new_code is None:
@@ -1001,7 +1010,7 @@ async def generate_new_parameter_estimator(current_island,
                 f"Refinement did not improve loss ({new_loss:.4f} >= {current_loss:.4f}); keeping current."
             )
 
-    return best_code, best_func
+    return best_code, best_func, pe_metadata
 
 
 async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='gemini-2.0-flash-lite') -> tuple[str, callable]:
@@ -1094,6 +1103,12 @@ def _run_translation_check_on_eval(
         params=np.asarray(params_subset),
         max_eval_trials=max_eval_trials,
     )
+
+
+def _append_generation_record(filepath, record):
+    """Append a single generation record as a JSON line."""
+    with open(filepath, 'a') as f:
+        f.write(json.dumps(record, default=str) + '\n')
 
 
 async def hypothesis_engine(
@@ -1266,6 +1281,9 @@ async def hypothesis_engine(
     print("Created param-est vs gd folder:", image_param_est_vs_gd_dir)
     print("Created param-est refinement folder:", image_param_est_refine_dir)
 
+    # Initialize generation log for family tree data capture
+    generation_log_path = os.path.join(full_dir, 'program_generation_log.jsonl')
+
     # Initialize best loss tracking for live monitoring
     best_loss_log = []  # List of dicts: {iteration, timestamp, best_train_loss, best_island, ...}
     best_loss_path = os.path.join(full_dir, 'best_loss_log.csv')
@@ -1314,7 +1332,7 @@ async def hypothesis_engine(
                                     'iteration_number': -1,
                                     'birth_island': -1,  # Birth island is set to a special value for initial programs
                                     'batch_index': i,
-                                    'train_loss': loss, 
+                                    'train_loss': loss,
                                     'test_loss': None,  # all test losses will be computed at the end
                                     'llm_name': None,
                                     'params': [params],
@@ -1417,12 +1435,13 @@ async def hypothesis_engine(
         model_results = await asyncio.gather(*model_generation_tasks)
         model_code_strings = [result[0] for result in model_results]
         model_prompts = [result[1] for result in model_results]
-        parent_ids = [result[2] for result in model_results]
+        model_llm_responses = [result[2] for result in model_results]
+        parent_ids = [result[3] for result in model_results]
         
         # convert to jax
         model_function_translation_tasks = [translate_to_jax(code_string, client, prompt_manager, tiny_lm_name) for code_string in model_code_strings]
         jax_results = await asyncio.gather(*model_function_translation_tasks)
-        model_results = [(model_code_strings[j], model_prompts[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
+        model_results = [(model_code_strings[j], model_prompts[j], model_llm_responses[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
         # build parameter‑estimator tasks
         if param_estimator_refinement_rounds > 0 and not has_spec_plotter:
@@ -1434,7 +1453,7 @@ async def hypothesis_engine(
             generate_new_parameter_estimator(
                 current_island=islands[island_idx],
                 model_code_string=model_code_strings[island_idx * batch_size + j],
-                model_fn=model_results[island_idx * batch_size + j][3],
+                model_fn=model_results[island_idx * batch_size + j][4],
                 llm_name=little_lm_name,
                 client=client,
                 x=X[0],
@@ -1474,7 +1493,7 @@ async def hypothesis_engine(
         success_rate = 0.0
         for island_idx, j in np.ndindex(n_islands, batch_size):
             logging.info(f"id={i},{island_idx},{j}")
-            model_code_string, prompt, model_code_string_jax, model_new, param_est_code_string, param_est_new = island_results[island_idx][j]
+            model_code_string, prompt, model_llm_response, model_code_string_jax, model_new, param_est_code_string, param_est_new, pe_metadata = island_results[island_idx][j]
             parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
 
             logging.info(f"Prompt: \n{prompt}\n")
@@ -1596,6 +1615,32 @@ async def hypothesis_engine(
                                         })
             
             islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
+
+            # Write generation record to JSON log for family tree
+            _append_generation_record(generation_log_path, {
+                "iteration_number": i,
+                "birth_island": island_idx,
+                "batch_index": j,
+                "parent1_id": list(parent1_id),
+                "parent2_id": list(parent2_id),
+                "train_loss": float(loss),
+                "initial_loss": float(initial_loss),
+                "model_prompt": prompt,
+                "model_llm_response": model_llm_response,
+                "model_code_numpy": model_code_string,
+                "model_code_jax": model_code_string_jax,
+                "param_est_prompt": pe_metadata.get("initial_prompt"),
+                "param_est_llm_response": pe_metadata.get("initial_response"),
+                "param_est_code": param_est_code_string,
+                "param_est_refinement_prompts": pe_metadata.get("refinement_prompts", []),
+                "param_est_refinement_responses": pe_metadata.get("refinement_responses", []),
+                "llm_name": llm_name,
+                "temperature": float(temperature),
+                "mode": mode,
+                "use_large_model": use_large_model,
+                "image_prompt_path": model_image_dirs[island_idx, j],
+            })
+
             success_rate += 1 / (n_islands * batch_size)
             print(f"iteration {i}, island {island_idx}, batch {j}, loss: {loss:.2f}", flush=True)
             print('-' * 50, flush=True)
