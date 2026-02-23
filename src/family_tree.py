@@ -6,7 +6,6 @@ between programs across iterations, with click-to-inspect details.
 
 import json
 import os
-import base64
 import html as html_module
 from collections import defaultdict
 
@@ -64,6 +63,8 @@ def _build_seed_nodes():
             "parent1_id": None,
             "parent2_id": None,
             "image_prompt_path": None,
+            "train_fit_image_path": None,
+            "test_fit_image_path": None,
             "is_seed": True,
         })
     return seeds
@@ -136,29 +137,27 @@ def _build_sidebar_data(records_by_id):
             "model_llm_response": rec.get("model_llm_response"),
             "param_est_prompt": rec.get("param_est_prompt", rec.get("param_est_prompt")),
             "param_est_llm_response": rec.get("param_est_llm_response"),
-            "image_path": rec.get("image_prompt_path"),
+            "image_prompt_path": rec.get("image_prompt_path"),
+            "train_fit_image_path": rec.get("train_fit_image_path"),
+            "test_fit_image_path": rec.get("test_fit_image_path"),
             "is_seed": rec.get("is_seed", False),
         }
         sidebar[node_id] = entry
     return sidebar
 
 
-def _try_embed_image(image_path):
-    """Return base64-encoded img tag if file exists, else a text note."""
-    if not image_path or not os.path.isfile(image_path):
-        return ""
-    try:
-        with open(image_path, "rb") as f:
-            data = base64.b64encode(f.read()).decode("utf-8")
-        ext = os.path.splitext(image_path)[1].lower().lstrip(".")
-        if ext == "jpg":
-            ext = "jpeg"
-        return f'<img src="data:image/{ext};base64,{data}" style="max-width:100%;margin-top:8px;">'
-    except Exception:
-        return f"<p><em>Image: {_escape(image_path)}</em></p>"
+def _resolve_image_path(raw_path, image_base_dir):
+    """Resolve an image path: make absolute if relative, return None if missing."""
+    if not raw_path:
+        return None
+    if not os.path.isabs(raw_path) and image_base_dir:
+        raw_path = os.path.join(image_base_dir, raw_path)
+    if os.path.isfile(raw_path):
+        return raw_path
+    return None
 
 
-def _generate_html(G, pos, records_by_id, title, image_base_dir=None):
+def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_output_dir=None):
     """Generate a standalone interactive HTML string for the family tree."""
     # Prepare edge traces
     edge_x = []
@@ -221,12 +220,15 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None):
     # Build sidebar data as JSON for embedding
     sidebar_data = _build_sidebar_data(records_by_id)
 
-    # Try to embed images into sidebar data
+    # Resolve image paths to relative paths from the HTML output directory
+    rel_base = html_output_dir or image_base_dir or "."
     for nid, entry in sidebar_data.items():
-        img_path = entry.get("image_path")
-        if img_path and image_base_dir and not os.path.isabs(img_path):
-            img_path = os.path.join(image_base_dir, img_path)
-        entry["image_html"] = _try_embed_image(img_path)
+        for key in ("image_prompt_path", "train_fit_image_path", "test_fit_image_path"):
+            abs_path = _resolve_image_path(entry.get(key), image_base_dir)
+            if abs_path:
+                entry[key] = os.path.relpath(abs_path, rel_base)
+            else:
+                entry[key] = None
 
     sidebar_json = json.dumps(sidebar_data, default=str)
     edge_x_json = json.dumps(edge_x)
@@ -391,9 +393,15 @@ function showSidebar(nodeId) {{
     h += '<details><summary>Param Estimator LLM Response</summary><pre>' + escapeHtml(d.param_est_llm_response) + '</pre></details>';
   }}
 
-  // Diagnostic image
-  if (d.image_html) {{
-    h += '<details open><summary>Diagnostic Image</summary>' + d.image_html + '</details>';
+  // Images
+  if (d.image_prompt_path) {{
+    h += '<details open><summary>Prompt Image (Parents)</summary><img src="' + d.image_prompt_path + '" style="max-width:100%;margin-top:8px;"></details>';
+  }}
+  if (d.train_fit_image_path) {{
+    h += '<details open><summary>Train Fit</summary><img src="' + d.train_fit_image_path + '" style="max-width:100%;margin-top:8px;"></details>';
+  }}
+  if (d.test_fit_image_path) {{
+    h += '<details open><summary>Test Fit</summary><img src="' + d.test_fit_image_path + '" style="max-width:100%;margin-top:8px;"></details>';
   }}
 
   sc.innerHTML = h;
@@ -483,7 +491,8 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
         pos = _compute_hierarchical_layout(G, island_records)
         html = _generate_html(G, pos, island_records,
                               f"Family Tree — Island {island_idx}",
-                              image_base_dir=image_base_dir)
+                              image_base_dir=image_base_dir,
+                              html_output_dir=output_dir)
         out_path = os.path.join(output_dir, f"family_tree_island_{island_idx}.html")
         with open(out_path, "w") as f:
             f.write(html)
@@ -502,7 +511,8 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
     pos_all = _compute_hierarchical_layout(G_all, records_by_id)
     html_all = _generate_html(G_all, pos_all, records_by_id,
                               "Family Tree — All Islands",
-                              image_base_dir=image_base_dir)
+                              image_base_dir=image_base_dir,
+                              html_output_dir=output_dir)
     out_path_all = os.path.join(output_dir, "family_tree_all.html")
     with open(out_path_all, "w") as f:
         f.write(html_all)

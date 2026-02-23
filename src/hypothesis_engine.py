@@ -1277,10 +1277,13 @@ async def hypothesis_engine(
     os.makedirs(image_prompts_dir, exist_ok=True)
     os.makedirs(image_param_est_vs_gd_dir, exist_ok=True)
     os.makedirs(image_param_est_refine_dir, exist_ok=True)
+    image_family_tree_fits_dir = os.path.join(image_feedback_dir, 'family_tree_fits')
+    os.makedirs(image_family_tree_fits_dir, exist_ok=True)
     print("Created image feedback folder:", image_feedback_dir)
     print("Created image prompts folder:", image_prompts_dir)
     print("Created param-est vs gd folder:", image_param_est_vs_gd_dir)
     print("Created param-est refinement folder:", image_param_est_refine_dir)
+    print("Created family tree fits folder:", image_family_tree_fits_dir)
 
     # Initialize generation log for family tree data capture
     generation_log_path = os.path.join(full_dir, 'program_generation_log.jsonl')
@@ -1554,7 +1557,8 @@ async def hypothesis_engine(
             )
             logging.info(f"Loss: {loss:.2f}\n")
 
-
+            train_fit_path = None
+            test_fit_path = None
             # plot the fits of the neuron model and parameter estimator if using image feedback
             if has_spec_plotter:
                 initial_params_plot = np.asarray(initial_params).copy()
@@ -1591,7 +1595,34 @@ async def hypothesis_engine(
                     save_path=os.path.join(image_param_est_vs_gd_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est_vs_gd.png'),
                     labels=['PE', 'GD'],
                 )
-            
+                # Per-program train/test fit images for family tree sidebar
+                train_fit_path = os.path.join(image_family_tree_fits_dir, f'iter_{i}_island_{island_idx}_batch_{j}_train_fit.png')
+                plot_model_fits(
+                    X=X[0, 0],
+                    Y=Y[0, 0],
+                    programs_list=[{
+                        "model": model_new,
+                        "params": optimized_params_plot,
+                        "losses": np.full(X[0, 0].shape[0], float(loss)),
+                    }],
+                    X_eval=X_eval_train,
+                    save_path=train_fit_path,
+                    labels=['Model'],
+                )
+                test_fit_path = os.path.join(image_family_tree_fits_dir, f'iter_{i}_island_{island_idx}_batch_{j}_test_fit.png')
+                plot_model_fits(
+                    X=X[1, 1],
+                    Y=Y[1, 1],
+                    programs_list=[{
+                        "model": model_new,
+                        "params": optimized_params_plot,
+                        "losses": np.full(X[1, 1].shape[0], float(loss)),
+                    }],
+                    X_eval=X_eval_test,
+                    save_path=test_fit_path,
+                    labels=['Model'],
+                )
+
             param_names = [n for n in inspect.signature(model_new).parameters if n != "theta"]
             if optimized_params.shape[1] == len(param_names):
                 df = pd.DataFrame(np.array(optimized_params)[:10], columns=param_names)
@@ -1640,6 +1671,8 @@ async def hypothesis_engine(
                 "mode": mode,
                 "use_large_model": use_large_model,
                 "image_prompt_path": model_image_dirs[island_idx, j],
+                "train_fit_image_path": train_fit_path,
+                "test_fit_image_path": test_fit_path,
             })
 
             success_rate += 1 / (n_islands * batch_size)
