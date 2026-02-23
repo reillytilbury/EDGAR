@@ -1,9 +1,10 @@
 anthropic==0.50.0
 google-genai==1.51.0
-jax==0.4.8
+jax==0.4.38
 jaxlib==0.4.38
 jaxopt==0.8.5
 matplotlib==3.10.3
+networkx>=3.2
 numpy==2.2.6
 optax==0.2.5
 pandas==2.2.3
