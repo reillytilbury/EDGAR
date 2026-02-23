@@ -10,6 +10,7 @@ import optax
 import pandas as pd
 from pathlib import Path
 from . import utils, llm_helper
+from . import utils, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .data_structures import ensure_inputs, ensure_outputs
 from .evolution_diagnostics import plot_train_vs_test_loss as plot_train_vs_test_loss_shared
@@ -324,6 +325,8 @@ def objective(model, param_estimator, x, y,
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
     # Per-sample loss function
+
+    # Per-sample loss function
     def loss_single_sample(params, x_i, y_i):
         y_pred = model(x_i, *params)
         if y_i.ndim == 1:
@@ -337,10 +340,17 @@ def objective(model, param_estimator, x, y,
 
     # Vectorize over samples
     # params: (n_samples, n_params), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
+    # params: (n_samples, n_params), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
     # Output: (n_samples,)
     loss_total = jax.vmap(loss_single_sample, in_axes=(0, 0, 0), out_axes=0)
 
+
     # Mini-batched loss and gradient computation to avoid GPU OOM
+    n_train_trials_x = x_train.shape[2]
+    n_train_trials_y = y_train.shape[2]
+    trials_matched = (n_train_trials_x == n_train_trials_y)
+    effective_trial_batch_size = n_train_trials_x if trial_batch_size is None else int(trial_batch_size)
+    # Scalar single-feature full-batch fast path only when using default loss
     n_train_trials_x = x_train.shape[2]
     n_train_trials_y = y_train.shape[2]
     trials_matched = (n_train_trials_x == n_train_trials_y)
@@ -356,6 +366,7 @@ def objective(model, param_estimator, x, y,
         """Compute sum of losses for one batch (JIT-compiled)."""
         batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
         return jnp.sum(batch_losses)
+
 
     # Combined loss and gradient computation - more efficient than separate calls
     loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
