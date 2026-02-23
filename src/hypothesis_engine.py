@@ -1439,6 +1439,7 @@ async def hypothesis_engine(
                 client=client,
                 x=X[0],
                 y=Y[0],
+                loss_fn=loss_fn,
                 prompt_manager=prompt_manager,
                 mode=mode,
                 k_max=2,
