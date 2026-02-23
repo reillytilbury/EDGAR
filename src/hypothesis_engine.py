@@ -15,6 +15,7 @@ from . import utils, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .data_structures import ensure_inputs, ensure_outputs
 from .evolution_diagnostics import plot_train_vs_test_loss as plot_train_vs_test_loss_shared
+from .family_tree import create_family_tree
 from tqdm import tqdm
 from google import genai
 from dotenv import load_dotenv
@@ -1827,6 +1828,9 @@ async def hypothesis_engine(
                     labels=['model'],
                 )
     
+    # Generate family tree visualizations
+    create_family_tree(generation_log_path, full_dir, n_islands)
+
     # Log final token usage summary (if using chat mode)
     if island_chat_manager is not None:
         island_chat_manager.log_final_summary()
