@@ -11,10 +11,8 @@ functions used by the engine:
      - `(n_samples, n_eval)` for single-input experiments, or
      - `(n_samples, n_features, n_eval)` for multi-input experiments.
 
-2. `plot_model_fits(plot_data, ...)`
+2. `plot_model_fits(X, Y, programs_list, ...)`
    - Draws multi-model fit diagnostics for selected samples/cells.
-   - Receives precomputed tensors from the engine in `plot_data` and should
-     only handle visualization decisions (layout/styling/annotations).
    - Called repeatedly during runs for image feedback and saved diagnostics.
 
 Process in a typical run:
@@ -23,9 +21,8 @@ Process in a typical run:
 - `hypothesis_engine` calls `select_evaluation_points(...)` once on training
   inputs to get evaluation inputs for the run.
 - `hypothesis_engine` computes `evaluation_matrix` values using those inputs.
-- `hypothesis_engine` prepares `plot_data` (predictions, observations, losses,
-  evaluation-grid outputs, and subplot metadata) and then calls plotting
-  functions to save iteration/final figures.
+- `hypothesis_engine` passes raw inputs/outputs plus program parameters
+  to task-specific plotting functions to save iteration/final figures.
 
 This module is the contract boundary that guarantees every experiment exposes
 the same diagnostics entry points while still letting each task control
@@ -35,27 +32,10 @@ evaluation-point policy and visualization style.
 import importlib.util
 import logging
 from pathlib import Path
-from typing import Protocol, Optional, TypedDict, runtime_checkable
+from typing import Protocol, Optional, runtime_checkable
 import numpy as np
 import pandas as pd
 import jax.numpy as jnp
-
-
-class ModelFitPlotData(TypedDict):
-    """Structured payload consumed by experiment `plot_model_fits(plot_data=...)`."""
-
-    sample_selection: np.ndarray   # (n_samples,) source sample indices selected for plotting
-    inputs_full: jnp.ndarray       # (n_samples, n_features, n_trials) full input tensor per sample
-    inputs_plot: jnp.ndarray       # (n_samples, n_trials) input values used on the x-axis for 1D plots
-    observed_outputs: jnp.ndarray  # (n_samples, n_trials) observed target/output values
-    trial_predictions: jnp.ndarray # (n_models, n_samples, n_trials) model predictions on observed trials
-    model_loss_dict: dict          # {model_name: List[float]} list of loss per sample of each model (e.g., MSE on observed trials for each sample)
-    n_grid_side: int               # subplot grid side length; n_grid_side^2 == n_samples
-    n_models: int                  # number of models being compared
-    n_samples: int                 # number of selected samples
-    n_trials_x: int                # number of observed trials per sample (inputs)
-    n_trials_y: int                # number of observed trials per sample (outputs)
-    input_idx: int                 # feature index used to build `inputs_plot` for 1D views
 
 
 @runtime_checkable
@@ -76,7 +56,9 @@ class DiagnosticsProtocol(Protocol):
         ...
 
     def plot_model_fits(self,
-                        plot_data: ModelFitPlotData,
+                        X: jnp.ndarray,
+                        Y: jnp.ndarray,
+                        programs_list: list,
                         colours: list = ...,
                         labels: Optional[list] = None,
                         title: str = '',
@@ -87,12 +69,7 @@ class DiagnosticsProtocol(Protocol):
                         legend_fontsize: int = 12,
                         dpi: float = 100.0,
                         save_path: Optional[str] = None) -> None:
-        """
-        Plot fits of multiple models using precomputed plotting tensors.
-
-        Required `plot_data` keys are produced by
-        `hypothesis_engine.prepare_model_fit_plot_data(...)`.
-        """
+        """Plot fits of multiple models using raw inputs/outputs."""
         ...
 
 
@@ -221,7 +198,7 @@ def load_diagnostics(experiment_path: Optional[str] = None):
         # Load diagnostics (returns None if not found)
         diag = load_diagnostics('experiments/orientation_tuning')
         if diag:
-            diag.plot_model_fits(plot_data=...)
+        diag.plot_model_fits(X=..., Y=..., programs_list=..., save_path=...)
     """
     if experiment_path is None:
         logging.info("No diagnostics path specified, diagnostics disabled.")

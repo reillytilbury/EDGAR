@@ -244,7 +244,6 @@ experiment_params:
   learning_rate: 3e-3
   param_penalty_weight: 0.01
   FAILED_PROGRAM_COST: .inf
-  use_image_feedback: true
   exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
   exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
   tiny_lm_name: gemini-2.0-flash-lite

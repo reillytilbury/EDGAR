@@ -1,0 +1,167 @@
+# ========================
+# Project Identity
+# ========================
+
+# Task folder name under projects/.
+task: grid_cells
+
+# Prompt-facing model family name.
+model_name: grid_model
+
+
+# ========================
+# Data Defaults
+# ========================
+
+# Data-processing overrides for this task.
+data_processing_params:
+  # data_path: /home/dabin/data/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
+  data_path: /Users/reillytilbury/Desktop/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
+  time_start: 27826
+  time_end: 31223
+  time_bin_ms: 100
+  speed_threshold: 2.5
+  max_trials: 20_000
+  min_spikes: 200
+  min_active_frac: 0.02
+  min_modulation: 1.0
+  min_spatial_reliability: 0.5
+  normalize_per_sample: true
+  target_l2_norm: 100.0
+  min_l2_norm: 1e-6
+
+# Input variable definitions used by prompts and model code.
+inputs:
+- name: x
+  description: Normalized x position in arena [-1, 1]
+- name: y
+  description: Normalized y position in arena [-1, 1]
+
+
+# ========================
+# Experiment Runtime
+# ========================
+
+# Runtime overrides for this task.
+experiment_params:
+  n_iterations: 5
+  max_iter: 100
+  learning_rate: 1e-3
+  trial_batch_size: 5000
+  fit_params: False
+  x_min: [-1.0, -1.0]
+  x_max: [1.0, 1.0]
+  n_bins: 100
+
+
+# ========================
+# Prompt Defaults
+# ========================
+
+# Prompt text overrides for this task.
+prompts:
+  program_prompt:
+    base: 'You are an AI scientist. The programs below are biological models.
+      The models are sorted from highest to lowest loss.
+
+      Your task is to create a new model, grid_model_v{next_version}, that has a
+      lower loss than the models below.
+
+      *Analyze* the progression of the models, *generalize* the improvements, and
+      *create* a new model that is better than *all* previous models.
+      '
+    explore: 'Use the models below as *inspiration*, but be *creative* and *invent*
+      something new. Which features in the models below correlate with lower loss?
+      Find these features and *extrapolate* them. You should also *combine* features
+      from several models, and *experiment* with new ideas.'
+    exploit: 'Use the models below as a *template* to create a new model. Which
+      features in the models below correlate with lower loss? Find these features
+      and *extrapolate* them. Focus on *exploiting* the strengths of the existing
+      models and *eliminating* their weaknesses or *redundancies*.
+      You will be *penalized* for complexity, so make the new model as *simple*
+      as possible while still being better than the previous models.'
+    image_analysis: |
+      **Image Analysis Instructions:**
+
+      Attached are diagnostic plots of model fits.
+      Identify systematic failure modes across multiple samples:
+      * Where do model curves miss the data trend (bias, wrong curvature, wrong oscillation)?
+      * Are errors concentrated near specific regions (edges vs center)?
+      * Do models underfit or overfit high-amplitude regions?
+
+      Use this analysis to design `grid_model_v{next_version}` with lower loss.
+      Include concise image-based reasoning in the docstring.
+    code_guidelines: '**Code Generation Guidelines:**
+
+      * Import any packages you use.
+
+      * Do not include any text other than the code.
+
+      * Ensure all free parameters are numeric, not strings.
+
+      '
+
+    docstring_guidelines: '**Docstring Guidelines:**
+
+      * Begin by listing the parent models and give them descriptive names.
+
+      * Do not refer to the current model as `grid_model_v{next_version}`. Instead,
+      refer to it as "this model".
+
+      * Provide a simple equation for the model, including all free parameters.
+
+      * Include a brief description of how the model improves upon the previous models.
+
+      '
+  parameter_estimator:
+    base: "You are an AI scientist. Your task is to create a simple parameter estimator\
+      \ function, parameter_estimator_v{next_version}, to estimate the free parameters\
+      \ of the latest model, grid_model_v{next_version}.\n*Analyze* the progression\
+      \ of the parameter estimators, *generalize* the improvements, and *create* a\
+      \ new parameter estimator that is better than *all* previous estimators.\n"
+    refinement_image_instructions: |
+      Image instructions:
+      - Compare predicted rate maps to data across multiple cells.
+      - Identify mismatches in grid spacing, orientation, phase, and field width.
+      - Adjust parameter estimation to correct consistent spacing/phase errors.
+      - Base changes on repeated patterns, not single-cell outliers.
+    code_guidelines: '**Code Generation Guidelines:**
+
+      * Import any packages you use.
+
+      * Do not include any text other than the code.
+
+      * The only arguments to the function should be the inputs (X) and the firing
+      rates.
+
+      * Your response **must** be less than {max_lines} lines (including imports).
+      If it is longer, it will be immediately rejected.
+
+      * Do not use complex fitting functions like `curve_fit`, `least_squares` or
+      `minimize`.
+
+      '
+    docstring_guidelines: '**Docstring Guidelines:**
+
+      * Begin by listing the parent models and give them descriptive names.
+
+      * Do not refer to the current model as `grid_model_v{next_version}`.
+
+      * Include a brief description of the estimation method.
+
+      '
+  jax_translator_prompt: "Convert the following function to a JAX-compatible function.\n\
+    \n  Include all necessary imports, and ensure that the function is compatible\
+    \ with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.\n  \n \
+    \ Ensure the new function has the same signature and behavior as the original function, 
+    \ but is fully compatible with JAX.
+    \ CRITICAL JAX compatibility requirements:\n  * Replace all boolean indexing (e.g.,\
+    \ `array[condition]`) with `jnp.where(condition, true_value, false_value)`\n \
+    \ * Replace NumPy functions with JAX equivalents (np.array \u2192 jnp.array, np.sin\
+    \ \u2192 jnp.sin, etc.)\n  * Avoid Python control flow (if/for) that depends on\
+    \ array values - use `jnp.where`, `jax.lax.cond`, `jax.lax.scan` instead\n  *\
+    \ Do not use dynamic array shapes or indexing with non-constant indices\n  * Use\
+    \ `jnp.clip()` instead of boolean masking for bounds\n  \n  Do not include any\
+    \ text other than the code. \n  Update the function name to be the original name\
+    \ without \"_v*\". For example, `def neuron_model_v1(X, param1=0.5):` should become\
+    \ `def neuron_model(X, param1=0.5):`.\n  Here is the code to translate:\n  {function_code}\n"
