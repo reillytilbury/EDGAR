@@ -28,8 +28,7 @@ data_processing_params:
 # Runtime overrides for this task.
 experiment_params:
   iterations: 3
-  swear_words: []
-  param_estimator_refinement_rounds: 3
+  param_estimator_refinement_rounds: 0
   x_min: -1.0
   x_max: 1.0
   n_bins: 100
@@ -61,31 +60,24 @@ prompts:
       Include concise image-based reasoning in the docstring.
 
     code_guidelines: '**Code Generation Guidelines:**
-
       * Import any packages you use.
-
       * Do not include any text other than the code.
-
       * Ensure all free parameters are numeric, not strings.
 
       '
   parameter_estimator:
-    
-    code_guidelines: '**Code Generation Guidelines:**
-
-      * Import any packages you use.
-
-      * Do not include any text other than the code.
-
-      * The only arguments to the function should be the inputs (X) and outputs (Y).
-
-      * Your response **must** be less than {max_lines} lines (including imports).
-      If it is longer, it will be immediately rejected.
-
-      '
     refinement_image_instructions: |
-      Image instructions:
-      - How does the current parameter_estimator fail to capture the true parameters across samples?
-      - Which parts of the parameter_estimator code are causing these failures?
-      - Propose specific code changes to fix these failures, citing samples and code lines in your analysis.
-      - Include these analyses in the docstring of the next parameter_estimator version. 
+      **Image instructions:**
+    
+      Attached is a 3x3 diagnostic plot of model fits with the current parameter_estimator on a rich dataset.
+      For each subplot (sample):
+      * Black points are raw observed data `(x, y)`.
+      * Blue line is the binned mean response over x.
+      * Model predictions are in orange.
+      
+      Use the image to identify systematic failure modes across multiple samples:
+      * Identify which parts of the parameter_estimator code are causing failures in the image-based evaluation.
+      * Propose specific code changes to fix these failures, citing samples and code lines in your analysis.
+      * Include these analyses in the docstring of the next parameter_estimator version. 
+      * Do *not* call the model function in your parameter_estimator code, as you will not have access to it!
+      * Write a new parameter_estimator function that incorporates your proposed code changes.

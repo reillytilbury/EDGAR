@@ -220,9 +220,8 @@ prompts:
     base: |
       You are an AI scientist. Below are two models describing a phenomenon, sorted from hightest to lowest loss.
       Your task is to create a new model, model_v{next_version}, that has a lower loss than the models below.
-      
+
       *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
-      Always ensure your model outputs are bounded (e.g., by clipping exponential arguments or the final output) to avoid infinite losses.
 
     explore: |
       Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss?
@@ -232,29 +231,13 @@ prompts:
       Use the models below as a *template* to create a new model.
       Which features in the models below correlate with lower loss? Find these features and *extrapolate* them.
       Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
-      Are the parameter ranges correct? If not, adjust them to be more appropriate.
       You will be *penalized* for complexity, so make the new model as *simple* as possible while still being better than the previous models.
 
     code_guidelines: |
       **Code Generation Guidelines:**
-
       * Import any packages you use.
       * Do not include any text other than the code.
       * Ensure all free parameters are numeric, not strings.
-      * IMPORTANT: Your code will be translated to JAX. Avoid boolean indexing (e.g., `array[condition]`), dynamic shapes, and control flow based on array values. Use `jnp.where()` instead of boolean indexing.
-
-    function_signature: |
-      **Function Signature:**
-
-      Your model must have this signature:
-      ```
-      def model_v{next_version}(X, param1=default1, param2=default2, ...):
-      ```
-      where:
-      * `X` is a 2D array with shape `(n_features, n_trials)`. Each row `X[i]` is a different input variable.
-      * Access inputs by index: `input_1 = X[0]`, `input_2 = X[1]`, etc.
-      * The remaining arguments are free parameters with default values.
-      * Return shape: `(n_trials,)` — the predicted response for each trial.
 
     docstring_guidelines: |
       **Docstring Guidelines:**
@@ -271,10 +254,15 @@ prompts:
       ----------------------------
       \n
   parameter_estimator:
-    base: |
+    generation_base: |
       You are an AI scientist. Your task is to create a simple parameter estimator function, parameter_estimator_v{next_version}, to estimate the free parameters of the latest model, model_v{next_version}.
       The parameter should be estimated directly, using statistical principles.
       *Analyze* the progression of the parameter estimators, *generalize* the improvements, and *create* a new parameter estimator that is better than *all* previous estimators.
+
+    base: |
+      You are an AI scientist. Your task is to improve the existing parameter estimator function, parameter_estimator_prev.
+      This function estimates the free parameters of the current model. Both the current model and its parameter estimator are included below.
+      The parameters should be estimated directly, using statistical principles.
 
     code_guidelines: |
       **Code Generation Guidelines:**
@@ -283,18 +271,7 @@ prompts:
       * The only arguments to the function should be the inputs (X) and the spike count.
       * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
       * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`.
-
-    function_signature: |
-      **Function Signature:**
-
-      Your parameter estimator must have this signature:
-      ```
-      def parameter_estimator_v{next_version}(X, spike_counts):
-      ```
-      where:
-      * `X` is a 2D array with shape `(n_features, n_trials)`. Each row `X[i]` is a different input variable.
-      * Access inputs by index: `theta = X[0]`, `contrast = X[1]`, etc.
-      * Return: a 1D array of estimated parameter values matching the model's free parameters.
+      * Do not call the model function in your parameter_estimator code, as you will not have access to it! Instead, use direct statistical relationships between the inputs and outputs to estimate parameters.
 
     docstring_guidelines: |
       **Docstring Guidelines:**
@@ -305,7 +282,7 @@ prompts:
       * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
 
     refinement_image_instructions: |
-      Image instructions:
+      - An image is attached comparing data vs the current estimator's model fits.
       - Compare predicted outputs to the data across multiple samples.
       - Identify systematic mismatches (bias, scale, shape, timing, or phase depending on task).
       - Propose parameter-estimation changes that address consistent failures seen across samples.

@@ -152,7 +152,7 @@ class PromptManager:
         templates = self.config['prompts']['parameter_estimator']
         next_version = f"{k+1}"
         sections = [
-            self._render_template(templates['base'], k=f"{k}", next_version=next_version),
+            self._render_template(templates.get('generation_base', templates.get('base', '')), k=f"{k}", next_version=next_version),
             self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}"),
             self._render_template(templates['docstring_guidelines'], next_version=next_version),
             "**Parent Models and Estimators:**",
@@ -291,33 +291,35 @@ class PromptManager:
     ) -> str:
         """Build refinement prompt for parameter estimator updates (chat mode)."""
         templates = self.config['prompts']['parameter_estimator']
+        prompt_parts = []
+        base = self._render_template(templates.get('base', ''), next_version="2")
+        if base:
+            prompt_parts.append(base)
         image_instructions = self._render_template(templates.get('refinement_image_instructions', ''))
-        header = (
-            f"Refinement round {refine_round}/{refine_rounds}.\n"
-            f"Current no-GD loss: {current_loss:.4f}.\n"
-            "Improve the parameter estimator without using gradient descent or external optimizers.\n"
-            "Return only the updated parameter_estimator code.\n"
-            "An image is attached comparing data vs the current estimator's model fits.\n"
-        )
         if image_instructions:
-            header = header + image_instructions + "\n"
-        # Build refinement body: current model + previous estimator only.
-        prompt_parts = [header]
+            stripped = image_instructions.lstrip()
+            if stripped.startswith("**"):
+                image_block = image_instructions
+            else:
+                image_block = "**Image analysis instructions:**\n" + image_instructions
+            prompt_parts.append(image_block)
         prompt_parts.append(self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}"))
-        prompt_parts.append(self._render_template(templates['docstring_guidelines'], next_version="N+1"))
+        if not model_code_string or not str(model_code_string).strip():
+            raise ValueError("Refinement prompt requires current model code string.")
+        prompt_parts.append("**Current model:**")
+        prompt_parts.append(model_code_string)
         if programs_df is not None and len(programs_df) > 0:
             row = programs_df.iloc[0]
             prev_loss = self._format_loss(row.get('train_loss', current_loss))
-            prev_est = row.get('parameter_estimator_code_string', '').replace('def parameter_estimator(', 'def parameter_estimator_prev(')
+            prev_est = row.get('parameter_estimator_code_string', '').replace(
+                'def parameter_estimator(', 'def parameter_estimator_prev('
+            )
+            prompt_parts.append("**Previous parameter estimator:**")
             prompt_parts.append(f"Previous estimator loss: {prev_loss}")
             if prev_est:
                 prompt_parts.append(prev_est)
         else:
             raise ValueError("Refinement prompt requires previous parameter estimator code.")
-        if not model_code_string or not str(model_code_string).strip():
-            raise ValueError("Refinement prompt requires current model code string.")
-        prompt_parts.append("**Current model:**")
-        prompt_parts.append(model_code_string)
         return "\n\n".join([p for p in prompt_parts if p])
 
     def get_parameter_estimator_refinement_prompt_legacy(
@@ -331,33 +333,35 @@ class PromptManager:
     ) -> str:
         """Build refinement prompt for parameter estimator updates (legacy mode)."""
         templates = self.config['prompts']['parameter_estimator']
+        prompt_parts = []
+        base = self._render_template(templates.get('base', ''), k="1", next_version="2")
+        if base:
+            prompt_parts.append(base)
         image_instructions = self._render_template(templates.get('refinement_image_instructions', ''))
-        header = (
-            f"Refinement round {refine_round}/{refine_rounds}.\n"
-            f"Current no-GD loss: {current_loss:.4f}.\n"
-            "Improve the parameter estimator without using gradient descent or external optimizers.\n"
-            "Return only the updated parameter_estimator code.\n"
-            "An image is attached comparing data vs the current estimator's model fits.\n"
-        )
         if image_instructions:
-            header = header + image_instructions + "\n"
-        prompt_parts = [header]
-        prompt_parts.append(self._render_template(templates['base'], k="1", next_version="2"))
+            stripped = image_instructions.lstrip()
+            if stripped.startswith("**"):
+                image_block = image_instructions
+            else:
+                image_block = "**Image analysis instructions:**\n" + image_instructions
+            prompt_parts.append(image_block)
         prompt_parts.append(self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}"))
-        prompt_parts.append(self._render_template(templates['docstring_guidelines'], next_version="N+1"))
+        if not model_code_string or not str(model_code_string).strip():
+            raise ValueError("Refinement prompt requires current model code string.")
+        prompt_parts.append("**Current model:**")
+        prompt_parts.append(model_code_string)
         if programs_df is not None and len(programs_df) > 0:
             row = programs_df.iloc[0]
             prev_loss = self._format_loss(row.get('train_loss', current_loss))
-            prev_est = row.get('parameter_estimator_code_string', '').replace('def parameter_estimator(', 'def parameter_estimator_prev(')
+            prev_est = row.get('parameter_estimator_code_string', '').replace(
+                'def parameter_estimator(', 'def parameter_estimator_prev('
+            )
+            prompt_parts.append("**Previous parameter estimator:**")
             prompt_parts.append(f"Previous estimator loss: {prev_loss}")
             if prev_est:
                 prompt_parts.append(prev_est)
         else:
             raise ValueError("Refinement prompt requires previous parameter estimator code.")
-        if not model_code_string or not str(model_code_string).strip():
-            raise ValueError("Refinement prompt requires current model code string.")
-        prompt_parts.append("**Current model:**")
-        prompt_parts.append(model_code_string)
         return "\n\n".join([p for p in prompt_parts if p])
 
     def get_jax_translator_prompt(self, function_code):
