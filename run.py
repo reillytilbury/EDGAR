@@ -172,8 +172,6 @@ def _broadcast_model_loss(loss_value, n_samples: int):
     loss_arr = np.asarray(loss_value)
     if loss_arr.size == 0:
         return None
-    if loss_arr.ndim == 0:
-        return np.full(n_samples, float(loss_arr))
     flat = loss_arr.reshape(-1)
     if flat.size == 1:
         return np.full(n_samples, float(flat[0]))
@@ -455,6 +453,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             use_large_every=params['use_large_every'],
             param_penalty_weight=params['param_penalty_weight'],
             exploration_topology=params['exploration_topology'],
+            exploitation_topology=params['exploitation_topology'],
             exploit_point=params['exploit_point'],
             k_max=params['k_max'],
             n_islands=params['n_islands'],
