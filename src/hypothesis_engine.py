@@ -1432,6 +1432,30 @@ async def hypothesis_engine(
         initial_programs = pd.concat([initial_programs, new_program_df], ignore_index=True)
         print(f"Initial program {i + 1} loss: {loss:.2f}")
 
+    # Write seed programs to generation log
+    for seed_idx, row in initial_programs.iterrows():
+        seed_n_params = int(row['params'][0].shape[1])
+        _append_generation_record(generation_log_path, {
+            "iteration_number": -1,
+            "birth_island": -1,
+            "batch_index": int(seed_idx),
+            "parent1_id": None,
+            "parent2_id": None,
+            "train_loss": float(row['train_loss']),
+            "initial_loss": float(row['initial_loss']),
+            "n_params": seed_n_params,
+            "complexity_penalty": float(param_penalty_weight * seed_n_params),
+            "model_code_numpy": row['program_code_string'],
+            "param_est_code": row['parameter_estimator_code_string'],
+            "model_prompt": None,
+            "model_llm_response": None,
+            "param_est_prompt": None,
+            "param_est_llm_response": None,
+            "llm_name": None,
+            "temperature": None,
+            "mode": "seed",
+        })
+
     # seed each island with the initial programs
     for i in range(n_islands):
         islands[i] = pd.concat([islands[i], initial_programs], ignore_index=True)

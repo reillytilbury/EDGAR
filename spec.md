@@ -73,88 +73,34 @@ Seed programs currently have `iteration_number = -1`, `birth_island = -1`, `pare
 
 ---
 
-## Step 2
+## Step 2 — COMPLETED
 
-### Step 2.0 — Include seed models in both plots
+### What was implemented
 
-**Why:** Seeds are the reference baseline and the root of all lineages. Their absence makes the lineage graph disconnected and prevents computing perplexity in 2.1.
+**`src/hypothesis_engine.py`**
+After the seed evaluation loop (`initial_programs` fully populated), a new block iterates over `initial_programs` and calls `_append_generation_record` for each seed with `iteration_number=-1`, `birth_island=-1`, `mode="seed"`, and all loss/code fields. Seeds are now included in the JSONL from the start of every run.
 
-**Changes in `src/hypothesis_engine.py`**
-After the seed evaluation loop (after `initial_programs` is populated, around line 1432), call `_append_generation_record` for each seed:
-```python
-for seed_idx, row in initial_programs.iterrows():
-    seed_n_params = int(row['params'][0].shape[1])
-    _append_generation_record(generation_log_path, {
-        "iteration_number": -1,
-        "birth_island": -1,
-        "batch_index": int(seed_idx),
-        "parent1_id": None,
-        "parent2_id": None,
-        "train_loss": float(row['train_loss']),
-        "initial_loss": float(row['initial_loss']),
-        "n_params": seed_n_params,
-        "complexity_penalty": float(param_penalty_weight * seed_n_params),
-        "model_code_numpy": row['program_code_string'],
-        "param_est_code": row['parameter_estimator_code_string'],
-        "model_prompt": None,
-        "model_llm_response": None,
-        "param_est_prompt": None,
-        "param_est_llm_response": None,
-        "llm_name": None,
-        "temperature": None,
-        "mode": "seed",
-    })
-```
+**`src/progress_report/progress_monitor.py`**
 
-**Changes in `src/progress_report/progress_monitor.py`**
-- Remove the filter `iteration_number != -1`; instead, separate `seed_records` and `prog_records`.
-- In `_generate_loss_progress_html`: add seeds as a distinct trace at x = -1 with a special marker style (e.g. star shape, black outline, larger).
-- In `_generate_gd_effect_html`: include seeds the same way.
-- Update sidebar data to include seeds (they get their own indices).
-- In `create_dynamic_progress_update`: pass both `seed_records` and `prog_records` to the two HTML generators.
+*Step 2.0 — Seeds in both plots*
+- `create_dynamic_progress_update` separates `seed_records` (iter==-1) and `prog_records`, then builds `all_records = seed_records + prog_records` for consistent `rec_idx` indexing.
+- Both HTML generators add a "Seeds" trace with a **star marker** at x=-1.
+- `_build_sidebar_data` is called on `all_records` so seeds get their own sidebar entries.
 
-### Step 2.1 — Relative perplexity metric
+*Step 2.1 — Relative perplexity y-axis*
+- Added `_perplexity(L, L_0) = exp(-(L - L_0))`; `L_0 = min(seed train_losses)` (falls back to min of all prog losses if no seeds present).
+- Loss progress HTML y-axis: `Relative perplexity P(L) = exp(−(L − L₀))` — higher is better, seeds sit at P≈1.
+- Penalty toggle switches between `P(train_loss)` and `P(train_loss − penalty)`, each with its own `L_0`/`L_0_raw`.
+- GD effect HTML axes: `Relative perplexity P(initial_loss)` vs `Relative perplexity P(train_loss)`; points above y=x diagonal mean GD improved the loss.
 
-**Definition:** `P(L) = exp(-(L - L_0))` where `L_0 = min(seed train losses)`.
-- P > 1: better than the best seed; P = 1: equal to seed; P < 1: worse.
-- When penalty toggle is on: use `L = train_loss`; when off: use `L = train_loss - complexity_penalty`.
+*Step 2.2 — Lineage edges in loss progress HTML*
+- `_build_edge_structures` builds `edge_segs_penalty`, `edge_segs_raw` (lists of `{x:[child_x,parent_x], y:[...]}` per segment), `parent_map` ({rec_idx: [p1_idx, p2_idx]}), and `edge_map` ({child_rec_idx: [seg_indices]}).
+- Node positions use the same jitter formula as scatter points; seeds are fixed at x=-1.
+- Loss progress HTML carries two edge traces: **edges_dim** (grey, opacity 0.3, all edges always visible) and **edges_highlight** (orange, initially empty).
+- Penalty toggle restyles both edge traces to the appropriate coordinate set.
 
-**Changes in `_generate_loss_progress_html`**
-- Compute `L_0` in Python from `seed_records`: `L_0 = min(r['train_loss'] for r in seed_records)`.
-- Replace `y_train_loss = -train_loss` with `y_train_loss = exp(-(train_loss - L_0))`.
-- Same for `y_raw_loss` (without penalty).
-- Update y-axis label: `'Relative perplexity P(L) = exp(-(L − L₀))'`.
-- Update range computation accordingly (`y_range` is now always positive).
-- Pass `L_0` into the HTML as a JS constant for tooltip display.
-- Seeds will plot at P = 1 by definition (useful visual reference).
-
-**Changes in `_generate_gd_effect_html`**
-- Both axes change: x = P(initial_loss), y = P(train_loss).
-- The y=x diagonal remains the "no improvement" reference.
-- Update axis labels.
-
-### Step 2.2 — Connect nodes to parents with lineage edges
-
-**Data preparation in Python (before building HTML)**
-- Build position map: `node_pos = {(iter, island, batch): (x_jittered, y_perplexity)}` for every record.
-- Build an edge list: for each `prog_record` with valid `parent1_id` / `parent2_id`, add `(child_key, parent_key)` pairs.
-- Aggregate into two arrays `edge_x` and `edge_y` (use `None` separators between line segments — Plotly's convention for disconnected lines in a single trace).
-- Pass `edge_x`, `edge_y` to the HTML as a single dedicated line trace rendered before the scatter points, with low opacity (e.g. 0.3), thin line (width 1), grey colour, `hoverinfo: 'none'`, `showlegend: false`.
-
-**Note on jitter consistency:** Use the same formula `(island_idx - (n_islands-1)/2) * 0.05` for parents; the parent island is `parent_id[1]`.
-
-### Step 2.3 — Hover to highlight lineage
-
-**Data in HTML**
-- Inject a `parentMap` JS object: `{rec_idx: [parent1_rec_idx_or_null, parent2_rec_idx_or_null], ...}`.
-- Inject an `edgeMap` JS object: `{rec_idx: [edge_segment_idx, ...]}` mapping each node to the indices of edge segments it is a child of.
-
-**JS behaviour**
-- On `plotly_hover`:
-  1. Walk `parentMap` upward from the hovered `rec_idx` to collect all ancestor indices.
-  2. Find all edge segment indices connecting this lineage.
-  3. `Plotly.restyle` the edge trace to draw the ancestors' edges in a highlight colour (e.g. orange, width 2, opacity 1) while dimming others.
-  4. Optionally increase marker size for ancestor scatter points.
-- On `plotly_unhover`: restore original styling.
-
-**Implementation note:** Rather than restyling a single combined edge trace, it may be cleaner to maintain two edge traces — `edges_dim` (always dim, all edges) and `edges_highlight` (initially empty, filled on hover) — to avoid complex index arithmetic.
+*Step 2.3 — Hover-to-highlight lineage*
+- `parentMap` and `edgeMap` injected as JS constants.
+- `getAncestors(rec_idx)` BFS-walks `parentMap` to collect the full ancestor chain.
+- `plotly_hover`: walks ancestors, collects their edge segments from `edgeMap`, fills `edges_highlight`; `plotly_unhover` clears it.
+- `currentHoveredIdx` persists so highlight is reapplied correctly after a penalty-toggle.
