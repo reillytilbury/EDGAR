@@ -11,16 +11,7 @@ from collections import defaultdict
 
 import networkx as nx
 
-
-def _load_generation_log(log_path):
-    """Load JSONL generation log into a list of dicts."""
-    records = []
-    with open(log_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
+from .io import load_generation_log
 
 
 def _make_node_id(iteration, island, batch):
@@ -50,6 +41,8 @@ def _build_seed_nodes():
             "batch_index": batch_idx,
             "train_loss": None,
             "initial_loss": None,
+            "n_params": None,
+            "complexity_penalty": None,
             "model_code_numpy": None,
             "model_code_jax": None,
             "param_est_code": None,
@@ -128,6 +121,8 @@ def _build_sidebar_data(records_by_id):
             "train_loss": rec.get("train_loss"),
             "test_loss": rec.get("test_loss"),
             "initial_loss": rec.get("initial_loss"),
+            "n_params": rec.get("n_params"),
+            "complexity_penalty": rec.get("complexity_penalty"),
             "mode": rec.get("mode"),
             "temperature": rec.get("temperature"),
             "llm_name": rec.get("llm_name"),
@@ -384,6 +379,8 @@ function showSidebar(nodeId) {{
   h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Complexity Penalty:</span> <span class="field-value">' + escapeHtml(d.complexity_penalty !== null && d.complexity_penalty !== undefined ? Number(d.complexity_penalty).toFixed(4) : null) + '</span></div>';
+  h += '<div class="field"><span class="field-label">N Params:</span> <span class="field-value">' + escapeHtml(d.n_params) + '</span></div>';
   h += '<div class="field"><span class="field-label">Mode:</span> <span class="field-value">' + escapeHtml(d.mode) + '</span></div>';
   h += '<div class="field"><span class="field-label">Temperature:</span> <span class="field-value">' + escapeHtml(d.temperature) + '</span></div>';
   h += '<div class="field"><span class="field-label">LLM:</span> <span class="field-value">' + escapeHtml(d.llm_name) + '</span></div>';
@@ -463,7 +460,7 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
         print(f"[family_tree] No generation log found at {generation_log_path}, skipping.")
         return
 
-    records = _load_generation_log(generation_log_path)
+    records = load_generation_log(generation_log_path)
     if not records:
         print("[family_tree] Generation log is empty, skipping.")
         return
@@ -585,7 +582,7 @@ if __name__ == "__main__":
     # Infer n_islands if not provided
     n_islands = args.n_islands
     if n_islands is None:
-        records = _load_generation_log(jsonl_path)
+        records = load_generation_log(jsonl_path)
         n_islands = _infer_n_islands(records)
         print(f"[family_tree] Auto-detected {n_islands} islands from log.")
 
