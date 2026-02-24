@@ -1685,8 +1685,8 @@ async def hypothesis_engine(
                 # Per-program train/test fit images for family tree sidebar
                 train_fit_path = os.path.join(image_family_tree_fits_dir, f'iter_{i}_island_{island_idx}_batch_{j}_train_fit.png')
                 train_programs_df = pd.DataFrame({
-                    "program": [model_new],
-                    "params": [optimized_params_plot],
+                    "program": [model_new, model_new],
+                    "params": [initial_params_plot, optimized_params_plot],
                 })
                 train_programs_list = _programs_df_to_programs_list(
                     train_programs_df,
@@ -1701,28 +1701,49 @@ async def hypothesis_engine(
                     programs_list=train_programs_list,
                     X_eval=X_eval_train,
                     save_path=train_fit_path,
-                    labels=['Model'],
+                    labels=['PE', 'GD'],
                 )
                 test_fit_path = os.path.join(image_family_tree_fits_dir, f'iter_{i}_island_{island_idx}_batch_{j}_test_fit.png')
-                test_programs_df = pd.DataFrame({
-                    "program": [model_new],
-                    "params": [optimized_params_plot],
-                })
-                test_programs_list = _programs_df_to_programs_list(
-                    test_programs_df,
-                    loss_func=loss_fn,
-                    x=X[1, 1],
-                    y=Y[1, 1],
-                    complexity_penalty=param_penalty_weight,
-                )
-                plot_model_fits(
-                    X=X[1, 1],
-                    Y=Y[1, 1],
-                    programs_list=test_programs_list,
-                    X_eval=X_eval_test,
-                    save_path=test_fit_path,
-                    labels=['Model'],
-                )
+                try:
+                    test_initial_loss, test_initial_params, test_final_loss, test_params = objective(
+                        model_new,
+                        param_est_new,
+                        x=X[1],
+                        y=Y[1],
+                        loss_fn=loss_fn,
+                        param_penalty_weight=param_penalty_weight,
+                        fit_params=fit_params,
+                        use_param_estimator=use_param_estimator,
+                        max_iter=max_iter,
+                        trial_batch_size=trial_batch_size,
+                    )
+                    if test_final_loss == FAILED_PROGRAM_COST:
+                        raise ValueError("test objective failed")
+                except Exception as e:
+                    logging.info(
+                        "Skipping test fit plot; failed to compute test parameters "
+                        f"(iter={i}, island={island_idx}, batch={j}): {e}"
+                    )
+                else:
+                    test_programs_df = pd.DataFrame({
+                        "program": [model_new, model_new],
+                        "params": [np.asarray(test_initial_params), np.asarray(test_params)],
+                    })
+                    test_programs_list = _programs_df_to_programs_list(
+                        test_programs_df,
+                        loss_func=loss_fn,
+                        x=X[1, 1],
+                        y=Y[1, 1],
+                        complexity_penalty=param_penalty_weight,
+                    )
+                    plot_model_fits(
+                        X=X[1, 1],
+                        Y=Y[1, 1],
+                        programs_list=test_programs_list,
+                        X_eval=X_eval_test,
+                        save_path=test_fit_path,
+                        labels=['PE', 'GD'],
+                    )
 
             param_names = [n for n in inspect.signature(model_new).parameters if n != "theta"]
             if optimized_params.shape[1] == len(param_names):
