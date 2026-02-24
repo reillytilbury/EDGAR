@@ -197,7 +197,8 @@ def _generate_loss_progress_html(
 
         for rec_idx, rec in island_recs:
             iteration = rec.get("iteration_number", 0)
-            jitter = island_idx * 0.15
+            n_islands = len(islands)
+            jitter = (island_idx - (n_islands - 1) / 2.0) * 0.05
             x_vals.append(iteration + jitter)
 
             train_loss = rec.get("train_loss")
@@ -226,6 +227,20 @@ def _generate_loss_progress_html(
             "hover": hover,
             "colour": colour,
         })
+
+    # Compute data ranges for the initial view so all iterations are visible
+    all_x = [xv for t in traces for xv in t["x"]]
+    all_y = [yv for t in traces for yv in t["y_with_penalty"] if yv is not None]
+    if all_x:
+        x_pad = max(0.5, (max(all_x) - min(all_x)) * 0.04)
+        x_range = json.dumps([min(all_x) - x_pad, max(all_x) + x_pad])
+    else:
+        x_range = "null"
+    if all_y:
+        y_pad = max(0.05, (max(all_y) - min(all_y)) * 0.05)
+        y_range = json.dumps([min(all_y) - y_pad, max(all_y) + y_pad])
+    else:
+        y_range = "null"
 
     traces_json = json.dumps(traces)
     sidebar_json = json.dumps(sidebar_data, default=str)
@@ -282,7 +297,7 @@ function buildPlotlyTraces(withPenalty) {{
       name: 'Island ' + t.island_idx,
       marker: {{
         color: t.colour,
-        size: 10,
+        size: 14,
         line: {{ width: 1, color: '#333' }}
       }},
       type: 'scatter'
@@ -294,8 +309,10 @@ const layout = {{
   title: {json.dumps(title)},
   showlegend: true,
   hovermode: 'closest',
-  xaxis: {{ title: 'Iteration (jittered by island)', showgrid: true }},
-  yaxis: {{ title: '-Train Loss (higher = better)', showgrid: true }},
+  xaxis: {{ title: 'Iteration (jittered by island)', showgrid: true,
+            range: {x_range}, autorange: {x_range} === null }},
+  yaxis: {{ title: '-Train Loss (higher = better)', showgrid: true,
+            range: {y_range}, autorange: {y_range} === null }},
   margin: {{ l: 60, r: 20, t: 60, b: 50 }},
   plot_bgcolor: '#fff',
   paper_bgcolor: '#fff'
@@ -474,7 +491,7 @@ const plotlyTraces = [diagTrace].concat(allTraces.map(function(t) {{
     name: 'Island ' + t.island_idx,
     marker: {{
       color: t.colour,
-      size: 10,
+      size: 14,
       line: {{ width: 1, color: '#333' }}
     }},
     type: 'scatter'
