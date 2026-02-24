@@ -570,3 +570,33 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
     with open(gd_path, "w") as f:
         f.write(gd_html)
     logging.info("[progress_monitor] Wrote %s", gd_path)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    parser = argparse.ArgumentParser(
+        description="Generate dynamic progress HTML files from an EDGAR generation log."
+    )
+    parser.add_argument(
+        "--jsonl", required=True,
+        help="Path to program_generation_log.jsonl (or directory containing it)",
+    )
+    parser.add_argument(
+        "--output_dir", default=None,
+        help="Directory to write HTML files into (defaults to same directory as the JSONL file)",
+    )
+    args = parser.parse_args()
+
+    jsonl_path = args.jsonl
+    if os.path.isdir(jsonl_path):
+        jsonl_path = os.path.join(jsonl_path, "program_generation_log.jsonl")
+
+    if not os.path.isfile(jsonl_path):
+        print(f"Error: JSONL file not found at {jsonl_path}")
+        raise SystemExit(1)
+
+    output_dir = args.output_dir or os.path.dirname(jsonl_path)
+    create_dynamic_progress_update(jsonl_path, output_dir)
