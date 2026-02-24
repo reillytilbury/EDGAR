@@ -1,4 +1,5 @@
 import yaml
+import re
 import pandas as pd
 from pathlib import Path
 from .prompt_test import PromptValidator
@@ -52,6 +53,22 @@ class PromptManager:
             return f"{float(train_loss):.2f}"
         except Exception:
             return str(train_loss)
+
+    @staticmethod
+    def _normalize_model_code_for_prompt(code_string: str, model_name: str, model_idx: int) -> str:
+        if not code_string:
+            return code_string
+        lines = code_string.splitlines()
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+            if stripped.startswith("def "):
+                indent = line[:len(line) - len(stripped)]
+                open_paren = stripped.find("(")
+                if open_paren != -1:
+                    lines[i] = f"{indent}def {model_name}_v{model_idx}{stripped[open_paren:]}"
+                    return "\n".join(lines)
+        replacement = f"def {model_name}_v{model_idx}("
+        return re.sub(r"def\\s+\\w+\\s*\\(", replacement, code_string, count=1)
 
     def _render_image_analysis(self, templates: dict, prompt_key: str, k: int, use_image: bool) -> str:
         """
@@ -123,7 +140,11 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
-            program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
+            program_code_string = self._normalize_model_code_for_prompt(
+                programs_df.iloc[i]['program_code_string'],
+                model_name,
+                model_idx,
+            )
             per_model_prompt = self._render_template(
                 templates['per_model_detail'],
                 model_idx=f"{model_idx}",
@@ -162,7 +183,11 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
-            program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
+            program_code_string = self._normalize_model_code_for_prompt(
+                programs_df.iloc[i]['program_code_string'],
+                model_name,
+                model_idx,
+            )
             parameter_estimator_code_string = programs_df.iloc[i]['parameter_estimator_code_string'].replace('def parameter_estimator(', f'def parameter_estimator_v{model_idx}(')
             per_model_prompt = self._render_template(
                 templates['per_model_detail'],
@@ -224,7 +249,11 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
-            program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
+            program_code_string = self._normalize_model_code_for_prompt(
+                programs_df.iloc[i]['program_code_string'],
+                model_name,
+                model_idx,
+            )
             per_model_prompt = self._render_template(
                 templates['per_model_detail'],
                 model_idx=f"{model_idx}",
@@ -263,7 +292,11 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
-            program_code_string = programs_df.iloc[i]['program_code_string'].replace(f'def {model_name}(', f'def {model_name}_v{model_idx}(')
+            program_code_string = self._normalize_model_code_for_prompt(
+                programs_df.iloc[i]['program_code_string'],
+                model_name,
+                model_idx,
+            )
             parameter_estimator_code_string = programs_df.iloc[i]['parameter_estimator_code_string'].replace('def parameter_estimator(', f'def parameter_estimator_v{model_idx}(')
             per_model_prompt = self._render_template(
                 templates['per_model_detail'],
