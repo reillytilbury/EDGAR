@@ -27,8 +27,12 @@ data_processing_params:
 
 # Runtime overrides for this task.
 experiment_params:
-  iterations: 3
+  n_iterations: 3
+  n_islands: 4
+  exploration_topology: [1, 2, 3, 0]
+  exploitation_topology: [1, 2, 3, 0]
   param_estimator_refinement_rounds: 0
+  open_family_tree: true
   x_min: -1.0
   x_max: 1.0
   n_bins: 100
