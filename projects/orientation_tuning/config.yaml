@@ -100,6 +100,8 @@ prompts:
 
       * Do NOT include any text other than the code.
 
+      * Model signature must be `def model(X, params):` where `params` is a dict of named arrays/scalars.
+
       * Ensure all free parameters are numeric, not strings.
 
       * At the beginning of the code, clip the free parameters to a biologically plausible
@@ -139,7 +141,7 @@ prompts:
       - Base changes on repeated patterns, not single-cell outliers.
     
     code_guidelines: "**Code Generation Guidelines:**\n* Import any packages you use.\n\
-      * Do not include any text other than the code.\n* The only arguments to the\
+      * Do not include any text other than the code.\n* Return a parameter dict with the same keys expected by the model.\n* The only arguments to the\
       \ function should be the inputs (X) and the spike count.\n* Your response **must**\
       \ be less than {max_lines} lines (including imports). If it is longer, it will\
       \ be immediately rejected. \n* Do not attempt to fit the parameters using complex\

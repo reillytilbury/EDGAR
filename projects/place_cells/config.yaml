@@ -174,7 +174,7 @@ prompts:
 
       '
     code_guidelines: "**Code Generation Guidelines:**\n\n* Import any packages you\
-      \ use.\n* Do not include any text other than the code.\n* Ensure all free parameters\
+      \ use.\n* Do not include any text other than the code.\n* Model signature must be `def model(X, params):` where `params` is a dict of named arrays/scalars.\n* Ensure all free parameters\
       \ are numeric, not strings.\n* At the beginning of the code, clip the free parameters\
       \ to biologically plausible ranges:\n  - `x0 = np.clip(x0, -1.0, 1.0)` and `y0\
       \ = np.clip(y0, -1.0, 1.0)` for field center\n  - `sigma = np.clip(sigma, 0.05,\
@@ -191,7 +191,7 @@ prompts:
 
       ```
 
-      def place_model_v{next_version}(X, param1=default1, param2=default2, ...):
+      def place_model_v{next_version}(X, params):
 
       ```
 
@@ -205,7 +205,7 @@ prompts:
 
       * Access inputs by index: `x = X[0]`, `y = X[1]`
 
-      * The remaining arguments are free parameters with default values.
+      * `params` is a dict of named free parameters (use descriptive keys).
 
       * Return shape: `(n_trials,)` - the predicted firing rate for each position.
 
@@ -273,6 +273,8 @@ prompts:
 
       * Do not include any text other than the code.
 
+      * Return a parameter dict with the same keys expected by the model.
+
       * The only arguments to the function should be the inputs (X) and the firing
       rates.
 
@@ -305,7 +307,7 @@ prompts:
 
       * `firing_rates` has shape `(n_trials,)`.
 
-      * Return: a 1D array of estimated parameter values matching the place model''s
+      * Return: a dict of estimated parameter values matching the place model''s
       free parameters.
 
       '

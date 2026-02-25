@@ -27,9 +27,11 @@ def compare_programs(program_a, program_b, loss_tol=0.02, cosine_tol=0.95, mode=
     # return false immediately if the programs have different number of free parameters, regardless of mode
     params_a = program_a['params']
     params_b = program_b['params']
-    parameter_shape_mismatch = params_a.shape != params_b.shape
-    if parameter_shape_mismatch:
-        return False
+    if params_a is not None and params_b is not None:
+        sig_a = utils.params_signature(params_a)
+        sig_b = utils.params_signature(params_b)
+        if sig_a != sig_b:
+            return False
 
     id_match = (program_a['birth_island'] == program_b['birth_island'] and
                 program_a['iteration_number'] == program_b['iteration_number'] and

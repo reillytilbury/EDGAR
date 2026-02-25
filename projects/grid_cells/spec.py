@@ -8,8 +8,8 @@ Loading:
 - train_test_split(X) -> [train_samples, train_trials]
 
 Seed Programs:
-- model_v1(X, *params) and param_est_v1(X, Y)
-- model_v2(X, *params) and param_est_v2(X, Y)
+- model_v1(X, params) and param_est_v1(X, Y)
+- model_v2(X, params) and param_est_v2(X, Y)
 
 Loss:
 - loss_fn(Y_pred, Y_true) -> loss values
@@ -24,6 +24,7 @@ from scipy.ndimage import gaussian_filter
 from typing import Dict, Any, Optional, List, Tuple
 
 from src.data_structures import Inputs, Outputs
+from src import utils
 
 
 # ========================
@@ -261,13 +262,7 @@ def train_test_split(
 
 def model_v1(
     X,
-    lam=0.6,
-    theta=0.0,
-    phi_x=0.0,
-    phi_y=0.0,
-    baseline=0.0,
-    amplitude=1.0,
-    sigma=0.12,
+    params,
 ):
     """
     Hexagonal grid-cell model with isotropic Gaussian fields.
@@ -283,6 +278,14 @@ def model_v1(
     ----------
     X : np.ndarray, shape (2, n_trials)
         Position array with X[0]=x and X[1]=y (typically normalized to [-1,1]).
+    params : dict
+        Parameter dictionary with keys:
+        - lam: lattice spacing
+        - theta: lattice orientation (radians)
+        - phi_x, phi_y: spatial phase shifts
+        - baseline: additive baseline firing rate
+        - amplitude: scaling of summed Gaussian bumps
+        - sigma: isotropic Gaussian width
     lam : float
         Lattice spacing (distance between neighboring field centers).
     theta : float
@@ -305,6 +308,13 @@ def model_v1(
     """
     x = X[0]
     y = X[1]
+    lam = params["lam"]
+    theta = params["theta"]
+    phi_x = params["phi_x"]
+    phi_y = params["phi_y"]
+    baseline = params["baseline"]
+    amplitude = params["amplitude"]
+    sigma = params["sigma"]
 
     # Rotated hexagonal basis vectors
     c, s = np.cos(theta), np.sin(theta)
@@ -332,6 +342,17 @@ def model_v1(
     return baseline + amplitude * np.sum(bumps, axis=0)
 
 
+model_v1.DEFAULT_PARAMS = {
+    "lam": 0.6,
+    "theta": 0.0,
+    "phi_x": 0.0,
+    "phi_y": 0.0,
+    "baseline": 0.0,
+    "amplitude": 1.0,
+    "sigma": 0.12,
+}
+
+
 def param_est_v1(X, Y):
     """
     Autocorr-based initializer for an isotropic hex-grid Gaussian-bump model.
@@ -355,8 +376,9 @@ def param_est_v1(X, Y):
 
     Returns
     -------
-    np.ndarray, shape (7,)
-        [lam, theta, phi_x, phi_y, baseline, amplitude, sigma]
+    dict
+        Parameter dictionary with keys
+        ["lam", "theta", "phi_x", "phi_y", "baseline", "amplitude", "sigma"].
     """
     from scipy.ndimage import gaussian_filter
 
@@ -478,19 +500,20 @@ def param_est_v1(X, Y):
     phi_x = float(np.clip(-shift_x, -1.0, 1.0))
     phi_y = float(np.clip(-shift_y, -1.0, 1.0))
 
-    return np.array([lam, theta, phi_x, phi_y, baseline, amplitude, sigma])
+    return {
+        "lam": float(lam),
+        "theta": float(theta),
+        "phi_x": float(phi_x),
+        "phi_y": float(phi_y),
+        "baseline": float(baseline),
+        "amplitude": float(amplitude),
+        "sigma": float(sigma),
+    }
 
 
 def model_v2(
     X,
-    lam=0.6,
-    theta=0.0,
-    phi_x=0.0,
-    phi_y=0.0,
-    baseline=0.0,
-    amplitude=1.0,
-    sigma_par=0.14,
-    sigma_perp=0.10,
+    params,
 ):
     """
     Hexagonal grid-cell model with anisotropic (elliptical) Gaussian fields.
@@ -508,20 +531,15 @@ def model_v2(
     ----------
     X : np.ndarray, shape (2, n_trials)
         Positions.
-    lam : float
-        Lattice spacing.
-    theta : float
-        Lattice orientation (radians).
-    phi_x, phi_y : float
-        Spatial phase shift.
-    baseline : float
-        Additive baseline firing rate.
-    amplitude : float
-        Global scaling.
-    sigma_par : float
-        Gaussian width parallel to lattice axis.
-    sigma_perp : float
-        Gaussian width perpendicular to lattice axis.
+    params : dict
+        Parameter dictionary with keys:
+        - lam: lattice spacing
+        - theta: lattice orientation (radians)
+        - phi_x, phi_y: spatial phase shift
+        - baseline: additive baseline firing rate
+        - amplitude: global scaling
+        - sigma_par: Gaussian width parallel to lattice axis
+        - sigma_perp: Gaussian width perpendicular to lattice axis
     K_MAX = 10
         Fixed lattice truncation radius.
 
@@ -532,6 +550,14 @@ def model_v2(
     """
     x = X[0]
     y = X[1]
+    lam = params["lam"]
+    theta = params["theta"]
+    phi_x = params["phi_x"]
+    phi_y = params["phi_y"]
+    baseline = params["baseline"]
+    amplitude = params["amplitude"]
+    sigma_par = params["sigma_par"]
+    sigma_perp = params["sigma_perp"]
 
     c, s = np.cos(theta), np.sin(theta)
     v1x, v1y = lam * c, lam * s
@@ -564,6 +590,18 @@ def model_v2(
     return baseline + amplitude * np.sum(bumps, axis=0)
 
 
+model_v2.DEFAULT_PARAMS = {
+    "lam": 0.6,
+    "theta": 0.0,
+    "phi_x": 0.0,
+    "phi_y": 0.0,
+    "baseline": 0.0,
+    "amplitude": 1.0,
+    "sigma_par": 0.14,
+    "sigma_perp": 0.10,
+}
+
+
 def param_est_v2(X, Y):
     """
     Autocorr-based initializer for an anisotropic hex-grid Gaussian-bump model.
@@ -580,8 +618,9 @@ def param_est_v2(X, Y):
 
     Returns
     -------
-    np.ndarray, shape (8,)
-        [lam, theta, phi_x, phi_y, baseline, amplitude, sigma_par, sigma_perp]
+    dict
+        Parameter dictionary with keys
+        ["lam", "theta", "phi_x", "phi_y", "baseline", "amplitude", "sigma_par", "sigma_perp"].
     """
     from scipy.ndimage import gaussian_filter
 
@@ -748,7 +787,16 @@ def param_est_v2(X, Y):
         sigma_par = 0.7 * sigma_par + 0.3 * sigma0
         sigma_perp = 0.7 * sigma_perp + 0.3 * sigma0
 
-    return np.array([lam, theta, phi_x, phi_y, baseline, amplitude, sigma_par, sigma_perp])
+    return {
+        "lam": float(lam),
+        "theta": float(theta),
+        "phi_x": float(phi_x),
+        "phi_y": float(phi_y),
+        "baseline": float(baseline),
+        "amplitude": float(amplitude),
+        "sigma_par": float(sigma_par),
+        "sigma_perp": float(sigma_perp),
+    }
 
 # ========================
 # 3. LOSS
@@ -790,7 +838,7 @@ def plot_model_fits(
     programs_list : list[dict]
         List of dictionaries with keys:
         - `'model'`: callable model function
-        - `'params'`: `(n_samples, n_params)` parameter matrix
+        - `'params'`: batched parameter pytree
         - optionally `'losses'`: per-sample losses
     X_eval : array-like or Inputs
         Evaluation grid with shape `(n_samples, n_features, n_eval_trials)`.
@@ -817,19 +865,10 @@ def plot_model_fits(
     axes = np.atleast_2d(axes)
 
     # Normalize params shape per program to avoid indexing mismatches.
-    params_by_model = []
-    for program in programs_list:
-        params_all = np.asarray(program["params"])
-        if params_all.ndim == 1:
-            params_all = np.broadcast_to(params_all[None, :], (n_samples, params_all.size))
-        elif params_all.shape[0] != n_samples:
-            if params_all.shape[0] == 1:
-                params_all = np.broadcast_to(params_all, (n_samples, params_all.shape[1]))
-            else:
-                raise ValueError(
-                    f"params shape {params_all.shape} does not match n_samples={n_samples}"
-                )
-        params_by_model.append(params_all)
+    params_by_model = [
+        utils.broadcast_params(program["params"], n_samples)
+        for program in programs_list
+    ]
 
     for row, s in enumerate(show_idx):
         x = x_arr[s, 0]
@@ -855,8 +894,8 @@ def plot_model_fits(
 
         for m_idx, program in enumerate(programs_list):
             model = program["model"]
-            params = params_by_model[m_idx][s]
-            y_pred = model(x_arr[s], *params)
+            params = utils.slice_params(params_by_model[m_idx], s)
+            y_pred = utils.call_model(model, x_arr[s], params)
             rm_pred = _bin_to_rate_map(
                 x, y, y_pred, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain,
                 smoothing_sigma=smoothing_sigma

@@ -37,8 +37,9 @@ SPEC_TEMPLATE = dedent(
     - train_test_split(X) -> [train_samples, train_trials]
 
     Seed Programs:
-    - model_v1(X, *params) and param_est_v1(X, Y)
-    - model_v2(X, *params) and param_est_v2(X, Y)
+    - model_v1(X, params) and param_est_v1(X, Y)
+    - model_v2(X, params) and param_est_v2(X, Y)
+    - params is a dict of named arrays/scalars (same keys for model + estimator)
 
     LOSS FUNCTION:
     - loss_fn(Y_pred, Y_true) -> loss values
@@ -81,7 +82,7 @@ SPEC_TEMPLATE = dedent(
     # 2. SEED MODELS
     # ========================
 
-    def model_v1(X):
+    def model_v1(X, params):
         raise NotImplementedError
 
 
@@ -89,7 +90,7 @@ SPEC_TEMPLATE = dedent(
         raise NotImplementedError
 
 
-    def model_v2(X):
+    def model_v2(X, params):
         raise NotImplementedError
 
 

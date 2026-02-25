@@ -8,8 +8,8 @@ Loading:
 - train_test_split(X) -> [train_samples, train_trials]
 
 Seed Programs:
-- model_v1(X, *params) and param_est_v1(X, Y)
-- model_v2(X, *params) and param_est_v2(X, Y)
+- model_v1(X, params) and param_est_v1(X, Y)
+- model_v2(X, params) and param_est_v2(X, Y)
 
 Loss:
 - loss_fn(Y_pred, Y_true) -> loss values
@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 from typing import Tuple
 
 from src.data_structures import Inputs, Outputs
+from src import utils
 
 
 # ========================
@@ -123,7 +124,7 @@ def train_test_split(
 # ========================
 # 2. SEED MODELS
 # ========================
-def model_v1(X, a=1.0, b=0.0):
+def model_v1(X, params):
     """
     Independent variable:
     X = [x]  # scalar input
@@ -132,13 +133,19 @@ def model_v1(X, a=1.0, b=0.0):
     y = a * relu(x-b) = a * max(0, x-b)
     Args:
         X (np.ndarray): Input array with shape (1, n_trials)
-        a (float): Scaling factor.
-        b (float): Threshold for RELU.
+        params (dict): Parameter dictionary with keys:
+            - a: Scaling factor.
+            - b: Threshold for RELU.
     Returns:
         np.ndarray: Predicted output, shape (n_trials,).
     """
     x = X[0]
+    a = params["a"]
+    b = params["b"]
     return a * np.maximum(0, x - b)
+
+
+model_v1.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}
 
 def param_est_v1(X, Y):
     """
@@ -149,7 +156,7 @@ def param_est_v1(X, Y):
         Y (np.ndarray): Target values with shape (n_trials,).
 
     Returns:
-        np.ndarray: Estimated parameters [a, b].
+        dict: Estimated parameters with keys {"a", "b"}.
     """
     y = np.asarray(Y)
 
@@ -161,15 +168,15 @@ def param_est_v1(X, Y):
 
     for a in a_values:
         for b in b_values:
-            y_pred = model_v1(X, a=a, b=b)
+            y_pred = model_v1(X, {"a": a, "b": b})
             loss = np.mean((y - y_pred) ** 2)
             if loss < best_loss:
                 best_loss = loss
                 best_params = (a, b)
 
-    return np.array(best_params)
+    return {"a": float(best_params[0]), "b": float(best_params[1])}
 
-def model_v2(X, a=1.0, b=0.0):
+def model_v2(X, params):
     """
     Independent variable:
     X = [x]  # scalar input
@@ -179,14 +186,20 @@ def model_v2(X, a=1.0, b=0.0):
 
     Args:
         X (np.ndarray): Input array with shape (1, n_trials) or (n_trials,).
-        a (float): Linear slope.
-        b (float): Linear intercept.
+        params (dict): Parameter dictionary with keys:
+            - a: Linear slope.
+            - b: Linear intercept.
 
     Returns:
         np.ndarray: Predicted output, shape (n_trials,).
     """
     x = X[0]
+    a = params["a"]
+    b = params["b"]
     return a * x + b
+
+
+model_v2.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}
 
 def param_est_v2(X, Y):
     """
@@ -197,14 +210,14 @@ def param_est_v2(X, Y):
         Y (np.ndarray): Target values with shape (n_trials,).
 
     Returns:
-        np.ndarray: Estimated parameters [a, b].
+        dict: Estimated parameters with keys {"a", "b"}.
     """
     x = X[0]
     y = np.asarray(Y)
 
     A = np.vstack([x, np.ones(len(x))]).T
     a, b = np.linalg.lstsq(A, y, rcond=None)[0]
-    return np.array([a, b])
+    return {"a": float(a), "b": float(b)}
 
 
 # ========================
@@ -247,8 +260,8 @@ def plot_model_fits(
         Output tensor with shape (n_samples, 1, n_trials).
     programs_list : list[dict]
         List of dictionaries with model metadata. Expected keys include:
-        - 'model': callable model(X_one, *params)
-        - 'params': array of shape (n_samples, n_params)
+        - 'model': callable model(X_one, params)
+        - 'params': batched parameter pytree
         - 'losses': array of shape (n_samples,)
     X_eval : array-like or Inputs
         Evaluation grid with shape (n_samples, n_features, n_eval_trials).
@@ -275,6 +288,11 @@ def plot_model_fits(
     # Intentionally unseeded so diagnostic samples vary across calls/runs.
     idx = np.random.default_rng().choice(n_samples, size=n_show, replace=False)
 
+    params_by_model = [
+        utils.broadcast_params(program["params"], n_samples)
+        for program in programs_list
+    ]
+
     fig, axes = plt.subplots(3, 3, figsize=(18, 18))
     axes = axes.reshape(3, 3)
 
@@ -295,8 +313,8 @@ def plot_model_fits(
 
         for j, program in enumerate(programs_list):
             model = program["model"]
-            params = program["params"][s]
-            y_pred = model(np.array([x_eval]), *params)
+            params = utils.slice_params(params_by_model[j], s)
+            y_pred = utils.call_model(model, np.array([x_eval]), params)
 
             label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
             if "losses" in program:

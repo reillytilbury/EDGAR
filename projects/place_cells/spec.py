@@ -8,8 +8,8 @@ Loading:
 - train_test_split(X) -> [train_samples, train_trials]
 
 Seed Programs:
-- model_v1(X, *params) and param_est_v1(X, Y)
-- model_v2(X, *params) and param_est_v2(X, Y)
+- model_v1(X, params) and param_est_v1(X, Y)
+- model_v2(X, params) and param_est_v2(X, Y)
 
 Loss:
 - loss_fn(Y_pred, Y_true) -> loss values
@@ -26,6 +26,7 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 
 from src.data_structures import Inputs, Outputs
+from src import utils
 
 
 # ========================
@@ -302,7 +303,7 @@ def train_test_split(
 # 2. SEED MODELS
 # ========================
 
-def model_v1(X, x0=0.0, y0=0.0, sigma=0.25, amplitude=1.0, baseline=0.0):
+def model_v1(X, params):
     """
     Independent variable:
     X = [x, y]  # 2D position (normalized approximately to [-1, 1])
@@ -314,11 +315,12 @@ def model_v1(X, x0=0.0, y0=0.0, sigma=0.25, amplitude=1.0, baseline=0.0):
     Args:
         X (np.ndarray): Input array with shape (2, n_trials).
                         X[0] is x-position, X[1] is y-position.
-        x0 (float): Place-field center x-coordinate.
-        y0 (float): Place-field center y-coordinate.
-        sigma (float): Isotropic spatial width of the field.
-        amplitude (float): Peak response above baseline.
-        baseline (float): Baseline firing rate.
+        params (dict): Parameter dictionary with keys:
+            - x0: Place-field center x-coordinate.
+            - y0: Place-field center y-coordinate.
+            - sigma: Isotropic spatial width of the field.
+            - amplitude: Peak response above baseline.
+            - baseline: Baseline firing rate.
 
     Returns:
         np.ndarray: Predicted firing rate for each trial, shape (n_trials,).
@@ -326,16 +328,25 @@ def model_v1(X, x0=0.0, y0=0.0, sigma=0.25, amplitude=1.0, baseline=0.0):
     x = X[0]
     y = X[1]
 
-    x0 = np.clip(x0, -1.0, 1.0)
-    y0 = np.clip(y0, -1.0, 1.0)
-    sigma = np.clip(sigma, 0.05, 1.0)
-    amplitude = np.clip(amplitude, 0.0, 50.0)
-    baseline = np.clip(baseline, 0.0, 20.0)
+    x0 = np.clip(params["x0"], -1.0, 1.0)
+    y0 = np.clip(params["y0"], -1.0, 1.0)
+    sigma = np.clip(params["sigma"], 0.05, 1.0)
+    amplitude = np.clip(params["amplitude"], 0.0, 50.0)
+    baseline = np.clip(params["baseline"], 0.0, 20.0)
 
     dx = x - x0
     dy = y - y0
     dist2 = dx * dx + dy * dy
     return baseline + amplitude * np.exp(-0.5 * dist2 / (sigma ** 2))
+
+
+model_v1.DEFAULT_PARAMS = {
+    "x0": 0.0,
+    "y0": 0.0,
+    "sigma": 0.25,
+    "amplitude": 1.0,
+    "baseline": 0.0,
+}
 
 
 def param_est_v1(X, Y):
@@ -351,8 +362,8 @@ def param_est_v1(X, Y):
         Y (np.ndarray): Observed firing rates with shape (n_trials,).
 
     Returns:
-        np.ndarray: Estimated parameters
-                    [x0, y0, sigma, amplitude, baseline].
+        dict: Estimated parameters with keys
+              {"x0", "y0", "sigma", "amplitude", "baseline"}.
     """
     x = X[0]
     y = X[1]
@@ -371,10 +382,16 @@ def param_est_v1(X, Y):
     sigma = np.sqrt(np.clip(var / 2.0, 1e-6, None))
 
     amplitude = np.max(firing_rates) - baseline
-    return np.array([x0, y0, sigma, amplitude, baseline])
+    return {
+        "x0": float(x0),
+        "y0": float(y0),
+        "sigma": float(sigma),
+        "amplitude": float(amplitude),
+        "baseline": float(baseline),
+    }
 
 
-def model_v2(X, x0=0.0, y0=0.0, sigma_x=0.3, sigma_y=0.2, theta=0.0, amplitude=1.0, baseline=0.0):
+def model_v2(X, params):
     """
     Independent variable:
     X = [x, y]  # 2D position (normalized approximately to [-1, 1])
@@ -386,13 +403,14 @@ def model_v2(X, x0=0.0, y0=0.0, sigma_x=0.3, sigma_y=0.2, theta=0.0, amplitude=1
     Args:
         X (np.ndarray): Input array with shape (2, n_trials).
                         X[0] is x-position, X[1] is y-position.
-        x0 (float): Place-field center x-coordinate.
-        y0 (float): Place-field center y-coordinate.
-        sigma_x (float): Width along major/minor rotated x-axis.
-        sigma_y (float): Width along major/minor rotated y-axis.
-        theta (float): Field orientation (radians).
-        amplitude (float): Peak response above baseline.
-        baseline (float): Baseline firing rate.
+        params (dict): Parameter dictionary with keys:
+            - x0: Place-field center x-coordinate.
+            - y0: Place-field center y-coordinate.
+            - sigma_x: Width along major/minor rotated x-axis.
+            - sigma_y: Width along major/minor rotated y-axis.
+            - theta: Field orientation (radians).
+            - amplitude: Peak response above baseline.
+            - baseline: Baseline firing rate.
 
     Returns:
         np.ndarray: Predicted firing rate for each trial, shape (n_trials,).
@@ -400,13 +418,13 @@ def model_v2(X, x0=0.0, y0=0.0, sigma_x=0.3, sigma_y=0.2, theta=0.0, amplitude=1
     x = X[0]
     y = X[1]
 
-    x0 = np.clip(x0, -1.0, 1.0)
-    y0 = np.clip(y0, -1.0, 1.0)
-    sigma_x = np.clip(sigma_x, 0.05, 1.0)
-    sigma_y = np.clip(sigma_y, 0.05, 1.0)
-    theta = np.clip(theta, 0.0, np.pi)
-    amplitude = np.clip(amplitude, 0.0, 50.0)
-    baseline = np.clip(baseline, 0.0, 20.0)
+    x0 = np.clip(params["x0"], -1.0, 1.0)
+    y0 = np.clip(params["y0"], -1.0, 1.0)
+    sigma_x = np.clip(params["sigma_x"], 0.05, 1.0)
+    sigma_y = np.clip(params["sigma_y"], 0.05, 1.0)
+    theta = np.clip(params["theta"], 0.0, np.pi)
+    amplitude = np.clip(params["amplitude"], 0.0, 50.0)
+    baseline = np.clip(params["baseline"], 0.0, 20.0)
 
     cos_t = np.cos(theta)
     sin_t = np.sin(theta)
@@ -418,6 +436,17 @@ def model_v2(X, x0=0.0, y0=0.0, sigma_x=0.3, sigma_y=0.2, theta=0.0, amplitude=1
 
     dist2 = (xr * xr) / (sigma_x ** 2) + (yr * yr) / (sigma_y ** 2)
     return baseline + amplitude * np.exp(-0.5 * dist2)
+
+
+model_v2.DEFAULT_PARAMS = {
+    "x0": 0.0,
+    "y0": 0.0,
+    "sigma_x": 0.3,
+    "sigma_y": 0.2,
+    "theta": 0.0,
+    "amplitude": 1.0,
+    "baseline": 0.0,
+}
 
 
 def param_est_v2(X, Y):
@@ -432,8 +461,8 @@ def param_est_v2(X, Y):
         Y (np.ndarray): Observed firing rates with shape (n_trials,).
 
     Returns:
-        np.ndarray: Estimated parameters
-                    [x0, y0, sigma_x, sigma_y, theta, amplitude, baseline].
+        dict: Estimated parameters with keys
+              {"x0", "y0", "sigma_x", "sigma_y", "theta", "amplitude", "baseline"}.
     """
     x = X[0]
     y = X[1]
@@ -463,7 +492,15 @@ def param_est_v2(X, Y):
     theta = np.arctan2(eigvecs[1, 0], eigvecs[0, 0])
 
     amplitude = np.max(firing_rates) - baseline
-    return np.array([x0, y0, sigma_x, sigma_y, theta, amplitude, baseline])
+    return {
+        "x0": float(x0),
+        "y0": float(y0),
+        "sigma_x": float(sigma_x),
+        "sigma_y": float(sigma_y),
+        "theta": float(theta),
+        "amplitude": float(amplitude),
+        "baseline": float(baseline),
+    }
 
 
 # ========================
@@ -501,8 +538,8 @@ def plot_model_fits(
         Output tensor with shape `(n_samples, 1, n_trials)`.
     programs_list : list[dict]
         List of model dictionaries. Each dictionary should contain:
-        - `'model'`: callable model function with signature `model(x, *params)`,
-        - `'params'`: parameter array of shape `(n_samples, n_params)`,
+        - `'model'`: callable model function with signature `model(x, params)`,
+        - `'params'`: batched parameter pytree,
         - optionally `'losses'`: per-sample losses.
     X_eval : array-like or Inputs
         Evaluation grid with shape `(n_samples, n_features, n_eval_trials)`.
@@ -532,6 +569,11 @@ def plot_model_fits(
     fig, axes = plt.subplots(n_show, 1 + n_models, figsize=(4 * (1 + n_models), 3 * n_show))
     axes = np.atleast_2d(axes)
 
+    params_by_model = [
+        utils.broadcast_params(program["params"], n_samples)
+        for program in programs_list
+    ]
+
     for row, sample_idx in enumerate(show_idx):
         x = x_arr[sample_idx, 0]
         y = x_arr[sample_idx, 1]
@@ -555,8 +597,8 @@ def plot_model_fits(
 
         for m_idx, program in enumerate(programs_list):
             model = program["model"]
-            params = program["params"][sample_idx]
-            y_pred = model(x_arr[sample_idx], *params)
+            params = utils.slice_params(params_by_model[m_idx], sample_idx)
+            y_pred = utils.call_model(model, x_arr[sample_idx], params)
             rm_pred = _bin_to_rate_map(
                 x, y, y_pred, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain
             )

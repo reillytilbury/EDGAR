@@ -237,6 +237,7 @@ prompts:
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
+      * Model signature must be `def model(X, params):` where `params` is a dict of named arrays/scalars.
       * Ensure all free parameters are numeric, not strings.
 
     docstring_guidelines: |
@@ -269,6 +270,7 @@ prompts:
       * Import any packages you use.
       * Do not include any text other than the code.
       * The only arguments to the function should be the inputs (X) and the spike count.
+      * Return a parameter dict with the same keys expected by the model.
       * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
       * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`.
       * Do not call the model function in your parameter_estimator code, as you will not have access to it! Instead, use direct statistical relationships between the inputs and outputs to estimate parameters.

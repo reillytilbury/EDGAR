@@ -7,6 +7,7 @@ import webbrowser
 import asyncio
 import numpy as np
 import jax, jax.numpy as jnp
+from jax.flatten_util import ravel_pytree
 import timeout_decorator
 import optax
 import pandas as pd
@@ -28,13 +29,16 @@ warnings.filterwarnings(
     message="The behavior of DataFrame concatenation with empty or all-NA entries is deprecated.*"
 )
 
+class ObjectiveTimeout(Exception):
+    """Raised when objective exceeds wall-clock timeout."""
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(relativeCreated)dms | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
+def compute_initial_params(param_estimator, model, x, y):
     """
     Estimate per-sample initial model parameters with safe fallbacks.
 
@@ -52,8 +56,8 @@ def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
             ``(n_samples, n_targets, n_trials)`` or ``(n_samples, n_trials)``.
 
     Returns:
-        jnp.ndarray | None: Parameter matrix of shape ``(n_samples, n_params)``.
-            Returns ``None`` when both estimator-based initialization and
+        pytree | None: Batched parameter pytree with leading sample axis for each
+            leaf. Returns ``None`` when both estimator-based initialization and
             default-parameter fallback fail.
     """
     @timeout_decorator.timeout(5, use_signals=True)
@@ -72,9 +76,9 @@ def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
 
     # Compute defaults once for per-sample fallback.
     defaults = compute_default_params(model)
+    fallback = defaults
     if defaults is None:
-        logging.info("Error: Unable to compute default parameters for the neuron model.")
-        return None
+        logging.info("Default parameters unavailable; will fall back to first successful estimate.")
 
     params_list = []
     n_samples = y.shape[0]
@@ -86,39 +90,58 @@ def compute_initial_params(param_estimator, model, x, y) -> jnp.ndarray:
             params_i = _safe_estimate(param_estimator, x[i], _estimator_response_arg(y[i]))
         except timeout_decorator.TimeoutError:
             logging.warning(f"param_estimator timed out for sample {i}, using defaults")
-            params_i = defaults[0]
+            params_i = fallback
         except Exception as e:
             logging.info(f"Error during parameter estimation for sample {i}: {e}")
-            params_i = defaults[0]
+            params_i = fallback
+        if params_i is None:
+            logging.info("Error: Unable to compute parameters (no defaults available).")
+            return None
+        fallback = params_i
         params_list.append(params_i)
 
-    return jnp.array(params_list)
+    return utils.stack_params(params_list)
 
 
-def compute_default_params(model) -> jnp.ndarray:
+def compute_default_params(model):
     """
-    Build a default parameter vector from a model function signature.
+    Build default parameters from model metadata or signature.
 
-    The first function argument is treated as the input tensor and skipped.
-    Remaining parameters use declared defaults where available, otherwise 0.0.
-
-    Args:
-        model (callable): Model function with signature ``model(X, *params)``.
+    Preferred sources:
+    1) ``model.default_params`` (callable or value)
+    2) ``model.DEFAULT_PARAMS`` (value)
+    3) Signature default for ``params`` when using ``model(X, params=...)``
+    4) Legacy positional defaults for ``model(X, *params)``
 
     Returns:
-        jnp.ndarray | None: Array of shape ``(1, n_params)`` containing defaults,
-            or ``None`` if signature introspection fails.
+        pytree | None: Default parameter pytree for a single sample, or ``None`` if
+            defaults cannot be determined.
     """
     try:
+        default_attr = getattr(model, "default_params", None)
+        if default_attr is not None:
+            return default_attr() if callable(default_attr) else default_attr
+        default_attr = getattr(model, "DEFAULT_PARAMS", None)
+        if default_attr is not None:
+            return default_attr
+
         sig = inspect.signature(model)
-        # First parameter is the input (X or theta), skip it
-        all_param_names = list(sig.parameters.keys())
-        # The first param is the input (could be named 'X', 'theta', or anything)
-        # All subsequent params are the model parameters to fit
-        param_names = all_param_names[1:] if all_param_names else []
-        defaults = [sig.parameters[n].default if sig.parameters[n].default is not inspect._empty else 0.0 for n in param_names]
+        param_names = list(sig.parameters.keys())
+        if len(param_names) >= 2 and param_names[1] == "params":
+            params_param = sig.parameters["params"]
+            if params_param.default is not inspect._empty:
+                return params_param.default
+            return None
+
+        # Legacy path: positional parameters after X/theta.
+        if len(param_names) <= 1:
+            return None
+        defaults = [
+            sig.parameters[n].default if sig.parameters[n].default is not inspect._empty else 0.0
+            for n in param_names[1:]
+        ]
         default_arr = jnp.array(defaults, dtype=np.float32)
-        return default_arr.reshape(1, -1)  # reshape to (1, n_params)
+        return default_arr.reshape(1, -1)
     except Exception as e:
         logging.info(f"Error while generating default parameters: {e}")
         return None
@@ -176,7 +199,7 @@ def validate_model_output(
 def validate_model_execution(
     model,
     x_data: jnp.ndarray,
-    initial_params: jnp.ndarray,
+    initial_params,
     n_samples: int,
     expected_n_targets: int = 1,
     n_validation_samples: int = 10,
@@ -192,7 +215,7 @@ def validate_model_execution(
     Args:
         model (callable): Candidate model function.
         x_data (jnp.ndarray): Input tensor ``(n_samples, n_features, n_trials)``.
-        initial_params (jnp.ndarray): Parameter matrix ``(n_samples, n_params)``.
+        initial_params (pytree): Batched parameter pytree (leading sample axis).
         n_samples (int): Number of samples in ``x_data``.
         expected_n_targets (int): Number of expected output targets.
         n_validation_samples (int): Maximum number of random samples to test.
@@ -207,14 +230,15 @@ def validate_model_execution(
         
         for sample_idx in np.random.choice(n_samples, size=min(n_validation_samples, n_samples), replace=False):
             # Validate with concrete values: x_data[sample_idx] is (n_features, n_trials)
-            output = model_jit(x_data[sample_idx], *initial_params[sample_idx])
+            params_i = utils.slice_params(initial_params, sample_idx)
+            output = model_jit(x_data[sample_idx], params_i)
             
             is_valid, error_msg = validate_model_output(output, test_n_trials, expected_n_targets)
             if not is_valid:
                 return False, error_msg
             
             # Validate with abstract tracer values
-            jax.eval_shape(model_jit, x_data[sample_idx], *initial_params[sample_idx])
+            jax.eval_shape(model_jit, x_data[sample_idx], params_i)
         
         return True, ""
     except Exception as e:
@@ -224,7 +248,8 @@ def validate_model_execution(
 def objective(model, param_estimator, x, y,
               loss_fn=None, param_penalty_weight=0.1, fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000, learning_rate=3e-3,
-              use_param_estimator=True, trial_batch_size=None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+              use_param_estimator=True, trial_batch_size=None,
+              timeout_s: float | None = None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate model loss using the unified Outputs representation.
     
@@ -237,7 +262,7 @@ def objective(model, param_estimator, x, y,
     Args:
         model (function): The model which predicts neural activity from inputs
                           and free parameters (for a single sample).
-                          Signature: model(X, *params) -> activity
+                          Signature: model(X, params) -> activity
                           where X has shape (n_features, n_trials) for a single sample.
                           Output shape: (n_targets, n_trials) for vectorized.
                           For n_targets=1, output can be (n_trials,) and will be auto-expanded.
@@ -268,14 +293,21 @@ def objective(model, param_estimator, x, y,
     Returns:
         tuple[
             - float: The cross-validated loss of the model with initial parameters,
-            - jnp.ndarray: The initial parameters (n_samples, n_params).
+            - pytree: The initial parameters (batched pytree).
             - float: The average loss on test set after optimization.
                      Returns FAILED_PROGRAM_COST if the model fails.
-            - jnp.ndarray: The optimized parameters (n_samples, n_params).
+            - pytree: The optimized parameters (batched pytree).
     """
     t_start = time.time()
+    initial_params = None
     if loss_fn is None:
         raise ValueError("objective requires a loss_fn; none was provided.")
+
+    def _check_timeout():
+        if timeout_s is None or timeout_s <= 0:
+            return
+        if time.time() - t_start > timeout_s:
+            raise ObjectiveTimeout(f"objective timed out after {timeout_s}s")
 
     if not (isinstance(x, (list, tuple, np.ndarray)) and len(x) == 2):
         raise ValueError("objective expects x as length-2 container: [x_train_trials, x_test_trials].")
@@ -292,30 +324,35 @@ def objective(model, param_estimator, x, y,
     n_samples, n_features, _ = x_train.shape
     n_targets = y_train_outputs.n_targets
     
-    # Compute initial parameters
-    # param_estimator receives y as (n_targets, n_trials) for each sample
-    if use_param_estimator:
-        initial_params = compute_initial_params(param_estimator, model, np.asarray(x_train), np.asarray(y_train))
-    else:
-        initial_params = compute_default_params(model)
-        if initial_params is not None:
-            initial_params = jnp.repeat(initial_params, n_samples, axis=0)
-    
-    # Fail immediately if initial_params is None or not a JAX array
-    if initial_params is None or not isinstance(initial_params, jnp.ndarray):
-        logging.info("Error: initial_params should be a JAX array.")
-        return FAILED_PROGRAM_COST, jnp.zeros((n_samples, 0)), FAILED_PROGRAM_COST, jnp.zeros((n_samples, 0))
-    if initial_params.ndim != 2 or initial_params.shape[0] != n_samples:
-        logging.info(f"Error: initial_params should be a 2D array with shape ({n_samples}, n_params).")
-        return FAILED_PROGRAM_COST, jnp.zeros((n_samples, 0)), FAILED_PROGRAM_COST, jnp.zeros((n_samples, 0))
-    
+    try:
+        _check_timeout()
+        # Compute initial parameters
+        # param_estimator receives y as (n_targets, n_trials) for each sample
+        if use_param_estimator:
+            initial_params = compute_initial_params(param_estimator, model, np.asarray(x_train), np.asarray(y_train))
+        else:
+            initial_params = compute_default_params(model)
+    except ObjectiveTimeout:
+        logging.info("Objective timed out during parameter initialization.")
+        empty_params = {}
+        return FAILED_PROGRAM_COST, empty_params, FAILED_PROGRAM_COST, empty_params
+
+    if initial_params is None:
+        logging.info("Error: initial_params unavailable.")
+        empty_params = {}
+        return FAILED_PROGRAM_COST, empty_params, FAILED_PROGRAM_COST, empty_params
+
+    initial_params = utils.broadcast_params(initial_params, n_samples)
+
     # Fail immediately if fit_params is True and non-numeric params
-    n_params = initial_params.shape[1]
-    all_numeric = (initial_params.dtype.kind in 'biufc' and 
-                   jnp.all(jnp.isfinite(initial_params)))
-    if fit_params and not all_numeric:
-        logging.info("Error: Cannot fit non-numeric parameters.")
-        return FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params)), FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params))
+    n_params_raw = utils.params_numel_per_sample(initial_params, n_samples=n_samples)
+    n_features_in = int(n_features)
+    n_features_out = int(n_targets)
+    penalty_denom = max(1, n_features_in * n_features_out)
+    n_params = n_params_raw / penalty_denom
+    if not utils.params_all_finite(initial_params):
+        logging.info("Error: Parameters contain non-numeric or non-finite values.")
+        return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
     
     # Validate model execution and output shape
     is_valid, error_msg = validate_model_execution(
@@ -327,11 +364,11 @@ def objective(model, param_estimator, x, y,
         logging.info(f"Model validation failed: {error_msg}")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
-    # Per-sample loss function
+    flat_init, unflatten = ravel_pytree(initial_params)
 
     # Per-sample loss function
     def loss_single_sample(params, x_i, y_i):
-        y_pred = model(x_i, *params)
+        y_pred = model(x_i, params)
         if y_i.ndim == 1:
             y_i = y_i[None, :]
         if y_pred.ndim == 1:
@@ -342,18 +379,11 @@ def objective(model, param_estimator, x, y,
         return jnp.mean(sample_loss)
 
     # Vectorize over samples
-    # params: (n_samples, n_params), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
-    # params: (n_samples, n_params), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
+    # params: pytree (batched), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
     # Output: (n_samples,)
     loss_total = jax.vmap(loss_single_sample, in_axes=(0, 0, 0), out_axes=0)
 
-
     # Mini-batched loss and gradient computation to avoid GPU OOM
-    n_train_trials_x = x_train.shape[2]
-    n_train_trials_y = y_train.shape[2]
-    trials_matched = (n_train_trials_x == n_train_trials_y)
-    effective_trial_batch_size = n_train_trials_x if trial_batch_size is None else int(trial_batch_size)
-    # Scalar single-feature full-batch fast path only when using default loss
     n_train_trials_x = x_train.shape[2]
     n_train_trials_y = y_train.shape[2]
     trials_matched = (n_train_trials_x == n_train_trials_y)
@@ -365,63 +395,65 @@ def objective(model, param_estimator, x, y,
     )
 
     @jax.jit
-    def loss_single_batch(params_2d, x_batch, y_batch):
+    def loss_single_batch(params_tree, x_batch, y_batch):
         """Compute sum of losses for one batch (JIT-compiled)."""
-        batch_losses = loss_total(params_2d, x_batch, y_batch)  # (n_samples,)
+        batch_losses = loss_total(params_tree, x_batch, y_batch)  # (n_samples,)
         return jnp.sum(batch_losses)
-
 
     # Combined loss and gradient computation - more efficient than separate calls
     loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
 
     # JIT-compiled eval (nansum to ignore NaN losses from bad model outputs)
     @jax.jit
-    def eval_single_batch(params_2d, x_batch, y_batch):
+    def eval_single_batch(params_tree, x_batch, y_batch):
         """Compute nansum of losses for one batch (JIT-compiled, no grad)."""
-        batch_losses = loss_total(params_2d, x_batch, y_batch)
+        batch_losses = loss_total(params_tree, x_batch, y_batch)
         return jnp.nansum(batch_losses)
 
     if trials_matched:
         # Standard path: batch over trial dimension with same indices for x and y
         n_train_trials = n_train_trials_x  # same as n_train_trials_y
 
-        def loss_and_grad_batched(params):
+        def loss_and_grad_batched(flat_params):
             """Compute loss and gradient by accumulating over trial batches."""
-            params_2d = params.reshape(-1, n_params)
+            params_tree = unflatten(flat_params)
             total_loss = 0.0
-            total_grad = jnp.zeros_like(params)
+            total_grad = jnp.zeros_like(flat_params)
 
             for start_idx in range(0, n_train_trials, effective_trial_batch_size):
+                _check_timeout()
                 end_idx = min(start_idx + effective_trial_batch_size, n_train_trials)
                 batch_weight = (end_idx - start_idx) / n_train_trials
                 x_batch = x_train[:, :, start_idx:end_idx]
                 y_batch = y_train[:, :, start_idx:end_idx]
 
-                batch_loss, batch_grad = loss_and_grad_single_batch(params_2d, x_batch, y_batch)
+                batch_loss, batch_grad_tree = loss_and_grad_single_batch(params_tree, x_batch, y_batch)
+                batch_grad_flat, _ = ravel_pytree(batch_grad_tree)
 
                 total_loss += batch_loss * batch_weight
-                total_grad += batch_grad.reshape(-1) * batch_weight
+                total_grad += batch_grad_flat * batch_weight
 
             return total_loss / n_samples, total_grad / n_samples
     else:
         # Mismatched trials: no trial mini-batching. Pass full x_train and y_train.
         # The loss_fn handles the shape relationship internally.
-        def loss_and_grad_batched(params):
+        def loss_and_grad_batched(flat_params):
             """Compute loss and gradient over full data (no trial batching)."""
-            params_2d = params.reshape(-1, n_params)
-            loss, grad = loss_and_grad_single_batch(params_2d, x_train, y_train)
-            return loss / n_samples, grad.reshape(-1) / n_samples
+            params_tree = unflatten(flat_params)
+            loss, grad_tree = loss_and_grad_single_batch(params_tree, x_train, y_train)
+            grad_flat, _ = ravel_pytree(grad_tree)
+            return loss / n_samples, grad_flat / n_samples
     
     if fit_params:
         # Adam optimizer with learning rate schedule
         # Ensure learning_rate is a Python float (not JAX array) for optax
         learning_rate = float(learning_rate)
         opt = optax.adam(learning_rate, b1=0.9, b2=0.999, eps=1e-8)
-        opt_state = opt.init(initial_params.reshape(-1))
+        opt_state = opt.init(flat_init)
         
         if use_scalar_single_feature_fullbatch:
             # Match legacy scalar full-batch path for speed/consistency when no batching is requested.
-            loss_param = lambda params: jnp.mean(loss_total(params.reshape(-1, n_params), x_train, y_train))
+            loss_param = lambda params: jnp.mean(loss_total(unflatten(params), x_train, y_train))
             loss_param_and_grad = jax.value_and_grad(loss_param)
 
             @jax.jit
@@ -432,11 +464,13 @@ def objective(model, param_estimator, x, y,
                 return params, opt_state, loss
 
             print_every = 50
-            params = initial_params.reshape(-1)
+            params = flat_init
             initial_loss = loss_param(params)
             best_loss, best_params = initial_loss.copy(), params.copy()
             for step in range(1, max_iter + 1):
+                _check_timeout()
                 params, opt_state, loss_val = train_step(params, opt_state)
+                _check_timeout()
                 if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
                     logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
                     print(f"Final loss: {loss_val:.4f} at step {step}")
@@ -446,7 +480,7 @@ def objective(model, param_estimator, x, y,
                     best_params = params.copy()
                 if step % print_every == 0:
                     print(f"step {step:4d}  loss {loss_val:.4f}")
-            params = best_params.reshape(n_samples, n_params)
+            params = unflatten(best_params)
             print(f"params optimized. Loss: {best_loss:.4f}")
         else:
             def train_step(params, opt_state):
@@ -456,7 +490,7 @@ def objective(model, param_estimator, x, y,
                 return new_params, new_opt_state, loss
 
             print_every = 50
-            params = initial_params.reshape(-1)
+            params = flat_init
             initial_loss, _ = loss_and_grad_batched(params)
 
             CATASTROPHIC_LOSS_THRESHOLD = 1e6
@@ -467,7 +501,9 @@ def objective(model, param_estimator, x, y,
 
             best_loss, best_params = initial_loss.copy(), params.copy()
             for step in range(1, max_iter + 1):
+                _check_timeout()
                 params, opt_state, loss_val = train_step(params, opt_state)
+                _check_timeout()
                 if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
                     logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
                     print(f"Final loss: {loss_val:.4f} at step {step}")
@@ -481,45 +517,53 @@ def objective(model, param_estimator, x, y,
                     best_params = params.copy()
                 if step % print_every == 0:
                     print(f"step {step:4d}  loss {loss_val:.4f}")
-            params = best_params.reshape(n_samples, n_params)
+            params = unflatten(best_params)
             print(f"params optimized. Loss: {best_loss:.4f}")
     else:
-        params = compute_initial_params(param_estimator, model, np.asarray(x_train), np.asarray(y_train))
-        if params is None or not isinstance(params, jnp.ndarray):
-            logging.info("Error: params should be a JAX array.")
-            return FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params)), FAILED_PROGRAM_COST, jnp.zeros((n_samples, n_params))
+        params = initial_params
     
     # Compute final loss on test set
     if trials_matched:
-        def eval_loss_batched(params_2d, x_eval, y_eval):
+        def eval_loss_batched(params_tree, x_eval, y_eval):
             """Compute loss by iterating over trial batches (matched trials)."""
             n_eval_trials = x_eval.shape[2]
             weighted_sum = 0.0
             for start_idx in range(0, n_eval_trials, effective_trial_batch_size):
+                _check_timeout()
                 end_idx = min(start_idx + effective_trial_batch_size, n_eval_trials)
                 batch_size = end_idx - start_idx
                 x_batch = x_eval[:, :, start_idx:end_idx]
                 y_batch = y_eval[:, :, start_idx:end_idx]
-                weighted_sum += eval_single_batch(params_2d, x_batch, y_batch) * (batch_size / n_eval_trials)
+                weighted_sum += eval_single_batch(params_tree, x_batch, y_batch) * (batch_size / n_eval_trials)
             return weighted_sum / n_samples
     else:
-        def eval_loss_batched(params_2d, x_eval, y_eval):
+        def eval_loss_batched(params_tree, x_eval, y_eval):
             """Compute loss over full data (mismatched trials, no batching)."""
-            return eval_single_batch(params_2d, x_eval, y_eval) / n_samples
+            return eval_single_batch(params_tree, x_eval, y_eval) / n_samples
 
-    if use_scalar_single_feature_fullbatch:
-        initial_loss = jnp.nanmean(loss_total(initial_params, x_test, y_test)) + param_penalty_weight * n_params
-    else:
-        initial_loss = eval_loss_batched(initial_params, x_test, y_test) + param_penalty_weight * n_params
+    try:
+        _check_timeout()
+        if use_scalar_single_feature_fullbatch:
+            initial_loss = jnp.nanmean(loss_total(initial_params, x_test, y_test)) + param_penalty_weight * n_params
+        else:
+            initial_loss = eval_loss_batched(initial_params, x_test, y_test) + param_penalty_weight * n_params
+    except ObjectiveTimeout:
+        logging.info("Objective timed out during initial loss evaluation.")
+        return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
     n_nans = jnp.sum(jnp.isnan(initial_loss))
     if n_nans > 0:
         print(f"Warning: initial loss contains {n_nans} NaNs.")
     initial_loss = jnp.nan_to_num(initial_loss, nan=FAILED_PROGRAM_COST, posinf=FAILED_PROGRAM_COST, neginf=FAILED_PROGRAM_COST)
     
-    if use_scalar_single_feature_fullbatch:
-        final_loss = jnp.nanmean(loss_total(params, x_test, y_test)) + param_penalty_weight * n_params
-    else:
-        final_loss = eval_loss_batched(params, x_test, y_test) + param_penalty_weight * n_params
+    try:
+        _check_timeout()
+        if use_scalar_single_feature_fullbatch:
+            final_loss = jnp.nanmean(loss_total(params, x_test, y_test)) + param_penalty_weight * n_params
+        else:
+            final_loss = eval_loss_batched(params, x_test, y_test) + param_penalty_weight * n_params
+    except ObjectiveTimeout:
+        logging.info("Objective timed out during final loss evaluation.")
+        return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
     n_nans = jnp.sum(jnp.isnan(final_loss))
     if n_nans > 0:
         print(f"Warning: final loss contains {n_nans} NaNs.")
@@ -528,6 +572,66 @@ def objective(model, param_estimator, x, y,
     t_end = time.time()
     print(f"Time taken for optimization: {t_end - t_start:.4f} seconds")
     return float(initial_loss), initial_params, float(final_loss), params
+
+
+def objective_with_timeout(
+    model,
+    param_estimator,
+    x,
+    y,
+    loss_fn=None,
+    param_penalty_weight=0.1,
+    fit_params=True,
+    FAILED_PROGRAM_COST=jnp.inf,
+    max_iter=1_000,
+    learning_rate=3e-3,
+    use_param_estimator=True,
+    trial_batch_size=None,
+    timeout_s: float | None = 5.0,
+) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+    """Wrapper around objective that enforces a wall-clock timeout."""
+    if timeout_s is None or timeout_s <= 0:
+        return objective(
+            model=model,
+            param_estimator=param_estimator,
+            x=x,
+            y=y,
+            loss_fn=loss_fn,
+            param_penalty_weight=param_penalty_weight,
+            fit_params=fit_params,
+            FAILED_PROGRAM_COST=FAILED_PROGRAM_COST,
+            max_iter=max_iter,
+            learning_rate=learning_rate,
+            use_param_estimator=use_param_estimator,
+            trial_batch_size=trial_batch_size,
+        )
+
+    @timeout_decorator.timeout(timeout_s, use_signals=True)
+    def _run():
+        return objective(
+            model=model,
+            param_estimator=param_estimator,
+            x=x,
+            y=y,
+            loss_fn=loss_fn,
+            param_penalty_weight=param_penalty_weight,
+            fit_params=fit_params,
+            FAILED_PROGRAM_COST=FAILED_PROGRAM_COST,
+            max_iter=max_iter,
+            learning_rate=learning_rate,
+            use_param_estimator=use_param_estimator,
+            trial_batch_size=trial_batch_size,
+            timeout_s=timeout_s,
+        )
+
+    try:
+        return _run()
+    except timeout_decorator.TimeoutError:
+        logging.info(f"Objective timed out after {timeout_s}s; skipping.")
+        return float(FAILED_PROGRAM_COST), {}, float(FAILED_PROGRAM_COST), {}
+    except ObjectiveTimeout:
+        logging.info(f"Objective timed out after {timeout_s}s; skipping.")
+        return float(FAILED_PROGRAM_COST), {}, float(FAILED_PROGRAM_COST), {}
 
 def _programs_df_to_programs_list(programs_df: pd.DataFrame, 
                                     loss_func: callable,
@@ -562,9 +666,11 @@ def _programs_df_to_programs_list(programs_df: pd.DataFrame,
         params = row.get('params')
         if model is None or params is None:
             continue
-        params_arr = jnp.asarray(params)
-        n_free_params = int(params_arr.shape[1]) if params_arr.ndim >= 2 else int(params_arr.size)
-        y_pred = utils.vmap_over_samples(model)(x_arr, params_arr)
+        params_tree = utils.broadcast_params(params, n_samples)
+        n_free_params_raw = utils.params_numel_per_sample(params_tree, n_samples=n_samples)
+        penalty_denom = max(1, int(x_arr.shape[1]) * int(y_arr.shape[1]))
+        n_free_params = n_free_params_raw / penalty_denom
+        y_pred = utils.vmap_over_samples(model)(x_arr, params_tree)
         if y_pred.ndim == 2 and y_arr.ndim == 3 and y_arr.shape[1] == 1:
             y_pred = y_pred[:, None, :]
         raw_losses = jnp.asarray(loss_func(y_pred, y_arr))
@@ -586,7 +692,7 @@ def _programs_df_to_programs_list(programs_df: pd.DataFrame,
         losses = losses + float(complexity_penalty) * n_free_params
         programs_list.append({
             'model': model,
-            'params': params_arr,
+            'params': params_tree,
             'losses': losses
         })
 
@@ -902,7 +1008,7 @@ async def generate_new_parameter_estimator(current_island,
 
     current_code = code_string
     current_func = func
-    current_loss, current_params, _, _ = objective(
+    current_loss, current_params, _, _ = objective_with_timeout(
         model=model_fn,
         param_estimator=current_func,
         x=x,
@@ -944,7 +1050,7 @@ async def generate_new_parameter_estimator(current_island,
                 programs_list=[
                     {
                         "model": model_fn,
-                        "params": np.asarray(current_params),
+                        "params": current_params,
                         "losses": np.full(x[0].shape[0], float(current_loss)),
                     }
                 ],
@@ -1015,7 +1121,7 @@ async def generate_new_parameter_estimator(current_island,
             logging.info("Failed to parse refined parameter estimator; keeping current.")
             continue
 
-        new_loss, _, _, _ = objective(
+        new_loss, _, _, _ = objective_with_timeout(
             model=model_fn,
             param_estimator=new_func,
             x=x,
@@ -1114,15 +1220,21 @@ def _run_translation_check_on_eval(
     """
     x_obs = np.asarray(ensure_inputs(x_train_trials).to_tensor())
     y_obs = np.asarray(ensure_outputs(y_train_trials).to_tensor())
-    eval_points = np.asarray(x_eval)
-    if eval_points.ndim != 3:
-        raise ValueError(
-            f"X_eval must have shape (n_samples, n_features, n_eval_trials), got {eval_points.shape}."
-        )
-
-    n_samples = min(x_obs.shape[0], y_obs.shape[0], eval_points.shape[0])
+    n_samples = min(x_obs.shape[0], y_obs.shape[0])
     if n_samples <= 0:
         raise ValueError("No samples available for translation check.")
+
+    # Use a small slice of real observed trials instead of synthetic eval grids.
+    n_trials = x_obs.shape[2]
+    n_eval_trials = min(5, int(max_eval_trials), n_trials)
+    rng = np.random.default_rng(0)
+    if n_eval_trials <= 0:
+        raise ValueError("No trials available for translation check.")
+    if n_eval_trials == n_trials:
+        trial_idx = np.arange(n_trials)
+    else:
+        trial_idx = rng.choice(n_trials, size=n_eval_trials, replace=False)
+    eval_points = x_obs[:, :, trial_idx]
 
     n_check = min(max_samples, n_samples)
     sample_idx = np.linspace(0, n_samples - 1, num=n_check, dtype=int)
@@ -1139,7 +1251,7 @@ def _run_translation_check_on_eval(
         np_func=np_func,
         jax_func=jax_func,
         eval_points=eval_points[sample_idx],
-        params=np.asarray(params_subset),
+        params=params_subset,
         max_eval_trials=max_eval_trials,
     )
 
@@ -1388,7 +1500,7 @@ async def hypothesis_engine(
         param_est = param_estimators[i]
         program_jax = jax_programs[i]
         # score the initial program
-        loss_init, params_init, loss, params = objective(
+        loss_init, params_init, loss, params = objective_with_timeout(
             program_jax,
             param_est,
             x=X[0],
@@ -1621,7 +1733,7 @@ async def hypothesis_engine(
                 logging.info('-' * 50)
                 continue
             
-            initial_loss, initial_params, loss, optimized_params = objective(
+            initial_loss, initial_params, loss, optimized_params = objective_with_timeout(
                 model_new,
                 param_est_new,
                 x=X[0],
@@ -1648,12 +1760,14 @@ async def hypothesis_engine(
             test_fit_path = None
             # plot the fits of the neuron model and parameter estimator if using image feedback
             if has_spec_plotter:
-                initial_params_plot = np.asarray(initial_params).copy()
-                optimized_params_plot = np.asarray(optimized_params).copy()
-                param_delta = optimized_params_plot - initial_params_plot
+                initial_params_plot = initial_params
+                optimized_params_plot = optimized_params
+                flat_init, _ = ravel_pytree(initial_params_plot)
+                flat_opt, _ = ravel_pytree(optimized_params_plot)
+                param_delta = np.asarray(flat_opt) - np.asarray(flat_init)
                 mean_abs_delta = float(np.mean(np.abs(param_delta)))
                 max_abs_delta = float(np.max(np.abs(param_delta)))
-                if np.allclose(initial_params_plot, optimized_params_plot, equal_nan=True):
+                if np.allclose(np.asarray(flat_init), np.asarray(flat_opt), equal_nan=True):
                     logging.info(
                         f"param_est_vs_gd: initial and optimized params are numerically identical "
                         f"(iter={i}, island={island_idx}, batch={j})."
@@ -1705,7 +1819,7 @@ async def hypothesis_engine(
                 )
                 test_fit_path = os.path.join(image_family_tree_fits_dir, f'iter_{i}_island_{island_idx}_batch_{j}_test_fit.png')
                 try:
-                    test_initial_loss, test_initial_params, test_final_loss, test_params = objective(
+                    test_initial_loss, test_initial_params, test_final_loss, test_params = objective_with_timeout(
                         model_new,
                         param_est_new,
                         x=X[1],
@@ -1727,7 +1841,7 @@ async def hypothesis_engine(
                 else:
                     test_programs_df = pd.DataFrame({
                         "program": [model_new, model_new],
-                        "params": [np.asarray(test_initial_params), np.asarray(test_params)],
+                        "params": [test_initial_params, test_params],
                     })
                     test_programs_list = _programs_df_to_programs_list(
                         test_programs_df,
@@ -1745,10 +1859,13 @@ async def hypothesis_engine(
                         labels=['PE', 'GD'],
                     )
 
-            param_names = [n for n in inspect.signature(model_new).parameters if n != "theta"]
-            if optimized_params.shape[1] == len(param_names):
-                df = pd.DataFrame(np.array(optimized_params)[:10], columns=param_names)
-                logging.info(f"Optimized Parameters for 10 samples:\n{df}\n")
+            param_summary = utils.params_tree_summary(
+                optimized_params,
+                n_samples=X[0, 0].shape[0],
+                max_lines=16,
+            )
+            if param_summary:
+                logging.info(f"Optimized parameter structure (sample view):\n{param_summary}\n")
             t_added = time.time() - t_start
             new_program_df = pd.DataFrame({'program_code_string': model_code_string,
                                         'program': model_new,
@@ -1892,7 +2009,7 @@ async def hypothesis_engine(
             model = program['program']
             param_estimator = program['parameter_estimator']
             # compute the test loss
-            _, _, test_loss, optimized_params = objective(
+            _, _, test_loss, optimized_params = objective_with_timeout(
                 model,
                 param_estimator,
                 x=X[1],

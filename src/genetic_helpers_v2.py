@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import yaml
+from . import utils
 
 
 # Default values for EvolutionConfig
@@ -140,7 +141,7 @@ class Program:
         """Number of free parameters."""
         if self.params is None:
             return 0
-        return self.params.shape[1] if self.params.ndim == 2 else len(self.params)
+        return utils.params_numel_per_sample(self.params)
     
     @property
     def code_hash(self) -> str:
@@ -179,7 +180,7 @@ class Program:
         # Fast path 2: Different parameter count → structurally different programs
         # (e.g., linear vs quadratic model can't be the same)
         if self.params is not None and other.params is not None:
-            if self.params.shape != other.params.shape:
+            if utils.params_signature(self.params) != utils.params_signature(other.params):
                 return False
         
         # Fast path 3: Losses too different → likely different programs
@@ -988,9 +989,7 @@ def compare_programs(program1: pd.Series, program2: pd.Series,
     params1 = program1.get('params')
     params2 = program2.get('params')
     if params1 is not None and params2 is not None:
-        params1 = jnp.array(params1)
-        params2 = jnp.array(params2)
-        if params1.shape != params2.shape:
+        if utils.params_signature(params1) != utils.params_signature(params2):
             return False
     
     # Fast path 3: Losses too different → likely different programs

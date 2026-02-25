@@ -99,8 +99,6 @@ def _build_load_and_process_data_fn(spec_load_and_process_data_fn):
             )
         if inputs.shape[0] != outputs.shape[0]:
             raise ValueError("Input/output sample count mismatch.")
-        if outputs.shape[1] != 1:
-            raise ValueError(f"Current engine expects scalar targets (n_targets=1), got {outputs.shape[1]}.")
         if inputs.shape[2] != outputs.shape[2]:
             raise ValueError(
                 "Current engine expects matching input/output trial counts, got "
@@ -192,7 +190,7 @@ def _programs_df_to_programs_list(programs_df, n_samples: int, params_col: str, 
         params = row.get(params_col)
         if model is None or params is None:
             continue
-        program_dict = {"model": model, "params": np.asarray(params)}
+        program_dict = {"model": model, "params": utils.broadcast_params(params, n_samples)}
         if loss_col is not None and loss_col in row.index:
             losses = _broadcast_model_loss(row[loss_col], n_samples=n_samples)
             if losses is not None:

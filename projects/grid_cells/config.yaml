@@ -97,6 +97,8 @@ prompts:
 
       * Do not include any text other than the code.
 
+      * Model signature must be `def model(X, params):` where `params` is a dict of named arrays/scalars.
+
       * Ensure all free parameters are numeric, not strings.
 
       '
@@ -130,6 +132,8 @@ prompts:
       * Import any packages you use.
 
       * Do not include any text other than the code.
+
+      * Return a parameter dict with the same keys expected by the model.
 
       * The only arguments to the function should be the inputs (X) and the firing
       rates.

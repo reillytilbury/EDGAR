@@ -37,24 +37,141 @@ def format_function_source(func: Callable, new_name: str, import_statement: str 
 
 def vmap_over_samples(model_fn):
     """Return a version of `model_fn` that accepts
-       (X, params_matrix) and runs one row per sample.
+       (X, params_tree) and runs one row per sample.
        
     Args:
         model_fn: A model function with signature:
-                  model_fn(X, *params) -> (n_trials,)
+                  model_fn(X, params) -> (n_trials,)
                   where X has shape (n_features, n_trials).
     
     Returns:
         A vmapped function that accepts:
         - X: shape (n_samples, n_features, n_trials)
-        - params_matrix: shape (n_samples, n_params)
+        - params_tree: pytree with leading sample axis for each leaf
         Returns shape (n_samples, n_trials).
     """
-    def _wrapped(X_cell, params_row):
+    def _wrapped(X_cell, params_cell):
         # X_cell shape: (n_features, n_trials) for one cell
-        # params_row shape: (k,) - one cell's parameters
-        return model_fn(X_cell, *params_row)   # unpack to scalars
+        return model_fn(X_cell, params_cell)
     return jax.vmap(_wrapped, in_axes=(0, 0))   # both X and params batched over cells
+
+
+def tree_to_jax(params):
+    """Convert all leaves in a pytree to jnp arrays."""
+    return jax.tree_util.tree_map(lambda x: jnp.asarray(x), params)
+
+
+def call_model(model_fn, X, params, prefer_jax: bool = True):
+    """Invoke a model with inputs/params converted to JAX arrays when possible.
+
+    This avoids tracer-to-numpy conversion errors in JAX control-flow primitives
+    (e.g., `lax.scan` / `lax.fori_loop`) by ensuring captured arrays are JAX types.
+    """
+    if prefer_jax:
+        try:
+            X_jax = jnp.asarray(X)
+            params_jax = tree_to_jax(params)
+            return model_fn(X_jax, params_jax)
+        except Exception as jax_exc:
+            try:
+                return model_fn(np.asarray(X), params)
+            except Exception:
+                raise jax_exc
+    return model_fn(np.asarray(X), params)
+
+
+def stack_params(params_list):
+    """Stack a list of per-sample param pytrees into a batched pytree."""
+    if not params_list:
+        return None
+    return jax.tree_util.tree_map(
+        lambda *xs: jnp.stack([jnp.asarray(x) for x in xs], axis=0),
+        *params_list,
+    )
+
+
+def broadcast_params(params, n_samples: int):
+    """Ensure params have a leading sample axis, broadcasting as needed."""
+    params = tree_to_jax(params)
+
+    def _broadcast(arr):
+        arr = jnp.asarray(arr)
+        if arr.ndim == 0:
+            return jnp.broadcast_to(arr, (n_samples,))
+        if arr.shape[0] == n_samples:
+            return arr
+        if arr.shape[0] == 1:
+            return jnp.broadcast_to(arr, (n_samples,) + arr.shape[1:])
+        arr = arr[None, ...]
+        return jnp.broadcast_to(arr, (n_samples,) + arr.shape)
+
+    return jax.tree_util.tree_map(_broadcast, params)
+
+
+def slice_params(params, idx: int):
+    """Slice a batched params pytree at the given sample index."""
+    return jax.tree_util.tree_map(lambda x: x if jnp.ndim(x) == 0 else x[idx], params)
+
+
+def params_numel_per_sample(params, n_samples: int | None = None) -> int:
+    """Count scalar parameters for a single sample in a params pytree."""
+    if n_samples is not None:
+        params = slice_params(broadcast_params(params, n_samples), 0)
+    leaves = jax.tree_util.tree_leaves(params)
+    return int(sum(np.asarray(leaf).size for leaf in leaves))
+
+
+def params_all_finite(params) -> bool:
+    """Return True if all leaves are numeric and finite."""
+    leaves = jax.tree_util.tree_leaves(params)
+    for leaf in leaves:
+        arr = np.asarray(leaf)
+        if arr.dtype.kind not in "biufc":
+            return False
+        try:
+            if not np.all(np.isfinite(arr)):
+                return False
+        except TypeError:
+            return False
+    return True
+
+
+def params_signature(params, n_samples: int | None = None):
+    """Return a structural signature of params (treedef, leaf shapes, dtypes)."""
+    if n_samples is not None:
+        params = slice_params(broadcast_params(params, n_samples), 0)
+    leaves, treedef = jax.tree_util.tree_flatten(params)
+    shapes = [np.asarray(leaf).shape for leaf in leaves]
+    dtypes = [np.asarray(leaf).dtype for leaf in leaves]
+    return treedef, shapes, dtypes
+
+
+def _format_tree_path(path) -> str:
+    parts = []
+    for entry in path:
+        if isinstance(entry, jax.tree_util.DictKey):
+            parts.append(str(entry.key))
+        elif isinstance(entry, jax.tree_util.SequenceKey):
+            parts.append(str(entry.idx))
+        elif isinstance(entry, jax.tree_util.GetAttrKey):
+            parts.append(entry.name)
+        else:
+            parts.append(str(entry))
+    return ".".join(parts) if parts else "<root>"
+
+
+def params_tree_summary(params, n_samples: int | None = None, max_lines: int = 24) -> str:
+    """Summarize param pytree structure for logging/debugging."""
+    if n_samples is not None:
+        params = slice_params(broadcast_params(params, n_samples), 0)
+    leaves_with_path, _ = jax.tree_util.tree_flatten_with_path(params)
+    lines = []
+    for path, leaf in leaves_with_path:
+        arr = np.asarray(leaf)
+        lines.append(f"{_format_tree_path(path)}: shape={arr.shape}, dtype={arr.dtype}")
+    if max_lines is not None and len(lines) > max_lines:
+        lines = lines[:max_lines] + [f"... ({len(lines) - max_lines} more)"]
+    return "\n".join(lines)
 
 
 def extract_code_block(text: Union[str, None], start_marker: str = "```python\n", end_marker: str = "```") -> Union[str, None]:
@@ -136,11 +253,11 @@ def check_jax_translation(
     Check NumPy vs JAX model agreement on a subset of eval points and samples.
 
     Args:
-        np_func: Original NumPy model function with signature model(X, *params).
-        jax_func: Translated JAX model function with signature model(X, *params).
+        np_func: Original NumPy model function with signature model(X, params).
+        jax_func: Translated JAX model function with signature model(X, params).
         eval_points: Array with shape (n_samples, n_features, n_eval_trials) or
             (n_features, n_eval_trials) for a single sample.
-        params: Array with shape (n_samples, n_params) or (n_params,).
+    params: Pytree with leading sample axis for each leaf, or a single-sample pytree.
         sample_indices: Optional sample indices to validate. If None, checks up to 3 samples.
         max_eval_trials: Max number of eval-trial points per sample used for comparison.
         rtol: Relative tolerance for numeric comparison.
@@ -157,19 +274,7 @@ def check_jax_translation(
             f"eval_points must have shape (n_samples, n_features, n_eval_trials), got {eval_arr.shape}."
         )
 
-    params_arr = np.asarray(params)
-    if params_arr.ndim == 1:
-        params_arr = np.broadcast_to(params_arr[None, :], (eval_arr.shape[0], params_arr.shape[0]))
-    elif params_arr.ndim == 2:
-        if params_arr.shape[0] == 1 and eval_arr.shape[0] > 1:
-            params_arr = np.broadcast_to(params_arr, (eval_arr.shape[0], params_arr.shape[1]))
-    else:
-        raise ValueError(f"params must be 1D or 2D, got {params_arr.shape}.")
-
-    if params_arr.shape[0] != eval_arr.shape[0]:
-        raise ValueError(
-            f"Sample mismatch between eval_points ({eval_arr.shape[0]}) and params ({params_arr.shape[0]})."
-        )
+    params_arr = broadcast_params(params, eval_arr.shape[0])
 
     n_samples = eval_arr.shape[0]
     if sample_indices is None:
@@ -186,9 +291,9 @@ def check_jax_translation(
             keep_idx = np.linspace(0, x_eval.shape[1] - 1, num=max_eval_trials, dtype=int)
             x_eval = x_eval[:, keep_idx]
 
-        sample_params = params_arr[sample_idx]
-        np_pred = np.asarray(np_func(x_eval, *sample_params))
-        jax_pred = np.asarray(jax_func(jnp.asarray(x_eval), *sample_params))
+        sample_params = slice_params(params_arr, sample_idx)
+        np_pred = np.asarray(np_func(x_eval, sample_params))
+        jax_pred = np.asarray(jax_func(jnp.asarray(x_eval), sample_params))
 
         if np_pred.shape != jax_pred.shape:
             raise ValueError(
@@ -240,11 +345,15 @@ def compute_evaluation_matrix(program, params, eval_points):
     if eval_points is None:
         raise ValueError("eval_points must be provided.")
 
-    params_arr = jnp.asarray(params)
+    params_arr = tree_to_jax(params)
     eval_arr = jnp.asarray(eval_points)
 
     if eval_arr.ndim == 1:
         eval_arr = eval_arr[:, None]
+    if eval_arr.ndim == 2:
+        eval_arr = eval_arr[None, :, :]
+    if eval_arr.ndim == 3:
+        params_arr = broadcast_params(params_arr, eval_arr.shape[0])
 
     program_vmap = vmap_over_samples(program)
     return program_vmap(eval_arr, params_arr)

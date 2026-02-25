@@ -8,8 +8,8 @@ Loading:
 - train_test_split(X) -> [train_samples, train_trials]
 
 Seed Programs:
-- model_v1(X, *params) and param_est_v1(X, Y)
-- model_v2(X, *params) and param_est_v2(X, Y)
+- model_v1(X, params) and param_est_v1(X, Y)
+- model_v2(X, params) and param_est_v2(X, Y)
 
 Loss:
 - loss_fn(Y_pred, Y_true) -> loss values
@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 from typing import List, Tuple
 from projects.synthetic_data.spec import compute_binned_means_on_eval
 from src.data_structures import Inputs, Outputs
+from src import utils
 
 
 # ========================
@@ -137,8 +138,7 @@ def train_test_split(
 # 2. SEED MODELS
 # ========================
 
-def model_v1(X, # independent variable: X = [theta] 
-             theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=1.0):
+def model_v1(X, params):  # independent variable: X = [theta]
     """
     Independent variable:
     X = [theta]  # stimulus angle (radians)
@@ -147,22 +147,31 @@ def model_v1(X, # independent variable: X = [theta]
     Args:
         X (np.ndarray): Input array with shape (1, n_trials).
                         X[0] is the stimulus angle theta in radians.
-        theta_pref (float): Preferred direction of the neuron.
-        baseline (float): Baseline firing rate.
-        amplitude (float): Maximum firing rate above baseline.
-        tuning_width (float): Width of the tuning curve.
+        params (dict): Parameter dictionary with keys:
+            - theta_pref: Preferred direction of the neuron.
+            - baseline: Baseline firing rate.
+            - amplitude: Maximum firing rate above baseline.
+            - tuning_width: Width of the tuning curve.
     Returns:
         np.ndarray: The firing rate of the neuron, shape (n_trials,).
     """
     theta = X[0]  # Extract theta from first input
-    theta_pref = np.clip(theta_pref, 0, 2 * np.pi)
-    baseline = np.clip(baseline, 0, None)
-    amplitude = np.clip(amplitude, 0, None)
-    tuning_width = np.clip(tuning_width, 0.01, None)
+    theta_pref = np.clip(params["theta_pref"], 0, 2 * np.pi)
+    baseline = np.clip(params["baseline"], 0, None)
+    amplitude = np.clip(params["amplitude"], 0, None)
+    tuning_width = np.clip(params["tuning_width"], 0.01, None)
 
     circ_dist_rad = lambda theta1, theta2: np.abs(np.arctan2(np.sin(theta1 - theta2), np.cos(theta1 - theta2)))
     dist = circ_dist_rad(theta, theta_pref)
     return baseline + amplitude * np.exp(-0.5 * (dist / tuning_width) ** 2)
+
+
+model_v1.DEFAULT_PARAMS = {
+    "theta_pref": 0.0,
+    "baseline": 0.0,
+    "amplitude": 1.0,
+    "tuning_width": 1.0,
+}
 
 def param_est_v1(X, Y):
     """
@@ -172,7 +181,7 @@ def param_est_v1(X, Y):
                         X[0] is the stimulus angle theta in radians.
         Y (np.ndarray): Spike counts corresponding to each trial, shape (n_trials,).
     Returns:
-        np.ndarray: Estimated parameters [theta_pref, baseline, amplitude, tuning_width].
+        dict: Estimated parameters with keys {"theta_pref", "baseline", "amplitude", "tuning_width"}.
     """
     theta = X[0]  # Extract theta from first input
     n_bins = 20
@@ -191,10 +200,14 @@ def param_est_v1(X, Y):
     above_half_max = tuning_curve[indices] >= half_max
     full_width_half_max = 2 * np.pi * np.sum(above_half_max) / n_bins
     tuning_width = full_width_half_max / (2.0 * np.sqrt(2 * np.log(2)))
-    return np.array([theta_pref, baseline, amplitude, tuning_width])
+    return {
+        "theta_pref": float(theta_pref),
+        "baseline": float(baseline),
+        "amplitude": float(amplitude),
+        "tuning_width": float(tuning_width),
+    }
 
-def model_v2(X, # independent variable: X = [theta] 
-             theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2=0.0, tuning_width=1.0):
+def model_v2(X, params):  # independent variable: X = [theta]
     """
     Independent variable:
     X = [theta]  # stimulus angle (radians)
@@ -203,25 +216,35 @@ def model_v2(X, # independent variable: X = [theta]
     Args:
         X (np.ndarray): Input array with shape (1, n_trials).
                         X[0] is the stimulus angle theta in radians.
-        theta_pref (float): Preferred angle in radians.
-        baseline (float): Baseline firing rate.
-        amplitude_1 (float): Amplitude of the first peak.
-        amplitude_2 (float): Amplitude of the second peak.
-        tuning_width (float): Width of the tuning curves around preferred angles.
+        params (dict): Parameter dictionary with keys:
+            - theta_pref: Preferred angle in radians.
+            - baseline: Baseline firing rate.
+            - amplitude_1: Amplitude of the first peak.
+            - amplitude_2: Amplitude of the second peak.
+            - tuning_width: Width of the tuning curves around preferred angles.
     Returns:
         np.ndarray: The response of the neuron model, shape (n_trials,).
     """
     theta = X[0]  # Extract theta from first input
-    theta_pref = np.clip(theta_pref, 0, 2 * np.pi)
-    baseline = np.clip(baseline, 0, None)
-    amplitude_1 = np.clip(amplitude_1, 0, None)
-    amplitude_2 = np.clip(amplitude_2, 0, None)
-    tuning_width = np.clip(tuning_width, 0.01, None)
+    theta_pref = np.clip(params["theta_pref"], 0, 2 * np.pi)
+    baseline = np.clip(params["baseline"], 0, None)
+    amplitude_1 = np.clip(params["amplitude_1"], 0, None)
+    amplitude_2 = np.clip(params["amplitude_2"], 0, None)
+    tuning_width = np.clip(params["tuning_width"], 0.01, None)
     
     circ_dist_rad = lambda theta1, theta2: np.abs(np.arctan2(np.sin(theta1 - theta2), np.cos(theta1 - theta2)))
     dist_1 = circ_dist_rad(theta, theta_pref)
     dist_2 = circ_dist_rad(theta, (theta_pref + np.pi) % (2 * np.pi))
     return baseline + amplitude_1 * np.exp(-0.5 * (dist_1 / tuning_width) ** 2) + amplitude_2 * np.exp(-0.5 * (dist_2 / tuning_width) ** 2)
+
+
+model_v2.DEFAULT_PARAMS = {
+    "theta_pref": 0.0,
+    "baseline": 0.0,
+    "amplitude_1": 1.0,
+    "amplitude_2": 0.0,
+    "tuning_width": 1.0,
+}
 
 def param_est_v2(X, Y):
     """
@@ -231,7 +254,7 @@ def param_est_v2(X, Y):
                         X[0] is the stimulus angle theta in radians.
         Y (np.ndarray): Spike counts corresponding to the angles, shape (n_trials,).
     Returns:
-        np.ndarray: Estimated parameters [theta_pref, baseline, amplitude_1, amplitude_2, tuning_width].
+        dict: Estimated parameters with keys {"theta_pref", "baseline", "amplitude_1", "amplitude_2", "tuning_width"}.
     """
     theta = X[0]  # Extract theta from first input
     n_bins = 50
@@ -260,7 +283,13 @@ def param_est_v2(X, Y):
     above_half_max = tuning_curve[indices] >= half_max
     full_width_half_max = 2 * np.pi * np.sum(above_half_max) / n_bins
     tuning_width = full_width_half_max / (2.0 * np.sqrt(2 * np.log(2)))
-    return np.array([theta_pref, baseline, amplitude_1, amplitude_2, tuning_width])
+    return {
+        "theta_pref": float(theta_pref),
+        "baseline": float(baseline),
+        "amplitude_1": float(amplitude_1),
+        "amplitude_2": float(amplitude_2),
+        "tuning_width": float(tuning_width),
+    }
 
 
 # ========================
@@ -297,8 +326,8 @@ def plot_model_fits(
         Output tensor with shape (n_samples, 1, n_trials).
     programs_list : list[dict]
         List of dictionaries with model metadata. Expected keys include:
-        - 'model': callable model(X_one, *params)
-        - 'params': array of shape (n_samples, n_params)
+        - 'model': callable model(X_one, params)
+        - 'params': batched parameter pytree
         - 'losses': array of shape (n_samples,)
     X_eval : array-like or Inputs
         Evaluation grid with shape (n_samples, n_features, n_eval_trials).
@@ -326,6 +355,11 @@ def plot_model_fits(
     # Intentionally unseeded so diagnostic samples vary across calls/runs.
     idx = np.random.default_rng().choice(n_samples, size=n_show, replace=False)
 
+    params_by_model = [
+        utils.broadcast_params(program["params"], n_samples)
+        for program in programs_list
+    ]
+
     fig, axes = plt.subplots(3, 3, figsize=(18, 18))
     axes = axes.reshape(3, 3)
 
@@ -346,9 +380,9 @@ def plot_model_fits(
 
         for j, program in enumerate(programs_list):
             model = program["model"]
-            params = program["params"][s]
+            params = utils.slice_params(params_by_model[j], s)
             loss = program["losses"][s]
-            y_pred = model(np.array([x_eval_fine]), *params)
+            y_pred = utils.call_model(model, np.array([x_eval_fine]), params)
 
             label = labels[j] + f" (loss={loss:.2f})"
             ax.plot(
