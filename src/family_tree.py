@@ -5,6 +5,7 @@ between programs across iterations, with click-to-inspect details.
 """
 
 import json
+import math
 import os
 import html as html_module
 from collections import defaultdict
@@ -154,13 +155,21 @@ def _assign_node_labels(records):
 
 
 def _loss_to_color(loss, min_loss, max_loss):
-    """Map a loss value to an RGB color string (green=good, red=bad)."""
+    """Map a loss value to an RGB color string (green=good, red=bad).
+
+    Uses log-scale normalisation so that the green-to-red gradient is spread
+    across the full range of surviving node losses rather than being compressed
+    near the minimum by right-skewed loss distributions.
+    """
     if loss is None or min_loss is None or max_loss is None:
-        return "rgb(180,180,180)"  # gray for seeds/unknown
-    if max_loss == min_loss:
+        return "rgb(180,180,180)"
+    if max_loss == min_loss or min_loss <= 0 or max_loss <= 0 or loss <= 0:
         return "rgb(50,180,50)"
-    # Clamp and normalize
-    t = min(1.0, max(0.0, (loss - min_loss) / (max_loss - min_loss)))
+    log_min = math.log(min_loss)
+    log_max = math.log(max_loss)
+    if log_max == log_min:
+        return "rgb(50,180,50)"
+    t = min(1.0, max(0.0, (math.log(loss) - log_min) / (log_max - log_min)))
     # Interpolate green (good) to red (bad)
     r = int(50 + 205 * t)
     g = int(180 - 130 * t)
