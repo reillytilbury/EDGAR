@@ -10,14 +10,14 @@ import logging
 import os
 
 
-def _escape(text) -> str:
+def escape(text) -> str:
     """HTML-escape a value, returning <em>N/A</em> for None."""
     if text is None:
         return "<em>N/A</em>"
     return html_module.escape(str(text))
 
 
-def _resolve_image_path(raw_path: str | None, image_base_dir: str | None) -> str | None:
+def resolve_image_path(raw_path: str | None, image_base_dir: str | None) -> str | None:
     """Resolve an image path to an absolute existing path, or None if missing."""
     if not raw_path:
         return None
@@ -28,7 +28,22 @@ def _resolve_image_path(raw_path: str | None, image_base_dir: str | None) -> str
     return None
 
 
-def _build_record_entry(rec: dict) -> dict:
+def record_key(rec: dict) -> tuple:
+    """Extract the canonical (iteration, island, batch) identity tuple from a record."""
+    return (rec.get("iteration_number"), rec.get("birth_island"), rec.get("batch_index"))
+
+
+def parse_parent_key(parent_id) -> tuple | None:
+    """Convert a stored [iteration, island, batch] parent_id to a key tuple, or None.
+
+    Returns None if parent_id is None or not a valid 3-element list/tuple.
+    """
+    if isinstance(parent_id, (list, tuple)) and len(parent_id) == 3:
+        return (int(parent_id[0]), int(parent_id[1]), int(parent_id[2]))
+    return None
+
+
+def build_record_entry(rec: dict) -> dict:
     """Extract the common sidebar fields shared by all monitoring views."""
     return {
         "iteration": rec.get("iteration_number"),

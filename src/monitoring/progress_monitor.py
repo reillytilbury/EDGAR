@@ -10,7 +10,7 @@ import logging
 import math
 import os
 
-from .io import load_generation_log, _escape, _resolve_image_path, _build_record_entry
+from .io import load_generation_log, escape, resolve_image_path, build_record_entry, record_key, parse_parent_key
 
 # Distinct colour palette for up to 8 islands
 _ISLAND_COLOURS = [
@@ -55,7 +55,7 @@ def _build_sidebar_data(records: list[dict]) -> dict:
     """
     sidebar = {}
     for idx, rec in enumerate(records):
-        entry = _build_record_entry(rec)
+        entry = build_record_entry(rec)
         entry["idx"] = idx
         sidebar[str(idx)] = entry
     return sidebar
@@ -82,20 +82,15 @@ def _build_edge_structures(
     # Build key -> rec_idx lookup
     key_to_idx = {}
     for rec_idx, rec in enumerate(all_records):
-        key = (
-            rec.get("iteration_number"),
-            rec.get("birth_island"),
-            rec.get("batch_index"),
-        )
-        key_to_idx[key] = rec_idx
+        key_to_idx[record_key(rec)] = rec_idx
 
     # Build parent map
     parent_map = {}
     for rec_idx, rec in enumerate(all_records):
-        p1 = rec.get("parent1_id")
-        p2 = rec.get("parent2_id")
-        p1_idx = key_to_idx.get(tuple(p1)) if isinstance(p1, list) else None
-        p2_idx = key_to_idx.get(tuple(p2)) if isinstance(p2, list) else None
+        p1_key = parse_parent_key(rec.get("parent1_id"))
+        p2_key = parse_parent_key(rec.get("parent2_id"))
+        p1_idx = key_to_idx.get(p1_key) if p1_key is not None else None
+        p2_idx = key_to_idx.get(p2_key) if p2_key is not None else None
         if p1_idx is not None or p2_idx is not None:
             parent_map[rec_idx] = [p1_idx, p2_idx]
 
@@ -448,7 +443,7 @@ def _generate_loss_progress_html(
     edge_segs_raw_json = json.dumps(edge_segs_raw)
     parent_map_json = json.dumps({str(k): v for k, v in parent_map.items()})
     edge_map_json = json.dumps({str(k): v for k, v in edge_map.items()})
-    title_esc = _escape(title)
+    title_esc = escape(title)
 
     return f"""<!DOCTYPE html>
 <html>
@@ -832,7 +827,7 @@ def _generate_gd_effect_html(
     seed_custom_json = json.dumps(seed_custom)
     seed_hover_json = json.dumps(seed_hover)
     diag_json = json.dumps([diag_min, diag_max])
-    title_esc = _escape(title)
+    title_esc = escape(title)
 
     return f"""<!DOCTYPE html>
 <html>
@@ -1014,7 +1009,7 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
     rel_base = output_dir or image_base_dir or "."
     for entry in sidebar_data.values():
         for key in ("image_prompt_path", "train_fit_image_path", "test_fit_image_path"):
-            abs_path = _resolve_image_path(entry.get(key), image_base_dir)
+            abs_path = resolve_image_path(entry.get(key), image_base_dir)
             if abs_path:
                 entry[key] = os.path.relpath(abs_path, rel_base)
             else:

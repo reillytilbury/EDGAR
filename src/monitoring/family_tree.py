@@ -10,7 +10,7 @@ from collections import defaultdict
 
 import networkx as nx
 
-from .io import load_generation_log, _escape, _resolve_image_path, _build_record_entry
+from .io import load_generation_log, escape, resolve_image_path, build_record_entry, record_key, parse_parent_key
 
 
 def _make_node_id(iteration, island, batch):
@@ -19,15 +19,12 @@ def _make_node_id(iteration, island, batch):
 
 
 def _parse_parent_id(parent_id):
-    """Parse a parent ID tuple [iteration, island, batch] into a node ID string.
+    """Parse a parent ID list [iteration, island, batch] into a node ID string.
 
     Returns None if parent_id is None or not a valid 3-element list.
     """
-    if parent_id is None:
-        return None
-    if isinstance(parent_id, (list, tuple)) and len(parent_id) == 3:
-        return _make_node_id(int(parent_id[0]), int(parent_id[1]), int(parent_id[2]))
-    return None
+    key = parse_parent_key(parent_id)
+    return _make_node_id(*key) if key is not None else None
 
 
 def _build_seed_nodes():
@@ -107,7 +104,7 @@ def _assign_node_labels(records):
     # Seed labels
     for rec in records:
         if rec.get("is_seed", False):
-            nid = _make_node_id(rec["iteration_number"], rec["birth_island"], rec["batch_index"])
+            nid = _make_node_id(*record_key(rec))
             label_map[nid] = f"S{int(rec.get('batch_index', 0)) + 1}"
 
     # Per-island labels (birth order)
@@ -119,7 +116,7 @@ def _assign_node_labels(records):
         ]
         island_records.sort(key=lambda r: (r.get("iteration_number", 0), r.get("batch_index", 0)))
         for i, rec in enumerate(island_records, start=1):
-            nid = _make_node_id(rec["iteration_number"], rec["birth_island"], rec["batch_index"])
+            nid = _make_node_id(*record_key(rec))
             label_map[nid] = f"{_island_letter(island_idx)}{i}"
     return label_map
 
@@ -186,7 +183,7 @@ def _build_sidebar_data(records_by_id):
     """Build a JSON-serializable dict of node data for the sidebar."""
     sidebar = {}
     for node_id, rec in records_by_id.items():
-        entry = _build_record_entry(rec)
+        entry = build_record_entry(rec)
         entry.update({
             "id": node_id,
             "display_label": rec.get("display_label"),
@@ -306,7 +303,7 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
     rel_base = html_output_dir or image_base_dir or "."
     for nid, entry in sidebar_data.items():
         for key in ("image_prompt_path", "train_fit_image_path", "test_fit_image_path"):
-            abs_path = _resolve_image_path(entry.get(key), image_base_dir)
+            abs_path = resolve_image_path(entry.get(key), image_base_dir)
             if abs_path:
                 entry[key] = os.path.relpath(abs_path, rel_base)
             else:
@@ -353,7 +350,7 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
 <html>
 <head>
 <meta charset="utf-8">
-<title>{_escape(title)}</title>
+<title>{escape(title)}</title>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <style>
   body {{ margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; display: flex; height: 100vh; overflow: hidden; }}
@@ -583,7 +580,7 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
     # Build lookup by node ID
     records_by_id = {}
     for rec in all_records:
-        nid = _make_node_id(rec["iteration_number"], rec["birth_island"], rec["batch_index"])
+        nid = _make_node_id(*record_key(rec))
         records_by_id[nid] = rec
 
     # Assign compact labels
