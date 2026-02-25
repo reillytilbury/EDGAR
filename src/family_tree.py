@@ -249,9 +249,15 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
             best_node = node
             break
 
-    # Compute loss range for coloring
-    losses = [r.get("train_loss") for r in records_by_id.values()
-              if r.get("train_loss") is not None]
+    # Dead nodes: non-seed nodes with no children in the graph
+    dead_nodes = {
+        node for node in G.nodes()
+        if G.out_degree(node) == 0 and not records_by_id.get(node, {}).get("is_seed", False)
+    }
+
+    # Compute loss range for coloring (exclude dead nodes so they don't skew the scale)
+    losses = [r.get("train_loss") for nid, r in records_by_id.items()
+              if r.get("train_loss") is not None and nid not in dead_nodes]
     min_loss = min(losses) if losses else None
     max_loss = max(losses) if losses else None
     # Use 95th percentile as max to avoid outlier skew
@@ -293,7 +299,7 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
             hover_parts.append(f"LLM: {llm}")
         node_hover.append("<br>".join(hover_parts))
 
-        if is_seed:
+        if is_seed or node in dead_nodes:
             node_colors.append("rgb(180,180,180)")
         else:
             node_colors.append(_loss_to_color(loss, min_loss, max_loss))
