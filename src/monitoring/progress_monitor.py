@@ -5,13 +5,12 @@ JSONL generation log, visualising training loss and gradient-descent
 effectiveness per island.
 """
 
-import html as html_module
 import json
 import logging
 import math
 import os
 
-from .io import load_generation_log
+from .io import load_generation_log, _escape, _resolve_image_path, _build_record_entry
 
 # Distinct colour palette for up to 8 islands
 _ISLAND_COLOURS = [
@@ -29,13 +28,6 @@ _ISLAND_COLOURS = [
 def _island_colour(island_idx: int) -> str:
     """Return a hex colour for island_idx, cycling if > 8 islands."""
     return _ISLAND_COLOURS[island_idx % len(_ISLAND_COLOURS)]
-
-
-def _escape(text) -> str:
-    """HTML-escape a value, returning N/A for None."""
-    if text is None:
-        return "<em>N/A</em>"
-    return html_module.escape(str(text))
 
 
 def _perplexity(L, L_0) -> float:
@@ -63,40 +55,10 @@ def _build_sidebar_data(records: list[dict]) -> dict:
     """
     sidebar = {}
     for idx, rec in enumerate(records):
-        sidebar[str(idx)] = {
-            "idx": idx,
-            "iteration": rec.get("iteration_number"),
-            "island": rec.get("birth_island"),
-            "batch": rec.get("batch_index"),
-            "train_loss": rec.get("train_loss"),
-            "initial_loss": rec.get("initial_loss"),
-            "n_params": rec.get("n_params"),
-            "complexity_penalty": rec.get("complexity_penalty"),
-            "mode": rec.get("mode"),
-            "llm_name": rec.get("llm_name"),
-            "temperature": rec.get("temperature"),
-            "model_code": rec.get("model_code_numpy"),
-            "param_est_code": rec.get("param_est_code"),
-            "model_prompt": rec.get("model_prompt"),
-            "image_prompt_path": rec.get("image_prompt_path"),
-            "model_llm_response": rec.get("model_llm_response"),
-            "param_est_prompt": rec.get("param_est_prompt"),
-            "param_est_llm_response": rec.get("param_est_llm_response"),
-            "train_fit_image_path": rec.get("train_fit_image_path"),
-            "test_fit_image_path": rec.get("test_fit_image_path"),
-        }
+        entry = _build_record_entry(rec)
+        entry["idx"] = idx
+        sidebar[str(idx)] = entry
     return sidebar
-
-
-def _resolve_image_path(raw_path: str | None, image_base_dir: str | None) -> str | None:
-    """Resolve an image path to an absolute existing path, or None if missing."""
-    if not raw_path:
-        return None
-    if not os.path.isabs(raw_path) and image_base_dir:
-        raw_path = os.path.join(image_base_dir, raw_path)
-    if os.path.isfile(raw_path):
-        return raw_path
-    return None
 
 
 def _build_edge_structures(

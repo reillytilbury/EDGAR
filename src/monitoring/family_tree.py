@@ -6,12 +6,11 @@ between programs across iterations, with click-to-inspect details.
 
 import json
 import os
-import html as html_module
 from collections import defaultdict
 
 import networkx as nx
 
-from .io import load_generation_log
+from .io import load_generation_log, _escape, _resolve_image_path, _build_record_entry
 
 
 def _make_node_id(iteration, island, batch):
@@ -183,62 +182,26 @@ def _loss_to_color(loss, min_loss, max_loss):
     return f"rgb({r},{g},{b})"
 
 
-def _escape(text):
-    """HTML-escape a string, handling None."""
-    if text is None:
-        return "<em>N/A</em>"
-    return html_module.escape(str(text))
-
-
 def _build_sidebar_data(records_by_id):
     """Build a JSON-serializable dict of node data for the sidebar."""
     sidebar = {}
     for node_id, rec in records_by_id.items():
-        entry = {
+        entry = _build_record_entry(rec)
+        entry.update({
             "id": node_id,
             "display_label": rec.get("display_label"),
-            "iteration": rec.get("iteration_number"),
-            "island": rec.get("birth_island"),
             "island_label": _island_letter(rec.get("birth_island", -1)),
-            "batch": rec.get("batch_index"),
-            "train_loss": rec.get("train_loss"),
             "test_loss": rec.get("test_loss"),
-            "initial_loss": rec.get("initial_loss"),
-            "n_params": rec.get("n_params"),
-            "complexity_penalty": rec.get("complexity_penalty"),
-            "mode": rec.get("mode"),
-            "temperature": rec.get("temperature"),
-            "llm_name": rec.get("llm_name"),
             "parent1_id": _parse_parent_id(rec.get("parent1_id")),
             "parent2_id": _parse_parent_id(rec.get("parent2_id")),
             "is_migrant": rec.get("is_migrant", False),
             "migrant_from_id": rec.get("migrant_from_id"),
             "migrant_from_label": rec.get("migrant_from_label"),
             "is_extinct": rec.get("is_extinct", False),
-            "model_code": rec.get("model_code_numpy"),
-            "param_est_code": rec.get("param_est_code"),
-            "model_prompt": rec.get("model_prompt"),
-            "model_llm_response": rec.get("model_llm_response"),
-            "param_est_prompt": rec.get("param_est_prompt", rec.get("param_est_prompt")),
-            "param_est_llm_response": rec.get("param_est_llm_response"),
-            "image_prompt_path": rec.get("image_prompt_path"),
-            "train_fit_image_path": rec.get("train_fit_image_path"),
-            "test_fit_image_path": rec.get("test_fit_image_path"),
             "is_seed": rec.get("is_seed", False),
-        }
+        })
         sidebar[node_id] = entry
     return sidebar
-
-
-def _resolve_image_path(raw_path, image_base_dir):
-    """Resolve an image path: make absolute if relative, return None if missing."""
-    if not raw_path:
-        return None
-    if not os.path.isabs(raw_path) and image_base_dir:
-        raw_path = os.path.join(image_base_dir, raw_path)
-    if os.path.isfile(raw_path):
-        return raw_path
-    return None
 
 
 def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_output_dir=None, island_dividers=None):
