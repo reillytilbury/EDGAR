@@ -78,11 +78,25 @@ def _build_sidebar_data(records: list[dict]) -> dict:
             "model_code": rec.get("model_code_numpy"),
             "param_est_code": rec.get("param_est_code"),
             "model_prompt": rec.get("model_prompt"),
+            "image_prompt_path": rec.get("image_prompt_path"),
             "model_llm_response": rec.get("model_llm_response"),
             "param_est_prompt": rec.get("param_est_prompt"),
             "param_est_llm_response": rec.get("param_est_llm_response"),
+            "train_fit_image_path": rec.get("train_fit_image_path"),
+            "test_fit_image_path": rec.get("test_fit_image_path"),
         }
     return sidebar
+
+
+def _resolve_image_path(raw_path: str | None, image_base_dir: str | None) -> str | None:
+    """Resolve an image path to an absolute existing path, or None if missing."""
+    if not raw_path:
+        return None
+    if not os.path.isabs(raw_path) and image_base_dir:
+        raw_path = os.path.join(image_base_dir, raw_path)
+    if os.path.isfile(raw_path):
+        return raw_path
+    return None
 
 
 def _build_edge_structures(
@@ -226,6 +240,15 @@ function showSidebar(idx) {
   }
   if (d.param_est_llm_response) {
     h += '<details><summary>Param Estimator LLM Response</summary><pre>' + escapeHtml(d.param_est_llm_response) + '</pre></details>';
+  }
+  if (d.image_prompt_path) {
+    h += '<details><summary>Prompt Image (Parents)</summary><img src="' + d.image_prompt_path + '" style="max-width:100%;margin-top:8px;"></details>';
+  }
+  if (d.train_fit_image_path) {
+    h += '<details><summary>Train Fit</summary><img src="' + d.train_fit_image_path + '" style="max-width:100%;margin-top:8px;"></details>';
+  }
+  if (d.test_fit_image_path) {
+    h += '<details><summary>Test Fit</summary><img src="' + d.test_fit_image_path + '" style="max-width:100%;margin-top:8px;"></details>';
   }
 
   sc.innerHTML = h;
@@ -922,6 +945,15 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
     # Unified record list: seeds first, then programs (gives consistent rec_idx)
     all_records = seed_records + prog_records
     sidebar_data = _build_sidebar_data(all_records)
+    image_base_dir = os.path.dirname(json_file)
+    rel_base = output_dir or image_base_dir or "."
+    for entry in sidebar_data.values():
+        for key in ("image_prompt_path", "train_fit_image_path", "test_fit_image_path"):
+            abs_path = _resolve_image_path(entry.get(key), image_base_dir)
+            if abs_path:
+                entry[key] = os.path.relpath(abs_path, rel_base)
+            else:
+                entry[key] = None
 
     islands = sorted({r.get("birth_island", 0) for r in prog_records})
 
