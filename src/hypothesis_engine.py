@@ -1437,7 +1437,7 @@ async def hypothesis_engine(
 
     # Write seed programs to generation log
     for seed_idx, row in initial_programs.iterrows():
-        seed_n_params = int(row['params'][0].shape[1])
+        seed_n_params = int(row['params'][0].shape[-1])
         _append_generation_record(generation_log_path, {
             "iteration_number": -1,
             "birth_island": -1,
