@@ -636,7 +636,7 @@ function buildInitialTraces(withPenalty) {{
     hoverinfo: 'text',
     name: 'Seeds',
     marker: {{
-      symbol: 'star',
+      symbol: 'square',
       color: seedCustom.map(function(idx) {{ return getNodeColour(idx, currentColourMode); }}),
       size: 18,
       line: {{width: 1.5, color: '#fff'}}
@@ -930,7 +930,7 @@ const seedTrace = {{
   hoverinfo: 'text',
   name: 'Seeds',
   marker: {{
-    symbol: 'star',
+    symbol: 'square',
     color: seedCustom.map(function(idx) {{ return getNodeColour(idx, currentColourMode); }}),
     size: 18,
     line: {{width: 1.5, color: '#fff'}}
