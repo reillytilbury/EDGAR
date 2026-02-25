@@ -262,7 +262,13 @@ def plot_model_fits(
     y_arr = _to_array3d(Y)
     x_eval_arr = _to_array3d(X_eval)
     n_samples = x_arr.shape[0]
-    colours = ["green", "red", "orange", "purple", "cyan", "magenta", "brown", "olive"]
+    # diff colours depending on how many models we have
+    if len(programs_list) == 1:
+        colours = ["red"]
+    elif len(programs_list) == 2:
+        colours = ["green", "red"]
+    else:
+        colours = ["purple", "green", "red"]
     binned_colour = "deepskyblue"
 
     n_show = min(9, n_samples)

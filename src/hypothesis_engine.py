@@ -3,6 +3,7 @@ import json
 import re
 import os
 import logging
+import webbrowser
 import asyncio
 import numpy as np
 import jax, jax.numpy as jnp
@@ -860,13 +861,13 @@ async def generate_new_parameter_estimator(current_island,
     if code_string is None:
         logging.info("No code block found in the LLM output for parameter estimator, skipping.")
         return None, None, pe_metadata
-    contains_swear_word = any(word in code_string for word in swear_words)
+    contains_swear_word = bool(swear_words) and any(word in code_string for word in swear_words)
     if contains_swear_word:
         # find the word that is in the code_string
         swear_word = next((word for word in swear_words if word in code_string), None)
         logging.info(f"Parameter estimator code contains swear word: {swear_word}, skipping.")
         logging.info(f"Code string was:\n{code_string}")
-        return None, None
+        return None, None, pe_metadata
     code_string = re.sub(r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", code_string)
     code_string = re.sub(r"def\s+parameter_estimator_prev\s*\(", "def parameter_estimator(", code_string)
     func = utils.str_to_func(code_string, 'parameter_estimator')
@@ -999,7 +1000,7 @@ async def generate_new_parameter_estimator(current_island,
         if new_code is None:
             logging.info("No code block found in refinement output; keeping current estimator.")
             continue
-        if any(word in new_code for word in swear_words):
+        if swear_words and any(word in new_code for word in swear_words):
             logging.info("Refinement code contains banned words; skipping.")
             continue
 
@@ -1211,6 +1212,7 @@ async def hypothesis_engine(
         X = None, Y = None, X_eval = None,
         plot_model_fits = None, loss_fn = None, 
         prompt_manager = None, trial_batch_size = None, swear_words = None,
+        open_family_tree = False,
         random_seed = 42, # consider setting up a seed_manager to make behaviours more robustly reproducible.
         ):
     """
@@ -1260,6 +1262,7 @@ async def hypothesis_engine(
         prompt_manager: PromptManager for all prompt construction.
         trial_batch_size (int | None): Trial batching size used by ``objective``.
         swear_words (list[str] | None): Blacklist for generated estimator code.
+        open_family_tree (bool): Open the combined family tree HTML at the end of the run.
         random_seed (int): Run seed for deterministic split-dependent operations.
 
     Returns:
@@ -1584,7 +1587,6 @@ async def hypothesis_engine(
                 island_id=island_idx,
                 batch_id=j,
                 iteration=i,
-                loss_fn=loss_fn,
                 plot_model_fits=plot_model_fits,
                 x_eval=X_eval_train,
                 image_refinement_dir=image_param_est_refine_dir,
@@ -1706,31 +1708,66 @@ async def hypothesis_engine(
                 )
                 # Per-program train/test fit images for family tree sidebar
                 train_fit_path = os.path.join(image_family_tree_fits_dir, f'iter_{i}_island_{island_idx}_batch_{j}_train_fit.png')
+                train_programs_df = pd.DataFrame({
+                    "program": [model_new, model_new],
+                    "params": [initial_params_plot, optimized_params_plot],
+                })
+                train_programs_list = _programs_df_to_programs_list(
+                    train_programs_df,
+                    loss_func=loss_fn,
+                    x=X[0, 0],
+                    y=Y[0, 0],
+                    complexity_penalty=param_penalty_weight,
+                )
                 plot_model_fits(
                     X=X[0, 0],
                     Y=Y[0, 0],
-                    programs_list=[{
-                        "model": model_new,
-                        "params": optimized_params_plot,
-                        "losses": np.full(X[0, 0].shape[0], float(loss)),
-                    }],
+                    programs_list=train_programs_list,
                     X_eval=X_eval_train,
                     save_path=train_fit_path,
-                    labels=['Model'],
+                    labels=['PE', 'GD'],
                 )
                 test_fit_path = os.path.join(image_family_tree_fits_dir, f'iter_{i}_island_{island_idx}_batch_{j}_test_fit.png')
-                plot_model_fits(
-                    X=X[1, 1],
-                    Y=Y[1, 1],
-                    programs_list=[{
-                        "model": model_new,
-                        "params": optimized_params_plot,
-                        "losses": np.full(X[1, 1].shape[0], float(loss)),
-                    }],
-                    X_eval=X_eval_test,
-                    save_path=test_fit_path,
-                    labels=['Model'],
-                )
+                try:
+                    test_initial_loss, test_initial_params, test_final_loss, test_params = objective(
+                        model_new,
+                        param_est_new,
+                        x=X[1],
+                        y=Y[1],
+                        loss_fn=loss_fn,
+                        param_penalty_weight=param_penalty_weight,
+                        fit_params=fit_params,
+                        use_param_estimator=use_param_estimator,
+                        max_iter=max_iter,
+                        trial_batch_size=trial_batch_size,
+                    )
+                    if test_final_loss == FAILED_PROGRAM_COST:
+                        raise ValueError("test objective failed")
+                except Exception as e:
+                    logging.info(
+                        "Skipping test fit plot; failed to compute test parameters "
+                        f"(iter={i}, island={island_idx}, batch={j}): {e}"
+                    )
+                else:
+                    test_programs_df = pd.DataFrame({
+                        "program": [model_new, model_new],
+                        "params": [np.asarray(test_initial_params), np.asarray(test_params)],
+                    })
+                    test_programs_list = _programs_df_to_programs_list(
+                        test_programs_df,
+                        loss_func=loss_fn,
+                        x=X[1, 1],
+                        y=Y[1, 1],
+                        complexity_penalty=param_penalty_weight,
+                    )
+                    plot_model_fits(
+                        X=X[1, 1],
+                        Y=Y[1, 1],
+                        programs_list=test_programs_list,
+                        X_eval=X_eval_test,
+                        save_path=test_fit_path,
+                        labels=['PE', 'GD'],
+                    )
 
             param_names = [n for n in inspect.signature(model_new).parameters if n != "theta"]
             if optimized_params.shape[1] == len(param_names):
@@ -1978,8 +2015,17 @@ async def hypothesis_engine(
                 )
     
     # Generate family tree visualizations
-    create_family_tree(generation_log_path, full_dir, n_islands)
     create_dynamic_progress_update(generation_log_path, full_dir)
+    create_family_tree(generation_log_path, full_dir, n_islands)
+    if open_family_tree:
+        family_tree_path = os.path.join(full_dir, "genealogy.html")
+        try:
+            if os.path.isfile(family_tree_path):
+                webbrowser.open(Path(family_tree_path).resolve().as_uri())
+            else:
+                logging.info("Family tree HTML not found at %s; skipping auto-open.", family_tree_path)
+        except Exception as e:
+            logging.info("Failed to open family tree HTML: %s", e)
 
     # Log final token usage summary (if using chat mode)
     if island_chat_manager is not None:
