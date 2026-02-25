@@ -262,6 +262,87 @@ function closeSidebar() {
 }
 """
 
+_COLOUR_MODE_JS = """
+const DEAD_COLOUR = '#b0b0b0';
+const CATEGORY_COLOURS = [
+  '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728',
+  '#9467bd', '#8c564b', '#e377c2', '#17becf',
+  '#bcbd22', '#7f7f7f'
+];
+
+let currentColourMode = 'dead_llm';
+
+const islandColourByIdx = {};
+allTraces.forEach(function(t) {
+  islandColourByIdx[String(t.island_idx)] = t.colour;
+});
+// Seeds are drawn in a dedicated trace with island=-1.
+islandColourByIdx['-1'] = '#222';
+
+function _categoryKey(value, fallback) {
+  if (value === null || value === undefined) return fallback;
+  const s = String(value).trim();
+  return s ? s : fallback;
+}
+
+function buildAliveCategoryColourMap(fieldName, fallbackLabel) {
+  const keys = [];
+  Object.keys(sidebarData).forEach(function(idx) {
+    const d = sidebarData[idx];
+    if (!d || d.is_dead) return;
+    keys.push(_categoryKey(d[fieldName], fallbackLabel));
+  });
+  const unique = Array.from(new Set(keys)).sort();
+  const out = {};
+  unique.forEach(function(k, i) {
+    out[k] = CATEGORY_COLOURS[i % CATEGORY_COLOURS.length];
+  });
+  return out;
+}
+
+const llmColourMap = buildAliveCategoryColourMap('llm_name', 'Unknown LLM');
+const modeColourMap = buildAliveCategoryColourMap('mode', 'Unknown Mode');
+
+function getNodeColour(recIdx, colourMode) {
+  const d = sidebarData[String(recIdx)];
+  if (!d) return '#444';
+
+  if (colourMode === 'island') {
+    return islandColourByIdx[String(d.island)] || '#444';
+  }
+  if (d.is_dead) {
+    return DEAD_COLOUR;
+  }
+  if (colourMode === 'dead_llm') {
+    const k = _categoryKey(d.llm_name, 'Unknown LLM');
+    return llmColourMap[k] || '#1f77b4';
+  }
+  const k = _categoryKey(d.mode, 'Unknown Mode');
+  return modeColourMap[k] || '#1f77b4';
+}
+
+function applyColourMode(colourMode) {
+  currentColourMode = colourMode;
+  const islandColours = allTraces.map(function(t) {
+    return t.custom.map(function(idx) { return getNodeColour(idx, colourMode); });
+  });
+  const islandIndices = allTraces.map(function(_, i) { return i + TRACE_OFFSET; });
+  if (islandIndices.length > 0) {
+    Plotly.restyle(graphDiv, {'marker.color': islandColours}, islandIndices);
+  }
+
+  const seedTraceIdx = allTraces.length + TRACE_OFFSET;
+  const seedColours = seedCustom.map(function(idx) { return getNodeColour(idx, colourMode); });
+  Plotly.restyle(graphDiv, {'marker.color': [seedColours]}, [seedTraceIdx]);
+}
+
+function onColourModeToggle() {
+  const selected = document.querySelector('input[name="colour-mode"]:checked');
+  if (!selected) return;
+  applyColourMode(selected.value);
+}
+"""
+
 
 def _generate_loss_progress_html(
     all_records: list[dict],
@@ -426,6 +507,11 @@ def _generate_loss_progress_html(
       Include complexity penalty
     </label>
     <hr>
+    <div class="section-title">Colouring</div>
+    <label><input type="radio" name="colour-mode" value="island" onchange="onColourModeToggle()"> By island</label>
+    <label><input type="radio" name="colour-mode" value="dead_llm" checked onchange="onColourModeToggle()"> Dead vs alive (alive by LLM)</label>
+    <label><input type="radio" name="colour-mode" value="dead_mode" onchange="onColourModeToggle()"> Dead vs alive (alive by mode)</label>
+    <hr>
     <div class="section-title">Islands</div>
     <div id="island-checkboxes"></div>
   </div>
@@ -455,6 +541,7 @@ const edgeMap = {edge_map_json};
 //   2 .. 2+n-1: island scatter traces
 //   2+n: seed scatter trace
 const TRACE_OFFSET = 2;
+{_COLOUR_MODE_JS}
 
 let showWithPenalty = true;
 let currentHoveredIdx = null;
@@ -531,7 +618,11 @@ function buildInitialTraces(withPenalty) {{
       mode: 'markers',
       hoverinfo: 'text',
       name: 'Island ' + t.island_idx,
-      marker: {{color: t.colour, size: 14, line: {{width: 1, color: '#333'}}}},
+      marker: {{
+        color: t.custom.map(function(idx) {{ return getNodeColour(idx, currentColourMode); }}),
+        size: 14,
+        line: {{width: 1, color: '#333'}}
+      }},
       type: 'scatter'
     }};
   }});
@@ -546,7 +637,7 @@ function buildInitialTraces(withPenalty) {{
     name: 'Seeds',
     marker: {{
       symbol: 'star',
-      color: '#222',
+      color: seedCustom.map(function(idx) {{ return getNodeColour(idx, currentColourMode); }}),
       size: 18,
       line: {{width: 1.5, color: '#fff'}}
     }},
@@ -793,6 +884,12 @@ def _generate_gd_effect_html(
 </head>
 <body>
 <div id="graph-container">
+  <div class="controls" id="controls">
+    <div class="section-title">Colouring</div>
+    <label><input type="radio" name="colour-mode" value="island" onchange="onColourModeToggle()"> By island</label>
+    <label><input type="radio" name="colour-mode" value="dead_llm" checked onchange="onColourModeToggle()"> Dead vs alive (alive by LLM)</label>
+    <label><input type="radio" name="colour-mode" value="dead_mode" onchange="onColourModeToggle()"> Dead vs alive (alive by mode)</label>
+  </div>
   <div id="graph" style="width:100%;height:100vh;"></div>
 </div>
 <div id="sidebar">
@@ -808,6 +905,8 @@ const seedY = {seed_y_json};
 const seedCustom = {seed_custom_json};
 const seedHover = {seed_hover_json};
 const diagRange = {diag_json};
+const TRACE_OFFSET = 1;
+{_COLOUR_MODE_JS}
 
 // Diagonal y=x reference (no improvement line)
 // Points above diagonal: P(train) > P(initial) => GD improved the loss
@@ -832,7 +931,7 @@ const seedTrace = {{
   name: 'Seeds',
   marker: {{
     symbol: 'star',
-    color: '#222',
+    color: seedCustom.map(function(idx) {{ return getNodeColour(idx, currentColourMode); }}),
     size: 18,
     line: {{width: 1.5, color: '#fff'}}
   }},
@@ -848,7 +947,11 @@ const plotlyTraces = [diagTrace].concat(allTraces.map(function(t) {{
     mode: 'markers',
     hoverinfo: 'text',
     name: 'Island ' + t.island_idx,
-    marker: {{color: t.colour, size: 14, line: {{width: 1, color: '#333'}}}},
+    marker: {{
+      color: t.custom.map(function(idx) {{ return getNodeColour(idx, currentColourMode); }}),
+      size: 14,
+      line: {{width: 1, color: '#333'}}
+    }},
     type: 'scatter'
   }};
 }})).concat([seedTrace]);
@@ -894,7 +997,7 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
 
     Safe to call mid-run: partial or corrupt JSONL lines are skipped.
     Writes two standalone HTML files into output_dir:
-      - progress_loss.html  — training loss per iteration coloured by island
+      - progress_loss.html  — training loss per iteration
       - progress_gd_effect.html — initial vs final loss showing GD effect
 
     Args:
@@ -983,6 +1086,15 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
     edge_segs_penalty, edge_segs_raw, parent_map, edge_map = _build_edge_structures(
         all_records, node_pos_penalty, node_pos_raw
     )
+
+    # Dead node = node that is never used as a parent.
+    has_children = set()
+    for parents in parent_map.values():
+        for p_idx in parents:
+            if p_idx is not None:
+                has_children.add(p_idx)
+    for idx_str, entry in sidebar_data.items():
+        entry["is_dead"] = int(idx_str) not in has_children
 
     os.makedirs(output_dir, exist_ok=True)
 
