@@ -246,10 +246,9 @@ experiment_params:
   FAILED_PROGRAM_COST: .inf
   exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
   exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
-  tiny_lm_name: gemini-2.0-flash-lite
-  little_lm_name: gemini-2.0-flash
-  large_lm_name: gemini-2.5-flash
-  use_large_every: 3
+  model_llm: gemini-2.5-flash
+  param_est_llm: gemini-2.0-flash
+  jax_translator_llm: gemini-2.0-flash-lite
 ```
 
 Then run:

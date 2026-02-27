@@ -108,23 +108,22 @@ experiment_params:
   # Token budget per chat before summarize/reset (0 = unlimited).
   chat_token_limit: 50000
 
+  # If true, use a single linked prompt to generate model + parameter estimator.
+  use_linked_prompt: false
+
   # Island graph for exploration exchanges.
   exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
 
   # Island graph for exploitation exchanges.
   exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
 
-  # Small model used for lightweight generation tasks.
-  tiny_lm_name: gemini-2.0-flash-lite
+  # LLMs for different tasks. Each can be a string or a list.
+  # If a list is provided, it is traversed in order by iteration.
+  model_llm: gemini-2.5-flash
+  param_est_llm: gemini-2.0-flash
+  jax_translator_llm: gemini-2.0-flash-lite
+  linked_llm: gemini-2.0-flash
 
-  # Medium model used for normal generation tasks.
-  little_lm_name: gemini-2.0-flash
-
-  # Large model used periodically for stronger proposals.
-  large_lm_name: gemini-2.5-flash
-
-  # Use large model every N iterations.
-  use_large_every: 3
 
   # Banned function calls/fragments during code generation.
   swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
@@ -180,6 +179,7 @@ _metadata:
 
   optional_prompts:
     - prompts.program_prompt.image_analysis
+    - prompts.linked_prompt.image_analysis
 
   allowed_variables:
     program_prompt:
@@ -209,6 +209,19 @@ _metadata:
 
     jax_translator_prompt:
       - function_code
+
+    linked_prompt:
+      _default:
+        - k
+        - next_version
+      code_guidelines:
+        - max_lines
+        - next_version
+      per_model_detail:
+        - model_idx
+        - train_loss
+        - program_code_string
+        - parameter_estimator_code_string
 
 
 # ========================
@@ -317,3 +330,25 @@ prompts:
       Update the function name to be the original name without "_v*".
       Here is the code to translate:
       {function_code}
+
+  linked_prompt:
+    base: |
+      You are an AI scientist. Generate BOTH a new model_v{next_version} and a new parameter_estimator_v{next_version}.
+      The parents below show models and their estimators, sorted by loss.
+    explore: |
+      Explore new model structure while keeping the estimator simple and stable.
+    exploit: |
+      Exploit strong patterns from the parents to improve both model and estimator.
+    code_guidelines: |
+      Return exactly TWO Python code blocks:
+      1) def model_v{next_version}(X, params): ...
+      2) def parameter_estimator_v{next_version}(X, Y): ...
+      Keep total length under {max_lines} lines combined.
+    docstring_guidelines: |
+      Each function should include a short docstring.
+    per_model_detail: |
+      **Parent {model_idx} (loss={train_loss})**
+      Model:
+      {program_code_string}
+      Estimator:
+      {parameter_estimator_code_string}

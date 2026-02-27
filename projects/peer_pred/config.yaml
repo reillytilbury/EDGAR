@@ -17,7 +17,7 @@ model_name: model
 data_processing_params:
   data_path: /home/reilly/datasets/spontaneous_data/spont_M161025_MP030_20161120.mat
   random_seed: 42
-  n_cells: 1000
+  n_cells: 4000
   downsample_factor: 4
   var_thresh: 1e-4
   zscore: true
@@ -37,6 +37,8 @@ experiment_params:
   param_estimator_refinement_rounds: 0
   open_family_tree: true
   fit_params: false
+  linked_llm: gemini-2.0-flash
+  use_linked_prompt: false
   swear_words: []
   x_min: -1.0
   x_max: 1.0
@@ -46,38 +48,29 @@ experiment_params:
 # ========================
 # Prompt Defaults
 # ========================
-
-prompts:
-  program_prompt:
+  linked_prompt:
     base: |
-      You are an AI scientist. The models below predict the responses of a population of target cells 
-      from a population of source cells. They are listed from worst to best, with the loss of each model shown.
-
-      Your goal is to find a new model that further improves cross-cell prediction. 
-      
-      *Analyze* the progression of models to identify what works and what doesn't. *Identify* features that 
-      correlate with better performance, and use this analysis to *propose* a new model structure.
-
+      You are an AI scientist. Generate BOTH a new model_v{next_version} and a new parameter_estimator_v{next_version}.
+      The parents below show models and their estimators, sorted by loss.
+    explore: |
+      Explore new model structure while keeping the estimator simple and stable.
+    exploit: |
+      Exploit strong patterns from the parents to improve both model and estimator.
     image_analysis: |
       **Image Analysis Instructions:**
       Attached is a 2x2 plot of target-cell traces (observed vs models).
-      Analyze the plot to identify specific failures of the models. 
-      Propose specific changes to the model structure that could address these failures.
-      Cite specific failure modes, example cells and time points from the plot in your proposal.
-
-  parameter_estimator:
-    base: |
-      You are an AI scientist. Improve parameter_estimator_v{next_version} for model_v{next_version}.
-      The estimator must infer a parameter matrix that maps source-cell activity to target-cell activity.
-      Use direct statistical relationships between X and Y, avoid calling the model function, and aim to reduce loss
-      while keeping the estimator simple and stable across target cells.
-
-
-    refinement_image_instructions: |
-      **Image instructions:**
-      Attached is a 2x2 plot of target-cell traces (observed vs estimator-based predictions).
-      Use the plot to identify systematic failures in the estimator across cells:
-      * Where do predicted traces drift in phase or amplitude relative to observed?
-      * Are errors consistent across cells (shared bias) or cell-specific (misestimated mapping)?
-      * Cite at least 2 target cells where the estimator fails.
-      Propose specific changes to the estimator to fix these issues and keep the code concise.
+      Analyze the plot to identify specific failures of the models and estimators.
+      Propose specific changes to both the model structure and estimator logic.
+    code_guidelines: |
+      Return exactly TWO Python code blocks:
+      1) def model_v{next_version}(X, params): ...
+      2) def parameter_estimator_v{next_version}(X, Y): ...
+      Keep total length under {max_lines} lines combined.
+    docstring_guidelines: |
+      Each function should include a short docstring.
+    per_model_detail: |
+      **Parent {model_idx} (loss={train_loss})**
+      Model:
+      {program_code_string}
+      Estimator:
+      {parameter_estimator_code_string}

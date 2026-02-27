@@ -1,4 +1,5 @@
 import inspect
+import re
 import jax
 import numpy as np
 import jax.numpy as jnp
@@ -204,6 +205,21 @@ def extract_code_block(text: Union[str, None], start_marker: str = "```python\n"
 
     # return just the code between the fences
     return text[start:end].rstrip()
+
+
+def extract_code_blocks(text: Union[str, None]) -> list[str]:
+    """
+    Extract all fenced code blocks (```python ... ``` or ``` ... ```).
+    Returns a list of code strings without the fences.
+    """
+    if text is None:
+        return []
+    blocks = re.findall(r"```(?:python)?\\s*\\n(.*?)```", text, flags=re.DOTALL)
+    if blocks:
+        return [b.rstrip() for b in blocks]
+    # Fallback: any fenced blocks without language tag on same line.
+    blocks = re.findall(r"```\\s*\\n(.*?)```", text, flags=re.DOTALL)
+    return [b.rstrip() for b in blocks]
 
 
 def str_to_func(code_string: Union[str, None], needle: str) -> Union[Callable, None]:

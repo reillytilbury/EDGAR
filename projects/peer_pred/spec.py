@@ -23,7 +23,7 @@ from typing import Tuple
 from scipy.io import loadmat
 from src.data_structures import Inputs, Outputs
 from src import utils
-from scipy.signal import medfilt
+from scipy.signal import medfilt, butter, filtfilt
 from skimage.restoration import denoise_tv_chambolle
 
 
@@ -42,6 +42,11 @@ def load_and_process_data(
 ) -> Tuple[Inputs, Outputs]:
     """
     Load and preprocess data and return canonical Inputs/Outputs.
+    X is the source population activity; Y is the target population activity.
+    - Input has shape (2, n_source_cells, n_time) where sample 0 is a training 
+    population and sample 1 is a held-out population for testing. 
+    - Output has shape (2, n_target_cells, n_time) where sample 0 is the training 
+    target population and sample 1 is the held-out target population for testing.
     """
     random_seed = int(random_seed)
     n_cells = int(n_cells)
@@ -60,11 +65,10 @@ def load_and_process_data(
     if n_cells < 4:
         raise ValueError("Need at least 4 cells to form equal source/target and train/test splits.")
     spks = subsample_cells(spks, n_cells, rng)
-    # clean up with median filter and TV denoising to make the models' lives easier
-    for i in range(spks.shape[0]):
-        spks[i] = preprocess_trace(spks[i], tv_weight=0.1, median_filter=True)
-    if zscore:
-        spks = zscore_rows(spks)
+    spks = zscore_rows(spks)
+    # add butterworth low-pass filter to smooth traces and make the task more learnable (optional)
+    b, a = butter(N=3, Wn=0.15, btype="low")
+    spks = filtfilt(b, a, spks, axis=1)
 
     # Source/target split for peer prediction, then split each into train/test cells.
     cell_idx = rng.permutation(spks.shape[0])
@@ -89,6 +93,11 @@ def load_and_process_data(
     X_test = spks[test_source]    # (n_source_test, T)
     Y_train = spks[train_targets] # (n_target_train, T)
     Y_test = spks[test_targets]   # (n_target_test, T)
+    if zscore:
+        X_train = zscore_rows(X_train)
+        X_test = zscore_rows(X_test)
+        Y_train = zscore_rows(Y_train)
+        Y_test = zscore_rows(Y_test)
 
     X = np.stack([X_train, X_test], axis=0)  # (2, n_source, T)
     Y = np.stack([Y_train, Y_test], axis=0)  # (2, n_target, T)
@@ -99,7 +108,8 @@ def train_test_split(
     X: Inputs,
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
     random_seed: int,
-    block_size: int = 60,
+    block_size: int = 180,
+    mode: str = "interleave",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Return train sample indices and train trial indices.
@@ -107,15 +117,17 @@ def train_test_split(
     Sample 0 is the training population; sample 1 is held-out.
     """
     x_arr = np.asarray(X.to_tensor())
-    _, _, T = x_arr.shape
-    train_samples = np.array([0], dtype=np.int64)
-    train_t, _ = make_time_split(T=T, block_size=block_size, mode="interleave")
-    return np.asarray(train_samples, dtype=np.int64), np.asarray(train_t, dtype=np.int64)
+    n_samples, n_features, n_trials = x_arr.shape
+    assert n_samples == 2, "Expected exactly 2 samples for train/test split."
+    train_sample_idx = 0
+    train_trials, _ = make_time_split(n_trials, block_size, mode)
+    return np.array([train_sample_idx]), train_trials
 
 
 # ========================
 # 2. SEED MODELS
 # ========================
+
 
 def model_v1(X, params):
     """
@@ -138,7 +150,8 @@ def model_v1(X, params):
 
 def param_est_v1(X, Y):
     """
-    Fit a PLS weight matrix mapping source cells to target cells with rank 16.
+    Fit a PLS-Ridge weight matrix mapping source cells to target cells.
+    Uses PLS for dimensionality reduction (k=16) followed by Ridge regression (alpha=100).
 
     Args:
         X (np.ndarray): Input array with shape (n_source_cells, n_time).
@@ -148,9 +161,28 @@ def param_est_v1(X, Y):
         dict: Parameter dictionary with key {"A"}.
     """
     from sklearn.cross_decomposition import PLSRegression
-    pls = PLSRegression(n_components=16, scale=False)
-    pls.fit(X.T, Y.T)
-    weight_matrix_A = pls.coef_.T  # (n_target_cells, n_source_cells)
+    from sklearn.linear_model import Ridge
+
+    # HYPERPARAMS: Maybe add some cross-validated tuning?
+    PLS_MAX_ITER = 500
+    PLS_TOL = 1e-5
+    N_COMPONENTS_PLS = 16
+    ALPHA_RIDGE = 100.0
+
+    # 1. PLS dimensionality reduction
+    # X.T and Y.T are used because sklearn expects (n_samples, n_features)
+    pls = PLSRegression(n_components=N_COMPONENTS_PLS, scale=False, max_iter=PLS_MAX_ITER, tol=PLS_TOL)
+    Z = pls.fit_transform(X.T, Y.T)[0]  # Latent representation Z (n_time, k)
+
+    # 2. Ridge regression from Latent Space -> Target
+    # fit_intercept=False to ensure compatibility with the model equation Y = A @ X
+    ridge = Ridge(alpha=ALPHA_RIDGE, fit_intercept=False)
+    ridge.fit(Z, Y.T)
+
+    # 3. Combine PLS rotations and Ridge weights into a single linear mapping matrix A
+    # A (n_tgt, n_src) = Ridge_coef (n_tgt, k) @ PLS_rotations^T (k, n_src)
+    weight_matrix_A = ridge.coef_ @ pls.x_rotations_.T
+
     return {"A": weight_matrix_A}
 
 
@@ -186,7 +218,7 @@ def model_v2(X, params):
 def param_est_v2(X, Y):
     """
     Fit parameters for model_v2 in two stages:
-    1. Fit the linear weights A using PLS as in param_est_v1.
+    1. Fit the linear weights A using PLS-Ridge (k=16, alpha=100).
     2. Fit the quadratic coefficients for each target cell independently using least squares.
 
     Args:
@@ -196,13 +228,30 @@ def param_est_v2(X, Y):
     Returns:
         dict: Parameter dictionary with keys {"A", "quadratic"}.
     """
-    weight_matrix_A = param_est_v1(X, Y)["A"]
-    n_target_cells = Y.shape[0]
-    
-    Y_pred_linear = weight_matrix_A @ X  # (n_target, n_time)
+    from sklearn.cross_decomposition import PLSRegression
+    from sklearn.linear_model import Ridge
 
+    # HYPERPARAMS: Maybe add some cross-validated tuning?
+    PLS_MAX_ITER = 500
+    PLS_TOL = 1e-5
+    N_COMPONENTS_PLS = 16
+    ALPHA_RIDGE = 100.0
+
+    # Stage 1: Fit linear weights A using PLS-Ridge logic
+    pls = PLSRegression(n_components=N_COMPONENTS_PLS, scale=False, max_iter=PLS_MAX_ITER, tol=PLS_TOL)
+    Z = pls.fit_transform(X.T, Y.T)[0]
+    ridge = Ridge(alpha=ALPHA_RIDGE, fit_intercept=False)
+    ridge.fit(Z, Y.T)
+    weight_matrix_A = ridge.coef_ @ pls.x_rotations_.T
+
+    # Generate linear predictions to serve as input for Stage 2
+    Y_pred_linear = weight_matrix_A @ X 
+    n_target_cells = Y.shape[0]
+
+    # Stage 2: Fit quadratic coefficients
     quadratic_coeffs = np.zeros((n_target_cells, 3))
     for c in range(n_target_cells):
+        # Design matrix for quadratic: [1, x, x^2]
         X_c = np.stack(
             [np.ones_like(Y_pred_linear[c]), Y_pred_linear[c], Y_pred_linear[c] ** 2],
             axis=1,
@@ -211,7 +260,6 @@ def param_est_v2(X, Y):
         quadratic_coeffs[c] = coeffs
 
     return {"A": weight_matrix_A, "quadratic": quadratic_coeffs}
-
 
 # ========================
 # 3. LOSS
@@ -242,6 +290,7 @@ def plot_model_fits(
     X_eval,
     save_path="",
     labels=None,
+    title_prefix: str | None = None,
 ):
     """
     Plot observed activity and model predictions for random target cells.
@@ -274,20 +323,24 @@ def plot_model_fits(
     n_show = min(4, n_targets)
     cell_idx = rng.choice(n_targets, size=n_show, replace=False)
 
-    block_len = min(120, n_trials)
-    if n_trials == block_len:
-        start = 0
-    else:
-        start = int(rng.integers(0, n_trials - block_len + 1))
+    block_len = 180
+    # want to show 1 full block so set start to be a random multiple of block len
+    start = block_len * rng.integers(0, n_trials // block_len)
     sl = slice(start, start + block_len)
 
     colours = ["red", "blue", "green", "purple", "orange"]
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    axes = axes.reshape(2, 2)
+    fig, axes = plt.subplots(
+        2,
+        3,
+        figsize=(16, 8),
+        gridspec_kw={"width_ratios": [1.0, 1.0, 0.9]},
+    )
+    trace_axes = axes[:, :2].reshape(2, 2)
 
     # Precompute predictions and overall losses for the selected sample.
     preds_by_model = []
     model_losses = []
+    per_cell_losses = []
     for program in programs_list:
         model = program["model"]
         params = utils.slice_params(
@@ -295,12 +348,26 @@ def plot_model_fits(
         )
         y_pred = utils.call_model(model, x, params)
         y_pred = np.asarray(y_pred)
+        if y_pred.ndim == 1:
+            y_pred = y_pred[None, :]
         preds_by_model.append(y_pred)
-        try:
-            model_loss = float(loss_fn(y_pred, y))
-        except Exception:
-            model_loss = float(np.mean((y_pred - y) ** 2))
-        model_losses.append(model_loss)
+        # Use provided test losses if available; otherwise fall back to current data.
+        per_cell_from_program = program.get("per_cell_losses")
+        if per_cell_from_program is not None:
+            per_cell_losses.append(np.asarray(per_cell_from_program)[sample_idx])
+        else:
+            per_cell_losses.append(np.mean((y_pred - y) ** 2, axis=1))
+
+        if "losses" in program:
+            try:
+                model_losses.append(float(np.asarray(program["losses"])[sample_idx]))
+            except Exception:
+                model_losses.append(float(np.mean((y_pred - y) ** 2)))
+        else:
+            try:
+                model_losses.append(float(loss_fn(y_pred, y)))
+            except Exception:
+                model_losses.append(float(np.mean((y_pred - y) ** 2)))
 
     def _model_label(j: int) -> str:
         if labels is not None and j < len(labels):
@@ -308,7 +375,7 @@ def plot_model_fits(
         return f"Model v{j+1}"
 
     for k in range(4):
-        ax = axes[k // 2, k % 2]
+        ax = trace_axes[k // 2, k % 2]
         if k >= n_show:
             ax.axis("off")
             continue
@@ -317,7 +384,10 @@ def plot_model_fits(
 
         for j, y_pred in enumerate(preds_by_model):
             name = _model_label(j)
-            cell_loss = float(np.mean((y_pred[c, sl] - y[c, sl]) ** 2))
+            if per_cell_losses:
+                cell_loss = float(per_cell_losses[j][c])
+            else:
+                cell_loss = float(np.mean((y_pred[c, sl] - y[c, sl]) ** 2))
             ax.plot(
                 y_pred[c, sl],
                 color=colours[j % len(colours)],
@@ -331,12 +401,53 @@ def plot_model_fits(
         ax.set_ylabel("z-scored activity")
         ax.legend(fontsize=8)
 
+    # Histograms: v1 (top-right), v2 (bottom-right)
+    for j in range(min(2, len(per_cell_losses))):
+        ax_hist = axes[j, 2]
+        name = _model_label(j)
+        cell_losses = np.asarray(per_cell_losses[j])
+        finite_mask = np.isfinite(cell_losses)
+        cell_losses = cell_losses[finite_mask]
+        if cell_losses.size == 0:
+            ax_hist.text(0.5, 0.5, "no finite losses", ha="center", va="center")
+            ax_hist.set_title(f"{name} loss histogram")
+            ax_hist.set_axis_off()
+            continue
+        n_bins = min(40, max(10, int(np.sqrt(max(1, cell_losses.size)))))
+        ax_hist.hist(
+            cell_losses,
+            bins=n_bins,
+            color=colours[j % len(colours)],
+            alpha=0.75,
+            edgecolor="white",
+        )
+        mean_loss = float(np.mean(cell_losses))
+        ax_hist.axvline(
+            mean_loss,
+            color=colours[j % len(colours)],
+            linestyle="--",
+            linewidth=2,
+            label=f"mean={mean_loss:.2f}",
+        )
+        ax_hist.set_title(f"{name} loss histogram")
+        ax_hist.set_xlabel("per-cell MSE")
+        ax_hist.set_ylabel("count")
+        ax_hist.legend(fontsize=9)
+
+    if len(per_cell_losses) < 2:
+        axes[1, 2].axis("off")
+
+    title_parts = []
     if model_losses:
-        title_parts = [
+        title_parts.extend(
             f"{_model_label(j)} loss={model_losses[j]:.2f}"
             for j in range(min(len(model_losses), len(programs_list)))
-        ]
-        plt.suptitle(" | ".join(title_parts), fontsize=14)
+        )
+    title_text = " | ".join(title_parts)
+    if title_prefix:
+        title_text = f"{title_prefix} | {title_text}" if title_text else str(title_prefix)
+    if title_text:
+        plt.suptitle(title_text, fontsize=14)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig(save_path, dpi=120, bbox_inches="tight")
     plt.close(fig)

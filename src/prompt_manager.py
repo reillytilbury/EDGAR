@@ -203,6 +203,53 @@ class PromptManager:
 
         return prompt
 
+    def get_linked_prompt_legacy(self, programs_df: pd.DataFrame, mode: str, use_image: bool = True, max_lines: int = 120) -> str:
+        """
+        Build a single prompt that asks for both a new model and a new parameter estimator.
+
+        This is a separate prompt family from program_prompt/parameter_estimator.
+        """
+        assert mode in ['explore', 'exploit'], "Invalid mode. Choose either 'explore' or 'exploit'."
+
+        k = len(programs_df)
+        model_name = self.get_model_name()
+        templates = self.config['prompts'].get('linked_prompt')
+        if not templates:
+            raise ValueError("Missing prompts.linked_prompt in config.")
+
+        next_version = f"{k+1}"
+        sections = [
+            self._render_template(templates['base'], k=f"{k}", next_version=next_version),
+            self._render_template(templates['exploit'] if mode == 'exploit' else templates['explore'], k=f"{k}", next_version=next_version),
+            self._render_image_analysis(templates, "linked_prompt", k, use_image),
+            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}", next_version=next_version),
+            self._render_template(templates['docstring_guidelines'], next_version=next_version),
+            "**Parent Models and Estimators:**",
+        ]
+        prompt = "\n\n".join([s for s in sections if s])
+
+        for i in range(k):
+            model_idx = i + 1
+            train_loss = programs_df.iloc[i]['train_loss']
+            program_code_string = self._normalize_model_code_for_prompt(
+                programs_df.iloc[i]['program_code_string'],
+                model_name,
+                model_idx,
+            )
+            parameter_estimator_code_string = programs_df.iloc[i]['parameter_estimator_code_string'].replace(
+                'def parameter_estimator(', f'def parameter_estimator_v{model_idx}('
+            )
+            per_model_prompt = self._render_template(
+                templates['per_model_detail'],
+                model_idx=f"{model_idx}",
+                train_loss=self._format_loss(train_loss),
+                program_code_string=program_code_string,
+                parameter_estimator_code_string=parameter_estimator_code_string,
+            )
+            prompt += "\n\n" + per_model_prompt
+
+        return prompt
+
     # ---------------------------------------------------------------
     # Chat mode prompt functions (dynamic content only)
     # ---------------------------------------------------------------

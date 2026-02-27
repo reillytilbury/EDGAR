@@ -49,6 +49,7 @@ def _build_seed_nodes():
             "birth_island": -1,
             "batch_index": batch_idx,
             "train_loss": None,
+            "train_fit_loss": None,
             "initial_loss": None,
             "model_code_numpy": None,
             "model_code_jax": None,
@@ -65,10 +66,31 @@ def _build_seed_nodes():
             "image_prompt_path": None,
             "train_fit_image_path": None,
             "test_fit_image_path": None,
+            "test_fit_loss": None,
             "is_seed": True,
             "is_winner": False,
         })
     return seeds
+
+
+def _display_train_loss(rec):
+    """Return train-fit loss if available, otherwise fall back to objective train loss."""
+    if not rec:
+        return None
+    train_fit = rec.get("train_fit_loss")
+    if train_fit is not None:
+        return train_fit
+    return rec.get("train_loss")
+
+
+def _display_test_loss(rec):
+    """Return test-fit loss if available, otherwise fall back to objective test loss."""
+    if not rec:
+        return None
+    test_fit = rec.get("test_fit_loss")
+    if test_fit is not None:
+        return test_fit
+    return rec.get("test_loss")
 
 
 def _compute_hierarchical_layout(G, records_by_id):
@@ -210,6 +232,8 @@ def _build_sidebar_data(records_by_id):
             "batch": rec.get("batch_index"),
             "train_loss": rec.get("train_loss"),
             "test_loss": rec.get("test_loss"),
+            "train_fit_loss": rec.get("train_fit_loss"),
+            "test_fit_loss": rec.get("test_fit_loss"),
             "initial_loss": rec.get("initial_loss"),
             "mode": rec.get("mode"),
             "temperature": rec.get("temperature"),
@@ -276,8 +300,8 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
             break
 
     # Compute loss range for coloring
-    losses = [r.get("train_loss") for r in records_by_id.values()
-              if r.get("train_loss") is not None]
+    losses = [(_display_train_loss(r)) for r in records_by_id.values()
+              if _display_train_loss(r) is not None]
     min_loss = min(losses) if losses else None
     max_loss = max(losses) if losses else None
     # Use 95th percentile as max to avoid outlier skew
@@ -298,8 +322,8 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
         is_extinct = rec.get("is_extinct", False)
         iteration = rec.get("iteration_number", "?")
         batch = rec.get("batch_index", "?")
-        loss = rec.get("train_loss")
-        test_loss = rec.get("test_loss")
+        loss = _display_train_loss(rec)
+        test_loss = _display_test_loss(rec)
         mode = rec.get("mode", "")
         llm = rec.get("llm_name", "")
 
@@ -315,9 +339,9 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
         if is_migrant and rec.get("migrant_from_id"):
             hover_parts.append(f"migrant from: {rec.get('migrant_from_label', rec.get('migrant_from_id'))}")
         if loss is not None:
-            hover_parts.append(f"train loss: {loss:.4f}")
+            hover_parts.append(f"train fit loss: {loss:.4f}")
         if test_loss is not None:
-            hover_parts.append(f"test loss: {test_loss:.4f}")
+            hover_parts.append(f"test fit loss: {test_loss:.4f}")
         hover_parts.append(f"mode: {mode}")
         if llm:
             hover_parts.append(f"LLM: {llm}")
@@ -529,8 +553,22 @@ function showSidebar(nodeId) {{
     h += '<div class="field"><span class="field-label">Status:</span> <span class="field-value">Extinct</span></div>';
   }}
   h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
-  h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
-  h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
+  if (d.train_fit_loss !== null && d.train_fit_loss !== undefined) {{
+    h += '<div class="field"><span class="field-label">Train Fit Loss:</span> <span class="field-value">' + formatLoss(d.train_fit_loss) + '</span></div>';
+    if (d.train_loss !== null && d.train_loss !== undefined && d.train_loss !== d.train_fit_loss) {{
+      h += '<div class="field"><span class="field-label">Objective Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
+    }}
+  }} else {{
+    h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
+  }}
+  if (d.test_fit_loss !== null && d.test_fit_loss !== undefined) {{
+    h += '<div class="field"><span class="field-label">Test Fit Loss:</span> <span class="field-value">' + formatLoss(d.test_fit_loss) + '</span></div>';
+    if (d.test_loss !== null && d.test_loss !== undefined && d.test_loss !== d.test_fit_loss) {{
+      h += '<div class="field"><span class="field-label">Objective Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
+    }}
+  }} else {{
+    h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
+  }}
   h += '<div class="field"><span class="field-label">Mode:</span> <span class="field-value">' + escapeHtml(d.mode) + '</span></div>';
   h += '<div class="field"><span class="field-label">Temperature:</span> <span class="field-value">' + formatTemp(d.temperature) + '</span></div>';
   h += '<div class="field"><span class="field-label">LLM:</span> <span class="field-value">' + escapeHtml(d.llm_name) + '</span></div>';
@@ -615,13 +653,20 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
         print("[family_tree] Generation log is empty, skipping.")
         return
 
-    # Add seed nodes
-    seed_nodes = _build_seed_nodes()
-    all_records = seed_nodes + records
+    has_seed_records = any(
+        rec.get("is_seed") or rec.get("iteration_number") == -1 for rec in records
+    )
+    if has_seed_records:
+        all_records = records
+    else:
+        seed_nodes = _build_seed_nodes()
+        all_records = seed_nodes + records
 
     # Build lookup by node ID
     records_by_id = {}
     for rec in all_records:
+        if rec.get("iteration_number") == -1:
+            rec["is_seed"] = True
         nid = _make_node_id(rec["iteration_number"], rec["birth_island"], rec["batch_index"])
         records_by_id[nid] = rec
 

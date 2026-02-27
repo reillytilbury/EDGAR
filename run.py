@@ -164,6 +164,17 @@ def _to_plot_array(obj):
     return arr
 
 
+def _zscore_trials(arr: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    """
+    Z-score each cell (sample, feature/target) across trials.
+    Expects shape (n_samples, n_features_or_targets, n_trials).
+    """
+    arr = np.asarray(arr)
+    mu = arr.mean(axis=2, keepdims=True)
+    sd = arr.std(axis=2, keepdims=True)
+    return (arr - mu) / (sd + eps)
+
+
 def _broadcast_model_loss(loss_value, n_samples: int):
     if loss_value is None:
         return None
@@ -344,7 +355,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     task_name = config.get('task')
     if not task_name:
         raise ValueError("Config must specify `task` so the reader can load projects.<task>.spec")
-    
+
     # Auto-load experiment spec module by fixed naming convention.
     spec_module_path = f"projects.{task_name}.spec"
     try:
@@ -426,6 +437,16 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         Y_test_train_trials = outputs[test_samples][:, :, train_trials]
         Y_test_test_trials = outputs[test_samples][:, :, test_trials]
 
+        # Z-score each cell separately within each split (train/test) before passing to engine.
+        X_train_train_trials = _zscore_trials(X_train_train_trials)
+        X_train_test_trials = _zscore_trials(X_train_test_trials)
+        X_test_train_trials = _zscore_trials(X_test_train_trials)
+        X_test_test_trials = _zscore_trials(X_test_test_trials)
+        Y_train_train_trials = _zscore_trials(Y_train_train_trials)
+        Y_train_test_trials = _zscore_trials(Y_train_test_trials)
+        Y_test_train_trials = _zscore_trials(Y_test_train_trials)
+        Y_test_test_trials = _zscore_trials(Y_test_test_trials)
+
         X = np.empty((2, 2), dtype=object)
         Y = np.empty((2, 2), dtype=object)
         X[0, 0] = Inputs.from_array(X_train_train_trials)
@@ -445,10 +466,14 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         )
 
         print("running with standard params")
+        def _require_llm(name: str):
+            value = params.get(name)
+            if value is None:
+                raise ValueError(f"Missing required experiment_params.{name} in config.")
+            return value
         full_dir = await hypothesis_engine.hypothesis_engine(
             n_iterations=params['n_iterations'],
             time_limit=params['time_limit'],
-            use_large_every=params['use_large_every'],
             param_penalty_weight=params['param_penalty_weight'],
             exploration_topology=params['exploration_topology'],
             exploitation_topology=params['exploitation_topology'],
@@ -464,9 +489,10 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             use_param_estimator=params.get('use_param_estimator', True),
             learning_rate=params['learning_rate'],
             FAILED_PROGRAM_COST=params['FAILED_PROGRAM_COST'],
-            tiny_lm_name=params['tiny_lm_name'],
-            little_lm_name=params['little_lm_name'],
-            large_lm_name=params['large_lm_name'],
+            model_llm=_require_llm('model_llm'),
+            param_est_llm=_require_llm('param_est_llm'),
+            jax_translator_llm=_require_llm('jax_translator_llm'),
+            linked_llm=_require_llm('linked_llm'),
             use_chat_mode=params.get('use_chat_mode', False),  # Default to legacy mode
             chat_token_limit=params.get('chat_token_limit', 50000),  # Max tokens per chat before auto-reset
             param_estimator_refinement_rounds=params.get('param_estimator_refinement_rounds', 0),
@@ -481,6 +507,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             swear_words=params.get('swear_words'),
             open_family_tree=params.get('open_family_tree', False),
             loss_fn=loss_fn,
+            use_linked_prompt=params.get('use_linked_prompt', False),
             random_seed=random_seed,
         )
         # Save split/data summary from preprocessed run-level data.
