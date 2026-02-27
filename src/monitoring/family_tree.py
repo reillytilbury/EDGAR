@@ -5,6 +5,7 @@ between programs across iterations, with click-to-inspect details.
 """
 
 import json
+import math
 import os
 from collections import defaultdict
 
@@ -60,10 +61,13 @@ def _build_seed_nodes():
     return seeds
 
 
-def _compute_hierarchical_layout(G, records_by_id):
-    """Compute a hierarchical layout with iteration as Y-level."""
+def _compute_hierarchical_layout(G, records_by_id, island_gap=1.5):
+    """Compute a hierarchical layout with iteration as Y-level.
+
+    Within each level, nodes are grouped by birth island with a small extra
+    gap between islands so they are visually distinct without hard dividers.
+    """
     pos = {}
-    # Group nodes by iteration
     levels = defaultdict(list)
     for node in G.nodes():
         rec = records_by_id.get(node)
@@ -73,13 +77,31 @@ def _compute_hierarchical_layout(G, records_by_id):
             levels[-1].append(node)
 
     for level, nodes in levels.items():
-        nodes.sort()  # deterministic ordering
-        n = len(nodes)
-        for idx, node in enumerate(nodes):
-            x = (idx - (n - 1) / 2) if n > 1 else 0
-            # Negate iteration so seeds (iter=-1) are at top (y=1 -> highest)
-            y = -level
-            pos[node] = (x, y)
+        # Sort by island first, then deterministically within island
+        nodes.sort(key=lambda n: (
+            records_by_id.get(n, {}).get("birth_island", -1),
+            records_by_id.get(n, {}).get("batch_index", 0),
+        ))
+
+        # Assign x positions: unit spacing within an island, extra gap between islands
+        x_positions = []
+        prev_island = None
+        x = 0.0
+        for i, node in enumerate(nodes):
+            island = records_by_id.get(node, {}).get("birth_island", -1)
+            if i > 0:
+                x += 1.0
+                if island != prev_island:
+                    x += island_gap
+            x_positions.append(x)
+            prev_island = island
+
+        # Center the row
+        mid = (x_positions[0] + x_positions[-1]) / 2 if x_positions else 0.0
+        y = -level
+        for node, xp in zip(nodes, x_positions):
+            pos[node] = (xp - mid, y)
+
     return pos
 
 
@@ -121,57 +143,22 @@ def _assign_node_labels(records):
     return label_map
 
 
-def _compute_island_layout(
-    node_ids,
-    records_by_id,
-    island_centers,
-    intra_spacing=0.7,
-    seed_center_x=0.0,
-    seed_offset=0.5,
-):
-    """Compute layout with islands separated into vertical columns."""
-    pos = {}
-    groups = defaultdict(list)
-    for nid in node_ids:
-        rec = records_by_id.get(nid, {})
-        if rec.get("is_seed", False):
-            continue
-        island = rec.get("birth_island", -1)
-        iteration = rec.get("iteration_number", -1)
-        groups[(island, iteration)].append(nid)
-
-    for (island, iteration), nodes in groups.items():
-        nodes.sort()
-        n = len(nodes)
-        if n == 1:
-            offsets = [0.0]
-        else:
-            offsets = [(i - (n - 1) / 2) * intra_spacing for i in range(n)]
-        center_x = island_centers.get(island, 0.0)
-        y = -iteration
-        for nid, off in zip(nodes, offsets):
-            pos[nid] = (center_x + off, y)
-
-    # Place seeds centered above all islands
-    seed_nodes = [nid for nid in node_ids if records_by_id.get(nid, {}).get("is_seed", False)]
-    seed_nodes.sort()
-    for idx, nid in enumerate(seed_nodes):
-        rec = records_by_id.get(nid, {})
-        iteration = rec.get("iteration_number", -1)
-        y = -iteration
-        x = seed_center_x + (idx - (len(seed_nodes) - 1) / 2) * seed_offset
-        pos[nid] = (x, y)
-    return pos
-
-
 def _loss_to_color(loss, min_loss, max_loss):
-    """Map a loss value to an RGB color string (green=good, red=bad)."""
+    """Map a loss value to an RGB color string (green=good, red=bad).
+
+    Uses log-scale normalisation so that the green-to-red gradient is spread
+    across the full range of surviving node losses rather than being compressed
+    near the minimum by right-skewed loss distributions.
+    """
     if loss is None or min_loss is None or max_loss is None:
-        return "rgb(180,180,180)"  # gray for seeds/unknown
-    if max_loss == min_loss:
+        return "rgb(180,180,180)"
+    if max_loss == min_loss or min_loss <= 0 or max_loss <= 0 or loss <= 0:
         return "rgb(50,180,50)"
-    # Clamp and normalize
-    t = min(1.0, max(0.0, (loss - min_loss) / (max_loss - min_loss)))
+    log_min = math.log(min_loss)
+    log_max = math.log(max_loss)
+    if log_max == log_min:
+        return "rgb(50,180,50)"
+    t = min(1.0, max(0.0, (math.log(loss) - log_min) / (log_max - log_min)))
     # Interpolate green (good) to red (bad)
     r = int(50 + 205 * t)
     g = int(180 - 130 * t)
@@ -195,10 +182,30 @@ def _build_sidebar_data(records_by_id):
             "migrant_from_id": rec.get("migrant_from_id"),
             "migrant_from_label": rec.get("migrant_from_label"),
             "is_extinct": rec.get("is_extinct", False),
+            "model_code": rec.get("model_code_numpy"),
+            "param_est_code": rec.get("param_est_code"),
+            "model_prompt": rec.get("model_prompt"),
+            "model_llm_response": rec.get("model_llm_response"),
+            "param_est_prompt": rec.get("param_est_prompt", rec.get("param_est_prompt")),
+            "param_est_llm_response": rec.get("param_est_llm_response"),
+            "image_prompt_path": rec.get("image_prompt_path"),
+            "train_fit_image_path": rec.get("train_fit_image_path"),
+            "test_fit_image_path": rec.get("test_fit_image_path"),
             "is_seed": rec.get("is_seed", False),
         })
         sidebar[node_id] = entry
     return sidebar
+
+
+def _resolve_image_path(raw_path, image_base_dir):
+    """Resolve an image path: make absolute if relative, return None if missing."""
+    if not raw_path:
+        return None
+    if not os.path.isabs(raw_path) and image_base_dir:
+        raw_path = os.path.join(image_base_dir, raw_path)
+    if os.path.isfile(raw_path):
+        return raw_path
+    return None
 
 
 def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_output_dir=None, island_dividers=None):
@@ -230,9 +237,15 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
             best_node = node
             break
 
-    # Compute loss range for coloring
-    losses = [r.get("train_loss") for r in records_by_id.values()
-              if r.get("train_loss") is not None]
+    # Dead nodes: non-seed nodes with no children in the graph
+    dead_nodes = {
+        node for node in G.nodes()
+        if G.out_degree(node) == 0 and not records_by_id.get(node, {}).get("is_seed", False)
+    }
+
+    # Compute loss range for coloring (exclude dead nodes so they don't skew the scale)
+    losses = [r.get("train_loss") for nid, r in records_by_id.items()
+              if r.get("train_loss") is not None and nid not in dead_nodes]
     min_loss = min(losses) if losses else None
     max_loss = max(losses) if losses else None
     # Use 95th percentile as max to avoid outlier skew
@@ -249,8 +262,6 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
 
         rec = records_by_id.get(node, {})
         is_seed = rec.get("is_seed", False)
-        is_migrant = rec.get("is_migrant", False)
-        is_extinct = rec.get("is_extinct", False)
         iteration = rec.get("iteration_number", "?")
         batch = rec.get("batch_index", "?")
         loss = rec.get("train_loss")
@@ -267,8 +278,6 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
         node_labels.append(label)
 
         hover_parts = [f"<b>{label}</b>"]
-        if is_migrant and rec.get("migrant_from_id"):
-            hover_parts.append(f"migrant from: {rec.get('migrant_from_label', rec.get('migrant_from_id'))}")
         if loss is not None:
             hover_parts.append(f"train loss: {loss:.4f}")
         if test_loss is not None:
@@ -276,16 +285,10 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
         hover_parts.append(f"mode: {mode}")
         if llm:
             hover_parts.append(f"LLM: {llm}")
-        if is_extinct:
-            hover_parts.append("status: extinct")
         node_hover.append("<br>".join(hover_parts))
 
-        if is_seed:
+        if is_seed or node in dead_nodes:
             node_colors.append("rgb(180,180,180)")
-        elif is_extinct:
-            node_colors.append("rgb(200,30,30)")
-        elif is_migrant:
-            node_colors.append("rgb(128,0,200)")
         else:
             node_colors.append(_loss_to_color(loss, min_loss, max_loss))
 
@@ -309,7 +312,23 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
             else:
                 entry[key] = None
 
+    # Build parent map: nodeId -> [parentId, ...] (only parents present in graph)
+    parent_map = {}
+    for nid, rec in records_by_id.items():
+        parents = []
+        for pk in ("parent1_id", "parent2_id"):
+            pid = _parse_parent_id(rec.get(pk))
+            if pid and pid in records_by_id:
+                parents.append(pid)
+        if parents:
+            parent_map[nid] = parents
+
+    # Build pos map: nodeId -> [x, y]
+    pos_map = {nid: list(xy) for nid, xy in pos.items()}
+
     sidebar_json = json.dumps(sidebar_data, default=str)
+    parent_map_json = json.dumps(parent_map)
+    pos_map_json = json.dumps(pos_map)
     edge_x_json = json.dumps(edge_x)
     edge_y_json = json.dumps(edge_y)
     node_x_json = json.dumps(node_x)
@@ -321,30 +340,6 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
     node_symbols_json = json.dumps(node_symbols)
     node_sizes_json = json.dumps(node_sizes)
     title_json = json.dumps(title)
-
-    divider_shapes = []
-    if island_dividers:
-        for div in island_dividers:
-            x = div.get("x") if isinstance(div, dict) else div
-            y0 = div.get("y0") if isinstance(div, dict) else None
-            y1 = div.get("y1") if isinstance(div, dict) else None
-            shape = {
-                "type": "line",
-                "xref": "x",
-                "x0": x,
-                "x1": x,
-                "line": {"color": "#e0e0e0", "width": 1}
-            }
-            if y0 is not None and y1 is not None:
-                shape["yref"] = "y"
-                shape["y0"] = y0
-                shape["y1"] = y1
-            else:
-                shape["yref"] = "paper"
-                shape["y0"] = 0
-                shape["y1"] = 1
-            divider_shapes.append(shape)
-    divider_shapes_json = json.dumps(divider_shapes)
 
     html_content = f"""<!DOCTYPE html>
 <html>
@@ -385,6 +380,8 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
 
 <script>
 const sidebarData = {sidebar_json};
+const parentMap = {parent_map_json};
+const posMap = {pos_map_json};
 
 const edgeTrace = {{
   x: {edge_x_json},
@@ -414,6 +411,15 @@ const nodeTrace = {{
   type: 'scatter'
 }};
 
+const highlightTrace = {{
+  x: [],
+  y: [],
+  mode: 'lines',
+  line: {{ color: '#e8a020', width: 3 }},
+  hoverinfo: 'none',
+  type: 'scatter'
+}};
+
 const layout = {{
   title: {title_json},
   showlegend: false,
@@ -422,12 +428,45 @@ const layout = {{
   yaxis: {{ showgrid: false, zeroline: false, showticklabels: false }},
   margin: {{ l: 20, r: 20, t: 50, b: 20 }},
   plot_bgcolor: '#fff',
-  paper_bgcolor: '#fff',
-  shapes: {divider_shapes_json}
+  paper_bgcolor: '#fff'
 }};
 
 const graphDiv = document.getElementById('graph');
-Plotly.newPlot(graphDiv, [edgeTrace, nodeTrace], layout, {{responsive: true}});
+Plotly.newPlot(graphDiv, [edgeTrace, highlightTrace, nodeTrace], layout, {{responsive: true}});
+
+function getAncestorEdgeCoords(nodeId) {{
+  const hx = [], hy = [];
+  const visited = new Set();
+  const queue = [nodeId];
+  while (queue.length > 0) {{
+    const current = queue.shift();
+    if (visited.has(current)) continue;
+    visited.add(current);
+    const parents = parentMap[current] || [];
+    for (const parent of parents) {{
+      if (posMap[parent] && posMap[current]) {{
+        hx.push(posMap[parent][0], posMap[current][0], null);
+        hy.push(posMap[parent][1], posMap[current][1], null);
+        queue.push(parent);
+      }}
+    }}
+  }}
+  return {{ hx, hy }};
+}}
+
+graphDiv.on('plotly_hover', function(data) {{
+  if (data.points.length > 0) {{
+    const pt = data.points[data.points.length - 1];
+    if (pt.customdata) {{
+      const {{ hx, hy }} = getAncestorEdgeCoords(pt.customdata);
+      Plotly.restyle(graphDiv, {{ x: [hx], y: [hy] }}, [1]);
+    }}
+  }}
+}});
+
+graphDiv.on('plotly_unhover', function() {{
+  Plotly.restyle(graphDiv, {{ x: [[]], y: [[]] }}, [1]);
+}});
 
 graphDiv.on('plotly_click', function(data) {{
   if (data.points.length > 0) {{
@@ -477,12 +516,6 @@ function showSidebar(nodeId) {{
   // Basic info
   h += '<div class="field"><span class="field-label">Generation:</span> <span class="field-value">' + escapeHtml(d.iteration) + '</span></div>';
   h += '<div class="field"><span class="field-label">Island:</span> <span class="field-value">' + escapeHtml(d.island_label || d.island) + '</span></div>';
-  if (d.is_migrant) {{
-    h += '<div class="field"><span class="field-label">Migrant From:</span> <span class="field-value">' + escapeHtml(d.migrant_from_label || d.migrant_from_id) + '</span></div>';
-  }}
-  if (d.is_extinct) {{
-    h += '<div class="field"><span class="field-label">Status:</span> <span class="field-value">Extinct</span></div>';
-  }}
   h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
@@ -588,100 +621,24 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
     for nid, rec in records_by_id.items():
         rec["display_label"] = label_map.get(nid)
 
-    # Compute extinction based on whether ever used as parent (ignore last iteration)
-    used_as_parent = set()
-    for rec in records:
-        for pid_key in ("parent1_id", "parent2_id"):
-            pid = _parse_parent_id(rec.get(pid_key))
-            if pid:
-                used_as_parent.add(pid)
-    max_iter = max((rec.get("iteration_number", -1) for rec in records), default=-1)
-    for nid, rec in records_by_id.items():
-        if rec.get("is_seed", False):
-            rec["is_extinct"] = False
-            continue
-        if rec.get("iteration_number", -1) >= max_iter:
-            rec["is_extinct"] = False
-            continue
-        rec["is_extinct"] = nid not in used_as_parent
-
-    seed_ids = {_make_node_id(-1, -1, i) for i in range(2)}
     image_base_dir = os.path.dirname(generation_log_path)
 
-    # Combined view (all islands), with migrant copies to keep parent lines within islands
-    combined_records = {nid: dict(rec) for nid, rec in records_by_id.items()}
+    # Combined view (all islands)
     G_all = nx.DiGraph()
-    for nid in combined_records:
+    for nid in records_by_id:
         G_all.add_node(nid)
-
-    migrant_copies = {}
     for nid, rec in records_by_id.items():
-        child_island = rec.get("birth_island")
         for pid_key in ("parent1_id", "parent2_id"):
             pid = _parse_parent_id(rec.get(pid_key))
-            if not pid or pid not in records_by_id:
-                continue
-            parent_rec = records_by_id[pid]
-            parent_island = parent_rec.get("birth_island")
-            if parent_rec.get("is_seed", False):
+            if pid and pid in records_by_id:
                 G_all.add_edge(pid, nid)
-                continue
-            if parent_island == child_island:
-                G_all.add_edge(pid, nid)
-                continue
-            key = (pid, child_island)
-            if key not in migrant_copies:
-                migrant_id = f"{pid}__m{child_island}"
-                migrant_rec = dict(parent_rec)
-                migrant_rec["birth_island"] = child_island
-                migrant_rec["is_migrant"] = True
-                migrant_rec["migrant_from_id"] = pid
-                migrant_rec["migrant_from_label"] = label_map.get(pid)
-                migrant_rec["display_label"] = label_map.get(pid)
-                migrant_rec["is_extinct"] = False
-                migrant_rec["is_seed"] = False
-                combined_records[migrant_id] = migrant_rec
-                G_all.add_node(migrant_id)
-                migrant_copies[key] = migrant_id
-            G_all.add_edge(migrant_copies[key], nid)
 
-    # Compute island centers and dividers
-    island_spacing = 6.0
-    island_centers = {}
-    for island_idx in range(n_islands):
-        island_centers[island_idx] = island_idx * island_spacing
-    divider_positions = []
-    for island_idx in range(0, n_islands - 1):
-        left = island_centers.get(island_idx, 0.0)
-        right = island_centers.get(island_idx + 1, 0.0)
-        divider_positions.append((left + right) / 2)
-
-    seed_center_x = (island_centers[0] + island_centers[n_islands - 1]) / 2 if n_islands > 0 else 0.0
-    pos_all = _compute_island_layout(
-        G_all.nodes(),
-        combined_records,
-        island_centers,
-        seed_center_x=seed_center_x,
-        seed_offset=0.8,
-    )
-
-    if pos_all:
-        min_y = min(y for _, y in pos_all.values())
-        max_y = max(y for _, y in pos_all.values())
-    else:
-        min_y = -1.0
-        max_y = 1.0
-    divider_shapes = [{"x": x, "y0": max_y - 0.4, "y1": min_y - 0.2} for x in divider_positions]
-    html_all = _generate_html(
-        G_all,
-        pos_all,
-        combined_records,
-        "Family Tree — All Islands",
-        image_base_dir=image_base_dir,
-        html_output_dir=output_dir,
-        island_dividers=divider_shapes,
-    )
-    out_path_all = os.path.join(output_dir, "genealogy.html")
+    pos_all = _compute_hierarchical_layout(G_all, records_by_id)
+    html_all = _generate_html(G_all, pos_all, records_by_id,
+                              "Family Tree",
+                              image_base_dir=image_base_dir,
+                              html_output_dir=output_dir)
+    out_path_all = os.path.join(output_dir, "family_tree.html")
     with open(out_path_all, "w") as f:
         f.write(html_all)
     print(f"[family_tree] Wrote {out_path_all}")
