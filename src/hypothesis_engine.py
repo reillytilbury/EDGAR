@@ -16,7 +16,7 @@ from . import utils, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .data_structures import ensure_inputs, ensure_outputs
 from .evolution_diagnostics import plot_train_vs_test_loss as plot_train_vs_test_loss_shared
-from .progress_report import create_family_tree, create_dynamic_progress_update
+from .monitoring import create_family_tree, create_dynamic_progress_update
 from tqdm import tqdm
 from google import genai
 from dotenv import load_dotenv

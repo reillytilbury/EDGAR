@@ -1,4 +1,4 @@
-"""Shared I/O utilities for progress_report.
+"""Shared I/O utilities for monitoring.
 
 Provides a robust JSONL reader that gracefully handles partial or
 malformed lines, making it safe to call against an in-progress log.
