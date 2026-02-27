@@ -7,21 +7,11 @@ between programs across iterations, with click-to-inspect details.
 import json
 import math
 import os
-import html as html_module
 from collections import defaultdict
 
 import networkx as nx
 
-
-def _load_generation_log(log_path):
-    """Load JSONL generation log into a list of dicts."""
-    records = []
-    with open(log_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
+from .io import load_generation_log, escape, resolve_image_path, build_record_entry, record_key, parse_parent_key
 
 
 def _make_node_id(iteration, island, batch):
@@ -30,15 +20,12 @@ def _make_node_id(iteration, island, batch):
 
 
 def _parse_parent_id(parent_id):
-    """Parse a parent ID tuple [iteration, island, batch] into a node ID string.
+    """Parse a parent ID list [iteration, island, batch] into a node ID string.
 
     Returns None if parent_id is None or not a valid 3-element list.
     """
-    if parent_id is None:
-        return None
-    if isinstance(parent_id, (list, tuple)) and len(parent_id) == 3:
-        return _make_node_id(int(parent_id[0]), int(parent_id[1]), int(parent_id[2]))
-    return None
+    key = parse_parent_key(parent_id)
+    return _make_node_id(*key) if key is not None else None
 
 
 def _build_seed_nodes():
@@ -51,6 +38,8 @@ def _build_seed_nodes():
             "batch_index": batch_idx,
             "train_loss": None,
             "initial_loss": None,
+            "n_params": None,
+            "complexity_penalty": None,
             "model_code_numpy": None,
             "model_code_jax": None,
             "param_est_code": None,
@@ -137,7 +126,7 @@ def _assign_node_labels(records):
     # Seed labels
     for rec in records:
         if rec.get("is_seed", False):
-            nid = _make_node_id(rec["iteration_number"], rec["birth_island"], rec["batch_index"])
+            nid = _make_node_id(*record_key(rec))
             label_map[nid] = f"S{int(rec.get('batch_index', 0)) + 1}"
 
     # Per-island labels (birth order)
@@ -149,7 +138,7 @@ def _assign_node_labels(records):
         ]
         island_records.sort(key=lambda r: (r.get("iteration_number", 0), r.get("batch_index", 0)))
         for i, rec in enumerate(island_records, start=1):
-            nid = _make_node_id(rec["iteration_number"], rec["birth_island"], rec["batch_index"])
+            nid = _make_node_id(*record_key(rec))
             label_map[nid] = f"{_island_letter(island_idx)}{i}"
     return label_map
 
@@ -177,32 +166,22 @@ def _loss_to_color(loss, min_loss, max_loss):
     return f"rgb({r},{g},{b})"
 
 
-def _escape(text):
-    """HTML-escape a string, handling None."""
-    if text is None:
-        return "<em>N/A</em>"
-    return html_module.escape(str(text))
-
-
 def _build_sidebar_data(records_by_id):
     """Build a JSON-serializable dict of node data for the sidebar."""
     sidebar = {}
     for node_id, rec in records_by_id.items():
-        entry = {
+        entry = build_record_entry(rec)
+        entry.update({
             "id": node_id,
             "display_label": rec.get("display_label"),
-            "iteration": rec.get("iteration_number"),
-            "island": rec.get("birth_island"),
             "island_label": _island_letter(rec.get("birth_island", -1)),
-            "batch": rec.get("batch_index"),
-            "train_loss": rec.get("train_loss"),
             "test_loss": rec.get("test_loss"),
-            "initial_loss": rec.get("initial_loss"),
-            "mode": rec.get("mode"),
-            "temperature": rec.get("temperature"),
-            "llm_name": rec.get("llm_name"),
             "parent1_id": _parse_parent_id(rec.get("parent1_id")),
             "parent2_id": _parse_parent_id(rec.get("parent2_id")),
+            "is_migrant": rec.get("is_migrant", False),
+            "migrant_from_id": rec.get("migrant_from_id"),
+            "migrant_from_label": rec.get("migrant_from_label"),
+            "is_extinct": rec.get("is_extinct", False),
             "model_code": rec.get("model_code_numpy"),
             "param_est_code": rec.get("param_est_code"),
             "model_prompt": rec.get("model_prompt"),
@@ -213,7 +192,7 @@ def _build_sidebar_data(records_by_id):
             "train_fit_image_path": rec.get("train_fit_image_path"),
             "test_fit_image_path": rec.get("test_fit_image_path"),
             "is_seed": rec.get("is_seed", False),
-        }
+        })
         sidebar[node_id] = entry
     return sidebar
 
@@ -229,7 +208,7 @@ def _resolve_image_path(raw_path, image_base_dir):
     return None
 
 
-def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_output_dir=None):
+def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_output_dir=None, island_dividers=None):
     """Generate a standalone interactive HTML string for the family tree."""
     # Prepare edge traces
     edge_x = []
@@ -327,7 +306,7 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
     rel_base = html_output_dir or image_base_dir or "."
     for nid, entry in sidebar_data.items():
         for key in ("image_prompt_path", "train_fit_image_path", "test_fit_image_path"):
-            abs_path = _resolve_image_path(entry.get(key), image_base_dir)
+            abs_path = resolve_image_path(entry.get(key), image_base_dir)
             if abs_path:
                 entry[key] = os.path.relpath(abs_path, rel_base)
             else:
@@ -366,7 +345,7 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
 <html>
 <head>
 <meta charset="utf-8">
-<title>{_escape(title)}</title>
+<title>{escape(title)}</title>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <style>
   body {{ margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; display: flex; height: 100vh; overflow: hidden; }}
@@ -540,6 +519,9 @@ function showSidebar(nodeId) {{
   h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Complexity Penalty:</span> <span class="field-value">' + escapeHtml(d.complexity_penalty !== null && d.complexity_penalty !== undefined ? Number(d.complexity_penalty).toFixed(4) : null) + '</span></div>';
+  h += '<div class="field"><span class="field-label">N Params:</span> <span class="field-value">' + escapeHtml(d.n_params) + '</span></div>';
   h += '<div class="field"><span class="field-label">Mode:</span> <span class="field-value">' + escapeHtml(d.mode) + '</span></div>';
   h += '<div class="field"><span class="field-label">Temperature:</span> <span class="field-value">' + formatTemp(d.temperature) + '</span></div>';
   h += '<div class="field"><span class="field-label">LLM:</span> <span class="field-value">' + escapeHtml(d.llm_name) + '</span></div>';
@@ -619,7 +601,7 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
         print(f"[family_tree] No generation log found at {generation_log_path}, skipping.")
         return
 
-    records = _load_generation_log(generation_log_path)
+    records = load_generation_log(generation_log_path)
     if not records:
         print("[family_tree] Generation log is empty, skipping.")
         return
@@ -631,7 +613,7 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
     # Build lookup by node ID
     records_by_id = {}
     for rec in all_records:
-        nid = _make_node_id(rec["iteration_number"], rec["birth_island"], rec["batch_index"])
+        nid = _make_node_id(*record_key(rec))
         records_by_id[nid] = rec
 
     # Assign compact labels
@@ -702,7 +684,7 @@ if __name__ == "__main__":
     # Infer n_islands if not provided
     n_islands = args.n_islands
     if n_islands is None:
-        records = _load_generation_log(jsonl_path)
+        records = load_generation_log(jsonl_path)
         n_islands = _infer_n_islands(records)
         print(f"[family_tree] Auto-detected {n_islands} islands from log.")
 

@@ -16,7 +16,7 @@ from . import utils, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .data_structures import ensure_inputs, ensure_outputs
 from .evolution_diagnostics import plot_train_vs_test_loss as plot_train_vs_test_loss_shared
-from .family_tree import create_family_tree
+from .monitoring import create_family_tree, create_dynamic_progress_update
 from tqdm import tqdm
 from google import genai
 from dotenv import load_dotenv
@@ -1435,6 +1435,30 @@ async def hypothesis_engine(
         initial_programs = pd.concat([initial_programs, new_program_df], ignore_index=True)
         print(f"Initial program {i + 1} loss: {loss:.2f}")
 
+    # Write seed programs to generation log
+    for seed_idx, row in initial_programs.iterrows():
+        seed_n_params = int(row['params'][0].shape[-1])
+        _append_generation_record(generation_log_path, {
+            "iteration_number": -1,
+            "birth_island": -1,
+            "batch_index": int(seed_idx),
+            "parent1_id": None,
+            "parent2_id": None,
+            "train_loss": float(row['train_loss']),
+            "initial_loss": float(row['initial_loss']),
+            "n_params": seed_n_params,
+            "complexity_penalty": float(param_penalty_weight * seed_n_params),
+            "model_code_numpy": row['program_code_string'],
+            "param_est_code": row['parameter_estimator_code_string'],
+            "model_prompt": None,
+            "model_llm_response": None,
+            "param_est_prompt": None,
+            "param_est_llm_response": None,
+            "llm_name": None,
+            "temperature": None,
+            "mode": "seed",
+        })
+
     # seed each island with the initial programs
     for i in range(n_islands):
         islands[i] = pd.concat([islands[i], initial_programs], ignore_index=True)
@@ -1771,6 +1795,8 @@ async def hypothesis_engine(
             islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
 
             # Write generation record to JSON log for family tree
+            n_params = int(optimized_params.shape[1])
+            complexity_penalty = float(param_penalty_weight * n_params)
             _append_generation_record(generation_log_path, {
                 "iteration_number": i,
                 "birth_island": island_idx,
@@ -1779,6 +1805,8 @@ async def hypothesis_engine(
                 "parent2_id": list(parent2_id),
                 "train_loss": float(loss),
                 "initial_loss": float(initial_loss),
+                "n_params": n_params,
+                "complexity_penalty": complexity_penalty,
                 "model_prompt": prompt,
                 "model_llm_response": model_llm_response,
                 "model_code_numpy": model_code_string,
@@ -1987,6 +2015,7 @@ async def hypothesis_engine(
                 )
     
     # Generate family tree visualizations
+    create_dynamic_progress_update(generation_log_path, full_dir)
     create_family_tree(generation_log_path, full_dir, n_islands)
     if open_family_tree:
         family_tree_path = os.path.join(full_dir, "genealogy.html")
