@@ -180,6 +180,13 @@ function showSidebar(idx) {
   h += '<div class="field"><span class="field-label">LLM:</span> <span class="field-value">' + escapeHtml(d.llm_name) + '</span></div>';
   h += '<div class="field"><span class="field-label">Temperature:</span> <span class="field-value">' + escapeHtml(d.temperature) + '</span></div>';
 
+  if (d.removal_reason) {
+    h += '<div class="field" style="background:#fff3cd;padding:6px;border-radius:4px;margin-bottom:8px;">';
+    h += '<span class="field-label" style="color:#856404;">Removed:</span> ';
+    h += '<span class="field-value">' + escapeHtml(d.removal_reason.event_type) + ' (' + escapeHtml(d.removal_reason.rule) + ')</span>';
+    h += '</div>';
+  }
+
   if (d.model_code) {
     h += '<details open><summary>Model Code</summary><pre>' + escapeHtml(d.model_code) + '</pre></details>';
   }
@@ -1044,14 +1051,9 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
         all_records, node_pos_penalty, node_pos_raw
     )
 
-    # Dead node = node that is never used as a parent.
-    has_children = set()
-    for parents in parent_map.values():
-        for p_idx in parents:
-            if p_idx is not None:
-                has_children.add(p_idx)
+    # Dead node = program explicitly removed via deduplication or pruning.
     for idx_str, entry in sidebar_data.items():
-        entry["is_dead"] = int(idx_str) not in has_children
+        entry["is_dead"] = entry.get("removal_reason") is not None
 
     os.makedirs(output_dir, exist_ok=True)
 

@@ -99,6 +99,22 @@ DeduplicateEventHook = Callable[[List['Program'], 'Island'], None]  # removed pr
 
 
 @dataclass
+class RemovalEvent:
+    """Metadata for a program removal (deduplication or pruning).
+
+    Collected by dedup/prune helpers and written into the JSONL log so
+    monitoring reports can distinguish "explicitly removed" from "never
+    selected as parent".
+    """
+    uid: Tuple[int, int, int]         # (iteration, birth_island, batch_index)
+    category: str                     # "deduplication" or "pruning"
+    event_type: str                   # e.g. "DEDUP_WITHIN_ISLAND_REMOVE"
+    island_id: int
+    rule: str
+    details: Optional[Dict[str, Any]] = None
+
+
+@dataclass
 class Program:
     """Typed representation of a single evolved program."""
     
@@ -1090,27 +1106,30 @@ def _log_population_event(event: str, **fields) -> None:
 def remove_duplicates(programs_dataframe: pd.DataFrame, mode: str = 'complicated',
                       loss_tol: float = 0.01, cosine_tol: float = 0.99,
                       loss_type: str = 'train_loss',
-                      island_id: int | None = None) -> pd.DataFrame:
+                      island_id: int | None = None) -> Tuple[pd.DataFrame, List[RemovalEvent]]:
     """
     Remove duplicate programs from a DataFrame (v1 API compatibility wrapper).
-    
+
     Args:
         programs_dataframe: DataFrame with program data
         mode: 'simple' or 'complicated' comparison mode
         loss_tol: Loss tolerance for complicated mode
         cosine_tol: Cosine similarity threshold for complicated mode
         loss_type: Which loss column to use
-    
+
     Returns:
-        DataFrame with duplicates removed
+        Tuple of (DataFrame with duplicates removed, list of RemovalEvents)
     """
+    removal_events: List[RemovalEvent] = []
+
     # Handle empty input
     if len(programs_dataframe) == 0:
-        return programs_dataframe.copy() if isinstance(programs_dataframe, pd.DataFrame) else pd.Series(dtype=object)
-    
+        result = programs_dataframe.copy() if isinstance(programs_dataframe, pd.DataFrame) else pd.Series(dtype=object)
+        return result, removal_events
+
     n_programs = len(programs_dataframe)
     indices_to_remove = set()
-    
+
     for i in range(n_programs):
         p_i = programs_dataframe.iloc[i]
         for j in range(i + 1, n_programs):
@@ -1153,24 +1172,37 @@ def remove_duplicates(programs_dataframe: pd.DataFrame, mode: str = 'complicated
                 rule=comparison["logic"],
                 details=comparison["details"],
             )
-    
+            removal_events.append(RemovalEvent(
+                uid=_row_uid(loser),
+                category="deduplication",
+                event_type="DEDUP_WITHIN_ISLAND_REMOVE",
+                island_id=island_id if island_id is not None else -1,
+                rule=comparison["logic"],
+                details={
+                    "kept_uid": list(_row_uid(survivor)),
+                    "kept_loss": round(_row_loss(survivor, loss_type), 6),
+                    "removed_loss": round(_row_loss(loser, loss_type), 6),
+                    **(comparison.get("details") or {}),
+                },
+            ))
+
     # Get indices to keep
     keep_indices = [i for i in range(n_programs) if i not in indices_to_remove]
-    
+
     if isinstance(programs_dataframe, pd.DataFrame):
-        return programs_dataframe.iloc[keep_indices].reset_index(drop=True)
+        return programs_dataframe.iloc[keep_indices].reset_index(drop=True), removal_events
     else:
         # Handle pd.Series case
-        return pd.Series([programs_dataframe.iloc[i] for i in keep_indices])
+        return pd.Series([programs_dataframe.iloc[i] for i in keep_indices]), removal_events
 
 
 def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'complicated',
                                   loss_tol: float = 0.01, cosine_tol: float = 0.99,
                                   loss_type: str = 'train_loss',
-                                  overlap_threshold: int = 6) -> List[pd.DataFrame]:
+                                  overlap_threshold: int = 6) -> Tuple[List[pd.DataFrame], List[RemovalEvent]]:
     """
     Perform deduplication on each island (v1 API compatibility wrapper).
-    
+
     Args:
         islands: List of DataFrames (or Series), each representing an island's programs.
         mode: Deduplication mode ('simple' or 'complicated')
@@ -1178,18 +1210,21 @@ def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'compl
         cosine_tol: Cosine similarity threshold for complicated mode
         loss_type: Which loss to use for comparison
         overlap_threshold: Minimum overlap to trigger cross-island deduplication
-    
+
     Returns:
-        List of deduplicated DataFrames/Series
+        Tuple of (list of deduplicated DataFrames/Series, list of RemovalEvents)
     """
+    all_events: List[RemovalEvent] = []
+
     # 1. Within-island deduplication
     deduplicated = []
     for island_id, island_data in enumerate(islands):
-        deduped = remove_duplicates(island_data, mode=mode, loss_tol=loss_tol,
+        deduped, events = remove_duplicates(island_data, mode=mode, loss_tol=loss_tol,
                                    cosine_tol=cosine_tol, loss_type=loss_type,
                                    island_id=island_id)
         deduplicated.append(deduped)
-    
+        all_events.extend(events)
+
     # 2. Cross-island deduplication (remove duplicates from higher-indexed islands)
     n_islands = len(deduplicated)
     for i in range(n_islands):
@@ -1227,6 +1262,21 @@ def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'compl
                         match_rule=comparison["logic"],
                         details=comparison["details"],
                     )
+                    all_events.append(RemovalEvent(
+                        uid=_row_uid(program_j),
+                        category="deduplication",
+                        event_type="DEDUP_CROSS_ISLAND_REMOVE",
+                        island_id=j,
+                        rule="cross_island_keep_lower_index",
+                        details={
+                            "reference_island": i,
+                            "kept_uid": list(_row_uid(program_i)),
+                            "kept_loss": round(_row_loss(program_i, loss_type), 6),
+                            "removed_loss": round(_row_loss(program_j, loss_type), 6),
+                            "match_rule": comparison["logic"],
+                            **(comparison.get("details") or {}),
+                        },
+                    ))
                     break
             # Remove duplicates from island j
             if duplicate_indices:
@@ -1235,22 +1285,22 @@ def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'compl
                     deduplicated[j] = deduplicated[j].iloc[keep_indices].reset_index(drop=True)
                 else:
                     deduplicated[j] = pd.Series([deduplicated[j].iloc[k] for k in keep_indices])
-    
-    return deduplicated
+
+    return deduplicated, all_events
 
 
-def perform_population_pruning(islands: List[pd.DataFrame], 
+def perform_population_pruning(islands: List[pd.DataFrame],
                                 critical_population_size: int = 12,
                                 large_lm_name: str = "",
                                 min_wise_population_size: int = 0,
                                 # Legacy aliases for API compatibility
                                 max_population: int = None,
-                                loss_type: str = 'train_loss') -> List[pd.DataFrame]:
+                                loss_type: str = 'train_loss') -> Tuple[List[pd.DataFrame], List[RemovalEvent]]:
     """
     Prune each island to critical population size (v1 API compatibility wrapper).
-    
+
     Ensures each island keeps a reserve of "wise" programs (trained with large model).
-    
+
     Args:
         islands: List of DataFrames, each representing an island
         critical_population_size: Maximum number of programs per island
@@ -1258,27 +1308,28 @@ def perform_population_pruning(islands: List[pd.DataFrame],
         min_wise_population_size: Minimum number of wise programs to keep
         max_population: (deprecated alias for critical_population_size)
         loss_type: Which loss to sort by when pruning
-    
+
     Returns:
-        List of pruned DataFrames
+        Tuple of (list of pruned DataFrames, list of RemovalEvents)
     """
     # Handle legacy alias
     if max_population is not None:
         critical_population_size = max_population
-    
+
     assert min_wise_population_size <= critical_population_size, \
         f"min_wise_population_size ({min_wise_population_size}) must be <= critical_population_size ({critical_population_size})"
-    
+
+    all_events: List[RemovalEvent] = []
     pruned = []
     for island_id, island_df in enumerate(islands):
         if len(island_df) <= critical_population_size:
             pruned.append(island_df.copy() if isinstance(island_df, pd.DataFrame) else island_df)
             continue
-        
+
         # Handle pd.Series of program rows (legacy format)
         if isinstance(island_df, pd.Series):
             # Convert to DataFrame-like operations
-            sorted_df = sorted(range(len(island_df)), 
+            sorted_df = sorted(range(len(island_df)),
                               key=lambda i: island_df.iloc[i].get(loss_type, float('inf')))
             keep_indices = sorted_df[:critical_population_size]
             removed_indices = [i for i in range(len(island_df)) if i not in keep_indices]
@@ -1292,17 +1343,28 @@ def perform_population_pruning(islands: List[pd.DataFrame],
                     rule="capacity_keep_lowest_loss",
                     capacity=critical_population_size,
                 )
+                all_events.append(RemovalEvent(
+                    uid=_row_uid(removed),
+                    category="pruning",
+                    event_type="PRUNE_REMOVE",
+                    island_id=island_id,
+                    rule="capacity_keep_lowest_loss",
+                    details={
+                        "removed_loss": round(_row_loss(removed, loss_type), 6),
+                        "capacity": critical_population_size,
+                    },
+                ))
             pruned.append(pd.Series([island_df.iloc[i] for i in keep_indices]))
             continue
-        
+
         # DataFrame format with wise program handling
         if 'llm_name' in island_df.columns and large_lm_name:
             wise_programs = island_df[island_df['llm_name'] == large_lm_name]
             top_wise = wise_programs.nsmallest(min_wise_population_size, loss_type)
-            
+
             # Remove wise programs from pool
             remaining = island_df[~island_df.index.isin(top_wise.index)]
-            
+
             # Fill remaining slots with best non-wise programs
             n_vacancies = critical_population_size - len(top_wise)
             top_remaining = remaining.nsmallest(n_vacancies, loss_type)
@@ -1310,16 +1372,30 @@ def perform_population_pruning(islands: List[pd.DataFrame],
             removed_df = island_df[~island_df.index.isin(kept_df.index)]
             for _, removed in removed_df.iterrows():
                 removed_is_wise = removed.get('llm_name') == large_lm_name
+                removed_class = "wise" if removed_is_wise else "non_wise"
                 _log_population_event(
                     "PRUNE_REMOVE",
                     island_id=island_id,
                     removed_uid=_row_uid(removed),
                     removed_loss=round(_row_loss(removed, loss_type), 6),
                     rule="capacity_keep_best_with_wise_reserve",
-                    removed_class="wise" if removed_is_wise else "non_wise",
+                    removed_class=removed_class,
                     capacity=critical_population_size,
                     min_wise_population_size=min_wise_population_size,
                 )
+                all_events.append(RemovalEvent(
+                    uid=_row_uid(removed),
+                    category="pruning",
+                    event_type="PRUNE_REMOVE",
+                    island_id=island_id,
+                    rule="capacity_keep_best_with_wise_reserve",
+                    details={
+                        "removed_loss": round(_row_loss(removed, loss_type), 6),
+                        "removed_class": removed_class,
+                        "capacity": critical_population_size,
+                        "min_wise_population_size": min_wise_population_size,
+                    },
+                ))
             pruned.append(kept_df.reset_index(drop=True))
         else:
             # Simple pruning: keep best programs
@@ -1335,9 +1411,20 @@ def perform_population_pruning(islands: List[pd.DataFrame],
                     rule="capacity_keep_lowest_loss",
                     capacity=critical_population_size,
                 )
+                all_events.append(RemovalEvent(
+                    uid=_row_uid(removed),
+                    category="pruning",
+                    event_type="PRUNE_REMOVE",
+                    island_id=island_id,
+                    rule="capacity_keep_lowest_loss",
+                    details={
+                        "removed_loss": round(_row_loss(removed, loss_type), 6),
+                        "capacity": critical_population_size,
+                    },
+                ))
             pruned.append(kept_df.reset_index(drop=True))
-    
-    return pruned
+
+    return pruned, all_events
 
 
 def perform_probabilistic_migration(islands: List[pd.DataFrame],

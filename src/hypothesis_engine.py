@@ -1151,6 +1151,47 @@ def _append_generation_record(filepath, record):
         f.write(json.dumps(record, default=str) + '\n')
 
 
+def _apply_removal_reasons_to_log(filepath, removal_events):
+    """Batch-update the JSONL log with removal_reason fields.
+
+    Reads the log, adds ``removal_reason`` to any record whose UID matches
+    a :class:`RemovalEvent`, then rewrites the file.  Records that already
+    carry a ``removal_reason`` are left unchanged.
+
+    Args:
+        filepath: Path to program_generation_log.jsonl
+        removal_events: List of ``RemovalEvent`` objects from dedup / prune.
+    """
+    if not removal_events or not os.path.isfile(filepath):
+        return
+
+    # Build lookup: (iteration, birth_island, batch_index) -> removal dict
+    reason_lookup = {}
+    for evt in removal_events:
+        key = (int(evt.uid[0]), int(evt.uid[1]), int(evt.uid[2]))
+        reason_lookup[key] = {
+            "category": evt.category,
+            "event_type": evt.event_type,
+            "island_id": evt.island_id,
+            "rule": evt.rule,
+            "details": evt.details,
+        }
+
+    # Read-modify-rewrite (same pattern as _update_generation_log_test_losses_and_mark_winner)
+    with open(filepath, 'r') as f:
+        lines = f.readlines()
+    with open(filepath, 'w') as f:
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            key = (rec['iteration_number'], rec['birth_island'], rec['batch_index'])
+            if key in reason_lookup and 'removal_reason' not in rec:
+                rec['removal_reason'] = reason_lookup[key]
+            f.write(json.dumps(rec, default=str) + '\n')
+
+
 def _update_generation_log_test_losses_and_mark_winner(filepath, islands):
     """Update JSONL records in-place with test_loss values and mark the winner.
 
@@ -1838,9 +1879,10 @@ async def hypothesis_engine(
         logging.info(f"Iteration {i} complete. The proportion of programs that successfully ran and received a loss is {success_rate:.2f}.")
         logging.info('-' * 50)
         # migrate and prune programs (better here for temperature to be in [0, 1] range)
-        islands = genetic_helpers.perform_island_deduplication(islands, overlap_threshold=int(0.75 * critical_population_size))
-        islands = genetic_helpers.perform_population_pruning(islands, critical_population_size=critical_population_size - n_migrants,
+        islands, dedup_events = genetic_helpers.perform_island_deduplication(islands, overlap_threshold=int(0.75 * critical_population_size))
+        islands, prune_events = genetic_helpers.perform_population_pruning(islands, critical_population_size=critical_population_size - n_migrants,
                                                 min_wise_population_size=min_wise_population_size,)
+        _apply_removal_reasons_to_log(generation_log_path, dedup_events + prune_events)
         islands = genetic_helpers.perform_probabilistic_migration(islands, 
                                                                   n_migrants=n_migrants,
                                                                   destination_islands=exploration_topology if mode == 'explore' else exploitation_topology, 
@@ -1942,7 +1984,7 @@ async def hypothesis_engine(
     combined_dir = os.path.join(base_dir, date_stamp, time_stamp, 'combined')
     os.makedirs(combined_dir, exist_ok=True)
     combined_programs_dataframe = pd.concat(islands, ignore_index=True)
-    combined_programs_dataframe = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss')
+    combined_programs_dataframe, _ = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss')
     # combined_programs_dataframe = combined_programs_dataframe.sort_values(by='test_loss').reset_index(drop=True)
     # sort by mean loss
     combined_programs_dataframe = combined_programs_dataframe.sort_values(by='mean_loss').reset_index(drop=True)

@@ -192,6 +192,7 @@ def _build_sidebar_data(records_by_id):
             "train_fit_image_path": rec.get("train_fit_image_path"),
             "test_fit_image_path": rec.get("test_fit_image_path"),
             "is_seed": rec.get("is_seed", False),
+            "removal_reason": rec.get("removal_reason"),
         })
         sidebar[node_id] = entry
     return sidebar
@@ -237,10 +238,10 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
             best_node = node
             break
 
-    # Dead nodes: non-seed nodes with no children in the graph
+    # Dead nodes: programs explicitly removed via deduplication or pruning
     dead_nodes = {
         node for node in G.nodes()
-        if G.out_degree(node) == 0 and not records_by_id.get(node, {}).get("is_seed", False)
+        if records_by_id.get(node, {}).get("removal_reason") is not None
     }
 
     # Compute loss range for coloring (exclude dead nodes so they don't skew the scale)
@@ -526,6 +527,13 @@ function showSidebar(nodeId) {{
   h += '<div class="field"><span class="field-label">Temperature:</span> <span class="field-value">' + formatTemp(d.temperature) + '</span></div>';
   h += '<div class="field"><span class="field-label">LLM:</span> <span class="field-value">' + escapeHtml(d.llm_name) + '</span></div>';
   h += '<div class="field"><span class="field-label">Parents:</span> <span class="field-value">' + labelFor(d.parent1_id) + ', ' + labelFor(d.parent2_id) + '</span></div>';
+
+  if (d.removal_reason) {{
+    h += '<div class="field" style="background:#fff3cd;padding:6px;border-radius:4px;margin-bottom:8px;">';
+    h += '<span class="field-label" style="color:#856404;">Removed:</span> ';
+    h += '<span class="field-value">' + escapeHtml(d.removal_reason.event_type) + ' (' + escapeHtml(d.removal_reason.rule) + ')</span>';
+    h += '</div>';
+  }}
 
   // Model code
   if (d.model_code) {{

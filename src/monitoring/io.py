@@ -65,6 +65,7 @@ def build_record_entry(rec: dict) -> dict:
         "param_est_llm_response": rec.get("param_est_llm_response"),
         "train_fit_image_path": rec.get("train_fit_image_path"),
         "test_fit_image_path": rec.get("test_fit_image_path"),
+        "removal_reason": rec.get("removal_reason"),
     }
 
 
