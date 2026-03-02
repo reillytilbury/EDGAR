@@ -110,6 +110,7 @@ class RemovalEvent:
     category: str                     # "deduplication" or "pruning"
     event_type: str                   # e.g. "DEDUP_WITHIN_ISLAND_REMOVE"
     island_id: int
+    iteration : int
     rule: str
     details: Optional[Dict[str, Any]] = None
 
@@ -1105,7 +1106,7 @@ def _log_population_event(event: str, **fields) -> None:
 
 def remove_duplicates(programs_dataframe: pd.DataFrame, mode: str = 'complicated',
                       loss_tol: float = 0.01, cosine_tol: float = 0.99,
-                      loss_type: str = 'train_loss',
+                      loss_type: str = 'train_loss', iteration: int | None = None,
                       island_id: int | None = None) -> Tuple[pd.DataFrame, List[RemovalEvent]]:
     """
     Remove duplicate programs from a DataFrame (v1 API compatibility wrapper).
@@ -1177,6 +1178,7 @@ def remove_duplicates(programs_dataframe: pd.DataFrame, mode: str = 'complicated
                 category="deduplication",
                 event_type="DEDUP_WITHIN_ISLAND_REMOVE",
                 island_id=island_id if island_id is not None else -1,
+                iteration=iteration if iteration is not None else -1,
                 rule=comparison["logic"],
                 details={
                     "kept_uid": list(_row_uid(survivor)),
@@ -1198,7 +1200,7 @@ def remove_duplicates(programs_dataframe: pd.DataFrame, mode: str = 'complicated
 
 def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'complicated',
                                   loss_tol: float = 0.01, cosine_tol: float = 0.99,
-                                  loss_type: str = 'train_loss',
+                                  loss_type: str = 'train_loss', iteration: int | None = None,
                                   overlap_threshold: int = 6) -> Tuple[List[pd.DataFrame], List[RemovalEvent]]:
     """
     Perform deduplication on each island (v1 API compatibility wrapper).
@@ -1209,6 +1211,7 @@ def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'compl
         loss_tol: Loss tolerance for complicated mode
         cosine_tol: Cosine similarity threshold for complicated mode
         loss_type: Which loss to use for comparison
+        iteration : Current iteration number for logging (optional)
         overlap_threshold: Minimum overlap to trigger cross-island deduplication
 
     Returns:
@@ -1298,6 +1301,7 @@ def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'compl
                         category="deduplication",
                         event_type="DEDUP_CROSS_ISLAND_REMOVE",
                         island_id=loser_island,
+                        iteration=iteration if iteration is not None else -1,
                         rule="cross_island_keep_lower_loss",
                         details=event_details,
                     ))
@@ -1319,6 +1323,7 @@ def perform_population_pruning(islands: List[pd.DataFrame],
                                 critical_population_size: int = 12,
                                 large_lm_name: str = "",
                                 min_wise_population_size: int = 0,
+                                iteration: int | None = None,
                                 # Legacy aliases for API compatibility
                                 max_population: int = None,
                                 loss_type: str = 'train_loss') -> Tuple[List[pd.DataFrame], List[RemovalEvent]]:
@@ -1334,6 +1339,7 @@ def perform_population_pruning(islands: List[pd.DataFrame],
         min_wise_population_size: Minimum number of wise programs to keep
         max_population: (deprecated alias for critical_population_size)
         loss_type: Which loss to sort by when pruning
+        iteration: Current iteration number for logging (optional)
 
     Returns:
         Tuple of (list of pruned DataFrames, list of RemovalEvents)
@@ -1374,6 +1380,7 @@ def perform_population_pruning(islands: List[pd.DataFrame],
                     category="pruning",
                     event_type="PRUNE_REMOVE",
                     island_id=island_id,
+                    iteration=iteration if iteration is not None else -1,
                     rule="capacity_keep_lowest_loss",
                     details={
                         "removed_loss": round(_row_loss(removed, loss_type), 6),
@@ -1414,6 +1421,7 @@ def perform_population_pruning(islands: List[pd.DataFrame],
                     category="pruning",
                     event_type="PRUNE_REMOVE",
                     island_id=island_id,
+                    iteration=iteration if iteration is not None else -1,
                     rule="capacity_keep_best_with_wise_reserve",
                     details={
                         "removed_loss": round(_row_loss(removed, loss_type), 6),
@@ -1442,6 +1450,7 @@ def perform_population_pruning(islands: List[pd.DataFrame],
                     category="pruning",
                     event_type="PRUNE_REMOVE",
                     island_id=island_id,
+                    iteration=iteration if iteration is not None else -1,
                     rule="capacity_keep_lowest_loss",
                     details={
                         "removed_loss": round(_row_loss(removed, loss_type), 6),
@@ -1456,7 +1465,8 @@ def perform_population_pruning(islands: List[pd.DataFrame],
 def perform_probabilistic_migration(islands: List[pd.DataFrame],
                                      n_migrants: int,
                                      destination_islands: List[int],
-                                     temperature: float = 1.0) -> List[pd.DataFrame]:
+                                     temperature: float = 1.0,
+                                     iteration: int | None = None) -> List[pd.DataFrame]:
     """
     Perform probabilistic migration between islands (v1 API compatibility wrapper).
     
