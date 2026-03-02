@@ -717,7 +717,7 @@ async def generate_new_model(current_island, llm_name, client,
     
     # Use chat-based or legacy LLM call
     if island_chat_manager is not None and island_id is not None:
-        logging.info(
+        logging.debug(
             f"Model generation prompt (island={island_id}, batch={batch_id}):\n{program_prompt}\n"
         )
         llm_output = await island_chat_manager.ask_island(
@@ -729,12 +729,12 @@ async def generate_new_model(current_island, llm_name, client,
         )
     else:
         # Legacy: independent query
-        logging.info(
+        logging.debug(
             f"Model generation prompt (island={island_id}, batch={batch_id}):\n{program_prompt}\n"
         )
         llm_output = await llm_helper.call_llm_async(program_prompt, model_name=llm_name, client=client, temperature=temp, 
                                                 thinking_budget=thinking_budget, img_bytes=img_bytes)
-    logging.info(
+    logging.debug(
         f"Model generation output (island={island_id}, batch={batch_id}):\n{llm_output}\n"
     )
     
@@ -745,7 +745,7 @@ async def generate_new_model(current_island, llm_name, client,
         )
         return None, None, None, (parent1_id, parent2_id)
     code_string = code_string.replace(f'def {model_name}_v{k+1}(', f'def {model_name}(')
-    logging.info(
+    logging.debug(
         f"Generated model candidate (island={island_id}, batch={batch_id}):\n"
         f"Prompt:\n{program_prompt}\n\n"
         f"Model (NumPy):\n{code_string}\n"
@@ -844,7 +844,7 @@ async def generate_new_parameter_estimator(current_island,
         )
     
     # Use chat-based or legacy LLM call
-    logging.info(
+    logging.debug(
         f"Parameter estimator prompt (island={island_id}, batch={batch_id}):\n{prompt}\n"
     )
     llm_output = await llm_helper.call_llm_async(
@@ -877,7 +877,7 @@ async def generate_new_parameter_estimator(current_island,
         logging.info("Failed to parse parameter estimator code, skipping.")
         return None, None, pe_metadata
 
-    logging.info(
+    logging.debug(
         f"Generated initial parameter estimator candidate (island={island_id}, batch={batch_id}):\n"
         f"Prompt:\n{prompt}\n\n"
         f"Parameter Estimator (initial):\n{code_string}\n"
@@ -980,7 +980,7 @@ async def generate_new_parameter_estimator(current_island,
                 "**Banned tokens (do not use in code):**\n"
                 f"{banned_list}\n"
             )
-        logging.info(
+        logging.debug(
             f"Param-est refinement prompt (iter={iter_label}, island={island_id}, "
             f"batch={batch_id}, round={r+1}):\n{refine_prompt}\n"
         )
@@ -1071,12 +1071,12 @@ async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='g
         return None, None
     
     prompt = prompt_manager.get_jax_translator_prompt(code_string)
-    logging.info(f"JAX translation prompt:\n{prompt}\n")
+    logging.debug(f"JAX translation prompt:\n{prompt}\n")
     if prompt is None:
         return None, None
     
     jax_code_string = await llm_helper.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
-    logging.info(f"JAX translation output:\n{jax_code_string}\n")
+    logging.debug(f"JAX translation output:\n{jax_code_string}\n")
     jax_code_string = utils.extract_code_block(jax_code_string)
     model_name = prompt_manager.get_model_name()
     func = utils.str_to_func(jax_code_string, model_name)
@@ -1612,10 +1612,10 @@ async def hypothesis_engine(
             model_code_string, prompt, model_llm_response, model_code_string_jax, model_new, param_est_code_string, param_est_new, pe_metadata = island_results[island_idx][j]
             parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
 
-            logging.info(f"Prompt: \n{prompt}\n")
-            logging.info(f"Model: \n{model_code_string}\n")
-            logging.info(f"Model (JAX): \n{model_code_string_jax}\n")
-            logging.info(f"Parameter Estimator: \n{param_est_code_string}\n")
+            logging.debug(f"Prompt: \n{prompt}\n")
+            logging.debug(f"Model: \n{model_code_string}\n")
+            logging.debug(f"Model (JAX): \n{model_code_string_jax}\n")
+            logging.debug(f"Parameter Estimator: \n{param_est_code_string}\n")
 
             if model_new is None or param_est_new is None:
                 logging.info(f"Skipping island {island_idx}, batch {j} due to LLM generation failure.")
@@ -1625,7 +1625,7 @@ async def hypothesis_engine(
             model_name = prompt_manager.get_model_name()
             model_np = utils.str_to_func(model_code_string, model_name)
             if model_np is None:
-                logging.info(
+                logging.debug(
                     f"Skipping island {island_idx}, batch {j}: failed to parse NumPy model."
                 )
                 logging.info('-' * 50)
