@@ -1225,18 +1225,22 @@ def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'compl
         deduplicated.append(deduped)
         all_events.extend(events)
 
-    # 2. Cross-island deduplication (remove duplicates from higher-indexed islands)
+    # 2. Cross-island deduplication (remove the higher-loss program across islands)
     n_islands = len(deduplicated)
+    indices_to_remove_by_island = [set() for _ in range(n_islands)]
     for i in range(n_islands):
         for j in range(i + 1, n_islands):
-            if len(deduplicated[i]) < overlap_threshold or len(deduplicated[j]) < overlap_threshold:
+            active_i = len(deduplicated[i]) - len(indices_to_remove_by_island[i])
+            active_j = len(deduplicated[j]) - len(indices_to_remove_by_island[j])
+            if active_i < overlap_threshold or active_j < overlap_threshold:
                 continue
-            duplicate_indices = set()
             for idx_j in range(len(deduplicated[j])):
-                if idx_j in duplicate_indices:
+                if idx_j in indices_to_remove_by_island[j]:
                     continue
                 program_j = deduplicated[j].iloc[idx_j]
                 for idx_i in range(len(deduplicated[i])):
+                    if idx_i in indices_to_remove_by_island[i]:
+                        continue
                     program_i = deduplicated[i].iloc[idx_i]
                     comparison = compare_programs(
                         program_i,
@@ -1249,42 +1253,64 @@ def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'compl
                     )
                     if not comparison["is_duplicate"]:
                         continue
-                    duplicate_indices.add(idx_j)
+                    loss_i = _row_loss(program_i, loss_type)
+                    loss_j = _row_loss(program_j, loss_type)
+                    tie_breaker = None
+                    if loss_i < loss_j:
+                        loser_island, loser_idx, loser = j, idx_j, program_j
+                        survivor_island, survivor = i, program_i
+                    elif loss_i > loss_j:
+                        loser_island, loser_idx, loser = i, idx_i, program_i
+                        survivor_island, survivor = j, program_j
+                    else:
+                        tie_breaker = "lower_island_index"
+                        loser_island, loser_idx, loser = j, idx_j, program_j
+                        survivor_island, survivor = i, program_i
+                    if loser_idx in indices_to_remove_by_island[loser_island]:
+                        if loser_island == j:
+                            break
+                        continue
+                    indices_to_remove_by_island[loser_island].add(loser_idx)
+                    event_details = {
+                        "reference_island": survivor_island,
+                        "kept_uid": list(_row_uid(survivor)),
+                        "kept_loss": round(_row_loss(survivor, loss_type), 6),
+                        "removed_loss": round(_row_loss(loser, loss_type), 6),
+                        "match_rule": comparison["logic"],
+                        **(comparison.get("details") or {}),
+                    }
+                    if tie_breaker is not None:
+                        event_details["tie_breaker"] = tie_breaker
                     _log_population_event(
                         "DEDUP_CROSS_ISLAND_REMOVE",
-                        reference_island=i,
-                        removed_from_island=j,
-                        removed_uid=_row_uid(program_j),
-                        removed_loss=round(_row_loss(program_j, loss_type), 6),
-                        kept_uid=_row_uid(program_i),
-                        kept_loss=round(_row_loss(program_i, loss_type), 6),
-                        rule="cross_island_keep_lower_index",
+                        reference_island=survivor_island,
+                        removed_from_island=loser_island,
+                        removed_uid=_row_uid(loser),
+                        removed_loss=round(_row_loss(loser, loss_type), 6),
+                        kept_uid=_row_uid(survivor),
+                        kept_loss=round(_row_loss(survivor, loss_type), 6),
+                        rule="cross_island_keep_lower_loss",
                         match_rule=comparison["logic"],
-                        details=comparison["details"],
+                        details=event_details,
                     )
                     all_events.append(RemovalEvent(
-                        uid=_row_uid(program_j),
+                        uid=_row_uid(loser),
                         category="deduplication",
                         event_type="DEDUP_CROSS_ISLAND_REMOVE",
-                        island_id=j,
-                        rule="cross_island_keep_lower_index",
-                        details={
-                            "reference_island": i,
-                            "kept_uid": list(_row_uid(program_i)),
-                            "kept_loss": round(_row_loss(program_i, loss_type), 6),
-                            "removed_loss": round(_row_loss(program_j, loss_type), 6),
-                            "match_rule": comparison["logic"],
-                            **(comparison.get("details") or {}),
-                        },
+                        island_id=loser_island,
+                        rule="cross_island_keep_lower_loss",
+                        details=event_details,
                     ))
-                    break
-            # Remove duplicates from island j
-            if duplicate_indices:
-                keep_indices = [k for k in range(len(deduplicated[j])) if k not in duplicate_indices]
-                if isinstance(deduplicated[j], pd.DataFrame):
-                    deduplicated[j] = deduplicated[j].iloc[keep_indices].reset_index(drop=True)
-                else:
-                    deduplicated[j] = pd.Series([deduplicated[j].iloc[k] for k in keep_indices])
+                    if loser_island == j:
+                        break
+    for island_id, duplicate_indices in enumerate(indices_to_remove_by_island):
+        if not duplicate_indices:
+            continue
+        keep_indices = [k for k in range(len(deduplicated[island_id])) if k not in duplicate_indices]
+        if isinstance(deduplicated[island_id], pd.DataFrame):
+            deduplicated[island_id] = deduplicated[island_id].iloc[keep_indices].reset_index(drop=True)
+        else:
+            deduplicated[island_id] = pd.Series([deduplicated[island_id].iloc[k] for k in keep_indices])
 
     return deduplicated, all_events
 
