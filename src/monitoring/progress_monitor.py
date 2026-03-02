@@ -10,7 +10,15 @@ import logging
 import math
 import os
 
-from .io import load_generation_log, escape, resolve_image_path, build_record_entry, record_key, parse_parent_key
+from .io import (
+    assign_display_labels,
+    build_record_entry,
+    escape,
+    load_generation_log,
+    parse_parent_key,
+    record_key,
+    resolve_image_path,
+)
 
 # Distinct colour palette for up to 8 islands
 _ISLAND_COLOURS = [
@@ -168,7 +176,9 @@ function showSidebar(idx) {
   const sb = document.getElementById('sidebar');
   const sc = document.getElementById('sidebar-content');
 
-  let h = '<h2>Program ' + escapeHtml(d.iteration) + '_' + escapeHtml(d.island) + '_' + escapeHtml(d.batch) + '</h2>';
+  const displayLabel = d.display_label || d.program_id || (String(d.iteration) + '_' + String(d.island) + '_' + String(d.batch));
+  let h = '<h2>' + escapeHtml(d.iteration === -1 ? ('Seed ' + displayLabel) : ('Program ' + displayLabel)) + '</h2>';
+  h += '<div class="field"><span class="field-label">ID:</span> <span class="field-value">' + escapeHtml(d.program_id) + '</span></div>';
   h += '<div class="field"><span class="field-label">Iteration:</span> <span class="field-value">' + escapeHtml(d.iteration) + '</span></div>';
   h += '<div class="field"><span class="field-label">Island:</span> <span class="field-value">' + escapeHtml(d.island) + '</span></div>';
   h += '<div class="field"><span class="field-label">Batch:</span> <span class="field-value">' + escapeHtml(d.batch) + '</span></div>';
@@ -377,8 +387,9 @@ def _generate_loss_progress_html(
             y_without_penalty.append(p_raw)
             custom.append(rec_idx)
 
+            display_label = rec.get("display_label") or f"{iteration}_{island_idx}_{rec.get('batch_index', '?')}"
             hover_parts = [
-                f"<b>i{iteration}_isl{island_idx}_b{rec.get('batch_index', '?')}</b>",
+                f"<b>{display_label}</b>",
                 f"P(L): {p_penalty:.4f}" if p_penalty is not None else "P(L): N/A",
                 f"train loss: {train_loss:.4f}" if train_loss is not None else "train loss: N/A",
                 f"penalty: {complexity_penalty:.4f}",
@@ -414,8 +425,9 @@ def _generate_loss_progress_html(
         seed_y_penalty.append(p_penalty)
         seed_y_raw.append(p_raw)
         seed_custom.append(rec_idx)
+        display_label = rec.get("display_label") or f"S{rec.get('batch_index', rec_idx)}"
         hover_parts = [
-            f"<b>seed_{rec.get('batch_index', rec_idx)}</b>",
+            f"<b>{display_label}</b>",
             f"P(L): {p_penalty:.4f}" if p_penalty is not None else "P(L): N/A",
             f"train loss: {train_loss:.4f}" if train_loss is not None else "train loss: N/A",
             f"penalty: {complexity_penalty:.4f}",
@@ -1011,6 +1023,7 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
 
     # Unified record list: seeds first, then programs (gives consistent rec_idx)
     all_records = seed_records + prog_records
+    assign_display_labels(all_records)
     sidebar_data = _build_sidebar_data(all_records)
     image_base_dir = os.path.dirname(json_file)
     rel_base = output_dir or image_base_dir or "."

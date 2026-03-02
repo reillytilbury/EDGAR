@@ -11,12 +11,18 @@ from collections import defaultdict
 
 import networkx as nx
 
-from .io import load_generation_log, escape, resolve_image_path, build_record_entry, record_key, parse_parent_key
+from .io import (
+    assign_display_labels,
+    build_record_entry,
+    escape,
+    island_label,
+    load_generation_log,
+    make_program_id,
+    parse_parent_key,
+    record_key,
+    resolve_image_path,
+)
 
-
-def _make_node_id(iteration, island, batch):
-    """Create a unique string node ID from (iteration, island, batch)."""
-    return f"{iteration}_{island}_{batch}"
 
 
 def _parse_parent_id(parent_id):
@@ -25,7 +31,7 @@ def _parse_parent_id(parent_id):
     Returns None if parent_id is None or not a valid 3-element list.
     """
     key = parse_parent_key(parent_id)
-    return _make_node_id(*key) if key is not None else None
+    return make_program_id(*key) if key is not None else None
 
 
 def _build_seed_nodes():
@@ -105,44 +111,6 @@ def _compute_hierarchical_layout(G, records_by_id, island_gap=1.5):
     return pos
 
 
-def _island_letter(island_idx: int) -> str:
-    """Map island index to a letter label (0->A, 1->B, ..., 25->Z, 26->AA, ...)."""
-    if island_idx < 0:
-        return "S"
-    letters = []
-    idx = island_idx
-    while True:
-        idx, rem = divmod(idx, 26)
-        letters.append(chr(ord('A') + rem))
-        if idx == 0:
-            break
-        idx -= 1
-    return "".join(reversed(letters))
-
-
-def _assign_node_labels(records):
-    """Assign compact labels like A12 per island and S1/S2 for seeds."""
-    label_map = {}
-    # Seed labels
-    for rec in records:
-        if rec.get("is_seed", False):
-            nid = _make_node_id(*record_key(rec))
-            label_map[nid] = f"S{int(rec.get('batch_index', 0)) + 1}"
-
-    # Per-island labels (birth order)
-    islands = sorted({rec.get("birth_island") for rec in records if rec.get("birth_island", -1) >= 0})
-    for island_idx in islands:
-        island_records = [
-            rec for rec in records
-            if rec.get("birth_island") == island_idx and rec.get("iteration_number", -1) >= 0
-        ]
-        island_records.sort(key=lambda r: (r.get("iteration_number", 0), r.get("batch_index", 0)))
-        for i, rec in enumerate(island_records, start=1):
-            nid = _make_node_id(*record_key(rec))
-            label_map[nid] = f"{_island_letter(island_idx)}{i}"
-    return label_map
-
-
 def _loss_to_color(loss, min_loss, max_loss):
     """Map a loss value to an RGB color string (green=good, red=bad).
 
@@ -174,7 +142,7 @@ def _build_sidebar_data(records_by_id):
         entry.update({
             "id": node_id,
             "display_label": rec.get("display_label"),
-            "island_label": _island_letter(rec.get("birth_island", -1)),
+            "island_label": island_label(rec.get("birth_island", -1)),
             "test_loss": rec.get("test_loss"),
             "parent1_id": _parse_parent_id(rec.get("parent1_id")),
             "parent2_id": _parse_parent_id(rec.get("parent2_id")),
@@ -515,6 +483,7 @@ function showSidebar(nodeId) {{
   let h = '<h2>' + escapeHtml(d.is_seed ? ('Seed ' + displayLabel) : ('Program ' + displayLabel)) + '</h2>';
 
   // Basic info
+  h += '<div class="field"><span class="field-label">ID:</span> <span class="field-value">' + escapeHtml(d.program_id) + '</span></div>';
   h += '<div class="field"><span class="field-label">Generation:</span> <span class="field-value">' + escapeHtml(d.iteration) + '</span></div>';
   h += '<div class="field"><span class="field-label">Island:</span> <span class="field-value">' + escapeHtml(d.island_label || d.island) + '</span></div>';
   h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
@@ -621,13 +590,11 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
     # Build lookup by node ID
     records_by_id = {}
     for rec in all_records:
-        nid = _make_node_id(*record_key(rec))
+        nid = make_program_id(*record_key(rec))
         records_by_id[nid] = rec
 
-    # Assign compact labels
-    label_map = _assign_node_labels(all_records)
-    for nid, rec in records_by_id.items():
-        rec["display_label"] = label_map.get(nid)
+    # Assign shared compact labels so the tree and progress monitor stay aligned.
+    assign_display_labels(all_records)
 
     image_base_dir = os.path.dirname(generation_log_path)
 

@@ -33,6 +33,71 @@ def record_key(rec: dict) -> tuple:
     return (rec.get("iteration_number"), rec.get("birth_island"), rec.get("batch_index"))
 
 
+def make_program_id(iteration, island, batch) -> str | None:
+    """Format a canonical raw program id like ``6_6_3``."""
+    if iteration is None or island is None or batch is None:
+        return None
+    return f"{iteration}_{island}_{batch}"
+
+
+def record_id(rec: dict) -> str | None:
+    """Return the canonical raw id for a record, or None if incomplete."""
+    return make_program_id(*record_key(rec))
+
+
+def island_label(island_idx: int) -> str:
+    """Map island index to a letter label (0->A, 1->B, ..., 25->Z, 26->AA, ...)."""
+    if island_idx < 0:
+        return "S"
+    letters = []
+    idx = island_idx
+    while True:
+        idx, rem = divmod(idx, 26)
+        letters.append(chr(ord("A") + rem))
+        if idx == 0:
+            break
+        idx -= 1
+    return "".join(reversed(letters))
+
+
+def assign_display_labels(records: list[dict]) -> dict[str, str]:
+    """Assign compact display labels like A12 and S1, mutating records in place."""
+    label_map = {}
+
+    for rec in records:
+        is_seed = rec.get("is_seed", False) or rec.get("iteration_number") == -1
+        if not is_seed:
+            continue
+        rec_id = record_id(rec)
+        if rec_id is None:
+            continue
+        batch_idx = rec.get("batch_index")
+        label = f"S{int(batch_idx) + 1}" if batch_idx is not None else "S?"
+        rec["display_label"] = label
+        label_map[rec_id] = label
+
+    island_indices = sorted({
+        rec.get("birth_island")
+        for rec in records
+        if rec.get("birth_island", -1) >= 0 and rec.get("iteration_number", -1) >= 0
+    })
+    for island_idx in island_indices:
+        island_records = [
+            rec for rec in records
+            if rec.get("birth_island") == island_idx and rec.get("iteration_number", -1) >= 0
+        ]
+        island_records.sort(key=lambda r: (r.get("iteration_number", 0), r.get("batch_index", 0)))
+        for i, rec in enumerate(island_records, start=1):
+            rec_id = record_id(rec)
+            if rec_id is None:
+                continue
+            label = f"{island_label(island_idx)}{i}"
+            rec["display_label"] = label
+            label_map[rec_id] = label
+
+    return label_map
+
+
 def parse_parent_key(parent_id) -> tuple | None:
     """Convert a stored [iteration, island, batch] parent_id to a key tuple, or None.
 
@@ -49,6 +114,8 @@ def build_record_entry(rec: dict) -> dict:
         "iteration": rec.get("iteration_number"),
         "island": rec.get("birth_island"),
         "batch": rec.get("batch_index"),
+        "program_id": record_id(rec),
+        "display_label": rec.get("display_label"),
         "train_loss": rec.get("train_loss"),
         "initial_loss": rec.get("initial_loss"),
         "n_params": rec.get("n_params"),
