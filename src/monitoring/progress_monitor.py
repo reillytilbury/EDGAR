@@ -12,10 +12,12 @@ import os
 
 from .io import (
     assign_display_labels,
+    backfill_removal_iterations_from_engine_log,
     build_record_entry,
     escape,
     load_generation_log,
     parse_parent_key,
+    record_id,
     record_key,
     resolve_image_path,
 )
@@ -61,9 +63,14 @@ def _build_sidebar_data(records: list[dict]) -> dict:
     Returns:
         Dict mapping string index to sidebar-ready record dict.
     """
+    label_map = {
+        record_id(rec): rec.get("display_label")
+        for rec in records
+        if record_id(rec) is not None and rec.get("display_label")
+    }
     sidebar = {}
     for idx, rec in enumerate(records):
-        entry = build_record_entry(rec)
+        entry = build_record_entry(rec, label_map)
         entry["idx"] = idx
         sidebar[str(idx)] = entry
     return sidebar
@@ -170,6 +177,29 @@ function formatNum(v, digits) {
   return Number(v).toFixed(digits !== undefined ? digits : 4);
 }
 
+function formatRemovalDetailValue(value) {
+  if (value === null || value === undefined) return '<em>N/A</em>';
+  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) {
+    return '<code>' + escapeHtml(JSON.stringify(value)) + '</code>';
+  }
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? String(value) : Number(value).toFixed(4);
+  }
+  return escapeHtml(value);
+}
+
+function formatRemovalDetails(details) {
+  if (!details || typeof details !== 'object' || Object.keys(details).length === 0) return '';
+  let html = '<div class="field" style="margin-top:6px;">';
+  html += '<span class="field-label" style="color:#856404;">Details:</span>';
+  html += '<div class="field-value" style="margin-top:4px;">';
+  Object.entries(details).forEach(function([key, value]) {
+    html += '<div><strong>' + escapeHtml(key) + ':</strong> ' + formatRemovalDetailValue(value) + '</div>';
+  });
+  html += '</div></div>';
+  return html;
+}
+
 function showSidebar(idx) {
   const d = sidebarData[String(idx)];
   if (!d) return;
@@ -194,6 +224,7 @@ function showSidebar(idx) {
     h += '<div class="field" style="background:#fff3cd;padding:6px;border-radius:4px;margin-bottom:8px;">';
     h += '<span class="field-label" style="color:#856404;">Removed:</span> ';
     h += '<span class="field-value">' + escapeHtml(d.removal_reason.event_type) + ' (' + escapeHtml(d.removal_reason.rule) + ')</span>';
+    h += formatRemovalDetails(d.removal_reason.details);
     h += '</div>';
   }
 
@@ -1024,6 +1055,10 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
     # Unified record list: seeds first, then programs (gives consistent rec_idx)
     all_records = seed_records + prog_records
     assign_display_labels(all_records)
+    backfill_removal_iterations_from_engine_log(
+        prog_records,
+        os.path.join(os.path.dirname(json_file), "hypothesis_engine.log"),
+    )
     sidebar_data = _build_sidebar_data(all_records)
     image_base_dir = os.path.dirname(json_file)
     rel_base = output_dir or image_base_dir or "."
