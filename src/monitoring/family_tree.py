@@ -13,6 +13,7 @@ import networkx as nx
 
 from .io import (
     assign_display_labels,
+    backfill_removal_iterations_from_engine_log,
     build_record_entry,
     escape,
     island_label,
@@ -136,9 +137,14 @@ def _loss_to_color(loss, min_loss, max_loss):
 
 def _build_sidebar_data(records_by_id):
     """Build a JSON-serializable dict of node data for the sidebar."""
+    label_map = {
+        node_id: rec.get("display_label")
+        for node_id, rec in records_by_id.items()
+        if rec.get("display_label")
+    }
     sidebar = {}
     for node_id, rec in records_by_id.items():
-        entry = build_record_entry(rec)
+        entry = build_record_entry(rec, label_map)
         entry.update({
             "id": node_id,
             "display_label": rec.get("display_label"),
@@ -160,7 +166,6 @@ def _build_sidebar_data(records_by_id):
             "train_fit_image_path": rec.get("train_fit_image_path"),
             "test_fit_image_path": rec.get("test_fit_image_path"),
             "is_seed": rec.get("is_seed", False),
-            "removal_reason": rec.get("removal_reason"),
         })
         sidebar[node_id] = entry
     return sidebar
@@ -466,6 +471,29 @@ function formatTemp(v) {{
   return num.toFixed(2);
 }}
 
+function formatRemovalDetailValue(value) {{
+  if (value === null || value === undefined) return '<em>N/A</em>';
+  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) {{
+    return '<code>' + escapeHtml(JSON.stringify(value)) + '</code>';
+  }}
+  if (typeof value === 'number') {{
+    return Number.isInteger(value) ? String(value) : Number(value).toFixed(4);
+  }}
+  return escapeHtml(value);
+}}
+
+function formatRemovalDetails(details) {{
+  if (!details || typeof details !== 'object' || Object.keys(details).length === 0) return '';
+  let html = '<div class="field" style="margin-top:6px;">';
+  html += '<span class="field-label" style="color:#856404;">Details:</span>';
+  html += '<div class="field-value" style="margin-top:4px;">';
+  Object.entries(details).forEach(function([key, value]) {{
+    html += '<div><strong>' + escapeHtml(key) + ':</strong> ' + formatRemovalDetailValue(value) + '</div>';
+  }});
+  html += '</div></div>';
+  return html;
+}}
+
 function labelFor(id) {{
   if (!id) return '<em>N/A</em>';
   const rec = sidebarData[id];
@@ -501,6 +529,7 @@ function showSidebar(nodeId) {{
     h += '<div class="field" style="background:#fff3cd;padding:6px;border-radius:4px;margin-bottom:8px;">';
     h += '<span class="field-label" style="color:#856404;">Removed:</span> ';
     h += '<span class="field-value">' + escapeHtml(d.removal_reason.event_type) + ' (' + escapeHtml(d.removal_reason.rule) + ')</span>';
+    h += formatRemovalDetails(d.removal_reason.details);
     h += '</div>';
   }}
 
@@ -595,6 +624,10 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
 
     # Assign shared compact labels so the tree and progress monitor stay aligned.
     assign_display_labels(all_records)
+    backfill_removal_iterations_from_engine_log(
+        records,
+        os.path.join(os.path.dirname(generation_log_path), "hypothesis_engine.log"),
+    )
 
     image_base_dir = os.path.dirname(generation_log_path)
 
