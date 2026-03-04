@@ -4,11 +4,26 @@ Runs a sequence of checks (required symbols, data loading, splits, seed
 models, parameter estimators, loss function, and optional plot function)
 and prints [PASS] / [FAIL] for each.  Returns True when every check passes.
 """
+import inspect
 import tempfile
 import traceback
 from pathlib import Path
 
 import numpy as np
+
+
+def _call_model_with_params(model_fn, Xi, params):
+    """Call a model function, mapping ndarray params to keyword args if needed."""
+    if isinstance(params, dict):
+        return model_fn(Xi, **params)
+    # ndarray / list — map positional values to keyword param names
+    sig = inspect.signature(model_fn)
+    param_names = [p for p in sig.parameters if p != "X"]
+    if len(param_names) == len(params):
+        kwargs = dict(zip(param_names, params))
+        return model_fn(Xi, **kwargs)
+    # fallback: pass as positional
+    return model_fn(Xi, *params)
 
 
 def validate_spec(
@@ -143,14 +158,14 @@ def validate_spec(
             Xi = inputs[0]  # (n_features, n_trials)
             default_params = getattr(model_fn, "DEFAULT_PARAMS", None)
             if default_params is not None:
-                y_pred = model_fn(Xi, default_params)
+                y_pred = _call_model_with_params(model_fn, Xi, default_params)
             else:
                 # Fall back to the corresponding param estimator
                 est_name = name.replace("model_", "param_est_")
                 est_fn = getattr(spec_module, est_name)
                 yi = _squeeze_targets(outputs[0])
                 params = est_fn(Xi, yi)
-                y_pred = model_fn(Xi, params)
+                y_pred = _call_model_with_params(model_fn, Xi, params)
             y_pred = np.asarray(y_pred)
             expected_shapes = [(n_trials,), (n_targets, n_trials)]
             if y_pred.shape not in expected_shapes:
@@ -170,10 +185,18 @@ def validate_spec(
             Xi = inputs[0]
             yi = _squeeze_targets(outputs[0])
             result = est_fn(Xi, yi)
-            if not isinstance(result, dict) or len(result) == 0:
-                _fail(name, f"expected non-empty dict, got {type(result).__name__}")
+            if isinstance(result, dict):
+                if len(result) == 0:
+                    _fail(name, "returned empty dict")
+                else:
+                    _pass(name, f"keys={list(result.keys())}")
+            elif isinstance(result, np.ndarray):
+                if result.size == 0:
+                    _fail(name, "returned empty array")
+                else:
+                    _pass(name, f"shape={result.shape}")
             else:
-                _pass(name, f"keys={list(result.keys())}")
+                _fail(name, f"expected dict or ndarray, got {type(result).__name__}")
         except Exception:
             _fail(name, traceback.format_exc().splitlines()[-1])
 
@@ -200,8 +223,8 @@ def validate_spec(
     if plot_model_fits_fn is not None:
         tmp_path = None
         try:
-            from src.data_structures import Inputs, Outputs
-            from src import utils
+            from src.data_structures import Inputs
+            from src.utils import build_evaluation_points
 
             tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png")
             import os
@@ -214,12 +237,15 @@ def validate_spec(
             yi = _squeeze_targets(outputs[0])
             params = est_fn(Xi, yi)
             n_samp = inputs.shape[0]
+            # Broadcast single-sample params to (n_samples, n_params)
+            params_arr = np.asarray(params)
+            broadcast_params = np.tile(params_arr, (n_samp, 1))
             programs_list = [{
                 "model": model_fn,
-                "params": utils.broadcast_params(params, n_samp),
+                "params": broadcast_params,
             }]
 
-            X_eval = utils.build_evaluation_points(
+            X_eval = build_evaluation_points(
                 inputs=Inputs.from_array(inputs),
                 n_bins=config.get("experiment_params", {}).get("n_bins", 100),
             )
