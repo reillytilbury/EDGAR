@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import yaml
 from pathlib import Path
 import importlib
@@ -273,7 +274,7 @@ def _build_plot_model_fits_fn(spec_plot_fn):
     return _wrapped_plot_fn
 
 
-async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
+async def _run_many(test_mode: bool = False, config_path: str = "config.yaml", validate_mode: bool = False):
     """
     _run_many(test_mode: bool = False, config_path: str = "config.yaml")
     Asynchronously runs multiple experiments based on the provided configuration and parameters. 
@@ -346,7 +347,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     task_name = config.get('task')
     if not task_name:
         raise ValueError("Config must specify `task` so the reader can load projects.<task>.spec")
-    
+
     # Auto-load experiment spec module by fixed naming convention.
     spec_module_path = f"projects.{task_name}.spec"
     try:
@@ -386,6 +387,19 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
 
     raw_loss_fn = spec_loss_fn
     loss_fn = _build_loss_fn(raw_loss_fn)
+
+    if validate_mode:
+        from src.validate_spec import validate_spec
+        success = validate_spec(
+            spec_module=spec_module,
+            config=config,
+            data_processing_params=data_processing_params,
+            load_and_process_data_fn=load_and_process_data_fn,
+            train_test_split_fn=train_test_split_fn,
+            loss_fn=loss_fn,
+            plot_model_fits_fn=plot_model_fits_fn,
+        )
+        sys.exit(0 if success else 1)
 
     # Initialize prompt manager with merged config (includes DEFAULT prompts)
     prompt_manager = PromptManager(config=config)
@@ -504,6 +518,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Hypothesis Engine")
     parser.add_argument('--test_mode', action='store_true', help='Run in test mode with reduced iterations and time limit')
+    parser.add_argument('--validate_mode', action='store_true', help='Validate spec.py without running evolution (no API calls)')
     parser.add_argument('--config', type=str, help='Path to experiment specific config file (relative to project root)', default="config.yaml")
     args = parser.parse_args()
-    asyncio.run(_run_many(test_mode=args.test_mode, config_path=args.config))
+    asyncio.run(_run_many(test_mode=args.test_mode, config_path=args.config, validate_mode=args.validate_mode))
