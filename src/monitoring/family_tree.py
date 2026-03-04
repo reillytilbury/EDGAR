@@ -624,10 +624,6 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
 
     # Assign shared compact labels so the tree and progress monitor stay aligned.
     assign_display_labels(all_records)
-    backfill_removal_iterations_from_engine_log(
-        records,
-        os.path.join(os.path.dirname(generation_log_path), "hypothesis_engine.log"),
-    )
 
     image_base_dir = os.path.dirname(generation_log_path)
 

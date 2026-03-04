@@ -1055,10 +1055,6 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
     # Unified record list: seeds first, then programs (gives consistent rec_idx)
     all_records = seed_records + prog_records
     assign_display_labels(all_records)
-    backfill_removal_iterations_from_engine_log(
-        prog_records,
-        os.path.join(os.path.dirname(json_file), "hypothesis_engine.log"),
-    )
     sidebar_data = _build_sidebar_data(all_records)
     image_base_dir = os.path.dirname(json_file)
     rel_base = output_dir or image_base_dir or "."
