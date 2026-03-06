@@ -1,5 +1,6 @@
 import inspect
 import re
+import warnings
 import jax
 import numpy as np
 import jax.numpy as jnp
@@ -189,6 +190,11 @@ def extract_code_block(text: Union[str, None], start_marker: str = "```python\n"
     """
     if text is None:
         return None
+
+    # Prefer any fenced code block if present.
+    blocks = extract_code_blocks(text)
+    if blocks:
+        return blocks[0].rstrip()
     
     # find the start of the code block
     start = text.find(start_marker)
@@ -214,11 +220,12 @@ def extract_code_blocks(text: Union[str, None]) -> list[str]:
     """
     if text is None:
         return []
-    blocks = re.findall(r"```(?:python)?\\s*\\n(.*?)```", text, flags=re.DOTALL)
+    # Match fenced blocks with optional language tag and support \r\n newlines.
+    blocks = re.findall(r"```(?:python)?\s*\r?\n(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     if blocks:
         return [b.rstrip() for b in blocks]
     # Fallback: any fenced blocks without language tag on same line.
-    blocks = re.findall(r"```\\s*\\n(.*?)```", text, flags=re.DOTALL)
+    blocks = re.findall(r"```\s*\r?\n(.*?)```", text, flags=re.DOTALL)
     return [b.rstrip() for b in blocks]
 
 
@@ -242,16 +249,41 @@ def str_to_func(code_string: Union[str, None], needle: str) -> Union[Callable, N
 
     # Execute the code string within the specified namespace
     try:
-        exec(code_string, execution_namespace)  # Pass the dictionary
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            exec(code_string, execution_namespace)  # Pass the dictionary
+        if captured:
+            for warn in captured:
+                logging.warning(
+                    "Warning executing code string for %s: %s (%s:%s)",
+                    needle,
+                    warn.message,
+                    warn.filename,
+                    warn.lineno,
+                )
+                print(f"Warning executing code for {needle}: {warn.message}")
     except Exception as e:
-        print(f"Error executing code string: {e}\nCode:\n{code_string}") # Print code on error
+        logging.warning(
+            "Error executing code string for %s: %s\nCode:\n%s",
+            needle,
+            e,
+            code_string,
+        )
+        print(f"Error executing code for {needle}: {e}")
         return None
     else:
         # Retrieve the function object from the namespace dictionary
         if needle in execution_namespace:
-            return execution_namespace[needle]
+            func = execution_namespace[needle]
+            # Preserve source for cross-process execution (e.g., spawn-based timeouts).
+            try:
+                setattr(func, "__source_code__", code_string)
+                setattr(func, "__function_name__", needle)
+            except Exception:
+                pass
+            return func
         else:
-            print(f"Function {needle} not found in executed code.")
+            logging.warning("Function %s not found in executed code.", needle)
             return None
 
 

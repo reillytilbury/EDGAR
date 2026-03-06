@@ -2,7 +2,6 @@ import yaml
 import re
 import pandas as pd
 from pathlib import Path
-from .prompt_test import PromptValidator
 
 class PromptManager:
     def __init__(self, config_path="config.yaml", config: dict = None, validate=True):
@@ -20,6 +19,8 @@ class PromptManager:
                 self.config = yaml.safe_load(f)
         
         if validate:
+            # Lazy import avoids pulling pytest into unrelated subprocesses.
+            from .prompt_test import PromptValidator
             validator = PromptValidator(config=self.config)
             try:
                 validator.test_required_prompts_exist()
@@ -45,6 +46,8 @@ class PromptManager:
         normalized = self._normalize_template_text(template_text)
         if not normalized:
             return ""
+        if "{model_name}" in normalized and "model_name" not in kwargs:
+            kwargs["model_name"] = self.get_model_name()
         return normalized.format(**kwargs)
 
     @staticmethod
@@ -53,6 +56,13 @@ class PromptManager:
             return f"{float(train_loss):.2f}"
         except Exception:
             return str(train_loss)
+
+    @staticmethod
+    def _format_seconds(value) -> str:
+        try:
+            return f"{float(value):.2f}s"
+        except Exception:
+            return "n/a"
 
     @staticmethod
     def _normalize_model_code_for_prompt(code_string: str, model_name: str, model_idx: int) -> str:
@@ -140,6 +150,7 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
+            optimization_time_s = programs_df.iloc[i].get('optimization_time_s')
             program_code_string = self._normalize_model_code_for_prompt(
                 programs_df.iloc[i]['program_code_string'],
                 model_name,
@@ -149,6 +160,7 @@ class PromptManager:
                 templates['per_model_detail'],
                 model_idx=f"{model_idx}",
                 train_loss=self._format_loss(train_loss),
+                optimization_time_s=self._format_seconds(optimization_time_s),
                 program_code_string=program_code_string,
             )
             prompt += "\n\n" + per_model_prompt
@@ -183,6 +195,7 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
+            optimization_time_s = programs_df.iloc[i].get('optimization_time_s')
             program_code_string = self._normalize_model_code_for_prompt(
                 programs_df.iloc[i]['program_code_string'],
                 model_name,
@@ -193,6 +206,7 @@ class PromptManager:
                 templates['per_model_detail'],
                 model_idx=f"{model_idx}",
                 train_loss=self._format_loss(train_loss),
+                optimization_time_s=self._format_seconds(optimization_time_s),
                 program_code_string=program_code_string,
                 parameter_estimator_code_string=parameter_estimator_code_string,
             )
@@ -231,6 +245,7 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1
             train_loss = programs_df.iloc[i]['train_loss']
+            optimization_time_s = programs_df.iloc[i].get('optimization_time_s')
             program_code_string = self._normalize_model_code_for_prompt(
                 programs_df.iloc[i]['program_code_string'],
                 model_name,
@@ -243,6 +258,7 @@ class PromptManager:
                 templates['per_model_detail'],
                 model_idx=f"{model_idx}",
                 train_loss=self._format_loss(train_loss),
+                optimization_time_s=self._format_seconds(optimization_time_s),
                 program_code_string=program_code_string,
                 parameter_estimator_code_string=parameter_estimator_code_string,
             )

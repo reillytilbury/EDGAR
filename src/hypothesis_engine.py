@@ -2,9 +2,11 @@ import inspect
 import json
 import re
 import os
+import multiprocessing as mp
 import logging
 import webbrowser
 import asyncio
+import textwrap
 import numpy as np
 import jax, jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
@@ -15,6 +17,7 @@ from pathlib import Path
 from . import utils, llm_helper
 from . import utils, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
+from .timeout_worker import run_estimator_from_source
 from .data_structures import ensure_inputs, ensure_outputs
 from .evolution_diagnostics import plot_train_vs_test_loss as plot_train_vs_test_loss_shared
 from .family_tree import create_family_tree
@@ -31,19 +34,89 @@ warnings.filterwarnings(
 
 class ObjectiveTimeout(Exception):
     """Raised when objective exceeds wall-clock timeout."""
+
+
+class ProcessTimeoutUnavailable(RuntimeError):
+    """Raised when process-based timeout backend cannot be used."""
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(relativeCreated)dms | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-def compute_initial_params(param_estimator, model, x, y):
+def _get_callable_source(func) -> tuple[str | None, str | None]:
+    """
+    Best-effort extraction of callable source for spawn-safe subprocess execution.
+    """
+    code = getattr(func, "__source_code__", None)
+    name = getattr(func, "__function_name__", None) or getattr(func, "__name__", None)
+    if isinstance(code, str) and code.strip() and isinstance(name, str) and name:
+        return code, name
+    try:
+        source = textwrap.dedent(inspect.getsource(func)).strip()
+        if not source:
+            return None, None
+        inferred_name = getattr(func, "__name__", None)
+        if not isinstance(inferred_name, str) or not inferred_name:
+            return None, None
+        return source, inferred_name
+    except Exception:
+        return None, None
+
+
+def _run_param_estimator_with_timeout(param_estimator, xi, yi, timeout_s: float):
+    """
+    Robust timeout wrapper for potentially hanging estimators.
+
+    Uses a dedicated ``spawn`` subprocess so estimator execution can be force-
+    terminated without ``fork`` conflicts in JAX multithreaded runtimes.
+    """
+    source_code, function_name = _get_callable_source(param_estimator)
+    if not source_code or not function_name:
+        raise ProcessTimeoutUnavailable(
+            "Unable to extract source for estimator; process timeout unavailable."
+        )
+
+    start_methods = mp.get_all_start_methods()
+    if "spawn" not in start_methods:
+        raise ProcessTimeoutUnavailable("Process timeout requires 'spawn' start method.")
+
+    ctx = mp.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    proc = ctx.Process(
+        target=run_estimator_from_source,
+        args=(source_code, function_name, np.asarray(xi), np.asarray(yi), child_conn),
+        daemon=True,
+    )
+    proc.start()
+    child_conn.close()
+    try:
+        if not parent_conn.poll(timeout_s):
+            raise TimeoutError(f"param_estimator timed out after {timeout_s:.2f}s")
+        status, payload, detail = parent_conn.recv()
+        if status == "ok":
+            return payload
+        raise RuntimeError(f"param_estimator failed: {payload} ({detail})")
+    finally:
+        parent_conn.close()
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=0.2)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout=0.2)
+
+
+def compute_initial_params(
+    param_estimator,
+    model,
+    x,
+    y,
+    timeout_s: float | None = 5.0,
+    deadline_s: float | None = None,
+):
     """
     Estimate per-sample initial model parameters with safe fallbacks.
-
-    This helper calls the provided parameter estimator once per sample with a
-    timeout guard. If estimation fails (timeout or exception), it falls back to
-    default values extracted from the model signature.
 
     Args:
         param_estimator (callable): Parameter initializer with signature
@@ -53,57 +126,89 @@ def compute_initial_params(param_estimator, model, x, y):
         x (np.ndarray): Input tensor of shape ``(n_samples, n_features, n_trials)``.
         y (np.ndarray): Output tensor of shape
             ``(n_samples, n_targets, n_trials)`` or ``(n_samples, n_trials)``.
+        timeout_s (float | None): Per-sample timeout (seconds) for the estimator.
+        deadline_s (float | None): Absolute wall-clock deadline (``time.time()`` seconds)
+            for the entire initialization pass. If exceeded, raises ``ObjectiveTimeout``.
 
     Returns:
-        pytree | None: Batched parameter pytree with leading sample axis for each
-            leaf. Returns ``None`` when both estimator-based initialization and
-            default-parameter fallback fail.
+        pytree | None: Batched parameter pytree with leading sample axis.
     """
-    @timeout_decorator.timeout(5, use_signals=True)
-    def _safe_estimate(pe, xi, yi):
-        return pe(xi, yi)
+    n_samples = y.shape[0]
+    defaults = compute_default_params(model)
+    
+    timeout_s_val = float(timeout_s) if (timeout_s and timeout_s > 0) else None
+    signal_timeout_estimator = None
+    if timeout_s_val is not None:
+        try:
+            # Prefer signal-based timeout in-process; this avoids expensive
+            # spawn-per-sample process startup during large seed evaluations.
+            signal_timeout_estimator = timeout_decorator.timeout(
+                timeout_s_val, use_signals=True
+            )(param_estimator)
+        except Exception as e:
+            logging.info(
+                "Signal timeout wrapper unavailable (%s). "
+                "Falling back to process-based timeout backend.",
+                e,
+            )
 
-    def _estimator_response_arg(yi):
-        """
-        Keep canonical 2D target format internally, but adapt scalar target for
-        legacy estimators that expect y shape (n_trials,).
-        """
+    def estimate_single(sample_idx: int, xi, yi):
+        if deadline_s is not None and time.time() > deadline_s:
+            raise ObjectiveTimeout(
+                f"objective timed out during parameter initialization at sample {sample_idx}"
+            )
         yi_arr = np.asarray(yi)
         if yi_arr.ndim == 2 and yi_arr.shape[0] == 1:
-            return yi_arr[0]
-        return yi_arr
-
-    # Compute defaults once for per-sample fallback.
-    defaults = compute_default_params(model)
-    fallback = defaults
-    if defaults is None:
-        logging.info("Default parameters unavailable; will fall back to first successful estimate.")
+            yi_arr = yi_arr[0]
+        try:
+            if timeout_s_val is not None:
+                if signal_timeout_estimator is not None:
+                    return signal_timeout_estimator(xi, yi_arr)
+                return _run_param_estimator_with_timeout(
+                    param_estimator, xi, yi_arr, timeout_s_val
+                )
+            return param_estimator(xi, yi_arr)
+        except ObjectiveTimeout:
+            raise
+        except ProcessTimeoutUnavailable as process_error:
+            logging.info(
+                "param_estimator timeout backend unavailable for sample %s: %s",
+                sample_idx,
+                process_error,
+            )
+            return None
+        except TimeoutError:
+            timeout_desc = f"{timeout_s_val:.2f}s" if timeout_s_val is not None else "unknown timeout"
+            logging.info(
+                f"param_estimator timed out for sample {sample_idx} after {timeout_desc}."
+            )
+            return None
+        except timeout_decorator.TimeoutError:
+            timeout_desc = f"{timeout_s_val:.2f}s" if timeout_s_val is not None else "unknown timeout"
+            logging.info(
+                f"param_estimator timed out for sample {sample_idx} after {timeout_desc}."
+            )
+            return None
+        except Exception as e:
+            logging.info(f"param_estimator failed for sample {sample_idx}: {e}")
+            return None
 
     params_list = []
-    n_samples = y.shape[0]
     for i in range(n_samples):
-        try:
-            # any call taking >5s will raise timeout_decorator.TimeoutError
-            # xi has shape (n_features, n_trials)
-            # yi has shape (n_trials,) for scalar or (n_targets, n_trials) for vectorized
-            params_i = _safe_estimate(param_estimator, x[i], _estimator_response_arg(y[i]))
-            # If estimator returned a batched singleton axis, squeeze it out.
-            params_i = jax.tree_util.tree_map(
-                lambda v: np.asarray(v)[0] if np.asarray(v).ndim >= 1 and np.asarray(v).shape[0] == 1 else v,
-                params_i,
+        if deadline_s is not None and time.time() > deadline_s:
+            raise ObjectiveTimeout(
+                f"objective timed out during parameter initialization at sample {i}"
             )
-        except timeout_decorator.TimeoutError:
-            logging.warning(f"param_estimator timed out for sample {i}, using defaults")
-            params_i = fallback
-        except Exception as e:
-            logging.info(f"Error during parameter estimation for sample {i}: {e}")
-            params_i = fallback
-        if params_i is None:
-            logging.info("Error: Unable to compute parameters (no defaults available).")
-            return None
-        fallback = params_i
-        params_list.append(params_i)
-
+        params_list.append(estimate_single(i, x[i], y[i]))
+    
+    # Find first valid params for fallback
+    fallback = next((p for p in params_list if p is not None), defaults)
+    if fallback is None:
+        return None
+    
+    # Fill None entries with fallback
+    params_list = [p if p is not None else fallback for p in params_list]
+    
     return utils.stack_params(params_list)
 
 
@@ -253,7 +358,8 @@ def objective(model, param_estimator, x, y,
               loss_fn=None, param_penalty_weight=0.1, fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, trial_batch_size=None,
-              timeout_s: float | None = None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
+              timeout_s: float | None = 5.0,
+              objective_timeout_s: float | None = None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
     Calculate model loss using the unified Outputs representation.
     
@@ -293,6 +399,12 @@ def objective(model, param_estimator, x, y,
         max_iter (int): Maximum number of iterations for optimization. Default is 1_000.
         use_param_estimator (bool): Whether to use the parameter estimator to compute initial parameters. Default is True.
         trial_batch_size (int | None): Ignored. Trial batching is disabled.
+        timeout_s (float | None): Per-sample timeout (seconds) for
+            ``param_estimator`` calls during initialization.
+            Set ``None`` or ``<=0`` to disable per-sample estimator timeout.
+        objective_timeout_s (float | None): Hard wall-clock timeout (seconds) for
+            the entire objective call (initialization + optimization + evaluation).
+            Set ``None`` or ``<=0`` to disable.
 
     Returns:
         tuple[
@@ -303,15 +415,20 @@ def objective(model, param_estimator, x, y,
             - pytree: The optimized parameters (batched pytree).
     """
     t_start = time.time()
+    deadline_s = (
+        t_start + float(objective_timeout_s)
+        if (objective_timeout_s is not None and objective_timeout_s > 0)
+        else None
+    )
     initial_params = None
     if loss_fn is None:
         raise ValueError("objective requires a loss_fn; none was provided.")
 
-    def _check_timeout():
-        if timeout_s is None or timeout_s <= 0:
-            return
-        if time.time() - t_start > timeout_s:
-            raise ObjectiveTimeout(f"objective timed out after {timeout_s}s")
+    def _check_timeout(stage: str):
+        if deadline_s is not None and time.time() > deadline_s:
+            raise ObjectiveTimeout(
+                f"objective timed out after {float(objective_timeout_s):.2f}s during {stage}"
+            )
 
     if not (isinstance(x, (list, tuple, np.ndarray)) and len(x) == 2):
         raise ValueError("objective expects x as length-2 container: [x_train_trials, x_test_trials].")
@@ -329,20 +446,33 @@ def objective(model, param_estimator, x, y,
     n_targets = y_train_outputs.n_targets
     
     try:
-        _check_timeout()
+        _check_timeout("parameter initialization")
         # Compute initial parameters
         # param_estimator receives y as (n_targets, n_trials) for each sample
         if use_param_estimator:
-            initial_params = compute_initial_params(param_estimator, model, np.asarray(x_train), np.asarray(y_train))
+            initial_params = compute_initial_params(
+                param_estimator,
+                model,
+                np.asarray(x_train),
+                np.asarray(y_train),
+                timeout_s=timeout_s,
+                deadline_s=deadline_s,
+            )
         else:
             initial_params = compute_default_params(model)
-    except ObjectiveTimeout:
-        logging.info("Objective timed out during parameter initialization.")
+        _check_timeout("parameter initialization")
+    except ObjectiveTimeout as e:
+        logging.info(str(e))
+        params_out = initial_params if initial_params is not None else {}
+        return FAILED_PROGRAM_COST, params_out, FAILED_PROGRAM_COST, params_out
+    except Exception as e:
+        logging.info(f"Error during parameter initialization: {e}")
         empty_params = {}
         return FAILED_PROGRAM_COST, empty_params, FAILED_PROGRAM_COST, empty_params
 
     if initial_params is None:
         logging.info("Error: initial_params unavailable.")
+        print("Program failed: initial_params unavailable.")
         empty_params = {}
         return FAILED_PROGRAM_COST, empty_params, FAILED_PROGRAM_COST, empty_params
 
@@ -356,7 +486,9 @@ def objective(model, param_estimator, x, y,
     n_params = n_params_raw / penalty_denom
     if not utils.params_all_finite(initial_params):
         logging.info("Error: Parameters contain non-numeric or non-finite values.")
+        print("Program failed: parameters contain non-numeric or non-finite values.")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
+    _check_timeout("model validation")
     
     # Validate model execution and output shape
     is_valid, error_msg = validate_model_execution(
@@ -366,7 +498,9 @@ def objective(model, param_estimator, x, y,
     )
     if not is_valid:
         logging.info(f"Model validation failed: {error_msg}")
+        print(f"Program failed: model validation failed ({error_msg}).")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
+    _check_timeout("post-validation")
 
     flat_init, unflatten = ravel_pytree(initial_params)
 
@@ -425,7 +559,7 @@ def objective(model, param_estimator, x, y,
             total_grad = jnp.zeros_like(flat_params)
 
             for start_idx in range(0, n_train_trials, effective_trial_batch_size):
-                _check_timeout()
+                _check_timeout("gradient accumulation")
                 end_idx = min(start_idx + effective_trial_batch_size, n_train_trials)
                 batch_weight = (end_idx - start_idx) / n_train_trials
                 x_batch = x_train[:, :, start_idx:end_idx]
@@ -436,6 +570,7 @@ def objective(model, param_estimator, x, y,
 
                 total_loss += batch_loss * batch_weight
                 total_grad += batch_grad_flat * batch_weight
+                _check_timeout("gradient accumulation")
 
             return total_loss / n_samples, total_grad / n_samples
     else:
@@ -443,9 +578,11 @@ def objective(model, param_estimator, x, y,
         # The loss_fn handles the shape relationship internally.
         def loss_and_grad_batched(flat_params):
             """Compute loss and gradient over full data (no trial batching)."""
+            _check_timeout("gradient computation")
             params_tree = unflatten(flat_params)
             loss, grad_tree = loss_and_grad_single_batch(params_tree, x_train, y_train)
             grad_flat, _ = ravel_pytree(grad_tree)
+            _check_timeout("gradient computation")
             return loss / n_samples, grad_flat / n_samples
     
     def _optimize_params(flat_params):
@@ -469,12 +606,14 @@ def objective(model, param_estimator, x, y,
 
             print_every = 50
             params = flat_params
+            _check_timeout("optimization warmup")
             initial_loss = loss_param(params)
+            _check_timeout("optimization warmup")
             best_loss, best_params = initial_loss.copy(), params.copy()
             for step in range(1, max_iter + 1):
-                _check_timeout()
+                _check_timeout("optimization")
                 params, opt_state, loss_val = train_step(params, opt_state)
-                _check_timeout()
+                _check_timeout("optimization")
                 if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
                     logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
                     print(f"Final loss: {loss_val:.4f} at step {step}")
@@ -506,9 +645,9 @@ def objective(model, param_estimator, x, y,
 
         best_loss, best_params = initial_loss.copy(), params.copy()
         for step in range(1, max_iter + 1):
-            _check_timeout()
+            _check_timeout("optimization")
             params, opt_state, loss_val = train_step(params, opt_state)
-            _check_timeout()
+            _check_timeout("optimization")
             if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
                 logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
                 print(f"Final loss: {loss_val:.4f} at step {step}")
@@ -533,40 +672,42 @@ def objective(model, param_estimator, x, y,
             n_eval_trials = x_eval.shape[2]
             weighted_sum = 0.0
             for start_idx in range(0, n_eval_trials, effective_trial_batch_size):
-                _check_timeout()
+                _check_timeout("evaluation")
                 end_idx = min(start_idx + effective_trial_batch_size, n_eval_trials)
                 batch_size = end_idx - start_idx
                 x_batch = x_eval[:, :, start_idx:end_idx]
                 y_batch = y_eval[:, :, start_idx:end_idx]
                 weighted_sum += eval_single_batch(params_tree, x_batch, y_batch) * (batch_size / n_eval_trials)
+                _check_timeout("evaluation")
             return weighted_sum / n_samples
     else:
         def eval_loss_batched(params_tree, x_eval, y_eval):
             """Compute loss over full data (mismatched trials, no batching)."""
             return eval_single_batch(params_tree, x_eval, y_eval) / n_samples
 
-    params, failed_opt = _optimize_params(flat_init)
-    if failed_opt:
-        return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
+    try:
+        params, failed_opt = _optimize_params(flat_init)
+        if failed_opt:
+            return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
-    def _eval_loss(params_tree, x_eval, y_eval, label: str):
-        try:
-            _check_timeout()
+        def _eval_loss(params_tree, x_eval, y_eval, label: str):
+            _check_timeout(f"{label} loss evaluation")
             if use_scalar_single_feature_fullbatch:
                 loss_val = jnp.nanmean(loss_total(params_tree, x_eval, y_eval))
             else:
                 loss_val = eval_loss_batched(params_tree, x_eval, y_eval)
             loss_val = loss_val + param_penalty_weight * n_params
-        except ObjectiveTimeout:
-            logging.info(f"Objective timed out during {label} loss evaluation.")
-            return jnp.asarray(FAILED_PROGRAM_COST)
-        n_nans = jnp.sum(jnp.isnan(loss_val))
-        if n_nans > 0:
-            print(f"Warning: {label} loss contains {n_nans} NaNs.")
-        return jnp.nan_to_num(loss_val, nan=FAILED_PROGRAM_COST, posinf=FAILED_PROGRAM_COST, neginf=FAILED_PROGRAM_COST)
+            n_nans = jnp.sum(jnp.isnan(loss_val))
+            if n_nans > 0:
+                print(f"Warning: {label} loss contains {n_nans} NaNs.")
+            return jnp.nan_to_num(loss_val, nan=FAILED_PROGRAM_COST, posinf=FAILED_PROGRAM_COST, neginf=FAILED_PROGRAM_COST)
 
-    initial_loss = _eval_loss(initial_params, x_test, y_test, "initial")
-    final_loss = _eval_loss(params, x_test, y_test, "final")
+        initial_loss = _eval_loss(initial_params, x_test, y_test, "initial")
+        final_loss = _eval_loss(params, x_test, y_test, "final")
+    except ObjectiveTimeout as e:
+        logging.info(str(e))
+        params_out = initial_params if initial_params is not None else {}
+        return FAILED_PROGRAM_COST, params_out, FAILED_PROGRAM_COST, params_out
 
     t_end = time.time()
     print(f"Time taken for optimization: {t_end - t_start:.4f} seconds")
@@ -832,9 +973,6 @@ async def generate_new_model(current_island, llm_name, client,
     
     # Use chat-based or legacy LLM call
     if island_chat_manager is not None and island_id is not None:
-        logging.info(
-            f"Model generation prompt (island={island_id}, batch={batch_id}):\n{program_prompt}\n"
-        )
         llm_output = await island_chat_manager.ask_island(
             island_id, program_prompt,
             batch_id=batch_id,
@@ -844,27 +982,13 @@ async def generate_new_model(current_island, llm_name, client,
         )
     else:
         # Legacy: independent query
-        logging.info(
-            f"Model generation prompt (island={island_id}, batch={batch_id}):\n{program_prompt}\n"
-        )
         llm_output = await llm_helper.call_llm_async(program_prompt, model_name=llm_name, client=client, temperature=temp, 
                                                 thinking_budget=thinking_budget, img_bytes=img_bytes)
-    logging.info(
-        f"Model generation output (island={island_id}, batch={batch_id}):\n{llm_output}\n"
-    )
     
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
-        logging.info(
-            f"Model generation returned no code block (island={island_id}, batch={batch_id})."
-        )
-        return None, None, None, (parent1_id, parent2_id)
+        return None, program_prompt, llm_output, (parent1_id, parent2_id)
     code_string = code_string.replace(f'def {model_name}_v{k+1}(', f'def {model_name}(')
-    logging.info(
-        f"Generated model candidate (island={island_id}, batch={batch_id}):\n"
-        f"Prompt:\n{program_prompt}\n\n"
-        f"Model (NumPy):\n{code_string}\n"
-    )
 
     return code_string, program_prompt, llm_output, (parent1_id, parent2_id)
 
@@ -937,10 +1061,6 @@ async def generate_linked_model_and_estimator(
             labels=[f"v_{i+1}" for i in range(len(random_programs))],
         )
 
-    logging.info(
-        "Linked model+estimator prompt:\n"
-        f"{prompt}\n"
-    )
     llm_output = await llm_helper.call_llm_async(
         prompt,
         model_name=llm_name,
@@ -950,26 +1070,92 @@ async def generate_linked_model_and_estimator(
         img_bytes=None,
     )
 
-    code_blocks = utils.extract_code_blocks(llm_output)
-    if len(code_blocks) < 2:
-        logging.info("Linked prompt returned fewer than 2 code blocks; skipping.")
-        return None, None, prompt, llm_output, (parent1_id, parent2_id)
-
     model_name = prompt_manager.get_model_name()
-    model_code_string = code_blocks[0]
-    param_est_code_string = code_blocks[1]
+
+    def _extract_top_level_def(lines, prefixes):
+        start = None
+        for idx, line in enumerate(lines):
+            stripped = line.lstrip()
+            if stripped.startswith("def "):
+                for p in prefixes:
+                    if stripped.startswith(f"def {p}"):
+                        start = idx
+                        break
+            if start is not None:
+                break
+        if start is None:
+            return None
+        end = len(lines)
+        for idx in range(start + 1, len(lines)):
+            if lines[idx].lstrip().startswith("def "):
+                end = idx
+                break
+        return "\n".join(lines[start:end]).strip()
+
+    def _ensure_numpy_import(code: str) -> str:
+        if "np." in code and not re.search(r"^\s*(import numpy as np|from numpy import)", code, flags=re.M):
+            return "import numpy as np\n" + code
+        return code
+
+    # Combine all fenced code blocks if present; otherwise fall back to raw output.
+    code_blocks = utils.extract_code_blocks(llm_output)
+    code_text = "\n\n".join(code_blocks).strip() if code_blocks else (llm_output or "").strip()
+    # Normalize indentation so top-level defs are detected correctly, even with nested defs.
+    code_text = textwrap.dedent(code_text).strip()
+
+    # Collect import lines from the combined code text.
+    imports = []
+    for line in code_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("import ") or stripped.startswith("from "):
+            imports.append(stripped)
+    import_block = "\n".join(dict.fromkeys(imports))
+
+    def _extract_func(code: str, name_prefixes: list[str]) -> str | None:
+        for prefix in name_prefixes:
+            safe_prefix = re.escape(prefix)
+            # Only stop at the next top-level def (column 0) so nested defs don't truncate the block.
+            pattern = rf"^def\s+{safe_prefix}\d*\s*\(.*?(?=^def\s+|\Z)"
+            match = re.search(pattern, code, flags=re.MULTILINE | re.DOTALL)
+            if match:
+                return match.group(0).strip()
+        return None
+
+    model_block = _extract_func(code_text, [f"{model_name}_v", "model_v", "model"])
+    param_block = _extract_func(code_text, ["parameter_estimator_v", "parameter_estimator"])
+
+    if model_block and param_block:
+        def _strip_imports(block: str) -> str:
+            return "\n".join(
+                line for line in block.splitlines()
+                if not line.strip().startswith(("import ", "from "))
+            ).strip()
+
+        model_block = _strip_imports(model_block)
+        param_block = _strip_imports(param_block)
+        model_code_string = "\n".join([import_block, model_block]).strip() if import_block else model_block
+        param_est_code_string = "\n".join([import_block, param_block]).strip() if import_block else param_block
+        model_code_string = _ensure_numpy_import(model_code_string)
+        param_est_code_string = _ensure_numpy_import(param_est_code_string)
+    else:
+        return None, None, prompt, llm_output, (parent1_id, parent2_id)
 
     model_code_string = model_code_string.replace(
         f"def {model_name}_v{k+1}(", f"def {model_name}("
     )
     param_est_code_string = re.sub(
-        r"def\\s+parameter_estimator_v\\d+\\s*\\(", "def parameter_estimator(", param_est_code_string
+        r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", param_est_code_string
     )
     param_est_code_string = re.sub(
-        r"def\\s+parameter_estimator_prev\\s*\\(", "def parameter_estimator(", param_est_code_string
+        r"def\s+parameter_estimator_prev\s*\(", "def parameter_estimator(", param_est_code_string
     )
+    param_est_code_string = re.sub(r"\bmodel_v\d+\b", "model", param_est_code_string)
+
+    if re.search(r"\bmodel\s*\(", param_est_code_string) and not re.search(r"^def\s+model", param_est_code_string, flags=re.M):
+        param_est_code_string = f"{model_code_string}\n\n{param_est_code_string}"
 
     return model_code_string, param_est_code_string, prompt, llm_output, (parent1_id, parent2_id)
+
 
 async def generate_new_parameter_estimator(current_island, 
                                            model_code_string: str,
@@ -990,7 +1176,9 @@ async def generate_new_parameter_estimator(current_island,
                                            loss_fn=None,
                                            plot_model_fits=None,
                                            x_eval=None,
-                                           image_refinement_dir=None,):                                           
+                                           image_refinement_dir=None,
+                                           param_estimator_timeout_s: float | None = 5.0,
+                                           objective_timeout_s: float | None = None,):
     """
     Generate and optionally refine a parameter-estimator function via LLM.
 
@@ -1022,22 +1210,32 @@ async def generate_new_parameter_estimator(current_island,
         batch_id (int): Batch id for chat mode.
         loss_fn (callable | None): Loss function forwarded to ``objective``.
         use_simple_objective (bool): Use the minimal objective implementation for scoring.
+        param_estimator_timeout_s (float | None): Per-sample timeout (seconds)
+            for estimator evaluation during refinement scoring.
+        objective_timeout_s (float | None): Hard timeout (seconds) for each
+            refinement objective call.
 
     Returns:
         tuple[str | None, callable | None, dict]: Best estimator code string, parsed
             callable, and metadata dict with prompt/response info.
             Returns ``(None, None, pe_metadata)`` when generation/validation fails.
     """
-    pe_metadata = {"initial_prompt": None, "initial_response": None,
-                   "refinement_prompts": [], "refinement_responses": []}
+    pe_metadata = {
+        "initial_prompt": None,
+        "initial_response": None,
+        "refinement_prompts": [],
+        "refinement_responses": [],
+        "refinement_codes": [],
+        "status": None,
+    }
     if model_code_string is None:
-        logging.info("No model code string provided, skipping parameter estimator generation.")
+        pe_metadata["status"] = "missing_model_code"
         return None, None, pe_metadata
     if not (isinstance(x, (list, tuple, np.ndarray)) and len(x) == 2):
-        logging.info("Parameter estimator generation expects x split as [train_trials, test_trials].")
+        pe_metadata["status"] = "invalid_x_split"
         return None, None, pe_metadata
     if not (isinstance(y, (list, tuple, np.ndarray)) and len(y) == 2):
-        logging.info("Parameter estimator generation expects y split as [train_trials, test_trials].")
+        pe_metadata["status"] = "invalid_y_split"
         return None, None, pe_metadata
 
     k = min(k_max, len(current_island))
@@ -1062,10 +1260,6 @@ async def generate_new_parameter_estimator(current_island,
             f"{banned_list}\n"
         )
     
-    # Use chat-based or legacy LLM call
-    logging.info(
-        f"Parameter estimator prompt (island={island_id}, batch={batch_id}):\n{prompt}\n"
-    )
     llm_output = await llm_helper.call_llm_async(
         prompt,
         model_name=llm_name,
@@ -1079,37 +1273,26 @@ async def generate_new_parameter_estimator(current_island,
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
-        logging.info("No code block found in the LLM output for parameter estimator, skipping.")
+        pe_metadata["status"] = "no_code_block"
         return None, None, pe_metadata
     contains_swear_word = bool(swear_words) and any(word in code_string for word in swear_words)
     if contains_swear_word:
         # find the word that is in the code_string
         swear_word = next((word for word in swear_words if word in code_string), None)
-        logging.info(f"Parameter estimator code contains swear word: {swear_word}, skipping.")
-        logging.info(f"Code string was:\n{code_string}")
+        pe_metadata["status"] = f"banned_token:{swear_word}"
         return None, None, pe_metadata
     code_string = re.sub(r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", code_string)
     code_string = re.sub(r"def\s+parameter_estimator_prev\s*\(", "def parameter_estimator(", code_string)
     func = utils.str_to_func(code_string, 'parameter_estimator')
 
     if func is None:
-        logging.info("Failed to parse parameter estimator code, skipping.")
+        pe_metadata["status"] = "parse_failed"
         return None, None, pe_metadata
-
-    logging.info(
-        f"Generated initial parameter estimator candidate (island={island_id}, batch={batch_id}):\n"
-        f"Prompt:\n{prompt}\n\n"
-        f"Parameter Estimator (initial):\n{code_string}\n"
-    )
 
     if refine_rounds <= 0 or model_fn is None:
         return code_string, func, pe_metadata
 
     iter_label = "?" if iteration is None else str(iteration)
-    logging.info(
-        f"Param-est refinement start (iter={iter_label}, island={island_id}, "
-        f"batch={batch_id}, rounds={refine_rounds})."
-    )
     print(
         f"Param-est refinement start (iter={iter_label}, island={island_id}, "
         f"batch={batch_id}, rounds={refine_rounds}).",
@@ -1131,6 +1314,8 @@ async def generate_new_parameter_estimator(current_island,
         loss_fn=loss_fn,
         fit_params=False,  # Don't fit parameters during refinement evaluation
         param_penalty_weight=param_penalty_weight,
+        timeout_s=param_estimator_timeout_s,
+        objective_timeout_s=objective_timeout_s,
     )
 
     if current_loss < best_loss:
@@ -1139,10 +1324,6 @@ async def generate_new_parameter_estimator(current_island,
         best_func = current_func
 
     for r in range(refine_rounds):
-        logging.info(
-            f"Param-est refinement round {r+1}/{refine_rounds} "
-            f"(iter={iter_label}, island={island_id}, batch={batch_id})."
-        )
         print(
             f"Param-est refinement round {r+1}/{refine_rounds} "
             f"(iter={iter_label}, island={island_id}, batch={batch_id}).",
@@ -1200,11 +1381,6 @@ async def generate_new_parameter_estimator(current_island,
                 "**Banned tokens (do not use in code):**\n"
                 f"{banned_list}\n"
             )
-        logging.info(
-            f"Param-est refinement prompt (iter={iter_label}, island={island_id}, "
-            f"batch={batch_id}, round={r+1}):\n{refine_prompt}\n"
-        )
-
         # Call LLM for refinement
         llm_output = await llm_helper.call_llm_async(
             refine_prompt,
@@ -1219,21 +1395,17 @@ async def generate_new_parameter_estimator(current_island,
 
         new_code = utils.extract_code_block(llm_output)
         if new_code is None:
-            logging.info("No code block found in refinement output; keeping current estimator.")
+            pe_metadata["refinement_codes"].append(None)
             continue
         if swear_words and any(word in new_code for word in swear_words):
-            logging.info("Refinement code contains banned words; skipping.")
+            pe_metadata["refinement_codes"].append(None)
             continue
 
         new_code = re.sub(r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", new_code)
         new_code = re.sub(r"def\s+parameter_estimator_prev\s*\(", "def parameter_estimator(", new_code)
-        logging.info(
-            f"Param-est refinement code (iter={iter_label}, island={island_id}, "
-            f"batch={batch_id}, round={r+1}):\n{new_code}\n"
-        )
+        pe_metadata["refinement_codes"].append(new_code)
         new_func = utils.str_to_func(new_code, 'parameter_estimator')
         if new_func is None:
-            logging.info("Failed to parse refined parameter estimator; keeping current.")
             continue
 
         new_loss, _, _, _ = _call_objective(
@@ -1245,12 +1417,10 @@ async def generate_new_parameter_estimator(current_island,
             loss_fn=loss_fn,
             fit_params=False,  # Don't fit parameters during refinement evaluation
             param_penalty_weight=param_penalty_weight,
+            timeout_s=param_estimator_timeout_s,
+            objective_timeout_s=objective_timeout_s,
         )
 
-        logging.info(
-            f"Param-est refinement eval (iter={iter_label}, island={island_id}, "
-            f"batch={batch_id}, round={r+1}): loss={new_loss:.6g}."
-        )
         print(
             f"Param-est refinement eval (iter={iter_label}, island={island_id}, "
             f"batch={batch_id}, round={r+1}): loss={new_loss:.6g}.",
@@ -1266,14 +1436,12 @@ async def generate_new_parameter_estimator(current_island,
                 best_code = new_code
                 best_func = new_func
         else:
-            logging.info(
-                f"Refinement did not improve loss ({new_loss:.4f} >= {current_loss:.4f}); keeping current."
-            )
+            pass
 
     return best_code, best_func, pe_metadata
 
 
-async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='gemini-2.0-flash-lite') -> tuple[str, callable]:
+async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='gemini-2.0-flash-lite') -> tuple[str, callable, str | None, str | None]:
     """
     Translate a model code string to a JAX-compatible implementation via LLM.
 
@@ -1284,24 +1452,22 @@ async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='g
         llm_name (str): LLM model name for translation.
 
     Returns:
-        tuple[str | None, callable | None]: ``(jax_code_string, jax_callable)``.
+        tuple[str | None, callable | None, str | None, str | None]:
+            ``(jax_code_string, jax_callable, prompt, raw_response)``.
             Returns ``(None, None)`` when translation cannot be produced/parsed.
     """
     if code_string is None:
-        logging.info("No neuron model code string provided for translation.")
-        return None, None
+        return None, None, None, None
     
     prompt = prompt_manager.get_jax_translator_prompt(code_string)
-    logging.info(f"JAX translation prompt:\n{prompt}\n")
     if prompt is None:
-        return None, None
+        return None, None, None, None
     
-    jax_code_string = await llm_helper.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
-    logging.info(f"JAX translation output:\n{jax_code_string}\n")
-    jax_code_string = utils.extract_code_block(jax_code_string)
+    raw_response = await llm_helper.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
+    jax_code_string = utils.extract_code_block(raw_response)
     model_name = prompt_manager.get_model_name()
     func = utils.str_to_func(jax_code_string, model_name)
-    return jax_code_string, func
+    return jax_code_string, func, prompt, raw_response
 
 
 def _run_translation_check_on_eval(
@@ -1378,6 +1544,51 @@ def _append_generation_record(filepath, record):
         f.write(json.dumps(record, default=str) + '\n')
 
 
+def _drop_nonfinite_train_loss_rows(df: pd.DataFrame, context: str) -> tuple[pd.DataFrame, int]:
+    """
+    Remove rows whose train_loss is NaN/Inf/non-numeric.
+
+    Returns:
+        (clean_df, n_removed)
+    """
+    if df is None or len(df) == 0:
+        return df, 0
+    if 'train_loss' not in df.columns:
+        return df, 0
+
+    train_loss_num = pd.to_numeric(df['train_loss'], errors='coerce')
+    finite_mask = np.isfinite(train_loss_num.to_numpy(dtype=float))
+    n_removed = int((~finite_mask).sum())
+    if n_removed > 0:
+        logging.info(
+            "%s: dropped %d programs with non-finite train_loss.",
+            context,
+            n_removed,
+        )
+        print(f"{context}: dropped {n_removed} programs with non-finite train_loss.", flush=True)
+    clean_df = df.loc[finite_mask].reset_index(drop=True)
+    return clean_df, n_removed
+
+
+def _drop_nonfinite_train_loss_from_islands(islands: list[pd.DataFrame], context: str) -> list[pd.DataFrame]:
+    """
+    Apply non-finite train_loss filtering to every island.
+    """
+    cleaned = []
+    total_removed = 0
+    for island_idx, island_df in enumerate(islands):
+        island_clean, removed = _drop_nonfinite_train_loss_rows(
+            island_df,
+            context=f"{context} (island={island_idx})",
+        )
+        cleaned.append(island_clean)
+        total_removed += removed
+    if total_removed > 0:
+        logging.info("%s: total dropped non-finite-loss programs=%d", context, total_removed)
+        print(f"{context}: total dropped non-finite-loss programs={total_removed}", flush=True)
+    return cleaned
+
+
 def _update_generation_log_test_losses_and_mark_winner(filepath, islands):
     """Update JSONL records in-place with test_loss values and mark the winner.
 
@@ -1430,6 +1641,8 @@ async def hypothesis_engine(
         critical_population_size=12, min_wise_population_size=0, n_migrants=2, 
         fit_params=True, use_param_estimator=True, 
         param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf, exploit_point=0.5,
+        param_estimator_timeout_s: float | None = 5.0,
+        objective_timeout_s: float | None = None,
         use_chat_mode=False,  # If True, use persistent chat sessions per island (expensive)
         chat_token_limit=50000,  # Max tokens per chat before auto-summarize and reset. 0 = unlimited
         param_estimator_refinement_rounds=0,
@@ -1470,6 +1683,10 @@ async def hypothesis_engine(
         param_penalty_weight (float): Complexity penalty applied in objective.
         FAILED_PROGRAM_COST (float): Failure sentinel cost used in scoring.
         exploit_point (float): Explore/exploit phase boundary as fraction of run.
+        param_estimator_timeout_s (float | None): Per-sample timeout for
+            ``param_estimator`` calls inside objective initialization.
+        objective_timeout_s (float | None): Hard timeout (seconds) for each full
+            objective call (initialization + optimization + evaluation).
         use_chat_mode (bool): Use persistent per-island chat sessions if True.
         chat_token_limit (int): Chat token cap before summarization/reset.
         param_estimator_refinement_rounds (int): Refinement rounds for new estimators.
@@ -1587,7 +1804,7 @@ async def hypothesis_engine(
 
     jax_programs = []
     jax_code_strings = []
-    for i, (jax_code_string, jax_func) in enumerate(jax_results):
+    for i, (jax_code_string, jax_func, _jax_prompt, _jax_response) in enumerate(jax_results):
         _run_translation_check_on_eval(
             np_func=numpy_programs[i],
             jax_func=jax_func,
@@ -1653,6 +1870,7 @@ async def hypothesis_engine(
         param_est = param_estimators[i]
         program_jax = jax_programs[i]
         # score the initial program
+        seed_opt_start = time.time()
         loss_init, params_init, loss, params = _call_objective(
             use_simple_objective,
             model=program_jax,
@@ -1666,7 +1884,12 @@ async def hypothesis_engine(
             use_param_estimator=use_param_estimator,
             max_iter=max_iter,
             trial_batch_size=trial_batch_size,
+            timeout_s=param_estimator_timeout_s,
+            # Keep seed scoring unconstrained by objective timeout so good seeds
+            # are not discarded due strict per-candidate runtime caps.
+            objective_timeout_s=None,
         )
+        seed_opt_time = time.time() - seed_opt_start
         print(f"Initial program {i + 1} loss before parameter fitting: {loss_init:.2f} and loss after fitting: {loss:.2f}")
 
         seed_losses[i] = loss
@@ -1695,6 +1918,7 @@ async def hypothesis_engine(
                                     'batch_index': i,
                                     'train_loss': loss,
                                     'test_loss': None,  # all test losses will be computed at the end
+                                    'optimization_time_s': seed_opt_time,
                                     'llm_name': None,
                                     'params': [params],
                                     'initial_loss': loss_init,
@@ -1704,6 +1928,17 @@ async def hypothesis_engine(
                                     'evaluation_matrix': [y_eval]})
         initial_programs = pd.concat([initial_programs, new_program_df], ignore_index=True)
         print(f"Initial program {i + 1} loss: {loss:.2f}")
+
+    # Drop invalid seed programs immediately (e.g., timed out/failed objective).
+    initial_programs, _ = _drop_nonfinite_train_loss_rows(
+        initial_programs,
+        context="Seed initialization",
+    )
+    if len(initial_programs) == 0:
+        raise ValueError(
+            "All seed programs have non-finite train_loss and were removed. "
+            "Cannot start evolutionary loop."
+        )
 
     # seed each island with the initial programs
     for i in range(n_islands):
@@ -1732,8 +1967,8 @@ async def hypothesis_engine(
             complexity_penalty=param_penalty_weight,
         )
         plot_model_fits(
-            X=X[0, 0],
-            Y=Y[0, 0],
+            X=X[0, 1],
+            Y=Y[0, 1],
             programs_list=seed_programs_list,
             X_eval=X_eval_train,
             save_path=os.path.join(image_prompts_dir, 'initial_programs.png'),
@@ -1741,26 +1976,10 @@ async def hypothesis_engine(
         )
 
         # Seed train/test fit plots for diagnostics.
+        # Use the train-fitted params for test plots to avoid extra optimization
+        # and keep cross-validated evaluation consistent.
         try:
-            seed_test_params = []
-            for idx, program_jax in enumerate(jax_programs):
-                param_est = param_estimators[idx]
-                _, _, _, test_params = _call_objective(
-                    use_simple_objective,
-                    model=program_jax,
-                    param_estimator=param_est,
-                    x=X[1],
-                    y=Y[1],
-                    loss_fn=loss_fn,
-                    fit_params=fit_params,
-                    param_penalty_weight=param_penalty_weight,
-                    learning_rate=learning_rate,
-                    use_param_estimator=use_param_estimator,
-                    max_iter=max_iter,
-                    trial_batch_size=trial_batch_size,
-                )
-                seed_test_params.append(test_params)
-
+            seed_test_params = list(seed_train_params)
             for idx, program_jax in enumerate(jax_programs):
                 seed_label = f"seed_{idx+1}"
                 seed_train_df = pd.DataFrame({
@@ -1799,8 +2018,8 @@ async def hypothesis_engine(
                 seed_test_programs_list = _programs_df_to_programs_list(
                     seed_test_df,
                     loss_func=loss_fn,
-                    x=X[1, 1],
-                    y=Y[1, 1],
+                    x=X[0, 1],
+                    y=Y[0, 1],
                     complexity_penalty=param_penalty_weight,
                 )
                 if seed_test_programs_list:
@@ -1812,8 +2031,8 @@ async def hypothesis_engine(
                 )
                 seed_test_fit_paths[idx] = seed_test_path
                 plot_model_fits(
-                    X=X[1, 1],
-                    Y=Y[1, 1],
+                    X=X[0, 1],
+                    Y=Y[0, 1],
                     programs_list=seed_test_programs_list,
                     X_eval=X_eval_test,
                     save_path=seed_test_path,
@@ -1831,6 +2050,8 @@ async def hypothesis_engine(
             "batch_index": idx,
             "train_loss": float(seed_losses[idx]),
             "initial_loss": float(seed_initial_losses[idx]) if idx < len(seed_initial_losses) else None,
+            "optimization_time_s": float(initial_programs.iloc[idx].get("optimization_time_s"))
+            if idx < len(initial_programs) else None,
             "train_fit_loss": seed_train_fit_losses[idx],
             "test_fit_loss": seed_test_fit_losses[idx],
             "model_prompt": None,
@@ -1867,7 +2088,11 @@ async def hypothesis_engine(
         
         logging.info(f"Iteration {i}")
         llm_name = model_llm_seq[i % len(model_llm_seq)]
-        logging.info(f"Using model LLM: {llm_name}")
+        if use_linked_prompt:
+            linked_llm_name = linked_llm_seq[i % len(linked_llm_seq)]
+            logging.info(f"Using linked LLM: {linked_llm_name}")
+        else:
+            logging.info(f"Using model LLM: {llm_name}")
         use_large_model = use_chat_mode and (llm_name == large_model_name)
         mode = 'explore' if i < n_iterations * exploit_point else 'exploit'
         temperature = 1 + np.exp(-i / n_iterations)
@@ -1892,8 +2117,8 @@ async def hypothesis_engine(
                     islands[island_idx],
                     llm_name=linked_llm_name,
                     client=client,
-                    x=X[0, 0],
-                    y=Y[0, 0],
+                    x=X[0, 1],
+                    y=Y[0, 1],
                     x_eval=X_eval_train,
                     prompt_manager=prompt_manager,
                     mode=mode,
@@ -1930,8 +2155,8 @@ async def hypothesis_engine(
                                                         mode=mode, 
                                                         k_max=k_max, 
                                                         temp=temperature,
-                                                        x=X[0, 0],
-                                                        y=Y[0, 0],
+                                                        x=X[0, 1],
+                                                        y=Y[0, 1],
                                                         x_eval=X_eval_train,
                                                         prompt_manager=prompt_manager,
                                                         img_dir=model_image_dirs[island_idx, j],
@@ -1957,7 +2182,18 @@ async def hypothesis_engine(
         jax_llm_name = jax_llm_seq[i % len(jax_llm_seq)]
         model_function_translation_tasks = [translate_to_jax(code_string, client, prompt_manager, jax_llm_name) for code_string in model_code_strings]
         jax_results = await asyncio.gather(*model_function_translation_tasks)
-        model_results = [(model_code_strings[j], model_prompts[j], model_llm_responses[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
+        model_results = [
+            (
+                model_code_strings[j],
+                model_prompts[j],
+                model_llm_responses[j],
+                jax_results[j][0],
+                jax_results[j][1],
+                jax_results[j][2],
+                jax_results[j][3],
+            )
+            for j in range(n_islands * batch_size)
+        ]
 
         # build parameter‑estimator tasks
         if use_linked_prompt:
@@ -1968,7 +2204,7 @@ async def hypothesis_engine(
                     continue
                 func = utils.str_to_func(code_string, 'parameter_estimator')
                 if func is None:
-                    logging.info("Linked prompt: failed to parse parameter estimator code, skipping.")
+                    pass
                 param_est_results.append((code_string, func, {"linked_prompt": True}))
         else:
             if param_estimator_refinement_rounds > 0 and not has_spec_plotter:
@@ -2003,6 +2239,8 @@ async def hypothesis_engine(
                     plot_model_fits=plot_model_fits,
                     x_eval=X_eval_train,
                     image_refinement_dir=image_param_est_refine_dir,
+                    param_estimator_timeout_s=param_estimator_timeout_s,
+                    objective_timeout_s=objective_timeout_s,
                 )
                 for island_idx in range(n_islands)
                 for j in range(batch_size)
@@ -2024,27 +2262,113 @@ async def hypothesis_engine(
         # now loop through the results and compute losses
         success_rate = 0.0
         for island_idx, j in np.ndindex(n_islands, batch_size):
-            logging.info(f"id={i},{island_idx},{j}")
-            model_code_string, prompt, model_llm_response, model_code_string_jax, model_new, param_est_code_string, param_est_new, pe_metadata = island_results[island_idx][j]
+            model_code_string, prompt, model_llm_response, model_code_string_jax, model_new, jax_prompt, jax_raw_response, param_est_code_string, param_est_new, pe_metadata = island_results[island_idx][j]
             parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
 
-            logging.info(f"Prompt: \n{prompt}\n")
-            logging.info(f"Model: \n{model_code_string}\n")
-            logging.info(f"Model (JAX): \n{model_code_string_jax}\n")
-            logging.info(f"Parameter Estimator: \n{param_est_code_string}\n")
+            print(
+                f"=== iter={i} island={island_idx} batch={j} === "
+                f"(mode={mode}, linked={use_linked_prompt})",
+                flush=True,
+            )
+            log_lines = [
+                f"=== iter={i} island={island_idx} batch={j} ===",
+                f"mode={mode} use_linked_prompt={use_linked_prompt}",
+                f"parent_ids={parent1_id},{parent2_id}",
+            ]
+            if use_linked_prompt:
+                log_lines.append("[Linked prompt]")
+                log_lines.append(prompt or "<none>")
+                log_lines.append("[Linked response]")
+                log_lines.append(model_llm_response or "<none>")
+            else:
+                log_lines.append("[Model prompt]")
+                log_lines.append(prompt or "<none>")
+                log_lines.append("[Model response]")
+                log_lines.append(model_llm_response or "<none>")
+                if isinstance(pe_metadata, dict):
+                    log_lines.append("[Param estimator prompt]")
+                    log_lines.append(pe_metadata.get("initial_prompt") or "<none>")
+                    log_lines.append("[Param estimator response]")
+                    log_lines.append(pe_metadata.get("initial_response") or "<none>")
+                    if pe_metadata.get("refinement_prompts"):
+                        for ridx, ref_prompt in enumerate(pe_metadata.get("refinement_prompts", []), start=1):
+                            ref_resp = pe_metadata.get("refinement_responses", [None] * ridx)
+                            ref_code = pe_metadata.get("refinement_codes", [None] * ridx)
+                            log_lines.append(f"[Refinement {ridx} prompt]")
+                            log_lines.append(ref_prompt or "<none>")
+                            log_lines.append(f"[Refinement {ridx} response]")
+                            log_lines.append(ref_resp[ridx - 1] if ridx - 1 < len(ref_resp) else "<none>")
+                            log_lines.append(f"[Refinement {ridx} code]")
+                            log_lines.append(ref_code[ridx - 1] if ridx - 1 < len(ref_code) else "<none>")
+
+            log_lines.append("[Parsed model code]")
+            log_lines.append(model_code_string or "<none>")
+            log_lines.append("[JAX translator prompt]")
+            log_lines.append(jax_prompt or "<none>")
+            log_lines.append("[JAX translator response]")
+            log_lines.append(jax_raw_response or "<none>")
+            log_lines.append("[Parsed JAX code]")
+            log_lines.append(model_code_string_jax or "<none>")
+            log_lines.append("[Parsed parameter estimator code]")
+            log_lines.append(param_est_code_string or "<none>")
+            if isinstance(pe_metadata, dict) and pe_metadata.get("status"):
+                log_lines.append(f"[Param estimator status] {pe_metadata['status']}")
+            status_notes = []
+            if model_code_string is None:
+                status_notes.append("model code missing")
+            if param_est_code_string is None:
+                status_notes.append("parameter estimator code missing")
+            if model_new is None:
+                status_notes.append("model parse failed")
+            if param_est_new is None:
+                status_notes.append("parameter estimator parse failed")
+            if model_code_string_jax is None:
+                status_notes.append("JAX translation missing")
+
+            def _flush_log(extra_note: str | None = None):
+                if extra_note:
+                    status_notes.append(extra_note)
+                if status_notes:
+                    log_lines.append("[Status] " + " | ".join(status_notes))
+                    print("Status:", " | ".join(status_notes), flush=True)
+                logging.info("\n".join(log_lines))
 
             if model_new is None or param_est_new is None:
-                logging.info(f"Skipping island {island_idx}, batch {j} due to LLM generation failure.")
-                logging.info('-' * 50)
+                # Provide extraction debug details when parsing fails.
+                if model_code_string is None or param_est_code_string is None:
+                    debug_blocks = utils.extract_code_blocks(model_llm_response)
+                    debug_text = "\n\n".join(debug_blocks).strip() if debug_blocks else (model_llm_response or "").strip()
+                    debug_imports = []
+                    for line in debug_text.splitlines():
+                        stripped = line.strip()
+                        if stripped.startswith("import ") or stripped.startswith("from "):
+                            debug_imports.append(stripped)
+                    def _debug_extract(code: str, name_prefixes: list[str]) -> str | None:
+                        for prefix in name_prefixes:
+                            safe_prefix = re.escape(prefix)
+                            pattern = rf"^\s*def\s+{safe_prefix}\d*\s*\(.*?(?=^\s*def\s+|\Z)"
+                            match = re.search(pattern, code, flags=re.MULTILINE | re.DOTALL)
+                            if match:
+                                return match.group(0).strip()
+                        return None
+
+                    debug_model = _debug_extract(debug_text, [f"{prompt_manager.get_model_name()}_v", "model_v", "model"])
+                    debug_param = _debug_extract(debug_text, ["parameter_estimator_v", "parameter_estimator"])
+                    log_lines.append("[Extracted code text]")
+                    log_lines.append(debug_text or "<none>")
+                    log_lines.append("[Extracted imports]")
+                    log_lines.append("\n".join(dict.fromkeys(debug_imports)) or "<none>")
+                    log_lines.append("[Extracted model block]")
+                    log_lines.append(debug_model or "<none>")
+                    log_lines.append("[Extracted parameter_estimator block]")
+                    log_lines.append(debug_param or "<none>")
+                _flush_log()
                 continue
 
             model_name = prompt_manager.get_model_name()
             model_np = utils.str_to_func(model_code_string, model_name)
             if model_np is None:
-                logging.info(
-                    f"Skipping island {island_idx}, batch {j}: failed to parse NumPy model."
-                )
-                logging.info('-' * 50)
+                _flush_log("failed to parse NumPy model")
                 continue
             try:
                 _run_translation_check_on_eval(
@@ -2056,12 +2380,12 @@ async def hypothesis_engine(
                     x_eval=X_eval_train,
                 )
             except Exception as e:
-                logging.info(
-                    f"Skipping island {island_idx}, batch {j}: JAX translation check failed: {e}"
-                )
-                logging.info('-' * 50)
+                _flush_log(f"JAX translation check failed: {e}")
                 continue
+
+            _flush_log()
             
+            opt_start = time.time()
             initial_loss, initial_params, loss, optimized_params = _call_objective(
                 use_simple_objective,
                 model=model_new,
@@ -2074,8 +2398,12 @@ async def hypothesis_engine(
                 use_param_estimator=use_param_estimator,
                 max_iter=max_iter,
                 trial_batch_size=trial_batch_size,
+                timeout_s=param_estimator_timeout_s,
+                objective_timeout_s=objective_timeout_s,
             )
-            if loss == FAILED_PROGRAM_COST:
+            optimization_time_s = time.time() - opt_start
+            if not np.isfinite(float(loss)):
+                print("Status: objective failed (non-finite loss).", flush=True)
                 logging.info('-' * 50)
                 continue
 
@@ -2157,54 +2485,32 @@ async def hypothesis_engine(
                     title_prefix="Train fits",
                 )
                 test_fit_path = os.path.join(image_family_tree_fits_dir, f'iter_{i}_island_{island_idx}_batch_{j}_test_fit.png')
-                try:
-                    test_initial_loss, test_initial_params, test_final_loss, test_params = _call_objective(
-                        use_simple_objective,
-                        model=model_new,
-                        param_estimator=param_est_new,
-                        x=X[1],
-                        y=Y[1],
-                        loss_fn=loss_fn,
-                        param_penalty_weight=param_penalty_weight,
-                        fit_params=fit_params,
-                        use_param_estimator=use_param_estimator,
-                        max_iter=max_iter,
-                        trial_batch_size=trial_batch_size,
-                    )
-                    if test_final_loss == FAILED_PROGRAM_COST:
-                        raise ValueError("test objective failed")
-                except Exception as e:
-                    logging.info(
-                        "Skipping test fit plot; failed to compute test parameters "
-                        f"(iter={i}, island={island_idx}, batch={j}): {e}"
-                    )
-                else:
-                    test_programs_df = pd.DataFrame({
-                        "program": [model_new, model_new],
-                        "params": [test_initial_params, test_params],
-                    })
-                    test_programs_list = _programs_df_to_programs_list(
-                        test_programs_df,
-                        loss_func=loss_fn,
-                        x=X[1, 1],
-                        y=Y[1, 1],
-                        complexity_penalty=param_penalty_weight,
-                    )
-                    test_fit_losses = []
-                    for entry in test_programs_list:
-                        if "losses" in entry:
-                            test_fit_losses.append(float(np.mean(np.asarray(entry["losses"]))))
-                        else:
-                            test_fit_losses.append(None)
-                    plot_model_fits(
-                        X=X[1, 1],
-                        Y=Y[1, 1],
-                        programs_list=test_programs_list,
-                        X_eval=X_eval_test,
-                        save_path=test_fit_path,
-                        labels=['PE', 'GD'],
-                        title_prefix="Test fits",
-                    )
+                test_programs_df = pd.DataFrame({
+                    "program": [model_new, model_new],
+                    "params": [initial_params_plot, optimized_params_plot],
+                })
+                test_programs_list = _programs_df_to_programs_list(
+                    test_programs_df,
+                    loss_func=loss_fn,
+                    x=X[0, 1],
+                    y=Y[0, 1],
+                    complexity_penalty=param_penalty_weight,
+                )
+                test_fit_losses = []
+                for entry in test_programs_list:
+                    if "losses" in entry:
+                        test_fit_losses.append(float(np.mean(np.asarray(entry["losses"]))))
+                    else:
+                        test_fit_losses.append(None)
+                plot_model_fits(
+                    X=X[0, 1],
+                    Y=Y[0, 1],
+                    programs_list=test_programs_list,
+                    X_eval=X_eval_train,
+                    save_path=test_fit_path,
+                    labels=['PE', 'GD'],
+                    title_prefix="Test fits",
+                )
             # Default if plots are disabled or failed.
             if not has_spec_plotter:
                 train_fit_losses = []
@@ -2234,6 +2540,7 @@ async def hypothesis_engine(
                                         'batch_index': j,
                                         'train_loss': loss,
                                         'test_loss': None,  # will be filled later
+                                        'optimization_time_s': optimization_time_s,
                                         'llm_name': llm_name,
                                         'params': [optimized_params],
                                         'initial_loss': initial_loss,
@@ -2254,6 +2561,7 @@ async def hypothesis_engine(
                 "parent2_id": list(parent2_id),
                 "train_loss": float(loss),
                 "initial_loss": float(initial_loss),
+                "optimization_time_s": float(optimization_time_s),
                 "model_prompt": prompt,
                 "model_llm_response": model_llm_response,
                 "model_code_numpy": model_code_string,
@@ -2284,6 +2592,13 @@ async def hypothesis_engine(
             logging.info("-" * 50)
         print("Success rate:", success_rate, flush=True)
 
+        # Remove invalid-loss programs immediately so they never participate
+        # in sorting, deduplication, pruning, or migration.
+        islands = _drop_nonfinite_train_loss_from_islands(
+            islands,
+            context=f"Iteration {i} pre-migration cleanup",
+        )
+
         # sort each island by loss
         for island_idx in range(n_islands):
             islands[island_idx] = islands[island_idx].sort_values(by='train_loss').reset_index(drop=True)
@@ -2297,6 +2612,10 @@ async def hypothesis_engine(
                                                                   n_migrants=n_migrants,
                                                                   destination_islands=exploration_topology if mode == 'explore' else exploitation_topology, 
                                                                   temperature=(temperature - 1.0)**4)
+        islands = _drop_nonfinite_train_loss_from_islands(
+            islands,
+            context=f"Iteration {i} post-migration cleanup",
+        )
 
                                                              
         # save diagnostics
@@ -2385,6 +2704,8 @@ async def hypothesis_engine(
                 param_penalty_weight=param_penalty_weight,
                 use_param_estimator=use_param_estimator,
                 trial_batch_size=trial_batch_size,
+                timeout_s=param_estimator_timeout_s,
+                objective_timeout_s=objective_timeout_s,
             )
             islands[island_idx].at[j, 'test_loss'] = test_loss
             islands[island_idx].at[j, 'params'] = optimized_params

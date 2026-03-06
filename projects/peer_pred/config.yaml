@@ -7,7 +7,7 @@
 # ========================
 
 task: peer_pred
-model_name: model
+model_name: population_predictor
 
 
 # ========================
@@ -28,16 +28,14 @@ data_processing_params:
 # ========================
 
 experiment_params:
-  n_iterations: 2
-  batch_size: 3
-  n_islands: 4
+  n_iterations: 3
+  batch_size: 6
+  n_islands: 8
   param_penalty_weight: 0.0
-  exploration_topology: [1, 2, 3, 0]
-  exploitation_topology: [1, 2, 3, 0]
   param_estimator_refinement_rounds: 0
   open_family_tree: true
   fit_params: false
-  linked_llm: gemini-2.0-flash
+  linked_llm: [gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash]
   use_linked_prompt: false
   swear_words: []
   x_min: -1.0
@@ -48,28 +46,89 @@ experiment_params:
 # ========================
 # Prompt Defaults
 # ========================
-  linked_prompt:
+
+prompts:
+  program_prompt:
     base: |
-      You are an AI scientist. Generate BOTH a new model_v{next_version} and a new parameter_estimator_v{next_version}.
-      The parents below show models and their estimators, sorted by loss.
+      You are an AI scientist, with the goal of finding a model that predicts the activity of one neuronal population from another.
+      The parent models are listed in order of increasing performance, with the best parent last.
+      Your goal is to generate a new model, {model_name}_v{next_version}, that outperforms all previous models.
+      Analyze the progression of the parent models, generalize what improves loss, and create a better model.
     explore: |
-      Explore new model structure while keeping the estimator simple and stable.
+      Use the parent models as inspiration, but be creative and invent something new.
+      Identify model features associated with lower loss, combine strong ideas, and test novel variants.
+
     exploit: |
-      Exploit strong patterns from the parents to improve both model and estimator.
+      Use the parent models as a template to create a better model.
+      Extrapolate features associated with lower loss and remove weak or redundant structure.
+      You will be penalized for complexity, so keep the model as simple as possible while improving performance.
     image_analysis: |
       **Image Analysis Instructions:**
-      Attached is a 2x2 plot of target-cell traces (observed vs models).
-      Analyze the plot to identify specific failures of the models and estimators.
-      Propose specific changes to both the model structure and estimator logic.
+
+      Attached is a plot of model fits to 4 example neurons as well as histograms of the distribution of losses across all neurons in the dataset.
+      For the model fit plots:
+      * Black trace is the raw observed activity of the neuron.
+      * Red trace is the the worse-performing parent model.
+      * Blue trace is the best-performing parent model.
+
+      Which strengths and weaknesses do you observe in the model fits?
+      How does {model_name}_v2 improve upon {model_name}_v1?
+      What can be done to further improve the shortcomins of both models?
+
+      Propose specific model-structure changes, citing specific samples and code features in your analysis.
+
     code_guidelines: |
-      Return exactly TWO Python code blocks:
-      1) def model_v{next_version}(X, params): ...
-      2) def parameter_estimator_v{next_version}(X, Y): ...
-      Keep total length under {max_lines} lines combined.
+      **Code Generation Guidelines:**
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * Model signature must be `def model(X, params):` where `params` is a dict of named arrays/scalars.
+      * Ensure all free parameters are numeric, not strings.
+      * The model will get an infinite loss if it takes more than 5 seconds to run, so ensure it is efficient!
+
     docstring_guidelines: |
-      Each function should include a short docstring.
+      **Docstring Guidelines:**
+      * Begin by listing the parent models and give them a descriptive name, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`.
+      * Never refer to the models as `{model_name}_v1`, `{model_name}_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names.
+      * Do not refer to the current model as `{model_name}_v{next_version}`. Instead, refer to it as "this model".
+      * Provide a simple equation for the model, including all free parameters.
+      * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+
     per_model_detail: |
-      **Parent {model_idx} (loss={train_loss})**
+      **Parent {model_idx} (loss={train_loss}, opt_time={optimization_time_s})**
+      {program_code_string}
+
+  parameter_estimator:
+    generation_base: |
+      You are an AI scientist. Your task is to create parameter_estimator_v{next_version} for the latest model, {model_name}_v{next_version}.
+      Estimate free parameters directly from the input/output structure.
+      Analyze the parent estimators, generalize what improves loss, and create a better estimator.
+
+    base: |
+      You are an AI scientist. Improve parameter_estimator_prev for the current model.
+      The model and parent estimators are provided below.
+
+    code_guidelines: |
+      **Code Generation Guidelines:**
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * Function signature must be `def parameter_estimator(X, y):`.
+      * Return a parameter dict with keys that match the model parameters.
+      * Do not call the model function in your estimator code; the estimator must be self-contained.
+      * The estimator should be computationally efficient.
+
+    docstring_guidelines: |
+      **Docstring Guidelines:**
+      * Summarize parent estimators by descriptive names, not version tags.
+      * Briefly explain how this estimator improves stability and fit quality.
+
+    refinement_image_instructions: |
+      **Image instructions:**
+      Attached are model-fit traces and loss histograms for multiple neurons.
+      Identify systematic failures in predicted traces and propose concrete estimator updates.
+      Do not call the model function in your estimator code.
+
+    per_model_detail: |
+      **Parent {model_idx} (loss={train_loss}, opt_time={optimization_time_s})**
       Model:
       {program_code_string}
       Estimator:

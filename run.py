@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import yaml
 from pathlib import Path
 import importlib
@@ -414,6 +415,43 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         params['exploration_topology'] = [1, 0]
         params['exploitation_topology'] = [1, 0]
         params['max_iter'] = 100 # --- USE WHEN JUST CHECKING THAT THE SCRIPT RUNS ---
+        # Keep test mode fast by shrinking common data-generation sizes when present.
+        if 'n_samples' in data_processing_params:
+            data_processing_params['n_samples'] = min(int(data_processing_params['n_samples']), 120)
+        if 'n_trials' in data_processing_params:
+            data_processing_params['n_trials'] = min(int(data_processing_params['n_trials']), 300)
+        if 'n_cells' in data_processing_params:
+            data_processing_params['n_cells'] = min(int(data_processing_params['n_cells']), 600)
+
+    def _ring_topology(n_islands: int) -> list[int]:
+        if n_islands <= 0:
+            return []
+        return list(range(1, n_islands)) + [0]
+
+    def _topology_invalid(topology, n_islands: int) -> bool:
+        if not isinstance(topology, (list, tuple)) or len(topology) != n_islands:
+            return True
+        for dest in topology:
+            if not isinstance(dest, (int, np.integer)):
+                return True
+            if dest < 0 or dest >= n_islands:
+                return True
+        return False
+
+    n_islands = int(params.get('n_islands', 0) or 0)
+    if n_islands > 0:
+        explore_top = params.get('exploration_topology')
+        exploit_top = params.get('exploitation_topology')
+        if _topology_invalid(explore_top, n_islands) or _topology_invalid(exploit_top, n_islands):
+            ring = _ring_topology(n_islands)
+            msg = (
+                f"Topology mismatch for n_islands={n_islands}. "
+                f"Defaulting exploration/exploitation topology to ring: {ring}"
+            )
+            logging.warning(msg)
+            print(f"Warning: {msg}")
+            params['exploration_topology'] = ring
+            params['exploitation_topology'] = ring
 
     for i in range(params['num_runs']):
         random_seed = params.get('random_seed', 42)
@@ -487,6 +525,8 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             n_migrants=params['n_migrants'],
             fit_params=params['fit_params'],
             use_param_estimator=params.get('use_param_estimator', True),
+            param_estimator_timeout_s=params.get('param_estimator_timeout_s', 5.0),
+            objective_timeout_s=params.get('objective_timeout_s', 60.0),
             learning_rate=params['learning_rate'],
             FAILED_PROGRAM_COST=params['FAILED_PROGRAM_COST'],
             model_llm=_require_llm('model_llm'),
