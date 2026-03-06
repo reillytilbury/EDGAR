@@ -10,7 +10,16 @@ import logging
 import math
 import os
 
-from .io import load_generation_log, escape, resolve_image_path, build_record_entry, record_key, parse_parent_key
+from .io import (
+    assign_display_labels,
+    build_record_entry,
+    escape,
+    load_generation_log,
+    parse_parent_key,
+    record_id,
+    record_key,
+    resolve_image_path,
+)
 
 # Distinct colour palette for up to 8 islands
 _ISLAND_COLOURS = [
@@ -53,9 +62,14 @@ def _build_sidebar_data(records: list[dict]) -> dict:
     Returns:
         Dict mapping string index to sidebar-ready record dict.
     """
+    label_map = {
+        record_id(rec): rec.get("display_label")
+        for rec in records
+        if record_id(rec) is not None and rec.get("display_label")
+    }
     sidebar = {}
     for idx, rec in enumerate(records):
-        entry = build_record_entry(rec)
+        entry = build_record_entry(rec, label_map)
         entry["idx"] = idx
         sidebar[str(idx)] = entry
     return sidebar
@@ -162,13 +176,38 @@ function formatNum(v, digits) {
   return Number(v).toFixed(digits !== undefined ? digits : 4);
 }
 
+function formatRemovalDetailValue(value) {
+  if (value === null || value === undefined) return '<em>N/A</em>';
+  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) {
+    return '<code>' + escapeHtml(JSON.stringify(value)) + '</code>';
+  }
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? String(value) : Number(value).toFixed(4);
+  }
+  return escapeHtml(value);
+}
+
+function formatRemovalDetails(details) {
+  if (!details || typeof details !== 'object' || Object.keys(details).length === 0) return '';
+  let html = '<div class="field" style="margin-top:6px;">';
+  html += '<span class="field-label" style="color:#856404;">Details:</span>';
+  html += '<div class="field-value" style="margin-top:4px;">';
+  Object.entries(details).forEach(function([key, value]) {
+    html += '<div><strong>' + escapeHtml(key) + ':</strong> ' + formatRemovalDetailValue(value) + '</div>';
+  });
+  html += '</div></div>';
+  return html;
+}
+
 function showSidebar(idx) {
   const d = sidebarData[String(idx)];
   if (!d) return;
   const sb = document.getElementById('sidebar');
   const sc = document.getElementById('sidebar-content');
 
-  let h = '<h2>Program ' + escapeHtml(d.iteration) + '_' + escapeHtml(d.island) + '_' + escapeHtml(d.batch) + '</h2>';
+  const displayLabel = d.display_label || d.program_id || (String(d.iteration) + '_' + String(d.island) + '_' + String(d.batch));
+  let h = '<h2>' + escapeHtml(d.iteration === -1 ? ('Seed ' + displayLabel) : ('Program ' + displayLabel)) + '</h2>';
+  h += '<div class="field"><span class="field-label">ID:</span> <span class="field-value">' + escapeHtml(d.program_id) + '</span></div>';
   h += '<div class="field"><span class="field-label">Iteration:</span> <span class="field-value">' + escapeHtml(d.iteration) + '</span></div>';
   h += '<div class="field"><span class="field-label">Island:</span> <span class="field-value">' + escapeHtml(d.island) + '</span></div>';
   h += '<div class="field"><span class="field-label">Batch:</span> <span class="field-value">' + escapeHtml(d.batch) + '</span></div>';
@@ -180,8 +219,19 @@ function showSidebar(idx) {
   h += '<div class="field"><span class="field-label">LLM:</span> <span class="field-value">' + escapeHtml(d.llm_name) + '</span></div>';
   h += '<div class="field"><span class="field-label">Temperature:</span> <span class="field-value">' + escapeHtml(d.temperature) + '</span></div>';
 
+  if (d.removal_reason) {
+    h += '<div class="field" style="background:#fff3cd;padding:6px;border-radius:4px;margin-bottom:8px;">';
+    h += '<span class="field-label" style="color:#856404;">Removed:</span> ';
+    h += '<span class="field-value">' + escapeHtml(d.removal_reason.event_type) + ' (' + escapeHtml(d.removal_reason.rule) + ')</span>';
+    h += formatRemovalDetails(d.removal_reason.details);
+    h += '</div>';
+  }
+
   if (d.model_code) {
     h += '<details open><summary>Model Code</summary><pre>' + escapeHtml(d.model_code) + '</pre></details>';
+  }
+  if (d.model_code_jax) {
+    h += '<details><summary>Model Code (JAX)</summary><pre>' + escapeHtml(d.model_code_jax) + '</pre></details>';
   }
   if (d.param_est_code) {
     h += '<details><summary>Parameter Estimator Code</summary><pre>' + escapeHtml(d.param_est_code) + '</pre></details>';
@@ -370,8 +420,9 @@ def _generate_loss_progress_html(
             y_without_penalty.append(p_raw)
             custom.append(rec_idx)
 
+            display_label = rec.get("display_label") or f"{iteration}_{island_idx}_{rec.get('batch_index', '?')}"
             hover_parts = [
-                f"<b>i{iteration}_isl{island_idx}_b{rec.get('batch_index', '?')}</b>",
+                f"<b>{display_label}</b>",
                 f"P(L): {p_penalty:.4f}" if p_penalty is not None else "P(L): N/A",
                 f"train loss: {train_loss:.4f}" if train_loss is not None else "train loss: N/A",
                 f"penalty: {complexity_penalty:.4f}",
@@ -407,8 +458,9 @@ def _generate_loss_progress_html(
         seed_y_penalty.append(p_penalty)
         seed_y_raw.append(p_raw)
         seed_custom.append(rec_idx)
+        display_label = rec.get("display_label") or f"S{rec.get('batch_index', rec_idx)}"
         hover_parts = [
-            f"<b>seed_{rec.get('batch_index', rec_idx)}</b>",
+            f"<b>{display_label}</b>",
             f"P(L): {p_penalty:.4f}" if p_penalty is not None else "P(L): N/A",
             f"train loss: {train_loss:.4f}" if train_loss is not None else "train loss: N/A",
             f"penalty: {complexity_penalty:.4f}",
@@ -1004,6 +1056,7 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
 
     # Unified record list: seeds first, then programs (gives consistent rec_idx)
     all_records = seed_records + prog_records
+    assign_display_labels(all_records)
     sidebar_data = _build_sidebar_data(all_records)
     image_base_dir = os.path.dirname(json_file)
     rel_base = output_dir or image_base_dir or "."
@@ -1044,14 +1097,9 @@ def create_dynamic_progress_update(json_file: str, output_dir: str) -> None:
         all_records, node_pos_penalty, node_pos_raw
     )
 
-    # Dead node = node that is never used as a parent.
-    has_children = set()
-    for parents in parent_map.values():
-        for p_idx in parents:
-            if p_idx is not None:
-                has_children.add(p_idx)
+    # Dead node = program explicitly removed via deduplication or pruning.
     for idx_str, entry in sidebar_data.items():
-        entry["is_dead"] = int(idx_str) not in has_children
+        entry["is_dead"] = entry.get("removal_reason") is not None
 
     os.makedirs(output_dir, exist_ok=True)
 

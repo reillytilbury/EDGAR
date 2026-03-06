@@ -221,6 +221,7 @@ def validate_model_execution(
         return False, f"Model failed to run or is incompatible with JAX tracing: {e}"
 
 
+
 def objective(model, param_estimator, x, y,
               loss_fn=None, param_penalty_weight=0.1, fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000, learning_rate=3e-3,
@@ -716,7 +717,7 @@ async def generate_new_model(current_island, llm_name, client,
     
     # Use chat-based or legacy LLM call
     if island_chat_manager is not None and island_id is not None:
-        logging.info(
+        logging.debug(
             f"Model generation prompt (island={island_id}, batch={batch_id}):\n{program_prompt}\n"
         )
         llm_output = await island_chat_manager.ask_island(
@@ -728,12 +729,12 @@ async def generate_new_model(current_island, llm_name, client,
         )
     else:
         # Legacy: independent query
-        logging.info(
+        logging.debug(
             f"Model generation prompt (island={island_id}, batch={batch_id}):\n{program_prompt}\n"
         )
         llm_output = await llm_helper.call_llm_async(program_prompt, model_name=llm_name, client=client, temperature=temp, 
                                                 thinking_budget=thinking_budget, img_bytes=img_bytes)
-    logging.info(
+    logging.debug(
         f"Model generation output (island={island_id}, batch={batch_id}):\n{llm_output}\n"
     )
     
@@ -744,7 +745,7 @@ async def generate_new_model(current_island, llm_name, client,
         )
         return None, None, None, (parent1_id, parent2_id)
     code_string = code_string.replace(f'def {model_name}_v{k+1}(', f'def {model_name}(')
-    logging.info(
+    logging.debug(
         f"Generated model candidate (island={island_id}, batch={batch_id}):\n"
         f"Prompt:\n{program_prompt}\n\n"
         f"Model (NumPy):\n{code_string}\n"
@@ -843,7 +844,7 @@ async def generate_new_parameter_estimator(current_island,
         )
     
     # Use chat-based or legacy LLM call
-    logging.info(
+    logging.debug(
         f"Parameter estimator prompt (island={island_id}, batch={batch_id}):\n{prompt}\n"
     )
     llm_output = await llm_helper.call_llm_async(
@@ -876,7 +877,7 @@ async def generate_new_parameter_estimator(current_island,
         logging.info("Failed to parse parameter estimator code, skipping.")
         return None, None, pe_metadata
 
-    logging.info(
+    logging.debug(
         f"Generated initial parameter estimator candidate (island={island_id}, batch={batch_id}):\n"
         f"Prompt:\n{prompt}\n\n"
         f"Parameter Estimator (initial):\n{code_string}\n"
@@ -979,7 +980,7 @@ async def generate_new_parameter_estimator(current_island,
                 "**Banned tokens (do not use in code):**\n"
                 f"{banned_list}\n"
             )
-        logging.info(
+        logging.debug(
             f"Param-est refinement prompt (iter={iter_label}, island={island_id}, "
             f"batch={batch_id}, round={r+1}):\n{refine_prompt}\n"
         )
@@ -1070,12 +1071,12 @@ async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='g
         return None, None
     
     prompt = prompt_manager.get_jax_translator_prompt(code_string)
-    logging.info(f"JAX translation prompt:\n{prompt}\n")
+    logging.debug(f"JAX translation prompt:\n{prompt}\n")
     if prompt is None:
         return None, None
     
     jax_code_string = await llm_helper.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
-    logging.info(f"JAX translation output:\n{jax_code_string}\n")
+    logging.debug(f"JAX translation output:\n{jax_code_string}\n")
     jax_code_string = utils.extract_code_block(jax_code_string)
     model_name = prompt_manager.get_model_name()
     func = utils.str_to_func(jax_code_string, model_name)
@@ -1148,6 +1149,74 @@ def _append_generation_record(filepath, record):
     """Append a single generation record as a JSON line."""
     with open(filepath, 'a') as f:
         f.write(json.dumps(record, default=str) + '\n')
+
+
+def _update_generation_log_records(filepath, updates_by_key):
+    """Patch existing JSONL records in-place by candidate UID."""
+    if not updates_by_key or not os.path.isfile(filepath):
+        return
+
+    normalized_updates = {
+        (int(key[0]), int(key[1]), int(key[2])): value
+        for key, value in updates_by_key.items()
+    }
+
+    with open(filepath, 'r') as f:
+        lines = f.readlines()
+    with open(filepath, 'w') as f:
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            key = (rec['iteration_number'], rec['birth_island'], rec['batch_index'])
+            if key in normalized_updates:
+                rec.update(normalized_updates[key])
+            f.write(json.dumps(rec, default=str) + '\n')
+
+
+def _apply_removal_reasons_to_log(filepath, removal_events):
+    """Batch-update the JSONL log with removal_reason fields.
+
+    Reads the log, adds ``removal_reason`` to any record whose UID matches
+    a :class:`RemovalEvent`, then rewrites the file.  Records that already
+    carry a ``removal_reason`` are left unchanged.
+
+    Args:
+        filepath: Path to program_generation_log.jsonl
+        removal_events: List of ``RemovalEvent`` objects from dedup / prune.
+    """
+    if not removal_events or not os.path.isfile(filepath):
+        return
+
+    # Build lookup: (iteration, birth_island, batch_index) -> removal dict
+    reason_lookup = {}
+    for evt in removal_events:
+        key = (int(evt.uid[0]), int(evt.uid[1]), int(evt.uid[2]))
+        details = dict(evt.details or {})
+        details.setdefault("iteration", evt.iteration)
+        reason_lookup[key] = {
+            "category": evt.category,
+            "event_type": evt.event_type,
+            "island_id": evt.island_id,
+            "rule": evt.rule,
+            "details": details,
+        }
+
+    # Non-atomic read/overwrite. If log corruption is observed, switch to
+    # temp file + os.replace() for atomic writes.
+    with open(filepath, 'r') as f:
+        lines = f.readlines()
+    with open(filepath, 'w') as f:
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            key = (rec['iteration_number'], rec['birth_island'], rec['batch_index'])
+            if key in reason_lookup and 'removal_reason' not in rec:
+                rec['removal_reason'] = reason_lookup[key]
+            f.write(json.dumps(rec, default=str) + '\n')
 
 
 def _update_generation_log_test_losses_and_mark_winner(filepath, islands):
@@ -1552,10 +1621,78 @@ async def hypothesis_engine(
         model_prompts = [result[1] for result in model_results]
         model_llm_responses = [result[2] for result in model_results]
         parent_ids = [result[3] for result in model_results]
+
+        for candidate_idx in range(n_islands * batch_size):
+            island_idx = candidate_idx // batch_size
+            batch_idx = candidate_idx % batch_size
+            model_code_string = model_code_strings[candidate_idx]
+            model_prompt = model_prompts[candidate_idx]
+            model_llm_response = model_llm_responses[candidate_idx]
+            parent1_id, parent2_id = parent_ids[candidate_idx]
+            model_generated = model_code_string is not None
+            _append_generation_record(generation_log_path, {
+                "iteration_number": i,
+                "birth_island": island_idx,
+                "batch_index": batch_idx,
+                "parent1_id": list(parent1_id) if parent1_id is not None else None,
+                "parent2_id": list(parent2_id) if parent2_id is not None else None,
+                "model_prompt": model_prompt,
+                "model_llm_response": model_llm_response,
+                "model_code_numpy": model_code_string,
+                "llm_name": llm_name,
+                "temperature": float(temperature),
+                "mode": mode,
+                "use_large_model": use_large_model,
+                "image_prompt_path": model_image_dirs[island_idx, batch_idx],
+                "status": "numpy_generated" if model_generated else "model_generation_failed",
+                "failure_stage": None if model_generated else "model_generation",
+                "failure_message": None if model_generated else "No NumPy model code generated.",
+                # these will be updated later after evaluation and parameter estimation steps
+                "train_loss": None,
+                "initial_loss": None,
+                "n_params": None,
+                "complexity_penalty": None,
+                "model_code_jax": None,
+                "param_est_prompt": None,
+                "param_est_llm_response": None,
+                "param_est_code": None,
+                "param_est_refinement_prompts": [],
+                "param_est_refinement_responses": [],
+                "train_fit_image_path": None,
+                "test_fit_image_path": None,
+            })
         
         # convert to jax
         model_function_translation_tasks = [translate_to_jax(code_string, client, prompt_manager, tiny_lm_name) for code_string in model_code_strings]
         jax_results = await asyncio.gather(*model_function_translation_tasks)
+        translation_updates = {}
+        for candidate_idx, (jax_code_string, jax_func) in enumerate(jax_results):
+            if model_code_strings[candidate_idx] is None:
+                continue
+            island_idx = candidate_idx // batch_size
+            batch_idx = candidate_idx % batch_size
+            key = (i, island_idx, batch_idx)
+            update = {"model_code_jax": jax_code_string}
+            if jax_code_string is None:
+                update.update({
+                    "status": "jax_translation_failed",
+                    "failure_stage": "jax_translation",
+                    "failure_message": "No JAX code block generated.",
+                })
+            elif jax_func is None:
+                update.update({
+                    "status": "jax_translation_failed",
+                    "failure_stage": "jax_translation",
+                    "failure_message": "Failed to parse translated JAX code into a callable.",
+                })
+            else:
+                update.update({
+                    "status": "jax_translated",
+                    "failure_stage": None,
+                    "failure_message": None,
+                })
+            translation_updates[key] = update
+        _update_generation_log_records(generation_log_path, translation_updates)
         model_results = [(model_code_strings[j], model_prompts[j], model_llm_responses[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
         # build parameter‑estimator tasks
@@ -1601,22 +1738,71 @@ async def hypothesis_engine(
         )
         logging.info(f"Generating {n_islands * batch_size} new parameter estimators... Model: {little_lm_name}, mode: {mode}, temperature: {temperature:.2f}")
         param_est_results = await asyncio.gather(*param_estimation_tasks)
+        param_est_updates = {}
+        for candidate_idx, (param_est_code_string, param_est_new, pe_metadata) in enumerate(param_est_results):
+            if model_code_strings[candidate_idx] is None:
+                continue
+            island_idx = candidate_idx // batch_size
+            batch_idx = candidate_idx % batch_size
+            key = (i, island_idx, batch_idx)
+            update = {
+                "param_est_prompt": pe_metadata.get("initial_prompt"),
+                "param_est_llm_response": pe_metadata.get("initial_response"),
+                "param_est_code": param_est_code_string,
+                "param_est_refinement_prompts": pe_metadata.get("refinement_prompts", []),
+                "param_est_refinement_responses": pe_metadata.get("refinement_responses", []),
+            }
+            if model_results[candidate_idx][4] is not None:
+                if param_est_new is None:
+                    update.update({
+                        "status": "param_estimator_failed",
+                        "failure_stage": "param_estimator",
+                        "failure_message": "Failed to generate executable parameter estimator.",
+                    })
+                else:
+                    update.update({
+                        "status": "ready_for_evaluation",
+                        "failure_stage": None,
+                        "failure_message": None,
+                    })
+            param_est_updates[key] = update
+        _update_generation_log_records(generation_log_path, param_est_updates)
         # combine results
         island_results = [[model_results[island_idx * batch_size + j] + param_est_results[island_idx * batch_size + j] for j in range(batch_size)] for island_idx in range(n_islands)]
 
         # now loop through the results and compute losses
         success_rate = 0.0
+        evaluation_log_updates = {}
         for island_idx, j in np.ndindex(n_islands, batch_size):
             logging.info(f"id={i},{island_idx},{j}")
             model_code_string, prompt, model_llm_response, model_code_string_jax, model_new, param_est_code_string, param_est_new, pe_metadata = island_results[island_idx][j]
             parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
+            candidate_key = (i, island_idx, j)
 
-            logging.info(f"Prompt: \n{prompt}\n")
-            logging.info(f"Model: \n{model_code_string}\n")
-            logging.info(f"Model (JAX): \n{model_code_string_jax}\n")
-            logging.info(f"Parameter Estimator: \n{param_est_code_string}\n")
+            logging.debug(f"Prompt: \n{prompt}\n")
+            logging.debug(f"Model: \n{model_code_string}\n")
+            logging.debug(f"Model (JAX): \n{model_code_string_jax}\n")
+            logging.debug(f"Parameter Estimator: \n{param_est_code_string}\n")
 
             if model_new is None or param_est_new is None:
+                if model_code_string is None:
+                    evaluation_log_updates[candidate_key] = {
+                        "status": "model_generation_failed",
+                        "failure_stage": "model_generation",
+                        "failure_message": "No NumPy model code generated.",
+                    }
+                elif model_new is None:
+                    evaluation_log_updates[candidate_key] = {
+                        "status": "jax_translation_failed",
+                        "failure_stage": "jax_translation",
+                        "failure_message": "Failed to translate NumPy model to executable JAX code.",
+                    }
+                else:
+                    evaluation_log_updates[candidate_key] = {
+                        "status": "param_estimator_failed",
+                        "failure_stage": "param_estimator",
+                        "failure_message": "Failed to generate executable parameter estimator.",
+                    }
                 logging.info(f"Skipping island {island_idx}, batch {j} due to LLM generation failure.")
                 logging.info('-' * 50)
                 continue
@@ -1624,7 +1810,12 @@ async def hypothesis_engine(
             model_name = prompt_manager.get_model_name()
             model_np = utils.str_to_func(model_code_string, model_name)
             if model_np is None:
-                logging.info(
+                evaluation_log_updates[candidate_key] = {
+                    "status": "numpy_parse_failed",
+                    "failure_stage": "numpy_parse",
+                    "failure_message": "Failed to parse generated NumPy model into a callable.",
+                }
+                logging.debug(
                     f"Skipping island {island_idx}, batch {j}: failed to parse NumPy model."
                 )
                 logging.info('-' * 50)
@@ -1639,6 +1830,11 @@ async def hypothesis_engine(
                     x_eval=X_eval_train,
                 )
             except Exception as e:
+                evaluation_log_updates[candidate_key] = {
+                    "status": "translation_check_failed",
+                    "failure_stage": "translation_check",
+                    "failure_message": str(e),
+                }
                 logging.info(
                     f"Skipping island {island_idx}, batch {j}: JAX translation check failed: {e}"
                 )
@@ -1658,6 +1854,11 @@ async def hypothesis_engine(
                 trial_batch_size=trial_batch_size,
             )
             if loss == FAILED_PROGRAM_COST:
+                evaluation_log_updates[candidate_key] = {
+                    "status": "objective_failed",
+                    "failure_stage": "objective",
+                    "failure_message": "objective returned FAILED_PROGRAM_COST.",
+                }
                 logging.info('-' * 50)
                 continue
 
@@ -1794,42 +1995,26 @@ async def hypothesis_engine(
             
             islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
 
-            # Write generation record to JSON log for family tree
             n_params = int(optimized_params.shape[1])
             complexity_penalty = float(param_penalty_weight * n_params)
-            _append_generation_record(generation_log_path, {
-                "iteration_number": i,
-                "birth_island": island_idx,
-                "batch_index": j,
-                "parent1_id": list(parent1_id),
-                "parent2_id": list(parent2_id),
+            evaluation_log_updates[candidate_key] = {
                 "train_loss": float(loss),
                 "initial_loss": float(initial_loss),
                 "n_params": n_params,
                 "complexity_penalty": complexity_penalty,
-                "model_prompt": prompt,
-                "model_llm_response": model_llm_response,
-                "model_code_numpy": model_code_string,
-                "model_code_jax": model_code_string_jax,
-                "param_est_prompt": pe_metadata.get("initial_prompt"),
-                "param_est_llm_response": pe_metadata.get("initial_response"),
-                "param_est_code": param_est_code_string,
-                "param_est_refinement_prompts": pe_metadata.get("refinement_prompts", []),
-                "param_est_refinement_responses": pe_metadata.get("refinement_responses", []),
-                "llm_name": llm_name,
-                "temperature": float(temperature),
-                "mode": mode,
-                "use_large_model": use_large_model,
-                "image_prompt_path": model_image_dirs[island_idx, j],
                 "train_fit_image_path": train_fit_path,
                 "test_fit_image_path": test_fit_path,
-            })
+                "status": "accepted",
+                "failure_stage": None,
+                "failure_message": None,
+            }
 
             success_rate += 1 / (n_islands * batch_size)
             print(f"iteration {i}, island {island_idx}, batch {j}, loss: {loss:.2f}", flush=True)
             print('-' * 50, flush=True)
             logging.info("-" * 50)
         print("Success rate:", success_rate, flush=True)
+        _update_generation_log_records(generation_log_path, evaluation_log_updates)
 
         # sort each island by loss
         for island_idx in range(n_islands):
@@ -1837,13 +2022,15 @@ async def hypothesis_engine(
         logging.info(f"Iteration {i} complete. The proportion of programs that successfully ran and received a loss is {success_rate:.2f}.")
         logging.info('-' * 50)
         # migrate and prune programs (better here for temperature to be in [0, 1] range)
-        islands = genetic_helpers.perform_island_deduplication(islands, overlap_threshold=int(0.75 * critical_population_size))
-        islands = genetic_helpers.perform_population_pruning(islands, critical_population_size=critical_population_size - n_migrants,
-                                                min_wise_population_size=min_wise_population_size,)
+        islands, dedup_events = genetic_helpers.perform_island_deduplication(islands, overlap_threshold=int(0.75 * critical_population_size), iteration=i)
+        islands, prune_events = genetic_helpers.perform_population_pruning(islands, critical_population_size=critical_population_size - n_migrants,
+                                                min_wise_population_size=min_wise_population_size, iteration=i)
+        _apply_removal_reasons_to_log(generation_log_path, dedup_events + prune_events)
         islands = genetic_helpers.perform_probabilistic_migration(islands, 
                                                                   n_migrants=n_migrants,
                                                                   destination_islands=exploration_topology if mode == 'explore' else exploitation_topology, 
-                                                                  temperature=(temperature - 1.0)**4)
+                                                                  temperature=(temperature - 1.0)**4,
+                                                                  iteration=i)
 
                                                              
         # save diagnostics
@@ -1941,7 +2128,7 @@ async def hypothesis_engine(
     combined_dir = os.path.join(base_dir, date_stamp, time_stamp, 'combined')
     os.makedirs(combined_dir, exist_ok=True)
     combined_programs_dataframe = pd.concat(islands, ignore_index=True)
-    combined_programs_dataframe = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss')
+    combined_programs_dataframe, _ = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss', iteration=-1)
     # combined_programs_dataframe = combined_programs_dataframe.sort_values(by='test_loss').reset_index(drop=True)
     # sort by mean loss
     combined_programs_dataframe = combined_programs_dataframe.sort_values(by='mean_loss').reset_index(drop=True)

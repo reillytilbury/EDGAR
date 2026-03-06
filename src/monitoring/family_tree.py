@@ -11,12 +11,18 @@ from collections import defaultdict
 
 import networkx as nx
 
-from .io import load_generation_log, escape, resolve_image_path, build_record_entry, record_key, parse_parent_key
+from .io import (
+    assign_display_labels,
+    build_record_entry,
+    escape,
+    island_label,
+    load_generation_log,
+    make_program_id,
+    parse_parent_key,
+    record_key,
+    resolve_image_path,
+)
 
-
-def _make_node_id(iteration, island, batch):
-    """Create a unique string node ID from (iteration, island, batch)."""
-    return f"{iteration}_{island}_{batch}"
 
 
 def _parse_parent_id(parent_id):
@@ -25,7 +31,7 @@ def _parse_parent_id(parent_id):
     Returns None if parent_id is None or not a valid 3-element list.
     """
     key = parse_parent_key(parent_id)
-    return _make_node_id(*key) if key is not None else None
+    return make_program_id(*key) if key is not None else None
 
 
 def _build_seed_nodes():
@@ -105,44 +111,6 @@ def _compute_hierarchical_layout(G, records_by_id, island_gap=1.5):
     return pos
 
 
-def _island_letter(island_idx: int) -> str:
-    """Map island index to a letter label (0->A, 1->B, ..., 25->Z, 26->AA, ...)."""
-    if island_idx < 0:
-        return "S"
-    letters = []
-    idx = island_idx
-    while True:
-        idx, rem = divmod(idx, 26)
-        letters.append(chr(ord('A') + rem))
-        if idx == 0:
-            break
-        idx -= 1
-    return "".join(reversed(letters))
-
-
-def _assign_node_labels(records):
-    """Assign compact labels like A12 per island and S1/S2 for seeds."""
-    label_map = {}
-    # Seed labels
-    for rec in records:
-        if rec.get("is_seed", False):
-            nid = _make_node_id(*record_key(rec))
-            label_map[nid] = f"S{int(rec.get('batch_index', 0)) + 1}"
-
-    # Per-island labels (birth order)
-    islands = sorted({rec.get("birth_island") for rec in records if rec.get("birth_island", -1) >= 0})
-    for island_idx in islands:
-        island_records = [
-            rec for rec in records
-            if rec.get("birth_island") == island_idx and rec.get("iteration_number", -1) >= 0
-        ]
-        island_records.sort(key=lambda r: (r.get("iteration_number", 0), r.get("batch_index", 0)))
-        for i, rec in enumerate(island_records, start=1):
-            nid = _make_node_id(*record_key(rec))
-            label_map[nid] = f"{_island_letter(island_idx)}{i}"
-    return label_map
-
-
 def _loss_to_color(loss, min_loss, max_loss):
     """Map a loss value to an RGB color string (green=good, red=bad).
 
@@ -168,13 +136,18 @@ def _loss_to_color(loss, min_loss, max_loss):
 
 def _build_sidebar_data(records_by_id):
     """Build a JSON-serializable dict of node data for the sidebar."""
+    label_map = {
+        node_id: rec.get("display_label")
+        for node_id, rec in records_by_id.items()
+        if rec.get("display_label")
+    }
     sidebar = {}
     for node_id, rec in records_by_id.items():
-        entry = build_record_entry(rec)
+        entry = build_record_entry(rec, label_map)
         entry.update({
             "id": node_id,
             "display_label": rec.get("display_label"),
-            "island_label": _island_letter(rec.get("birth_island", -1)),
+            "island_label": island_label(rec.get("birth_island", -1)),
             "test_loss": rec.get("test_loss"),
             "parent1_id": _parse_parent_id(rec.get("parent1_id")),
             "parent2_id": _parse_parent_id(rec.get("parent2_id")),
@@ -183,6 +156,7 @@ def _build_sidebar_data(records_by_id):
             "migrant_from_label": rec.get("migrant_from_label"),
             "is_extinct": rec.get("is_extinct", False),
             "model_code": rec.get("model_code_numpy"),
+            "model_code_jax": rec.get("model_code_jax"),
             "param_est_code": rec.get("param_est_code"),
             "model_prompt": rec.get("model_prompt"),
             "model_llm_response": rec.get("model_llm_response"),
@@ -237,10 +211,10 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
             best_node = node
             break
 
-    # Dead nodes: non-seed nodes with no children in the graph
+    # Dead nodes: programs explicitly removed via deduplication or pruning
     dead_nodes = {
         node for node in G.nodes()
-        if G.out_degree(node) == 0 and not records_by_id.get(node, {}).get("is_seed", False)
+        if records_by_id.get(node, {}).get("removal_reason") is not None
     }
 
     # Compute loss range for coloring (exclude dead nodes so they don't skew the scale)
@@ -497,6 +471,29 @@ function formatTemp(v) {{
   return num.toFixed(2);
 }}
 
+function formatRemovalDetailValue(value) {{
+  if (value === null || value === undefined) return '<em>N/A</em>';
+  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) {{
+    return '<code>' + escapeHtml(JSON.stringify(value)) + '</code>';
+  }}
+  if (typeof value === 'number') {{
+    return Number.isInteger(value) ? String(value) : Number(value).toFixed(4);
+  }}
+  return escapeHtml(value);
+}}
+
+function formatRemovalDetails(details) {{
+  if (!details || typeof details !== 'object' || Object.keys(details).length === 0) return '';
+  let html = '<div class="field" style="margin-top:6px;">';
+  html += '<span class="field-label" style="color:#856404;">Details:</span>';
+  html += '<div class="field-value" style="margin-top:4px;">';
+  Object.entries(details).forEach(function([key, value]) {{
+    html += '<div><strong>' + escapeHtml(key) + ':</strong> ' + formatRemovalDetailValue(value) + '</div>';
+  }});
+  html += '</div></div>';
+  return html;
+}}
+
 function labelFor(id) {{
   if (!id) return '<em>N/A</em>';
   const rec = sidebarData[id];
@@ -514,6 +511,7 @@ function showSidebar(nodeId) {{
   let h = '<h2>' + escapeHtml(d.is_seed ? ('Seed ' + displayLabel) : ('Program ' + displayLabel)) + '</h2>';
 
   // Basic info
+  h += '<div class="field"><span class="field-label">ID:</span> <span class="field-value">' + escapeHtml(d.program_id) + '</span></div>';
   h += '<div class="field"><span class="field-label">Generation:</span> <span class="field-value">' + escapeHtml(d.iteration) + '</span></div>';
   h += '<div class="field"><span class="field-label">Island:</span> <span class="field-value">' + escapeHtml(d.island_label || d.island) + '</span></div>';
   h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
@@ -527,9 +525,20 @@ function showSidebar(nodeId) {{
   h += '<div class="field"><span class="field-label">LLM:</span> <span class="field-value">' + escapeHtml(d.llm_name) + '</span></div>';
   h += '<div class="field"><span class="field-label">Parents:</span> <span class="field-value">' + labelFor(d.parent1_id) + ', ' + labelFor(d.parent2_id) + '</span></div>';
 
+  if (d.removal_reason) {{
+    h += '<div class="field" style="background:#fff3cd;padding:6px;border-radius:4px;margin-bottom:8px;">';
+    h += '<span class="field-label" style="color:#856404;">Removed:</span> ';
+    h += '<span class="field-value">' + escapeHtml(d.removal_reason.event_type) + ' (' + escapeHtml(d.removal_reason.rule) + ')</span>';
+    h += formatRemovalDetails(d.removal_reason.details);
+    h += '</div>';
+  }}
+
   // Model code
   if (d.model_code) {{
     h += '<details><summary>Model Code</summary><pre>' + escapeHtml(d.model_code) + '</pre></details>';
+  }}
+  if (d.model_code_jax) {{
+    h += '<details><summary>Model Code (JAX)</summary><pre>' + escapeHtml(d.model_code_jax) + '</pre></details>';
   }}
 
   // Param estimator code
@@ -613,13 +622,11 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
     # Build lookup by node ID
     records_by_id = {}
     for rec in all_records:
-        nid = _make_node_id(*record_key(rec))
+        nid = make_program_id(*record_key(rec))
         records_by_id[nid] = rec
 
-    # Assign compact labels
-    label_map = _assign_node_labels(all_records)
-    for nid, rec in records_by_id.items():
-        rec["display_label"] = label_map.get(nid)
+    # Assign shared compact labels so the tree and progress monitor stay aligned.
+    assign_display_labels(all_records)
 
     image_base_dir = os.path.dirname(generation_log_path)
 
