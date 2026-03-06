@@ -81,7 +81,7 @@ def assign_display_labels(records: list[dict]) -> dict[str, str]:
     island_indices = sorted({
         rec.get("birth_island")
         for rec in records
-        if rec.get("birth_island", -1) >= 0 and rec.get("iteration_number", -1) >= 0
+        if isinstance(rec.get("birth_island"), int) and rec.get("birth_island") >= 0 and rec.get("iteration_number", -1) >= 0
     })
     for island_idx in island_indices:
         island_records = [
