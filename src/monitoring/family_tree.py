@@ -13,7 +13,6 @@ import networkx as nx
 
 from .io import (
     assign_display_labels,
-    backfill_removal_iterations_from_engine_log,
     build_record_entry,
     escape,
     island_label,

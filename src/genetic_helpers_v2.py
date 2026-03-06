@@ -1224,7 +1224,7 @@ def perform_island_deduplication(islands: List[pd.DataFrame], mode: str = 'compl
     for island_id, island_data in enumerate(islands):
         deduped, events = remove_duplicates(island_data, mode=mode, loss_tol=loss_tol,
                                    cosine_tol=cosine_tol, loss_type=loss_type,
-                                   island_id=island_id)
+                                   island_id=island_id, iteration=iteration)
         deduplicated.append(deduped)
         all_events.extend(events)
 
