@@ -1203,7 +1203,8 @@ def _apply_removal_reasons_to_log(filepath, removal_events):
             "details": details,
         }
 
-    # Read-modify-rewrite (same pattern as _update_generation_log_test_losses_and_mark_winner)
+    # Non-atomic read/overwrite. If log corruption is observed, switch to
+    # temp file + os.replace() for atomic writes.
     with open(filepath, 'r') as f:
         lines = f.readlines()
     with open(filepath, 'w') as f:
