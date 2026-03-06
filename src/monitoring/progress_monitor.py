@@ -230,6 +230,9 @@ function showSidebar(idx) {
   if (d.model_code) {
     h += '<details open><summary>Model Code</summary><pre>' + escapeHtml(d.model_code) + '</pre></details>';
   }
+  if (d.model_code_jax) {
+    h += '<details><summary>Model Code (JAX)</summary><pre>' + escapeHtml(d.model_code_jax) + '</pre></details>';
+  }
   if (d.param_est_code) {
     h += '<details><summary>Parameter Estimator Code</summary><pre>' + escapeHtml(d.param_est_code) + '</pre></details>';
   }

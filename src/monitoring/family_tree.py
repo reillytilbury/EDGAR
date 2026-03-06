@@ -156,6 +156,7 @@ def _build_sidebar_data(records_by_id):
             "migrant_from_label": rec.get("migrant_from_label"),
             "is_extinct": rec.get("is_extinct", False),
             "model_code": rec.get("model_code_numpy"),
+            "model_code_jax": rec.get("model_code_jax"),
             "param_est_code": rec.get("param_est_code"),
             "model_prompt": rec.get("model_prompt"),
             "model_llm_response": rec.get("model_llm_response"),
@@ -535,6 +536,9 @@ function showSidebar(nodeId) {{
   // Model code
   if (d.model_code) {{
     h += '<details><summary>Model Code</summary><pre>' + escapeHtml(d.model_code) + '</pre></details>';
+  }}
+  if (d.model_code_jax) {{
+    h += '<details><summary>Model Code (JAX)</summary><pre>' + escapeHtml(d.model_code_jax) + '</pre></details>';
   }}
 
   // Param estimator code

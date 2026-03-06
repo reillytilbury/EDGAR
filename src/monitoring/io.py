@@ -203,6 +203,7 @@ def build_record_entry(
         "llm_name": rec.get("llm_name"),
         "temperature": rec.get("temperature"),
         "model_code": rec.get("model_code_numpy"),
+        "model_code_jax": rec.get("model_code_jax"),
         "param_est_code": rec.get("param_est_code"),
         "model_prompt": rec.get("model_prompt"),
         "image_prompt_path": rec.get("image_prompt_path"),
