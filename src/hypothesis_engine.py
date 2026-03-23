@@ -2,6 +2,9 @@ import inspect
 import json
 import re
 import os
+import io
+import tokenize
+import gc
 import multiprocessing as mp
 import logging
 import webbrowser
@@ -62,6 +65,101 @@ def _get_callable_source(func) -> tuple[str | None, str | None]:
         return source, inferred_name
     except Exception:
         return None, None
+
+
+def _normalize_generated_model_code(
+    code_string: str | None,
+    model_name: str,
+    expected_version: int | None = None,
+) -> str | None:
+    """
+    Accept common generated model function names and normalize to ``def {model_name}(...):``.
+
+    Accepted top-level names:
+    - ``{model_name}_v{expected_version}``
+    - ``{model_name}_v<number>``
+    - ``{model_name}``
+    - ``model_v<number>``
+    - ``model``
+    """
+    if code_string is None:
+        return None
+    code = textwrap.dedent(str(code_string)).strip()
+    if not code:
+        return code
+
+    patterns = []
+    if expected_version is not None:
+        patterns.append(rf"^\s*def\s+{re.escape(model_name)}_v{int(expected_version)}\s*\(")
+    patterns.extend(
+        [
+            rf"^\s*def\s+{re.escape(model_name)}_v\d+\s*\(",
+            rf"^\s*def\s+{re.escape(model_name)}\s*\(",
+            r"^\s*def\s+model_v\d+\s*\(",
+            r"^\s*def\s+model\s*\(",
+        ]
+    )
+
+    for pat in patterns:
+        if re.search(pat, code, flags=re.MULTILINE):
+            return re.sub(pat, f"def {model_name}(", code, count=1, flags=re.MULTILINE)
+    return code
+
+
+def _strip_strings_and_comments(code_string: str) -> str:
+    """
+    Remove Python string literals and comments for safer token scanning.
+    """
+    if not isinstance(code_string, str) or not code_string:
+        return ""
+    try:
+        tokens = []
+        reader = io.StringIO(code_string).readline
+        for tok_type, tok_str, *_ in tokenize.generate_tokens(reader):
+            if tok_type in (tokenize.STRING, tokenize.COMMENT):
+                continue
+            tokens.append(tok_str)
+        return " ".join(tokens)
+    except Exception:
+        # Best effort: if tokenization fails, fall back to raw text.
+        return code_string
+
+
+def _find_banned_token(code_string: str, swear_words) -> str | None:
+    """
+    Return the first banned token found in executable code, or None.
+    """
+    if not swear_words:
+        return None
+    scan_text = _strip_strings_and_comments(code_string)
+    for raw_word in swear_words:
+        if not isinstance(raw_word, str) or not raw_word.strip():
+            continue
+        word = raw_word.strip()
+        if "." in word and re.fullmatch(r"[A-Za-z0-9_.]+", word):
+            # Match dotted paths with optional whitespace around dots.
+            parts = [re.escape(p) for p in word.split(".") if p]
+            if not parts:
+                continue
+            pattern = r"\b" + r"\s*\.\s*".join(parts) + r"\b"
+        elif re.fullmatch(r"[A-Za-z0-9_]+", word):
+            pattern = rf"\b{re.escape(word)}\b"
+        else:
+            pattern = re.escape(word)
+        if re.search(pattern, scan_text, flags=re.IGNORECASE):
+            return raw_word
+    return None
+
+
+def _clear_jax_runtime_cache():
+    """
+    Best-effort cache cleanup to reduce long-run GPU memory pressure.
+    """
+    try:
+        jax.clear_caches()
+    except Exception:
+        pass
+    gc.collect()
 
 
 def _run_param_estimator_with_timeout(param_estimator, xi, yi, timeout_s: float):
@@ -160,14 +258,31 @@ def compute_initial_params(
         yi_arr = np.asarray(yi)
         if yi_arr.ndim == 2 and yi_arr.shape[0] == 1:
             yi_arr = yi_arr[0]
-        try:
+
+        def _call_once(x_local, y_local):
             if timeout_s_val is not None:
                 if signal_timeout_estimator is not None:
-                    return signal_timeout_estimator(xi, yi_arr)
+                    return signal_timeout_estimator(x_local, y_local)
                 return _run_param_estimator_with_timeout(
-                    param_estimator, xi, yi_arr, timeout_s_val
+                    param_estimator, x_local, y_local, timeout_s_val
                 )
-            return param_estimator(xi, yi_arr)
+            return param_estimator(x_local, y_local)
+
+        def _is_shape_like_error(err: Exception) -> bool:
+            msg = str(err).lower()
+            hints = (
+                "shape",
+                "broadcast",
+                "matmul",
+                "gufunc",
+                "incompatible dimensions",
+                "cannot reshape",
+            )
+            return any(h in msg for h in hints)
+
+        # First attempt: canonical orientation.
+        try:
+            return _call_once(xi, yi_arr)
         except ObjectiveTimeout:
             raise
         except ProcessTimeoutUnavailable as process_error:
@@ -190,6 +305,24 @@ def compute_initial_params(
             )
             return None
         except Exception as e:
+            # Second attempt: y transposed. Many generated estimators confuse
+            # (n_targets, n_trials) with (n_trials, n_targets).
+            if yi_arr.ndim == 2 and yi_arr.shape[0] > 1 and yi_arr.shape[1] > 1 and _is_shape_like_error(e):
+                try:
+                    retry_params = _call_once(xi, yi_arr.T)
+                    logging.info(
+                        "param_estimator recovered on sample %s by retrying with y.T.",
+                        sample_idx,
+                    )
+                    return retry_params
+                except Exception as retry_e:
+                    logging.info(
+                        "param_estimator failed for sample %s in both orientations: %s | retry(y.T): %s",
+                        sample_idx,
+                        e,
+                        retry_e,
+                    )
+                    return None
             logging.info(f"param_estimator failed for sample {sample_idx}: {e}")
             return None
 
@@ -391,9 +524,10 @@ def objective(model, param_estimator, x, y,
            Each element can be an Outputs object or array with shape
            (n_samples, n_targets, n_trials_split).
         loss_fn (function): Per-sample loss function.
-                          Signature: loss_fn(y_pred, y_true) -> scalar/array.
+                          Signature: loss_fn(y_pred, y_true[, params]) -> scalar/array.
                           Required; no default.
-        param_penalty_weight (float): Weight for the penalty on the number of parameters. Default is 0.1.
+        param_penalty_weight (float): Legacy complexity-penalty knob.
+            Reported/saved losses are always raw data-fit losses (no penalty term).
         fit_params (bool): Whether to fit the parameters of the model. Default is True.
         FAILED_PROGRAM_COST (float): Cost assigned to failed models. Default is np.inf.
         max_iter (int): Maximum number of iterations for optimization. Default is 1_000.
@@ -478,15 +612,39 @@ def objective(model, param_estimator, x, y,
 
     initial_params = utils.broadcast_params(initial_params, n_samples)
 
+    # Memory guard: reject candidates with very large per-sample parameter payloads.
+    try:
+        params_single = utils.slice_params(initial_params, 0)
+        param_bytes = int(
+            sum(np.asarray(leaf).nbytes for leaf in jax.tree_util.tree_leaves(params_single))
+        )
+        max_param_bytes = 64 * 1024 * 1024  # 64 MiB per sample
+        if param_bytes > max_param_bytes:
+            logging.info(
+                "Error: parameter payload too large (%d bytes > %d bytes).",
+                param_bytes,
+                max_param_bytes,
+            )
+            print(
+                "Program failed: parameter payload exceeds memory guard "
+                f"({param_bytes} bytes)."
+            )
+            return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
+    except Exception:
+        # Keep objective robust even if size introspection fails.
+        pass
+
     # Fail immediately if fit_params is True and non-numeric params
-    n_params_raw = utils.params_numel_per_sample(initial_params, n_samples=n_samples)
-    n_features_in = int(n_features)
-    n_features_out = int(n_targets)
-    penalty_denom = max(1, n_features_in * n_features_out)
-    n_params = n_params_raw / penalty_denom
     if not utils.params_all_finite(initial_params):
         logging.info("Error: Parameters contain non-numeric or non-finite values.")
         print("Program failed: parameters contain non-numeric or non-finite values.")
+        return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
+    if fit_params and not utils.params_all_inexact(initial_params):
+        logging.info(
+            "Error: Parameters contain int/bool leaves; rejecting before GD.\n%s",
+            utils.params_tree_summary(initial_params, n_samples=n_samples),
+        )
+        print("Program failed: parameters must be floating-point for GD (found int/bool dtype).")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
     _check_timeout("model validation")
     
@@ -500,12 +658,28 @@ def objective(model, param_estimator, x, y,
         logging.info(f"Model validation failed: {error_msg}")
         print(f"Program failed: model validation failed ({error_msg}).")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
-    _check_timeout("post-validation")
+    try:
+        _check_timeout("post-validation")
+    except ObjectiveTimeout as e:
+        logging.info(str(e))
+        return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
     flat_init, unflatten = ravel_pytree(initial_params)
 
-    # Per-sample loss function
-    def loss_single_sample(params, x_i, y_i):
+    # Per-sample optimization loss (may include regularization via params).
+    def loss_single_sample_opt(params, x_i, y_i):
+        y_pred = model(x_i, params)
+        if y_i.ndim == 1:
+            y_i = y_i[None, :]
+        if y_pred.ndim == 1:
+            y_pred = y_pred[None, :]
+        sample_loss = jnp.asarray(loss_fn(y_pred, y_i, params))
+        if sample_loss.ndim == 0:
+            return sample_loss
+        return jnp.mean(sample_loss)
+
+    # Per-sample reporting/evaluation loss (raw data-fit loss, no params passed).
+    def loss_single_sample_raw(params, x_i, y_i):
         y_pred = model(x_i, params)
         if y_i.ndim == 1:
             y_i = y_i[None, :]
@@ -519,7 +693,8 @@ def objective(model, param_estimator, x, y,
     # Vectorize over samples
     # params: pytree (batched), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
     # Output: (n_samples,)
-    loss_total = jax.vmap(loss_single_sample, in_axes=(0, 0, 0), out_axes=0)
+    loss_total_opt = jax.vmap(loss_single_sample_opt, in_axes=(0, 0, 0), out_axes=0)
+    loss_total_raw = jax.vmap(loss_single_sample_raw, in_axes=(0, 0, 0), out_axes=0)
 
     # Mini-batched loss and gradient computation to avoid GPU OOM
     n_train_trials_x = x_train.shape[2]
@@ -535,7 +710,7 @@ def objective(model, param_estimator, x, y,
     @jax.jit
     def loss_single_batch(params_tree, x_batch, y_batch):
         """Compute sum of losses for one batch (JIT-compiled)."""
-        batch_losses = loss_total(params_tree, x_batch, y_batch)  # (n_samples,)
+        batch_losses = loss_total_opt(params_tree, x_batch, y_batch)  # (n_samples,)
         return jnp.sum(batch_losses)
 
     # Combined loss and gradient computation - more efficient than separate calls
@@ -545,7 +720,7 @@ def objective(model, param_estimator, x, y,
     @jax.jit
     def eval_single_batch(params_tree, x_batch, y_batch):
         """Compute nansum of losses for one batch (JIT-compiled, no grad)."""
-        batch_losses = loss_total(params_tree, x_batch, y_batch)
+        batch_losses = loss_total_raw(params_tree, x_batch, y_batch)
         return jnp.nansum(batch_losses)
 
     if trials_matched:
@@ -594,7 +769,7 @@ def objective(model, param_estimator, x, y,
         opt_state = opt.init(flat_params)
 
         if use_scalar_single_feature_fullbatch:
-            loss_param = lambda params: jnp.mean(loss_total(unflatten(params), x_train, y_train))
+            loss_param = lambda params: jnp.mean(loss_total_opt(unflatten(params), x_train, y_train))
             loss_param_and_grad = jax.value_and_grad(loss_param)
 
             @jax.jit
@@ -693,10 +868,9 @@ def objective(model, param_estimator, x, y,
         def _eval_loss(params_tree, x_eval, y_eval, label: str):
             _check_timeout(f"{label} loss evaluation")
             if use_scalar_single_feature_fullbatch:
-                loss_val = jnp.nanmean(loss_total(params_tree, x_eval, y_eval))
+                loss_val = jnp.nanmean(loss_total_raw(params_tree, x_eval, y_eval))
             else:
                 loss_val = eval_loss_batched(params_tree, x_eval, y_eval)
-            loss_val = loss_val + param_penalty_weight * n_params
             n_nans = jnp.sum(jnp.isnan(loss_val))
             if n_nans > 0:
                 print(f"Warning: {label} loss contains {n_nans} NaNs.")
@@ -728,7 +902,8 @@ def objective_simple(
     - param_estimator: function with signature param_estimator(X, response) -> params for single sample.
     - x: length-2 container of train/test inputs, each of shape (n_samples, n_features, n_trials_split).
     - y: length-2 container of train/test outputs, each of shape (n_samples, n_targets, n_trials_split)
-    - loss_fn: function with signature loss_fn(y_pred, y_true) -> scalar or array.
+    - loss_fn: function with signature loss_fn(y_pred, y_true[, params]) -> scalar or array.
+      Reported loss is raw (called without params).
     """
     print("Running objective_simple (no JIT, no mini-batching)...")
     x_train = np.asarray(x[0])
@@ -758,21 +933,28 @@ def objective_simple(
 
 
 def _call_objective(use_simple_objective: bool, **kwargs):
-    if use_simple_objective:
-        x = kwargs["x"]
-        y = kwargs["y"]
-        x_train = x[0].to_tensor() if hasattr(x[0], "to_tensor") else x[0]
-        x_test = x[1].to_tensor() if hasattr(x[1], "to_tensor") else x[1]
-        y_train = y[0].to_tensor() if hasattr(y[0], "to_tensor") else y[0]
-        y_test = y[1].to_tensor() if hasattr(y[1], "to_tensor") else y[1]
-        return objective_simple(
-            model=kwargs["model"],
-            param_estimator=kwargs["param_estimator"],
-            x=[x_train, x_test],
-            y=[y_train, y_test],
-            loss_fn=kwargs["loss_fn"],
-        )
-    return objective(**kwargs)
+    try:
+        if use_simple_objective:
+            x = kwargs["x"]
+            y = kwargs["y"]
+            x_train = x[0].to_tensor() if hasattr(x[0], "to_tensor") else x[0]
+            x_test = x[1].to_tensor() if hasattr(x[1], "to_tensor") else x[1]
+            y_train = y[0].to_tensor() if hasattr(y[0], "to_tensor") else y[0]
+            y_test = y[1].to_tensor() if hasattr(y[1], "to_tensor") else y[1]
+            return objective_simple(
+                model=kwargs["model"],
+                param_estimator=kwargs["param_estimator"],
+                x=[x_train, x_test],
+                y=[y_train, y_test],
+                loss_fn=kwargs["loss_fn"],
+            )
+        return objective(**kwargs)
+    except ObjectiveTimeout as e:
+        logging.info(str(e))
+        return np.inf, {}, np.inf, {}
+    except Exception as e:
+        logging.exception("Objective call failed: %s", e)
+        return np.inf, {}, np.inf, {}
 
 
 def _programs_df_to_programs_list(programs_df: pd.DataFrame, 
@@ -787,65 +969,91 @@ def _programs_df_to_programs_list(programs_df: pd.DataFrame,
 
     Args:
     programs_df (pd.DataFrame): DataFrame containing program information with columns 'model' and 'params'.
-    loss_func (callable): Loss function ``loss_func(y_pred, y_true)``.
+    loss_func (callable): Loss function ``loss_func(y_pred, y_true[, params])``.
     x (jnp.ndarray): (n_samples, n_features, n_trials) input data used for computing losses.
     y (jnp.ndarray): (n_samples, n_targets, n_trials) true output data used for computing losses.
-    complexity_penalty (float): Additive complexity penalty multiplier.
-        Each sample loss is increased by ``complexity_penalty * n_free_params``.
+    complexity_penalty (float): Legacy argument kept for call-site compatibility.
+        Plot losses are raw losses and ignore this penalty.
     """
     programs_list = []
     if programs_df is None or len(programs_df) == 0:
         return programs_list
-    x_arr = jnp.asarray(ensure_inputs(x).to_tensor())
-    y_arr = jnp.asarray(ensure_outputs(y).to_tensor())
+    _ = complexity_penalty  # Intentionally ignored: plots show raw losses.
+    x_arr = np.asarray(ensure_inputs(x).to_tensor())
+    y_arr = np.asarray(ensure_outputs(y).to_tensor())
     n_samples = x_arr.shape[0]
 
     if loss_func is None:
         raise ValueError("_programs_df_to_programs_list requires a loss_func; none was provided.")
+
+    def _broadcast_params_cpu(params_in, n: int):
+        def _b(arr):
+            arr = np.asarray(arr)
+            if arr.ndim == 0:
+                return np.full((n,), arr, dtype=arr.dtype)
+            if arr.shape[0] == n:
+                return arr
+            if arr.shape[0] == 1:
+                return np.broadcast_to(arr, (n,) + arr.shape[1:])
+            arr = arr[None, ...]
+            return np.broadcast_to(arr, (n,) + arr.shape)
+        return jax.tree_util.tree_map(_b, params_in)
+
+    def _slice_params_cpu(params_in, idx: int):
+        return jax.tree_util.tree_map(
+            lambda arr: arr if np.ndim(arr) == 0 else np.asarray(arr)[idx],
+            params_in,
+        )
 
     for _, row in programs_df.iterrows():
         model = row.get('program', row.get('model'))
         params = row.get('params')
         if model is None or params is None:
             continue
-        params_tree = utils.broadcast_params(params, n_samples)
-        n_free_params_raw = utils.params_numel_per_sample(params_tree, n_samples=n_samples)
-        penalty_denom = max(1, int(x_arr.shape[1]) * int(y_arr.shape[1]))
-        n_free_params = n_free_params_raw / penalty_denom
-        y_pred = utils.vmap_over_samples(model)(x_arr, params_tree)
-        if y_pred.ndim == 2 and y_arr.ndim == 3 and y_arr.shape[1] == 1:
-            y_pred = y_pred[:, None, :]
-        raw_losses = jnp.asarray(loss_func(y_pred, y_arr))
+        params_tree = _broadcast_params_cpu(params, n_samples)
 
-        # Per-cell MSE for each sample (n_samples, n_targets)
+        losses = np.full((n_samples,), np.inf, dtype=np.float64)
         per_cell_losses = None
-        if y_pred.ndim == 3 and y_arr.ndim == 3:
-            per_cell_losses = jnp.mean((y_pred - y_arr) ** 2, axis=2)
+        per_cell_list = []
 
-        if raw_losses.ndim == 0:
-            losses = jnp.full((n_samples,), raw_losses)
-        else:
-            # Reduce all non-sample dimensions so each sample has one loss value.
-            if raw_losses.shape[0] == n_samples:
-                losses = jnp.mean(raw_losses.reshape(n_samples, -1), axis=1)
-            else:
-                flat = raw_losses.reshape(-1)
-                if flat.size == n_samples:
-                    losses = flat
-                elif flat.size == 1:
-                    losses = jnp.full((n_samples,), flat[0])
+        for sample_idx in range(n_samples):
+            params_i = _slice_params_cpu(params_tree, sample_idx)
+            y_true_i = np.asarray(y_arr[sample_idx], dtype=np.float64)
+            try:
+                y_pred_i = np.asarray(
+                    utils.call_model(model, x_arr[sample_idx], params_i, prefer_jax=False),
+                    dtype=np.float64,
+                )
+                if y_pred_i.ndim == 1:
+                    y_pred_i = y_pred_i[None, :]
+                if y_true_i.ndim == 1:
+                    y_true_i = y_true_i[None, :]
+                if y_pred_i.shape != y_true_i.shape:
+                    raise ValueError(
+                        f"prediction/target shape mismatch: pred={y_pred_i.shape}, true={y_true_i.shape}"
+                    )
+                raw_loss_i = np.asarray(loss_func(y_pred_i, y_true_i), dtype=np.float64)
+                losses[sample_idx] = float(np.nanmean(raw_loss_i))
+                per_cell_list.append(np.mean((y_pred_i - y_true_i) ** 2, axis=1))
+            except Exception:
+                losses[sample_idx] = np.inf
+                if y_true_i.ndim == 2:
+                    per_cell_list.append(np.full((y_true_i.shape[0],), np.inf, dtype=np.float64))
                 else:
-                    losses = jnp.full((n_samples,), jnp.mean(flat))
-        penalty_term = float(complexity_penalty) * n_free_params
-        losses = losses + penalty_term
-        if per_cell_losses is not None:
-            per_cell_losses = per_cell_losses + penalty_term
+                    per_cell_list.append(np.full((1,), np.inf, dtype=np.float64))
+
+        try:
+            per_cell_losses = np.stack(per_cell_list, axis=0)
+        except Exception:
+            per_cell_losses = None
+
         programs_list.append({
             'model': model,
-            'params': params_tree,
+            'params': params,
             'losses': losses,
             'per_cell_losses': per_cell_losses,
         })
+        _clear_jax_runtime_cache()
 
     return programs_list
 
@@ -988,7 +1196,11 @@ async def generate_new_model(current_island, llm_name, client,
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
         return None, program_prompt, llm_output, (parent1_id, parent2_id)
-    code_string = code_string.replace(f'def {model_name}_v{k+1}(', f'def {model_name}(')
+    code_string = _normalize_generated_model_code(
+        code_string,
+        model_name=model_name,
+        expected_version=k + 1,
+    )
 
     return code_string, program_prompt, llm_output, (parent1_id, parent2_id)
 
@@ -1121,7 +1333,7 @@ async def generate_linked_model_and_estimator(
                 return match.group(0).strip()
         return None
 
-    model_block = _extract_func(code_text, [f"{model_name}_v", "model_v", "model"])
+    model_block = _extract_func(code_text, [f"{model_name}_v", model_name, "model_v", "model"])
     param_block = _extract_func(code_text, ["parameter_estimator_v", "parameter_estimator"])
 
     if model_block and param_block:
@@ -1140,8 +1352,10 @@ async def generate_linked_model_and_estimator(
     else:
         return None, None, prompt, llm_output, (parent1_id, parent2_id)
 
-    model_code_string = model_code_string.replace(
-        f"def {model_name}_v{k+1}(", f"def {model_name}("
+    model_code_string = _normalize_generated_model_code(
+        model_code_string,
+        model_name=model_name,
+        expected_version=k + 1,
     )
     param_est_code_string = re.sub(
         r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", param_est_code_string
@@ -1275,10 +1489,8 @@ async def generate_new_parameter_estimator(current_island,
     if code_string is None:
         pe_metadata["status"] = "no_code_block"
         return None, None, pe_metadata
-    contains_swear_word = bool(swear_words) and any(word in code_string for word in swear_words)
-    if contains_swear_word:
-        # find the word that is in the code_string
-        swear_word = next((word for word in swear_words if word in code_string), None)
+    swear_word = _find_banned_token(code_string, swear_words)
+    if swear_word is not None:
         pe_metadata["status"] = f"banned_token:{swear_word}"
         return None, None, pe_metadata
     code_string = re.sub(r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", code_string)
@@ -1397,7 +1609,7 @@ async def generate_new_parameter_estimator(current_island,
         if new_code is None:
             pe_metadata["refinement_codes"].append(None)
             continue
-        if swear_words and any(word in new_code for word in swear_words):
+        if _find_banned_token(new_code, swear_words) is not None:
             pe_metadata["refinement_codes"].append(None)
             continue
 
@@ -1441,7 +1653,14 @@ async def generate_new_parameter_estimator(current_island,
     return best_code, best_func, pe_metadata
 
 
-async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='gemini-2.0-flash-lite') -> tuple[str, callable, str | None, str | None]:
+async def translate_to_jax(
+    code_string: str,
+    client,
+    prompt_manager,
+    llm_name='gemini-2.0-flash-lite',
+    max_retries: int = 2,
+    retry_delay_s: float = 2.0,
+) -> tuple[str, callable, str | None, str | None]:
     """
     Translate a model code string to a JAX-compatible implementation via LLM.
 
@@ -1463,10 +1682,44 @@ async def translate_to_jax(code_string: str, client, prompt_manager, llm_name='g
     if prompt is None:
         return None, None, None, None
     
-    raw_response = await llm_helper.call_llm_async(prompt, client=client, model_name=llm_name, temperature=0)
+    raw_response = None
+    for attempt in range(max_retries + 1):
+        raw_response = await llm_helper.call_llm_async(
+            prompt,
+            client=client,
+            model_name=llm_name,
+            temperature=0,
+        )
+        if isinstance(raw_response, str) and raw_response.strip():
+            break
+        if attempt < max_retries:
+            sleep_s = float(retry_delay_s) * (2 ** attempt)
+            logging.warning(
+                "JAX translation attempt %d/%d failed for model %s; retrying in %.1fs.",
+                attempt + 1,
+                max_retries + 1,
+                llm_name,
+                sleep_s,
+            )
+            await asyncio.sleep(sleep_s)
+
+    if not (isinstance(raw_response, str) and raw_response.strip()):
+        logging.error(
+            "JAX translation failed after %d attempts for model %s (empty/None response).",
+            max_retries + 1,
+            llm_name,
+        )
+        return None, None, prompt, raw_response
+
     jax_code_string = utils.extract_code_block(raw_response)
+    if not (isinstance(jax_code_string, str) and jax_code_string.strip()):
+        logging.error("JAX translation response did not contain an extractable code block.")
+        return None, None, prompt, raw_response
+
     model_name = prompt_manager.get_model_name()
     func = utils.str_to_func(jax_code_string, model_name)
+    if not callable(func):
+        logging.error("Translated JAX code parsed but did not produce callable function %s.", model_name)
     return jax_code_string, func, prompt, raw_response
 
 
@@ -1500,6 +1753,12 @@ def _run_translation_check_on_eval(
     Returns:
         None: Raises on mismatch; otherwise completes silently.
     """
+    if not callable(jax_func):
+        raise ValueError(
+            "JAX translation missing/non-callable; likely translation failed "
+            "(for example due API rate limiting)."
+        )
+
     x_obs = np.asarray(ensure_inputs(x_train_trials).to_tensor())
     y_obs = np.asarray(ensure_outputs(y_train_trials).to_tensor())
     n_samples = min(x_obs.shape[0], y_obs.shape[0])
@@ -1517,14 +1776,15 @@ def _run_translation_check_on_eval(
     else:
         trial_idx = rng.choice(n_trials, size=n_eval_trials, replace=False)
     eval_points = x_obs[:, :, trial_idx]
+    y_eval_obs = y_obs[:, :, trial_idx]
 
     n_check = min(max_samples, n_samples)
     sample_idx = np.linspace(0, n_samples - 1, num=n_check, dtype=int)
     params_subset = compute_initial_params(
         param_estimator,
         np_func,
-        x_obs[sample_idx],
-        y_obs[sample_idx],
+        eval_points[sample_idx],
+        y_eval_obs[sample_idx],
     )
     if params_subset is None:
         raise ValueError("Failed to compute parameters for translation check.")
@@ -1656,6 +1916,8 @@ async def hypothesis_engine(
         open_family_tree = False,
         use_simple_objective: bool = False,
         use_linked_prompt: bool = False,
+        log_prompts: bool = False,
+        log_jax_translations: bool = False,
         random_seed = 42, # consider setting up a seed_manager to make behaviours more robustly reproducible.
         ):
     """
@@ -1712,6 +1974,8 @@ async def hypothesis_engine(
         open_family_tree (bool): Open the combined family tree HTML at the end of the run.
         use_simple_objective (bool): Use the minimal objective implementation everywhere.
         use_linked_prompt (bool): Generate model + parameter estimator in a single prompt.
+        log_prompts (bool): If True, include prompt/response text in logs and generation records.
+        log_jax_translations (bool): If True, include JAX translator prompt/response/code in logs.
         random_seed (int): Run seed for deterministic split-dependent operations.
 
     Returns:
@@ -1796,15 +2060,23 @@ async def hypothesis_engine(
         for i, program in enumerate(numpy_programs)
     ]
     seed_jax_llm = jax_llm_seq[0]
-    translation_tasks = [
-        translate_to_jax(code_string, client, prompt_manager, seed_jax_llm)
-        for code_string in seed_code_strings
-    ]
-    jax_results = await asyncio.gather(*translation_tasks)
+    # Translate seed models sequentially to reduce burst quota/rate-limit failures.
+    jax_results = []
+    for code_string in seed_code_strings:
+        jax_results.append(
+            await translate_to_jax(code_string, client, prompt_manager, seed_jax_llm)
+        )
 
     jax_programs = []
     jax_code_strings = []
     for i, (jax_code_string, jax_func, _jax_prompt, _jax_response) in enumerate(jax_results):
+        if not callable(jax_func):
+            raise RuntimeError(
+                "Failed to translate seed model "
+                f"{i + 1} to JAX using {seed_jax_llm}. "
+                "This is commonly caused by LLM API rate limits (429 RESOURCE_EXHAUSTED). "
+                "Please retry after cooldown or lower request pressure."
+            )
         _run_translation_check_on_eval(
             np_func=numpy_programs[i],
             jax_func=jax_func,
@@ -1950,8 +2222,8 @@ async def hypothesis_engine(
         logging.root.removeHandler(handler)
     logging.basicConfig(filename=log_file, level=logging.INFO, format='%(message)s')
     
-    # Log the IslandChatManager configuration (including system instruction)
-    if island_chat_manager is not None:
+    # Log chat configuration only when prompt logging is explicitly enabled.
+    if island_chat_manager is not None and log_prompts:
         island_chat_manager.log_configuration()
     
     seed_train_fit_losses = [None] * len(jax_programs)
@@ -2057,7 +2329,7 @@ async def hypothesis_engine(
             "model_prompt": None,
             "model_llm_response": None,
             "model_code_numpy": seed_model_code_strings[idx] if idx < len(seed_model_code_strings) else None,
-            "model_code_jax": jax_code_strings[idx] if idx < len(jax_code_strings) else None,
+            "model_code_jax": jax_code_strings[idx] if (log_jax_translations and idx < len(jax_code_strings)) else None,
             "param_est_prompt": None,
             "param_est_llm_response": None,
             "param_est_code": seed_param_est_code_strings[idx] if idx < len(seed_param_est_code_strings) else None,
@@ -2262,6 +2534,7 @@ async def hypothesis_engine(
         # now loop through the results and compute losses
         success_rate = 0.0
         for island_idx, j in np.ndindex(n_islands, batch_size):
+            _clear_jax_runtime_cache()
             model_code_string, prompt, model_llm_response, model_code_string_jax, model_new, jax_prompt, jax_raw_response, param_est_code_string, param_est_new, pe_metadata = island_results[island_idx][j]
             parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
 
@@ -2275,40 +2548,45 @@ async def hypothesis_engine(
                 f"mode={mode} use_linked_prompt={use_linked_prompt}",
                 f"parent_ids={parent1_id},{parent2_id}",
             ]
-            if use_linked_prompt:
-                log_lines.append("[Linked prompt]")
-                log_lines.append(prompt or "<none>")
-                log_lines.append("[Linked response]")
-                log_lines.append(model_llm_response or "<none>")
-            else:
-                log_lines.append("[Model prompt]")
-                log_lines.append(prompt or "<none>")
-                log_lines.append("[Model response]")
-                log_lines.append(model_llm_response or "<none>")
-                if isinstance(pe_metadata, dict):
-                    log_lines.append("[Param estimator prompt]")
-                    log_lines.append(pe_metadata.get("initial_prompt") or "<none>")
-                    log_lines.append("[Param estimator response]")
-                    log_lines.append(pe_metadata.get("initial_response") or "<none>")
-                    if pe_metadata.get("refinement_prompts"):
-                        for ridx, ref_prompt in enumerate(pe_metadata.get("refinement_prompts", []), start=1):
-                            ref_resp = pe_metadata.get("refinement_responses", [None] * ridx)
-                            ref_code = pe_metadata.get("refinement_codes", [None] * ridx)
-                            log_lines.append(f"[Refinement {ridx} prompt]")
-                            log_lines.append(ref_prompt or "<none>")
-                            log_lines.append(f"[Refinement {ridx} response]")
-                            log_lines.append(ref_resp[ridx - 1] if ridx - 1 < len(ref_resp) else "<none>")
-                            log_lines.append(f"[Refinement {ridx} code]")
-                            log_lines.append(ref_code[ridx - 1] if ridx - 1 < len(ref_code) else "<none>")
+            score_line_idx = len(log_lines)
+            log_lines.append("score=<pending>")
+            if log_prompts:
+                if use_linked_prompt:
+                    log_lines.append("[Linked prompt]")
+                    log_lines.append(prompt or "<none>")
+                    log_lines.append("[Linked response]")
+                    log_lines.append(model_llm_response or "<none>")
+                else:
+                    log_lines.append("[Model prompt]")
+                    log_lines.append(prompt or "<none>")
+                    log_lines.append("[Model response]")
+                    log_lines.append(model_llm_response or "<none>")
+                    if isinstance(pe_metadata, dict):
+                        log_lines.append("[Param estimator prompt]")
+                        log_lines.append(pe_metadata.get("initial_prompt") or "<none>")
+                        log_lines.append("[Param estimator response]")
+                        log_lines.append(pe_metadata.get("initial_response") or "<none>")
+                        if pe_metadata.get("refinement_prompts"):
+                            for ridx, ref_prompt in enumerate(pe_metadata.get("refinement_prompts", []), start=1):
+                                ref_resp = pe_metadata.get("refinement_responses", [None] * ridx)
+                                ref_code = pe_metadata.get("refinement_codes", [None] * ridx)
+                                log_lines.append(f"[Refinement {ridx} prompt]")
+                                log_lines.append(ref_prompt or "<none>")
+                                log_lines.append(f"[Refinement {ridx} response]")
+                                log_lines.append(ref_resp[ridx - 1] if ridx - 1 < len(ref_resp) else "<none>")
+                                log_lines.append(f"[Refinement {ridx} code]")
+                                log_lines.append(ref_code[ridx - 1] if ridx - 1 < len(ref_code) else "<none>")
+
+            if log_jax_translations:
+                log_lines.append("[JAX translator prompt]")
+                log_lines.append(jax_prompt or "<none>")
+                log_lines.append("[JAX translator response]")
+                log_lines.append(jax_raw_response or "<none>")
+                log_lines.append("[Parsed JAX code]")
+                log_lines.append(model_code_string_jax or "<none>")
 
             log_lines.append("[Parsed model code]")
             log_lines.append(model_code_string or "<none>")
-            log_lines.append("[JAX translator prompt]")
-            log_lines.append(jax_prompt or "<none>")
-            log_lines.append("[JAX translator response]")
-            log_lines.append(jax_raw_response or "<none>")
-            log_lines.append("[Parsed JAX code]")
-            log_lines.append(model_code_string_jax or "<none>")
             log_lines.append("[Parsed parameter estimator code]")
             log_lines.append(param_est_code_string or "<none>")
             if isinstance(pe_metadata, dict) and pe_metadata.get("status"):
@@ -2333,6 +2611,16 @@ async def hypothesis_engine(
                     print("Status:", " | ".join(status_notes), flush=True)
                 logging.info("\n".join(log_lines))
 
+            def _set_score(value):
+                try:
+                    scalar = float(value)
+                    if np.isfinite(scalar):
+                        log_lines[score_line_idx] = f"score={scalar:.6f}"
+                    else:
+                        log_lines[score_line_idx] = "score=inf"
+                except Exception:
+                    log_lines[score_line_idx] = "score=<unknown>"
+
             if model_new is None or param_est_new is None:
                 # Provide extraction debug details when parsing fails.
                 if model_code_string is None or param_est_code_string is None:
@@ -2352,22 +2640,28 @@ async def hypothesis_engine(
                                 return match.group(0).strip()
                         return None
 
-                    debug_model = _debug_extract(debug_text, [f"{prompt_manager.get_model_name()}_v", "model_v", "model"])
+                    debug_model = _debug_extract(
+                        debug_text,
+                        [f"{prompt_manager.get_model_name()}_v", prompt_manager.get_model_name(), "model_v", "model"],
+                    )
                     debug_param = _debug_extract(debug_text, ["parameter_estimator_v", "parameter_estimator"])
-                    log_lines.append("[Extracted code text]")
-                    log_lines.append(debug_text or "<none>")
+                    if log_prompts:
+                        log_lines.append("[Extracted code text]")
+                        log_lines.append(debug_text or "<none>")
                     log_lines.append("[Extracted imports]")
                     log_lines.append("\n".join(dict.fromkeys(debug_imports)) or "<none>")
                     log_lines.append("[Extracted model block]")
-                    log_lines.append(debug_model or "<none>")
+                    log_lines.append((debug_model or "<none>") if log_prompts else ("present" if debug_model else "missing"))
                     log_lines.append("[Extracted parameter_estimator block]")
-                    log_lines.append(debug_param or "<none>")
+                    log_lines.append((debug_param or "<none>") if log_prompts else ("present" if debug_param else "missing"))
+                _set_score(np.inf)
                 _flush_log()
                 continue
 
             model_name = prompt_manager.get_model_name()
             model_np = utils.str_to_func(model_code_string, model_name)
             if model_np is None:
+                _set_score(np.inf)
                 _flush_log("failed to parse NumPy model")
                 continue
             try:
@@ -2380,10 +2674,9 @@ async def hypothesis_engine(
                     x_eval=X_eval_train,
                 )
             except Exception as e:
+                _set_score(np.inf)
                 _flush_log(f"JAX translation check failed: {e}")
                 continue
-
-            _flush_log()
             
             opt_start = time.time()
             initial_loss, initial_params, loss, optimized_params = _call_objective(
@@ -2404,6 +2697,8 @@ async def hypothesis_engine(
             optimization_time_s = time.time() - opt_start
             if not np.isfinite(float(loss)):
                 print("Status: objective failed (non-finite loss).", flush=True)
+                _set_score(np.inf)
+                _flush_log("objective failed (non-finite loss)")
                 logging.info('-' * 50)
                 continue
 
@@ -2412,6 +2707,8 @@ async def hypothesis_engine(
                 optimized_params,
                 eval_points=X_eval_train,
             )
+            _set_score(loss)
+            _flush_log()
             logging.info(f"Loss: {loss:.2f}\n")
 
             train_fit_path = None
@@ -2562,15 +2859,15 @@ async def hypothesis_engine(
                 "train_loss": float(loss),
                 "initial_loss": float(initial_loss),
                 "optimization_time_s": float(optimization_time_s),
-                "model_prompt": prompt,
-                "model_llm_response": model_llm_response,
+                "model_prompt": prompt if log_prompts else None,
+                "model_llm_response": model_llm_response if log_prompts else None,
                 "model_code_numpy": model_code_string,
-                "model_code_jax": model_code_string_jax,
-                "param_est_prompt": pe_metadata.get("initial_prompt"),
-                "param_est_llm_response": pe_metadata.get("initial_response"),
+                "model_code_jax": model_code_string_jax if log_jax_translations else None,
+                "param_est_prompt": pe_metadata.get("initial_prompt") if log_prompts else None,
+                "param_est_llm_response": pe_metadata.get("initial_response") if log_prompts else None,
                 "param_est_code": param_est_code_string,
-                "param_est_refinement_prompts": pe_metadata.get("refinement_prompts", []),
-                "param_est_refinement_responses": pe_metadata.get("refinement_responses", []),
+                "param_est_refinement_prompts": pe_metadata.get("refinement_prompts", []) if log_prompts else [],
+                "param_est_refinement_responses": pe_metadata.get("refinement_responses", []) if log_prompts else [],
                 "llm_name": llm_name,
                 "temperature": float(temperature),
                 "mode": mode,
@@ -2605,13 +2902,29 @@ async def hypothesis_engine(
         logging.info(f"Iteration {i} complete. The proportion of programs that successfully ran and received a loss is {success_rate:.2f}.")
         logging.info('-' * 50)
         # migrate and prune programs (better here for temperature to be in [0, 1] range)
-        islands = genetic_helpers.perform_island_deduplication(islands, overlap_threshold=int(0.75 * critical_population_size))
-        islands = genetic_helpers.perform_population_pruning(islands, critical_population_size=critical_population_size - n_migrants,
-                                                min_wise_population_size=min_wise_population_size,)
-        islands = genetic_helpers.perform_probabilistic_migration(islands, 
-                                                                  n_migrants=n_migrants,
-                                                                  destination_islands=exploration_topology if mode == 'explore' else exploitation_topology, 
-                                                                  temperature=(temperature - 1.0)**4)
+        try:
+            islands = genetic_helpers.perform_island_deduplication(
+                islands,
+                overlap_threshold=int(0.75 * critical_population_size),
+            )
+            islands = genetic_helpers.perform_population_pruning(
+                islands,
+                critical_population_size=critical_population_size - n_migrants,
+                min_wise_population_size=min_wise_population_size,
+            )
+            islands = genetic_helpers.perform_probabilistic_migration(
+                islands,
+                n_migrants=n_migrants,
+                destination_islands=exploration_topology if mode == 'explore' else exploitation_topology,
+                temperature=(temperature - 1.0) ** 4,
+            )
+        except Exception as migration_error:
+            logging.exception("Migration/pruning failed at iteration %s: %s", i, migration_error)
+            print(
+                f"Warning: migration/pruning failed at iteration {i}; "
+                "continuing without migration for this iteration.",
+                flush=True,
+            )
         islands = _drop_nonfinite_train_loss_from_islands(
             islands,
             context=f"Iteration {i} post-migration cleanup",
@@ -2688,64 +3001,88 @@ async def hypothesis_engine(
     for island_idx in range(n_islands):
         logging.info(f"Island {island_idx} programs: {(len(islands[island_idx]))} programs to evaluate.")
         for j in range(len(islands[island_idx])):
+            _clear_jax_runtime_cache()
             program = islands[island_idx].iloc[j]
             model = program['program']
             param_estimator = program['parameter_estimator']
-            # compute the test loss
-            _, _, test_loss, optimized_params = _call_objective(
-                use_simple_objective,
-                model=model,
-                param_estimator=param_estimator,
-                x=X[1],
-                y=Y[1],
-                loss_fn=loss_fn,
-                fit_params=fit_params,
-                max_iter=max_iter,
-                param_penalty_weight=param_penalty_weight,
-                use_param_estimator=use_param_estimator,
-                trial_batch_size=trial_batch_size,
-                timeout_s=param_estimator_timeout_s,
-                objective_timeout_s=objective_timeout_s,
-            )
-            islands[island_idx].at[j, 'test_loss'] = test_loss
-            islands[island_idx].at[j, 'params'] = optimized_params
-            islands[island_idx].at[j, 'mean_loss'] = np.mean(test_loss)
-            print(f"Test loss: {test_loss:.2f}")
+            try:
+                # compute the test loss
+                _, _, test_loss, optimized_params = _call_objective(
+                    use_simple_objective,
+                    model=model,
+                    param_estimator=param_estimator,
+                    x=X[1],
+                    y=Y[1],
+                    loss_fn=loss_fn,
+                    fit_params=fit_params,
+                    max_iter=max_iter,
+                    param_penalty_weight=param_penalty_weight,
+                    use_param_estimator=use_param_estimator,
+                    trial_batch_size=trial_batch_size,
+                    timeout_s=param_estimator_timeout_s,
+                    objective_timeout_s=objective_timeout_s,
+                )
+                islands[island_idx].at[j, 'test_loss'] = test_loss
+                islands[island_idx].at[j, 'params'] = optimized_params
+                islands[island_idx].at[j, 'mean_loss'] = np.mean(test_loss)
+                print(f"Test loss: {test_loss:.2f}")
+            except Exception as test_eval_error:
+                logging.exception(
+                    "Test evaluation failed (island=%s, idx=%s): %s",
+                    island_idx,
+                    j,
+                    test_eval_error,
+                )
+                islands[island_idx].at[j, 'test_loss'] = np.inf
+                islands[island_idx].at[j, 'mean_loss'] = np.inf
+                print("Test loss: inf", flush=True)
+            _clear_jax_runtime_cache()
 
-    # group all islands together and save
-    combined_dir = os.path.join(base_dir, date_stamp, time_stamp, 'combined')
-    os.makedirs(combined_dir, exist_ok=True)
-    combined_programs_dataframe = pd.concat(islands, ignore_index=True)
-    combined_programs_dataframe = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss')
-    # combined_programs_dataframe = combined_programs_dataframe.sort_values(by='test_loss').reset_index(drop=True)
-    # sort by mean loss
-    combined_programs_dataframe = combined_programs_dataframe.sort_values(by='mean_loss').reset_index(drop=True)
+    try:
+        # group all islands together and save
+        combined_dir = os.path.join(base_dir, date_stamp, time_stamp, 'combined')
+        os.makedirs(combined_dir, exist_ok=True)
+        combined_programs_dataframe = pd.concat(islands, ignore_index=True)
+        combined_programs_dataframe = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss')
+        # combined_programs_dataframe = combined_programs_dataframe.sort_values(by='test_loss').reset_index(drop=True)
+        # sort by mean loss
+        combined_programs_dataframe = combined_programs_dataframe.sort_values(by='mean_loss').reset_index(drop=True)
 
-    # Update generation log with test losses and winner flag for family tree visualization
-    _update_generation_log_test_losses_and_mark_winner(generation_log_path, islands)
-    # save the combined programs dataframe, reordering columns to have order:
-    # iteration_number, birth_island, batch_index, train_loss, test_loss, program_code_string, parameter_estimator_code_string, program, parameter_estimator, params, parent1_id, parent2_id
-    combined_programs_dataframe = combined_programs_dataframe[['iteration_number', 'birth_island', 'batch_index',
-                                                                'train_loss', 'test_loss',
-                                                                'program_code_string', 'parameter_estimator_code_string',
-                                                                'program', 'parameter_estimator', 'params',
-                                                                'parent1_id', 'parent2_id', 'llm_name']]
-    combined_programs_dataframe.to_csv(os.path.join(combined_dir, 'programs_db.csv'), index=False)
+        # Update generation log with test losses and winner flag for family tree visualization
+        _update_generation_log_test_losses_and_mark_winner(generation_log_path, islands)
+        # save the combined programs dataframe, reordering columns to have order:
+        # iteration_number, birth_island, batch_index, train_loss, test_loss, program_code_string, parameter_estimator_code_string, program, parameter_estimator, params, parent1_id, parent2_id
+        combined_programs_dataframe = combined_programs_dataframe[['iteration_number', 'birth_island', 'batch_index',
+                                                                    'train_loss', 'test_loss',
+                                                                    'program_code_string', 'parameter_estimator_code_string',
+                                                                    'program', 'parameter_estimator', 'params',
+                                                                    'parent1_id', 'parent2_id', 'llm_name']]
+        combined_programs_dataframe.to_csv(os.path.join(combined_dir, 'programs_db.csv'), index=False)
 
-    # save island-specific results
-    for island_id, island_df in enumerate(islands):
-        island_dir = os.path.join(base_dir, date_stamp, time_stamp, f'island_{island_id}' if island_id < n_islands else 'meta_island')
-        os.makedirs(island_dir, exist_ok=True)
-        island_df.to_csv(os.path.join(island_dir, 'programs_db.csv'), index=False)
+        # save island-specific results
+        for island_id, island_df in enumerate(islands):
+            island_dir = os.path.join(base_dir, date_stamp, time_stamp, f'island_{island_id}' if island_id < n_islands else 'meta_island')
+            os.makedirs(island_dir, exist_ok=True)
+            island_df.to_csv(os.path.join(island_dir, 'programs_db.csv'), index=False)
+    except Exception as postprocess_error:
+        logging.exception("Post-processing failed: %s", postprocess_error)
+        print(
+            "Warning: post-processing failed; returning partial run outputs.",
+            flush=True,
+        )
+        return full_dir
 
     # ---------------------------
     # save losses plot    
     if has_spec_plotter:
-        plot_train_vs_test_loss_shared(
-            programs_df=combined_programs_dataframe,
-            island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
-            save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'),
-        )
+        try:
+            plot_train_vs_test_loss_shared(
+                programs_df=combined_programs_dataframe,
+                island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
+                save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'),
+            )
+        except Exception as plot_error:
+            logging.exception("Train-vs-test plot failed: %s", plot_error)
     
     # ---------------------------
     df_list = [combined_programs_dataframe] + islands
@@ -2754,40 +3091,43 @@ async def hypothesis_engine(
     df_dirs = combined_dir + island_dirs
 
     if has_spec_plotter:
-        for i, df in enumerate(df_list):
-            df = df.head(3)
-            df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
-            programs_list = _programs_df_to_programs_list(
-                df,
-                loss_func=loss_fn,
-                x=X[1, 1],
-                y=Y[1, 1],
-                complexity_penalty=param_penalty_weight,
-            )
-            plot_model_fits(
-                X=X[1, 1],
-                Y=Y[1, 1],
-                programs_list=programs_list,
-                X_eval=X_eval_test,
-                save_path=os.path.join(df_dirs[i], 'top_model_fits.png'),
-            )
-            # Plot top models separately using the same plot_model_fits pathway.
-            for j in range(min(3, len(df))):
-                model_df = df.iloc[[j]].copy().reset_index(drop=True)
+        try:
+            for i, df in enumerate(df_list):
+                df = df.head(3)
+                df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
+                programs_list = _programs_df_to_programs_list(
+                    df,
+                    loss_func=loss_fn,
+                    x=X[1, 1],
+                    y=Y[1, 1],
+                    complexity_penalty=param_penalty_weight,
+                )
                 plot_model_fits(
                     X=X[1, 1],
                     Y=Y[1, 1],
-                    programs_list=_programs_df_to_programs_list(
-                        model_df,
-                        loss_func=loss_fn,
-                        x=X[1, 1],
-                        y=Y[1, 1],
-                        complexity_penalty=param_penalty_weight,
-                    ),
+                    programs_list=programs_list,
                     X_eval=X_eval_test,
-                    save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png'),
-                    labels=['model'],
+                    save_path=os.path.join(df_dirs[i], 'top_model_fits.png'),
                 )
+                # Plot top models separately using the same plot_model_fits pathway.
+                for j in range(min(3, len(df))):
+                    model_df = df.iloc[[j]].copy().reset_index(drop=True)
+                    plot_model_fits(
+                        X=X[1, 1],
+                        Y=Y[1, 1],
+                        programs_list=_programs_df_to_programs_list(
+                            model_df,
+                            loss_func=loss_fn,
+                            x=X[1, 1],
+                            y=Y[1, 1],
+                            complexity_penalty=param_penalty_weight,
+                        ),
+                        X_eval=X_eval_test,
+                        save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png'),
+                        labels=['model'],
+                    )
+        except Exception as top_plot_error:
+            logging.exception("Top-model plotting failed: %s", top_plot_error)
     
     # Generate family tree visualizations
     create_family_tree(generation_log_path, full_dir, n_islands)

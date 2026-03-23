@@ -339,9 +339,9 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
         if is_migrant and rec.get("migrant_from_id"):
             hover_parts.append(f"migrant from: {rec.get('migrant_from_label', rec.get('migrant_from_id'))}")
         if loss is not None:
-            hover_parts.append(f"train fit loss: {loss:.4f}")
+            hover_parts.append(f"primary train metric loss: {loss:.4f}")
         if test_loss is not None:
-            hover_parts.append(f"test fit loss: {test_loss:.4f}")
+            hover_parts.append(f"primary test metric loss: {test_loss:.4f}")
         hover_parts.append(f"mode: {mode}")
         if llm:
             hover_parts.append(f"LLM: {llm}")
@@ -552,22 +552,22 @@ function showSidebar(nodeId) {{
   if (d.is_extinct) {{
     h += '<div class="field"><span class="field-label">Status:</span> <span class="field-value">Extinct</span></div>';
   }}
-  h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Initial Loss (train sample, test trial):</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
   if (d.train_fit_loss !== null && d.train_fit_loss !== undefined) {{
-    h += '<div class="field"><span class="field-label">Train Fit Loss:</span> <span class="field-value">' + formatLoss(d.train_fit_loss) + '</span></div>';
+    h += '<div class="field"><span class="field-label">Train Fit Loss (train sample, train trial):</span> <span class="field-value">' + formatLoss(d.train_fit_loss) + '</span></div>';
     if (d.train_loss !== null && d.train_loss !== undefined && d.train_loss !== d.train_fit_loss) {{
-      h += '<div class="field"><span class="field-label">Objective Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
+      h += '<div class="field"><span class="field-label">Objective Train Loss (train sample, test trial):</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
     }}
   }} else {{
-    h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
+    h += '<div class="field"><span class="field-label">Objective Train Loss (train sample, test trial):</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
   }}
   if (d.test_fit_loss !== null && d.test_fit_loss !== undefined) {{
-    h += '<div class="field"><span class="field-label">Test Fit Loss:</span> <span class="field-value">' + formatLoss(d.test_fit_loss) + '</span></div>';
+    h += '<div class="field"><span class="field-label">Test Fit Loss (train sample, test trial):</span> <span class="field-value">' + formatLoss(d.test_fit_loss) + '</span></div>';
     if (d.test_loss !== null && d.test_loss !== undefined && d.test_loss !== d.test_fit_loss) {{
-      h += '<div class="field"><span class="field-label">Objective Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
+      h += '<div class="field"><span class="field-label">Objective Test Loss (test sample, test trial):</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
     }}
   }} else {{
-    h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
+    h += '<div class="field"><span class="field-label">Objective Test Loss (test sample, test trial):</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
   }}
   h += '<div class="field"><span class="field-label">Mode:</span> <span class="field-value">' + escapeHtml(d.mode) + '</span></div>';
   h += '<div class="field"><span class="field-label">Temperature:</span> <span class="field-value">' + formatTemp(d.temperature) + '</span></div>';

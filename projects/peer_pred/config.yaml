@@ -29,15 +29,20 @@ data_processing_params:
 
 experiment_params:
   n_iterations: 3
-  batch_size: 6
-  n_islands: 8
+  batch_size: 3
+  n_islands: 4
   param_penalty_weight: 0.0
   param_estimator_refinement_rounds: 0
   open_family_tree: true
-  fit_params: false
-  linked_llm: [gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash]
-  use_linked_prompt: false
-  swear_words: []
+  log_prompts: false
+  log_jax_translations: false
+  fit_params: true
+  max_iter: 200
+  learning_rate: 1e-2
+  param_estimator_timeout_s: 5.0
+  objective_timeout_s: 30.0
+  model_llm: [gemini-2.5-pro, gemini-2.0-flash]
+  swear_words: [sklearn, PLSRegression, scipy.optimize, optimize.minimize, curve_fit, cvxpy, torch, tensorflow]
   x_min: -1.0
   x_max: 1.0
   n_bins: 100
@@ -57,6 +62,13 @@ prompts:
     explore: |
       Use the parent models as inspiration, but be creative and invent something new.
       Identify model features associated with lower loss, combine strong ideas, and test novel variants.
+      
+      A good model will capture meaningful structure in teh data, by constructing some encoders, applying a transformation to
+      predict the encoding of the target population, and then decoding back to the original space. 
+      
+      Look for ways to improve each of these steps. Include ideas from latent space models, temporal dynamics, or nonlinearities. 
+      
+      Be creative and test new structure, but also keep in mind the bias-variance tradeoff and the penalty on complexity.
 
     exploit: |
       Use the parent models as a template to create a better model.
@@ -65,24 +77,42 @@ prompts:
     image_analysis: |
       **Image Analysis Instructions:**
 
-      Attached is a plot of model fits to 4 example neurons as well as histograms of the distribution of losses across all neurons in the dataset.
-      For the model fit plots:
-      * Black trace is the raw observed activity of the neuron.
-      * Red trace is the the worse-performing parent model.
-      * Blue trace is the best-performing parent model.
+      Attached is a 3x3 diagnostic figure:
+      * Row 1 col 1: observed raster (gray) stacked over v1 prediction (red).
+      * Row 2 col 1: observed raster (gray) stacked over v2 prediction (blue).
+      * Row 1 col 2: observed raster (gray) stacked over residuals (obs - v1).
+      * Row 2 col 2: observed raster (gray) stacked over residuals (obs - v2), with colorbars.
+      * Row 1 col 3: per-cell MSE scatter (v1 on x-axis, v2 on y-axis, dashed y=x).
+      * Row 2 col 3: population mean observed trace (black) and residual means for v1/v2 (red/blue).
+      * Row 3: three randomly chosen single-cell overlays (observed black, v1 red, v2 blue).
 
-      Which strengths and weaknesses do you observe in the model fits?
-      How does {model_name}_v2 improve upon {model_name}_v1?
-      What can be done to further improve the shortcomins of both models?
+      What to look for:
+      * Event timing errors: predictions systematically lag/lead observed bursts.
+      * Amplitude compression: peaks in observed are much larger than predictions.
+      * Residual structure: residual rasters still contain event-like structure (model missing dynamics), not noise.
+      * Population bias: residual means have non-zero offset or repeated oscillatory structure.
+      * Cell-specific failures: in scatter, points far from y=x indicate cells where one parent clearly dominates.
+      * Random-cell traces: identify repeated mismatches (missing transients, wrong baseline, oversmoothing).
 
-      Propose specific model-structure changes, citing specific samples and code features in your analysis.
+      Your goal:
+      * Explain how {model_name}_v2 improves on {model_name}_v1 and where each still fails.
+      * Propose 2-4 concrete model-structure changes that directly target repeated failures seen in the plots.
+      * Tie each proposal to specific visual evidence (residual patterns, scatter outliers, trace behavior).
 
     code_guidelines: |
       **Code Generation Guidelines:**
-      * Import any packages you use.
+      * Use only lightweight numerical code (NumPy/JAX-friendly math).
+      * Do not import heavy ML/stat libraries.
       * Do not include any text other than the code.
-      * Model signature must be `def model(X, params):` where `params` is a dict of named arrays/scalars.
+      * Do not include any helper functions; the model must be self-contained in one function.
+      * Model signature must be `def {model_name}_v{next_version}(X, params):` where `params` is a dict of named arrays/scalars.
       * Ensure all free parameters are numeric, not strings.
+      * Keep operations simple and JAX-translatable: matrix multiplies, elementwise arithmetic, clipping, and basic nonlinearities.
+      * Target activity is z-scored and signed; final outputs must allow negative and positive values.
+      * Do not force positivity at the final output layer (no final ReLU/Softplus/abs/square/clipping on Y_pred).
+      * Avoid memory-heavy constructions: no full pairwise `(n_cells x n_cells)` or `(n_time x n_time)` matrices unless mathematically essential.
+      * Do not allocate tensors larger than needed; avoid `np.tile`/`repeat`/`outer`/large `einsum` patterns that expand dimensions.
+      * Keep latent widths modest and data-dependent (e.g., <= min(n_source, n_target, 64)).
       * The model will get an infinite loss if it takes more than 5 seconds to run, so ensure it is efficient!
 
     docstring_guidelines: |
@@ -109,12 +139,26 @@ prompts:
 
     code_guidelines: |
       **Code Generation Guidelines:**
-      * Import any packages you use.
+      * Use only lightweight NumPy operations.
+      * Do not import heavy ML/stat libraries.
       * Do not include any text other than the code.
-      * Function signature must be `def parameter_estimator(X, y):`.
+      * Function signature must be `def parameter_estimator_v{next_version}(X, y):`.
+      * Do NOT include external helper functions; the estimator must be self-contained in one function.
+      * Assume `X.shape == (n_source_cells, n_time)` and `y.shape == (n_target_cells, n_time)`.
+      * Do not assume `y` is `(n_time, n_target_cells)`; if you transpose internally, transpose back consistently.
       * Return a parameter dict with keys that match the model parameters.
+      * Every value in the returned parameter dict must be floating-point (`float`/`np.float32`/`np.float64` or float arrays).
+      * Never return integer or boolean parameters (including choices like `0`, `1`, or `np.asarray(1)`); cast to float explicitly.
       * Do not call the model function in your estimator code; the estimator must be self-contained.
-      * The estimator should be computationally efficient.
+      * The estimator should be fast and "quick-and-dirty": prefer closed-form linear algebra (`np.linalg.lstsq`, regularized normal equations).
+      * Avoid expensive grid searches, iterative optimizers, or nested loops over large hyperparameter grids.
+      * Keep matrix dimensions explicit and valid for all matmul operations; avoid hard-coded dimensions that can mismatch `X`/`y`.
+      * Do not hard-code latent dimensions like 16/32/64 unless you clamp them to valid sizes from `X`/`y`.
+      * Explicitly check and preserve matrix shapes when adding biases (e.g., use `bias[:, None]` for `(n_cells, n_time)` outputs).
+      * Ensure all returned arrays are finite: use `np.nan_to_num` before returning.
+      * If your main solve fails, return a robust finite fallback dict with the same keys and valid shapes.
+      * Avoid `np.log` on unconstrained values; clip first (e.g., `np.log(np.clip(x, 1e-6, None))`).
+      * Avoid building large temporary matrices in the estimator (no full covariance over expanded latent stacks unless size-checked).
 
     docstring_guidelines: |
       **Docstring Guidelines:**
@@ -123,8 +167,10 @@ prompts:
 
     refinement_image_instructions: |
       **Image instructions:**
-      Attached are model-fit traces and loss histograms for multiple neurons.
-      Identify systematic failures in predicted traces and propose concrete estimator updates.
+      Attached is a 3x3 diagnostic figure with observed/prediction rasters, residual rasters, per-cell MSE scatter,
+      population mean vs residual means, and random single-cell overlays.
+      Identify systematic estimator failures (scale bias, baseline bias, timing mismatch, or cell-specific outliers),
+      then propose concrete parameter-estimation updates that address these repeated patterns.
       Do not call the model function in your estimator code.
 
     per_model_detail: |
@@ -133,3 +179,27 @@ prompts:
       {program_code_string}
       Estimator:
       {parameter_estimator_code_string}
+
+  jax_translator_prompt: |
+    Convert the following function to a JAX-compatible function.
+
+      Include all necessary imports, and ensure that the function is compatible with `jax.jit`, `jax.grad`, and `jax.vmap`.
+      Use `jnp` everywhere (no `np`).
+
+      CRITICAL JAX compatibility requirements:
+      * Preserve exact output shape semantics from the NumPy function.
+      * Do not use in-place mutation (`x[idx] = ...`); use `x = x.at[idx].set(...)`.
+      * Do not use dynamic slicing bounds from traced values (no `x[:, :k]` where `k` depends on params/data).
+      * Do not call Python `int()`, `float()`, `range()`, or create array sizes from traced values.
+      * Avoid unsupported SciPy/NumPy modes (for example convolution/padding modes like `circular`).
+      * Avoid `jax.nn.logaddexp`; use `jnp.logaddexp`.
+      * Make broadcasting explicit with `None`/reshape so shapes are unambiguous.
+      * Keep loops static-length only (e.g., over `X.shape[1]`), or use `jax.lax.scan` / `jax.lax.fori_loop`.
+      * For logs/divisions, guard numerics (`jnp.clip`, small epsilons) to avoid NaN/Inf mismatches.
+      * Avoid introducing large intermediate tensors in translation; keep memory linear in `(n_cells * n_time)` where possible.
+      * Do not change the math beyond what is needed for JAX compatibility.
+
+      Do not include any text other than the code.
+      Update the function name to be the original name without "_v*".
+      Here is the code to translate:
+      {function_code}

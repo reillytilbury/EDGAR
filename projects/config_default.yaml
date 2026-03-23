@@ -120,6 +120,12 @@ experiment_params:
   # If true, use a single linked prompt to generate model + parameter estimator.
   use_linked_prompt: false
 
+  # If true, write full prompt/response text to hypothesis_engine.log and generation JSONL.
+  log_prompts: false
+
+  # If true, write JAX translation prompt/response/code text to logs and generation JSONL.
+  log_jax_translations: false
+
   # Island graph for exploration exchanges.
   exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
 
@@ -198,6 +204,8 @@ _metadata:
         - model_name
       code_guidelines:
         - max_lines
+        - next_version
+        - model_name
       per_model_detail:
         - model_idx
         - train_loss
@@ -266,7 +274,7 @@ prompts:
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
-      * Model signature must be `def model(X, params):` where `params` is a dict of named arrays/scalars.
+      * Model signature must be `def {model_name}_v{next_version}(X, params):` where `params` is a dict of named arrays/scalars.
       * Ensure all free parameters are numeric, not strings.
 
     docstring_guidelines: |

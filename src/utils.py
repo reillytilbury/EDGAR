@@ -138,6 +138,16 @@ def params_all_finite(params) -> bool:
     return True
 
 
+def params_all_inexact(params) -> bool:
+    """Return True if all leaves are floating or complex dtypes (no int/bool leaves)."""
+    leaves = jax.tree_util.tree_leaves(params)
+    for leaf in leaves:
+        arr = np.asarray(leaf)
+        if not np.issubdtype(arr.dtype, np.inexact):
+            return False
+    return True
+
+
 def params_signature(params, n_samples: int | None = None):
     """Return a structural signature of params (treedef, leaf shapes, dtypes)."""
     if n_samples is not None:
@@ -314,6 +324,12 @@ def check_jax_translation(
     Raises:
         ValueError: If shapes are incompatible or predictions mismatch.
     """
+    if not callable(jax_func):
+        raise ValueError(
+            "jax_func is not callable. Translation likely failed upstream "
+            "(for example due API rate limiting)."
+        )
+
     eval_arr = np.asarray(eval_points)
     if eval_arr.ndim == 2:
         eval_arr = eval_arr[None, :, :]

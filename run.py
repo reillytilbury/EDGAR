@@ -6,6 +6,14 @@ import importlib
 import os, argparse
 import inspect
 import numpy as np
+
+# JAX/XLA runtime guards to reduce GPU OOM frequency during large program sweeps.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+_xla_flags = os.environ.get("XLA_FLAGS", "")
+if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
+    os.environ["XLA_FLAGS"] = (_xla_flags + " --xla_gpu_enable_command_buffer=").strip()
+
 from src import hypothesis_engine, utils
 from src.prompt_manager import PromptManager
 from src.data_structures import Inputs, Outputs, ensure_inputs, ensure_outputs
@@ -134,7 +142,7 @@ def _build_train_test_split_fn(spec_train_test_split_fn):
 def _build_loss_fn(raw_loss_fn):
     """
     Validate loss signature for the engine contract:
-      loss_fn(y_pred, y_true)
+      loss_fn(y_pred, y_true[, params])
     """
     if raw_loss_fn is None:
         return None
@@ -147,12 +155,21 @@ def _build_loss_fn(raw_loss_fn):
         for p in params
     )
 
-    if has_varargs or n_positional != 2:
+    if has_varargs or n_positional not in (2, 3):
         raise ValueError(
-            "loss_fn must use signature loss_fn(y_pred, y_true)."
+            "loss_fn must use signature loss_fn(y_pred, y_true) "
+            "or loss_fn(y_pred, y_true, params)."
         )
 
-    return raw_loss_fn
+    if n_positional == 2:
+        def _wrapped_loss_fn(y_pred, y_true, params=None):
+            return raw_loss_fn(y_pred, y_true)
+        return _wrapped_loss_fn
+
+    def _wrapped_loss_fn(y_pred, y_true, params=None):
+        return raw_loss_fn(y_pred, y_true, params)
+
+    return _wrapped_loss_fn
 
 
 def _to_plot_array(obj):
@@ -388,7 +405,10 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     # Loss function: required in spec
     spec_loss_fn = getattr(spec_module, "loss_fn", None)
     if spec_loss_fn is None or not callable(spec_loss_fn):
-        raise ValueError(f"{spec_module_path} must define callable loss_fn(Y_pred, Y_true).")
+        raise ValueError(
+            f"{spec_module_path} must define callable loss_fn(Y_pred, Y_true) "
+            "or loss_fn(Y_pred, Y_true, params)."
+        )
 
     # Image diagnostics are enabled automatically if spec defines plot_model_fits.
     spec_plot_fn = getattr(spec_module, "plot_model_fits", None)
@@ -509,61 +529,90 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             if value is None:
                 raise ValueError(f"Missing required experiment_params.{name} in config.")
             return value
-        full_dir = await hypothesis_engine.hypothesis_engine(
-            n_iterations=params['n_iterations'],
-            time_limit=params['time_limit'],
-            param_penalty_weight=params['param_penalty_weight'],
-            exploration_topology=params['exploration_topology'],
-            exploitation_topology=params['exploitation_topology'],
-            exploit_point=params['exploit_point'],
-            k_max=params['k_max'],
-            n_islands=params['n_islands'],
-            batch_size=params['batch_size'],
-            max_iter=params['max_iter'],
-            critical_population_size=params['critical_population_size'],
-            min_wise_population_size=params['min_wise_population_size'],
-            n_migrants=params['n_migrants'],
-            fit_params=params['fit_params'],
-            use_param_estimator=params.get('use_param_estimator', True),
-            param_estimator_timeout_s=params.get('param_estimator_timeout_s', 5.0),
-            objective_timeout_s=params.get('objective_timeout_s', 60.0),
-            learning_rate=params['learning_rate'],
-            FAILED_PROGRAM_COST=params['FAILED_PROGRAM_COST'],
-            model_llm=_require_llm('model_llm'),
-            param_est_llm=_require_llm('param_est_llm'),
-            jax_translator_llm=_require_llm('jax_translator_llm'),
-            linked_llm=_require_llm('linked_llm'),
-            use_chat_mode=params.get('use_chat_mode', False),  # Default to legacy mode
-            chat_token_limit=params.get('chat_token_limit', 50000),  # Max tokens per chat before auto-reset
-            param_estimator_refinement_rounds=params.get('param_estimator_refinement_rounds', 0),
-            numpy_programs=models,
-            param_estimators=param_estimators,
-            X=X,
-            Y=Y,
-            X_eval=X_eval,
-            plot_model_fits=plot_model_fits_fn,
-            prompt_manager=prompt_manager,
-            trial_batch_size=params.get('trial_batch_size', None),
-            swear_words=params.get('swear_words'),
-            open_family_tree=params.get('open_family_tree', False),
-            loss_fn=loss_fn,
-            use_linked_prompt=params.get('use_linked_prompt', False),
-            random_seed=random_seed,
-        )
-        # Save split/data summary from preprocessed run-level data.
-        save_data_summary(
-            response=outputs,
-            inputs=inputs,
-            training_samples=train_samples,
-            test_samples=test_samples,
-            x_train_trial_idx=train_trials,
-            x_test_trial_idx=test_trials,
-            y_train_trial_idx=train_trials,
-            y_test_trial_idx=test_trials,
-            output_dir=full_dir,
-            random_seed=random_seed,
-            train_test_split_fn=spec_train_test_split_fn,
-        )
+        full_dir = None
+        try:
+            full_dir = await hypothesis_engine.hypothesis_engine(
+                n_iterations=params['n_iterations'],
+                time_limit=params['time_limit'],
+                param_penalty_weight=params['param_penalty_weight'],
+                exploration_topology=params['exploration_topology'],
+                exploitation_topology=params['exploitation_topology'],
+                exploit_point=params['exploit_point'],
+                k_max=params['k_max'],
+                n_islands=params['n_islands'],
+                batch_size=params['batch_size'],
+                max_iter=params['max_iter'],
+                critical_population_size=params['critical_population_size'],
+                min_wise_population_size=params['min_wise_population_size'],
+                n_migrants=params['n_migrants'],
+                fit_params=params['fit_params'],
+                use_param_estimator=params.get('use_param_estimator', True),
+                param_estimator_timeout_s=params.get('param_estimator_timeout_s', 5.0),
+                objective_timeout_s=params.get('objective_timeout_s', 60.0),
+                learning_rate=params['learning_rate'],
+                FAILED_PROGRAM_COST=params['FAILED_PROGRAM_COST'],
+                model_llm=_require_llm('model_llm'),
+                param_est_llm=_require_llm('param_est_llm'),
+                jax_translator_llm=_require_llm('jax_translator_llm'),
+                linked_llm=_require_llm('linked_llm'),
+                use_chat_mode=params.get('use_chat_mode', False),  # Default to legacy mode
+                chat_token_limit=params.get('chat_token_limit', 50000),  # Max tokens per chat before auto-reset
+                param_estimator_refinement_rounds=params.get('param_estimator_refinement_rounds', 0),
+                numpy_programs=models,
+                param_estimators=param_estimators,
+                X=X,
+                Y=Y,
+                X_eval=X_eval,
+                plot_model_fits=plot_model_fits_fn,
+                prompt_manager=prompt_manager,
+                trial_batch_size=params.get('trial_batch_size', None),
+                swear_words=params.get('swear_words'),
+                open_family_tree=params.get('open_family_tree', False),
+                loss_fn=loss_fn,
+                use_linked_prompt=params.get('use_linked_prompt', False),
+                log_prompts=params.get('log_prompts', False),
+                log_jax_translations=params.get('log_jax_translations', False),
+                random_seed=random_seed,
+            )
+        except KeyboardInterrupt:
+            raise
+        except Exception as engine_error:
+            logging.exception("Hypothesis engine run %s failed: %s", i, engine_error)
+            print(
+                f"Run {i + 1}/{params['num_runs']} failed in hypothesis_engine; "
+                "continuing to next run.",
+                flush=True,
+            )
+            continue
+
+        if not full_dir:
+            print(
+                f"Run {i + 1}/{params['num_runs']} completed without output directory; skipping summary.",
+                flush=True,
+            )
+            continue
+
+        try:
+            # Save split/data summary from preprocessed run-level data.
+            save_data_summary(
+                response=outputs,
+                inputs=inputs,
+                training_samples=train_samples,
+                test_samples=test_samples,
+                x_train_trial_idx=train_trials,
+                x_test_trial_idx=test_trials,
+                y_train_trial_idx=train_trials,
+                y_test_trial_idx=test_trials,
+                output_dir=full_dir,
+                random_seed=random_seed,
+                train_test_split_fn=spec_train_test_split_fn,
+            )
+        except Exception as summary_error:
+            logging.exception("save_data_summary failed for run %s: %s", i, summary_error)
+            print(
+                f"Run {i + 1}/{params['num_runs']}: warning - failed to save data summary.",
+                flush=True,
+            )
 
 
 if __name__ == "__main__":
