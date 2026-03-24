@@ -194,6 +194,7 @@ def load_and_process_data(
     # load and preprocess data
     neural_data = np.load(data_path, allow_pickle=True)
     neural_data = neural_data.item()
+    response = np.asarray(neural_data['sresp'])
 
     angles = neural_data['istim'] # shape (n_trials)
     assert max(angles) <= 2 * np.pi, "Expected angles to be in radians and between 0 and 2pi"
@@ -241,6 +242,7 @@ def load_and_process_data(
     source = np.stack([X_train, X_test], axis=0)  # (2, n_source, T)
     target = np.stack([Y_train, Y_test], axis=0)  # (2, n_target, T)
     return {"stimulus" : angles, "source": source, "target": target}
+
 
 def train_test_split(
     X: Dict[str, np.ndarray],
