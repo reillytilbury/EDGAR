@@ -3,6 +3,7 @@ model_name: model
 
 data_processing_params:
   data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
+  # data_path: /home/dabin/data/jacob_gratings_202507/parsed/
   conc_threshold: 0.55
 
 inputs:
