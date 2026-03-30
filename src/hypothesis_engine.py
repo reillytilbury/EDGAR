@@ -664,7 +664,7 @@ def objective(model, param_estimator, data,
         total_grad = jnp.zeros_like(flat_params)
 
         for start_idx in range(0, n_train_trials, effective_trial_batch_size):
-            _check_timeout()
+            _check_timeout("loss/grad computation")
             end_idx = min(start_idx + effective_trial_batch_size, n_train_trials)
             batch_weight = (end_idx - start_idx) / n_train_trials
             data_batch = utils.slice_data_trials(data_train, slice(start_idx, end_idx))
@@ -729,7 +729,7 @@ def objective(model, param_estimator, data,
         n_eval_trials = utils.data_n_trials(data_eval)
         weighted_sum = 0.0
         for start_idx in range(0, n_eval_trials, effective_trial_batch_size):
-            _check_timeout()
+            _check_timeout("final loss evaluation")
             end_idx = min(start_idx + effective_trial_batch_size, n_eval_trials)
             batch_size = end_idx - start_idx
             data_batch = utils.slice_data_trials(data_eval, slice(start_idx, end_idx))
@@ -2038,7 +2038,7 @@ async def hypothesis_engine(
             complexity_penalty=param_penalty_weight,
         )
         plot_model_fits(
-            data=X[0, 1],
+            data=X[0, 0],
             programs_list=seed_programs_list,
             X_eval=X_eval_train,
             save_path=os.path.join(image_prompts_dir, 'initial_programs.png'),
@@ -2183,7 +2183,7 @@ async def hypothesis_engine(
                     islands[island_idx],
                     llm_name=linked_llm_name,
                     client=client,
-                    data=X[0, 1],
+                    data=X[0, 0],
                     x_eval=X_eval_train,
                     prompt_manager=prompt_manager,
                     mode=mode,
@@ -2220,7 +2220,7 @@ async def hypothesis_engine(
                                                         mode=mode, 
                                                         k_max=k_max, 
                                                         temp=temperature,
-                                                        data=X[0, 1],
+                                                        data=X[0, 0],
                                                         x_eval=X_eval_train,
                                                         prompt_manager=prompt_manager,
                                                         img_dir=model_image_dirs[island_idx, j],

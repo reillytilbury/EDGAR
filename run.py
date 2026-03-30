@@ -478,7 +478,6 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             numpy_programs=models,
             param_estimators=param_estimators,
             X=X,
-            Y=Y,
             X_eval=X_eval,
             plot_model_fits=plot_model_fits_fn,
             prompt_manager=prompt_manager,
@@ -489,16 +488,14 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             use_linked_prompt=params.get('use_linked_prompt', False),
             random_seed=random_seed,
         )
+
         # Save split/data summary from preprocessed run-level data.
         save_data_summary(
-            response=outputs,
-            inputs=inputs,
+            data=data,
             training_samples=train_samples,
             test_samples=test_samples,
-            x_train_trial_idx=train_trials,
-            x_test_trial_idx=test_trials,
-            y_train_trial_idx=train_trials,
-            y_test_trial_idx=test_trials,
+            train_trials=train_trials,
+            test_trials=test_trials,
             output_dir=full_dir,
             random_seed=random_seed,
             train_test_split_fn=spec_train_test_split_fn,
