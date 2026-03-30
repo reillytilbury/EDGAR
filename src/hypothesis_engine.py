@@ -1561,7 +1561,7 @@ async def hypothesis_engine(
             complexity_penalty=param_penalty_weight,
         )
         plot_model_fits(
-            data=X[0, 0],
+            data=X[0, 1],
             programs_list=seed_programs_list,
             X_eval=X_eval_train,
             save_path=os.path.join(image_prompts_dir, 'initial_programs.png'),
@@ -1577,7 +1577,7 @@ async def hypothesis_engine(
                     use_simple_objective,
                     model=program_jax,
                     param_estimator=param_est,
-                    data=[X[1,0], X[1,1]],
+                    data=[X[0,0], X[0,1]],
                     loss_fn=loss_fn,
                     fit_params=fit_params,
                     param_penalty_weight=param_penalty_weight,
@@ -1624,7 +1624,7 @@ async def hypothesis_engine(
                 seed_test_programs_list = _programs_df_to_programs_list(
                     seed_test_df,
                     loss_func=loss_fn,
-                    data=X[1, 1],
+                    data=X[0, 1],
                     complexity_penalty=param_penalty_weight,
                 )
                 if seed_test_programs_list:
@@ -1636,7 +1636,7 @@ async def hypothesis_engine(
                 )
                 seed_test_fit_paths[idx] = seed_test_path
                 plot_model_fits(
-                    data=X[1, 1],
+                    data=X[0, 1],
                     programs_list=seed_test_programs_list,
                     X_eval=X_eval_test,
                     save_path=seed_test_path,
@@ -1976,7 +1976,7 @@ async def hypothesis_engine(
                         use_simple_objective,
                         model=model_new,
                         param_estimator=param_est_new,
-                        data=[X[1,0], X[1,1]],
+                        data=[X[0,0], X[0,1]],
                         loss_fn=loss_fn,
                         param_penalty_weight=param_penalty_weight,
                         fit_params=fit_params,
@@ -1999,7 +1999,7 @@ async def hypothesis_engine(
                     test_programs_list = _programs_df_to_programs_list(
                         test_programs_df,
                         loss_func=loss_fn,
-                        data=X[1, 1],
+                        data=X[0, 1],
                         complexity_penalty=param_penalty_weight,
                     )
                     test_fit_losses = []
@@ -2009,7 +2009,7 @@ async def hypothesis_engine(
                         else:
                             test_fit_losses.append(None)
                     plot_model_fits(
-                        data=X[1, 1],
+                        data=X[0, 1],
                         programs_list=test_programs_list,
                         X_eval=X_eval_test,
                         save_path=test_fit_path,
