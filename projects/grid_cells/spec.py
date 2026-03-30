@@ -916,7 +916,7 @@ def plot_model_fits(
         for m_idx, program in enumerate(programs_list):
             model = program["model"]
             params = utils.slice_params(params_by_model[m_idx], s)
-            sample_data = {'pos_x': eval_pos_x[s], 'pos_y': eval_pos_y[s]}
+            sample_data = {'pos_x': pos_x[s], 'pos_y': pos_y[s]}
             y_pred = utils.call_model(model, sample_data, params)
             rm_pred = _bin_to_rate_map(
                 x, y, y_pred, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain,
