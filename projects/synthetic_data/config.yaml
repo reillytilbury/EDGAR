@@ -68,7 +68,7 @@ prompts:
     code_guidelines: '**Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
-      * Model signature must be `def model(data, params):` where `data` is a dict with keys 'x' and 'y' where `params` is a dict of named arrays/scalars.
+      * Model signature must be `def model(data, params):` where `data` is a dict with keys "x" and "y" where `params` is a dict of named arrays/scalars.
       * Ensure all free parameters are numeric, not strings.
 
       '

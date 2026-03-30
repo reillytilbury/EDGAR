@@ -198,13 +198,13 @@ prompts:
 
       where:
 
-      * `data` is a dict with keys 'pos_x', 'pos_y', 'response'.
+      * `data` is a dict with keys "pos_x", "pos_y", "response".
 
-      * `data['pos_x']` has shape `(n_trials,)` — x position (normalized to [-1, 1]).
+      * `data["pos_x"]` has shape `(n_trials,)` — x position (normalized to [-1, 1]).
 
-      * `data['pos_y']` has shape `(n_trials,)` — y position (normalized to [-1, 1]).
+      * `data["pos_y"]` has shape `(n_trials,)` — y position (normalized to [-1, 1]).
 
-      * Access inputs by key: `x = data['pos_x']`, `y = data['pos_y']`
+      * Access inputs by key: `x = data["pos_x"]`, `y = data["pos_y"]`
 
       * `params` is a dict of named free parameters (use descriptive keys).
 
@@ -302,13 +302,13 @@ prompts:
 
       where:
 
-      * `data` is a dict with keys 'pos_x', 'pos_y', 'response'.
+      * `data` is a dict with keys "pos_x", "pos_y", "response".
 
-      * `data['pos_x']` has shape `(n_trials,)` — x position.
+      * `data["pos_x"]` has shape `(n_trials,)` — x position.
 
-      * `data['pos_y']` has shape `(n_trials,)` — y position.
+      * `data["pos_y"]` has shape `(n_trials,)` — y position.
 
-      * `data['response']` has shape `(n_trials,)` — firing rates.
+      * `data["response"]` has shape `(n_trials,)` — firing rates.
 
       * Return: a dict of estimated parameter values matching the place model''s
       free parameters.
