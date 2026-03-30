@@ -163,6 +163,8 @@ def param_est_v1(data):
     best_loss = float("inf")
     best_params = (1.0, 0.0)
 
+    x = np.asarray(X[0] if np.asarray(X).ndim > 1 else X)
+
     for a in a_values:
         for b in b_values:
             y_pred = model_v1(data, {"a": a, "b": b})

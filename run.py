@@ -1,10 +1,19 @@
 import asyncio
+import logging
 import yaml
 from pathlib import Path
 import importlib
 import os, argparse
 import inspect
 import numpy as np
+
+# JAX/XLA runtime guards to reduce GPU OOM frequency during large program sweeps.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+_xla_flags = os.environ.get("XLA_FLAGS", "")
+if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
+    os.environ["XLA_FLAGS"] = (_xla_flags + " --xla_gpu_enable_command_buffer=").strip()
+
 from src import hypothesis_engine, utils
 from src.prompt_manager import PromptManager
 from src.data_summary import save_data_summary
@@ -109,7 +118,7 @@ def _build_train_test_split_fn(spec_train_test_split_fn):
 def _build_loss_fn(raw_loss_fn):
     """
     Validate loss signature for the engine contract:
-      loss_fn(model_output, data)
+      loss_fn(y_pred, y_true)
     """
     if raw_loss_fn is None:
         return None
@@ -122,12 +131,20 @@ def _build_loss_fn(raw_loss_fn):
         for p in params
     )
 
-    if has_varargs or n_positional != 2:
+    if has_varargs or n_positional not in (2, 3):
         raise ValueError(
-            "loss_fn must use signature loss_fn(model_output, data)."
+            "loss_fn must use signature loss_fn(y_pred, y_true)."
         )
 
-    return raw_loss_fn
+    if n_positional == 2:
+        def _wrapped_loss_fn(y_pred, y_true, params=None):
+            return raw_loss_fn(y_pred, y_true)
+        return _wrapped_loss_fn
+
+    def _wrapped_loss_fn(y_pred, y_true, params=None):
+        return raw_loss_fn(y_pred, y_true, params)
+
+    return _wrapped_loss_fn
 
 
 def _zscore_data(data: dict, skip_keys: list | None = None, eps: float = 1e-12) -> dict:
@@ -319,7 +336,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     # Loss function: required in spec
     spec_loss_fn = getattr(spec_module, "loss_fn", None)
     if spec_loss_fn is None or not callable(spec_loss_fn):
-        raise ValueError(f"{spec_module_path} must define callable loss_fn(model_output, data).")
+        raise ValueError(f"{spec_module_path} must define callable loss_fn(Y_pred, Y_true).")
 
     # Image diagnostics are enabled automatically if spec defines plot_model_fits.
     spec_plot_fn = getattr(spec_module, "plot_model_fits", None)
@@ -351,6 +368,43 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         params['exploration_topology'] = [1, 0]
         params['exploitation_topology'] = [1, 0]
         params['max_iter'] = 100 # --- USE WHEN JUST CHECKING THAT THE SCRIPT RUNS ---
+        # Keep test mode fast by shrinking common data-generation sizes when present.
+        if 'n_samples' in data_processing_params:
+            data_processing_params['n_samples'] = min(int(data_processing_params['n_samples']), 120)
+        if 'n_trials' in data_processing_params:
+            data_processing_params['n_trials'] = min(int(data_processing_params['n_trials']), 300)
+        if 'n_cells' in data_processing_params:
+            data_processing_params['n_cells'] = min(int(data_processing_params['n_cells']), 600)
+
+    def _ring_topology(n_islands: int) -> list[int]:
+        if n_islands <= 0:
+            return []
+        return list(range(1, n_islands)) + [0]
+
+    def _topology_invalid(topology, n_islands: int) -> bool:
+        if not isinstance(topology, (list, tuple)) or len(topology) != n_islands:
+            return True
+        for dest in topology:
+            if not isinstance(dest, (int, np.integer)):
+                return True
+            if dest < 0 or dest >= n_islands:
+                return True
+        return False
+
+    n_islands = int(params.get('n_islands', 0) or 0)
+    if n_islands > 0:
+        explore_top = params.get('exploration_topology')
+        exploit_top = params.get('exploitation_topology')
+        if _topology_invalid(explore_top, n_islands) or _topology_invalid(exploit_top, n_islands):
+            ring = _ring_topology(n_islands)
+            msg = (
+                f"Topology mismatch for n_islands={n_islands}. "
+                f"Defaulting exploration/exploitation topology to ring: {ring}"
+            )
+            logging.warning(msg)
+            print(f"Warning: {msg}")
+            params['exploration_topology'] = ring
+            params['exploitation_topology'] = ring
 
     for i in range(params['num_runs']):
         random_seed = params.get('random_seed', 42)
@@ -400,7 +454,6 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             n_iterations=params['n_iterations'],
             time_limit=params['time_limit'],
             param_penalty_weight=params['param_penalty_weight'],
-            penalty_denominator=penalty_denominator,
             exploration_topology=params['exploration_topology'],
             exploitation_topology=params['exploitation_topology'],
             exploit_point=params['exploit_point'],
@@ -425,6 +478,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             numpy_programs=models,
             param_estimators=param_estimators,
             X=X,
+            Y=Y,
             X_eval=X_eval,
             plot_model_fits=plot_model_fits_fn,
             prompt_manager=prompt_manager,
@@ -437,11 +491,14 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         )
         # Save split/data summary from preprocessed run-level data.
         save_data_summary(
-            data=data,
+            response=outputs,
+            inputs=inputs,
             training_samples=train_samples,
             test_samples=test_samples,
-            train_trials=train_trials,
-            test_trials=test_trials,
+            x_train_trial_idx=train_trials,
+            x_test_trial_idx=test_trials,
+            y_train_trial_idx=train_trials,
+            y_test_trial_idx=test_trials,
             output_dir=full_dir,
             random_seed=random_seed,
             train_test_split_fn=spec_train_test_split_fn,

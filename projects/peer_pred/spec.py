@@ -12,14 +12,14 @@ Seed Programs:
 - model_v2(data, params) and param_est_v2(data)
 
 LOSS FUNCTION:
-- loss_fn(model_output, data) -> loss values
+- loss_fn(Y_pred, Y_true) -> loss values
 
 OPTIONAL COMPONENTS:
 - plot_model_fits(data, programs_list, data_eval, save_path, labels)
 """
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Dict, Tuple
+from typing import Tuple
 from scipy.io import loadmat
 from src import utils
 from scipy.signal import medfilt, butter, filtfilt
@@ -149,10 +149,11 @@ def train_test_split(
 # ========================
 
 
-def model_v1(data, params):
+def model_v1(X, params):
     """
-    Linear peer-prediction model with a weight matrix.
-
+    Linear peer-prediction model with a weight matrix. 
+    
+    No temporal lags, so it's a simpler model than a lagged regression, but this usually gives better held out performance (less overfitting).
     Equation: For each target cell c at timepoint t,
     Y[c, t] = sum_{s in source_cells} A[c, s] * data['source'][s, t]
 
@@ -169,10 +170,11 @@ def model_v1(data, params):
     return weight_matrix_A @ data["source"]
 
 
-def param_est_v1(data):
+def param_est_v1(X, Y):
     """
-    Fit a PLS-Ridge weight matrix mapping source cells to target cells.
-    Uses PLS for dimensionality reduction (k=16) followed by Ridge regression (alpha=100).
+    Fast "quick-and-dirty" estimator for model_v2.
+    Solves a regularized linear map A in closed form:
+    A = Y X^T (X X^T + lambda I)^(-1)
 
     Args:
         data (dict): Single-sample data dictionary with keys:
@@ -184,9 +186,6 @@ def param_est_v1(data):
     """
     from sklearn.cross_decomposition import PLSRegression
     from sklearn.linear_model import Ridge
-
-    X = data["source"]
-    Y = data["target"]
 
     # HYPERPARAMS: Maybe add some cross-validated tuning?
     PLS_MAX_ITER = 500
@@ -211,17 +210,16 @@ def param_est_v1(data):
     return {"A": weight_matrix_A}
 
 
-def model_v2(data, params):
+def model_v2(X, params):
     """
     Linear peer-prediction with cell-specific quadratic terms.
 
     Equation: For each target cell c at timepoint t,
-    Y[c, t] = q_c(sum_{s in source_cells} A[c, s] * data['source'][s, t])
+    Y[c, t] = q_c(sum_{s in source_cells} A[c, s] * X[s, t])
     where q_c(x) = a0_c + a1_c * x + a2_c * x^2 is a cell-specific quadratic function.
 
     Args:
-        data (dict): Single-sample data dictionary with keys:
-            - 'source': source activity array of shape (n_source_cells, n_time).
+        X (np.ndarray): Input array with shape (n_source_cells, n_time).
         params (dict): Parameter dictionary with keys:
             - A: Weight matrix of shape (n_target_cells, n_source_cells)
             - quadratic: Quadratic coefficients of shape (n_target_cells, 3)
@@ -231,35 +229,31 @@ def model_v2(data, params):
     """
     weight_matrix_A = params["A"]
     quadratic_coeffs = params["quadratic"]
-
+    
     intercept = quadratic_coeffs[:, 0:1]
     linear_coef = quadratic_coeffs[:, 1:2]
     quadratic_coef = quadratic_coeffs[:, 2:3]
-
-    Y_pred_linear = weight_matrix_A @ data["source"]  # (n_target, n_time)
+    
+    Y_pred_linear = weight_matrix_A @ X  # (n_target, n_time)
     Y_pred = intercept + linear_coef * Y_pred_linear + quadratic_coef * (Y_pred_linear ** 2)
     return Y_pred
 
 
-def param_est_v2(data):
+def param_est_v2(X, Y):
     """
     Fit parameters for model_v2 in two stages:
     1. Fit the linear weights A using PLS-Ridge (k=16, alpha=100).
     2. Fit the quadratic coefficients for each target cell independently using least squares.
 
     Args:
-        data (dict): Single-sample data dictionary with keys:
-            - 'source': source activity array of shape (n_source_cells, n_time).
-            - 'target': target activity array of shape (n_target_cells, n_time).
+        X (np.ndarray): Input array with shape (n_source_cells, n_time).
+        Y (np.ndarray): Target array with shape (n_target_cells, n_time).
 
     Returns:
         dict: Parameter dictionary with keys {"A", "quadratic"}.
     """
     from sklearn.cross_decomposition import PLSRegression
     from sklearn.linear_model import Ridge
-
-    X = data["source"]
-    Y = data["target"]
 
     # HYPERPARAMS: Maybe add some cross-validated tuning?
     PLS_MAX_ITER = 500
@@ -275,7 +269,7 @@ def param_est_v2(data):
     weight_matrix_A = ridge.coef_ @ pls.x_rotations_.T
 
     # Generate linear predictions to serve as input for Stage 2
-    Y_pred_linear = weight_matrix_A @ X
+    Y_pred_linear = weight_matrix_A @ X 
     n_target_cells = Y.shape[0]
 
     # Stage 2: Fit quadratic coefficients
@@ -295,18 +289,18 @@ def param_est_v2(data):
 # 3. LOSS
 # ========================
 
-def loss_fn(model_output, data):
+def loss_fn(Y_pred, Y_true):
     """
-    Compute mean squared error between predicted and true target activity.
+    Compute MSE plus optional parameter regularization.
 
     Args:
-        model_output (np.ndarray): Predicted target activity, shape (n_target_cells, n_time).
-        data (dict): Data dictionary; the comparison target is data['target'].
+        Y_pred (np.ndarray): Predicted target activity, shape (n_target_cells, n_time).
+        Y_true (np.ndarray): True target activity, shape (n_target_cells, n_time).
 
     Returns:
         float: Mean squared error between predicted and true target activity.
     """
-    return np.mean((model_output - data["target"]) ** 2)
+    return np.mean((Y_pred - Y_true) ** 2)
 
 
 # ========================
@@ -326,59 +320,46 @@ def plot_model_fits(
 
     Shows 4 random target cells in a 2x2 grid over a random contiguous
     time block (default length 120).
-
-    Parameters
-    ----------
-    data : dict[str, np.ndarray]
-        Data dictionary with keys 'source' and 'target'.
-        'source' has shape (n_samples, n_source_cells, n_time).
-        'target' has shape (n_samples, n_target_cells, n_time).
-    programs_list : list[dict]
-        List of model dictionaries.
-    data_eval : dict[str, np.ndarray]
-        Evaluation data dict (unused for peer_pred but kept for interface consistency).
-    save_path : str
-        Output path for saved figure.
-    labels : list[str] or None
-        Labels for each model.
-    title_prefix : str or None
-        Optional prefix for the figure title.
     """
     if save_path == "":
         raise ValueError("Please provide a save path for the plot")
 
-    source_arr = np.asarray(data["source"])   # (n_samples, n_source, n_time)
-    target_arr = np.asarray(data["target"])   # (n_samples, n_target, n_time)
-    n_samples = source_arr.shape[0]
-    n_targets = target_arr.shape[1]
-    n_trials = target_arr.shape[2]
+    def _to_array3d(obj) -> np.ndarray:
+        if hasattr(obj, "to_tensor"):
+            arr = np.asarray(obj.to_tensor())
+        else:
+            arr = np.asarray(obj)
+        if arr.ndim == 2:
+            return arr[:, np.newaxis, :]
+        return arr
+
+    x_arr = _to_array3d(X)
+    y_arr = _to_array3d(Y)
+    n_samples, n_features, n_trials = x_arr.shape
+    _, n_targets, _ = y_arr.shape
 
     sample_idx = 0
     x = source_arr[sample_idx]  # (n_source, n_time)
     y = target_arr[sample_idx]  # (n_target, n_time)
 
-    rng = np.random.default_rng()
-    n_show = min(4, n_targets)
-    cell_idx = rng.choice(n_targets, size=n_show, replace=False)
+    block_len = 360
+    if n_trials <= block_len:
+        sl = slice(0, n_trials)
+    else:
+        rng = np.random.default_rng()
+        start = block_len * rng.integers(0, max(1, n_trials // block_len))
+        sl = slice(start, min(start + block_len, n_trials))
 
-    block_len = 180
-    # want to show 1 full block so set start to be a random multiple of block len
-    start = block_len * rng.integers(0, n_trials // block_len)
-    sl = slice(start, start + block_len)
-
-    colours = ["red", "blue", "green", "purple", "orange"]
     fig, axes = plt.subplots(
-        2,
         3,
-        figsize=(16, 8),
-        gridspec_kw={"width_ratios": [1.0, 1.0, 0.9]},
+        3,
+        figsize=(21, 14),
+        gridspec_kw={"width_ratios": [1.25, 1.25, 1.0], "height_ratios": [1.0, 1.0, 0.8]},
     )
-    trace_axes = axes[:, :2].reshape(2, 2)
 
-    # Precompute predictions and overall losses for the selected sample.
+    # Precompute predictions and overall losses.
     preds_by_model = []
     model_losses = []
-    per_cell_losses = []
     for program in programs_list:
         model = program["model"]
         params = utils.slice_params(
@@ -391,12 +372,6 @@ def plot_model_fits(
         if y_pred.ndim == 1:
             y_pred = y_pred[None, :]
         preds_by_model.append(y_pred)
-        # Use provided test losses if available; otherwise fall back to current data.
-        per_cell_from_program = program.get("per_cell_losses")
-        if per_cell_from_program is not None:
-            per_cell_losses.append(np.asarray(per_cell_from_program)[sample_idx])
-        else:
-            per_cell_losses.append(np.mean((y_pred - y) ** 2, axis=1))
 
         if "losses" in program:
             try:
@@ -415,68 +390,212 @@ def plot_model_fits(
             return str(labels[j])
         return f"Model v{j+1}"
 
-    for k in range(4):
-        ax = trace_axes[k // 2, k % 2]
-        if k >= n_show:
+    def _pc1_order(cell_by_trial: np.ndarray) -> np.ndarray:
+        """Sort neurons by their score on PC1 of the observed activity block."""
+        arr = np.asarray(cell_by_trial, dtype=float)
+        if arr.ndim != 2:
+            return np.arange(0, dtype=int)
+        n_cells, n_t = arr.shape
+        if n_cells <= 1:
+            return np.arange(n_cells, dtype=int)
+        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        try:
+            # Center per-neuron time series and get first left singular vector scores.
+            arr_centered = arr - arr.mean(axis=1, keepdims=True)
+            u, s, _ = np.linalg.svd(arr_centered, full_matrices=False)
+            if u.shape[0] == n_cells and s.size > 0:
+                pc1_scores = u[:, 0] * s[0]
+                return np.argsort(pc1_scores)
+        except Exception:
+            pass
+        # Fallback keeps plotting robust if SVD fails.
+        return np.argsort(np.nanargmax(arr, axis=1))
+
+    def _positive_vmax(arr: np.ndarray, pct: float = 99.0) -> float:
+        pos = np.clip(np.asarray(arr, dtype=float), 0.0, None)
+        vmax = float(np.nanpercentile(pos, pct))
+        if not np.isfinite(vmax) or vmax <= 1e-12:
+            vmax = 1.0
+        return vmax
+
+    def _obs_gray_rgb(obs: np.ndarray) -> np.ndarray:
+        """
+        White=baseline (0), black=high positive activity.
+        """
+        arr = np.nan_to_num(np.asarray(obs, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+        vmax = _positive_vmax(arr)
+        norm = np.clip(np.clip(arr, 0.0, None) / vmax, 0.0, 1.0)
+        gray = 1.0 - norm
+        return np.repeat(gray[:, :, None], 3, axis=2)
+
+    def _pred_color_rgb(pred: np.ndarray, color: str) -> np.ndarray:
+        """
+        White=baseline (0), high positive activity maps to strong red/blue.
+        """
+        arr = np.nan_to_num(np.asarray(pred, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+        vmax = _positive_vmax(arr)
+        norm = np.clip(np.clip(arr, 0.0, None) / vmax, 0.0, 1.0)
+        rgb = np.ones((arr.shape[0], arr.shape[1], 3), dtype=float)
+        if color == "red":
+            rgb[:, :, 1] = 1.0 - norm
+            rgb[:, :, 2] = 1.0 - norm
+        else:  # blue
+            rgb[:, :, 0] = 1.0 - norm
+            rgb[:, :, 1] = 1.0 - norm
+        return rgb
+
+    def _residual_rgb(residual: np.ndarray, cmap_name: str = "BrBG"):
+        arr = np.nan_to_num(np.asarray(residual, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+        rv = float(np.nanpercentile(np.abs(arr), 99))
+        if not np.isfinite(rv) or rv <= 1e-12:
+            rv = 1.0
+        norm = mcolors.TwoSlopeNorm(vmin=-rv, vcenter=0.0, vmax=rv)
+        cmap = plt.get_cmap(cmap_name)
+        rgb = cmap(norm(arr))[..., :3]
+        return rgb, norm, cmap
+
+    # Use same ordering for all raster panels, then display every 10th neuron.
+    y_block = y[:, sl]
+    order = _pc1_order(y_block)
+    plot_stride = 4
+    order_plot = order[::plot_stride] if order.size > 0 else order
+    if order_plot.size == 0 and order.size > 0:
+        order_plot = order[:1]
+    y_sorted = y_block[order_plot, :]
+    pred_blocks = [np.asarray(pred[:, sl], dtype=float) for pred in preds_by_model]
+
+    # Left column: observed stacked on prediction.
+    for row in range(2):
+        ax = axes[row, 0]
+        if row >= len(pred_blocks):
             ax.axis("off")
             continue
-        c = cell_idx[k]
-        ax.plot(y[c, sl], color="black", linewidth=2, label="Observed")
+        pred_sorted = pred_blocks[row][order_plot, :]
+        panel = np.concatenate(
+            [ _obs_gray_rgb(y_sorted), _pred_color_rgb(pred_sorted, "red" if row == 0 else "blue") ],
+            axis=0,
+        )
+        ax.imshow(panel, aspect="auto", interpolation="none")
+        n_cells = y_sorted.shape[0]
+        ax.axhline(n_cells - 0.5, color="white", linewidth=1.0, alpha=0.95)
+        ax.set_yticks([n_cells / 2.0, n_cells + n_cells / 2.0])
+        if row == 0:
+            ax.set_yticklabels(["Y_obs (gray)", "pred v1 (red)"])
+        else:
+            ax.set_yticklabels(["Y_obs (gray)", "pred v2 (blue)"])
+        ax.set_title(f"{_model_label(row)}: observed + prediction")
+        if row == 1:
+            ax.set_xlabel("time (sec)")
+        else:
+            ax.set_xticks([])
 
-        for j, y_pred in enumerate(preds_by_model):
-            name = _model_label(j)
-            if per_cell_losses:
-                cell_loss = float(per_cell_losses[j][c])
-            else:
-                cell_loss = float(np.mean((y_pred[c, sl] - y[c, sl]) ** 2))
-            ax.plot(
-                y_pred[c, sl],
-                color=colours[j % len(colours)],
-                linewidth=2,
-                label=f"{name} (loss={cell_loss:.2f})",
-                alpha=0.8,
-            )
-
-        ax.set_title(f"Target cell {int(c)}")
-        ax.set_xlabel("time (s)")
-        ax.set_ylabel("z-scored activity")
-        ax.legend(fontsize=8)
-
-    # Histograms: v1 (top-right), v2 (bottom-right)
-    for j in range(min(2, len(per_cell_losses))):
-        ax_hist = axes[j, 2]
-        name = _model_label(j)
-        cell_losses = np.asarray(per_cell_losses[j])
-        finite_mask = np.isfinite(cell_losses)
-        cell_losses = cell_losses[finite_mask]
-        if cell_losses.size == 0:
-            ax_hist.text(0.5, 0.5, "no finite losses", ha="center", va="center")
-            ax_hist.set_title(f"{name} loss histogram")
-            ax_hist.set_axis_off()
+    # Middle column: observed stacked on residual, with residual colorbars.
+    residual_cmap = "BrBG"
+    for row in range(2):
+        ax = axes[row, 1]
+        if row >= len(pred_blocks):
+            ax.axis("off")
             continue
-        n_bins = min(40, max(10, int(np.sqrt(max(1, cell_losses.size)))))
-        ax_hist.hist(
-            cell_losses,
-            bins=n_bins,
-            color=colours[j % len(colours)],
-            alpha=0.75,
-            edgecolor="white",
-        )
-        mean_loss = float(np.mean(cell_losses))
-        ax_hist.axvline(
-            mean_loss,
-            color=colours[j % len(colours)],
-            linestyle="--",
-            linewidth=2,
-            label=f"mean={mean_loss:.2f}",
-        )
-        ax_hist.set_title(f"{name} loss histogram")
-        ax_hist.set_xlabel("per-cell MSE")
-        ax_hist.set_ylabel("count")
-        ax_hist.legend(fontsize=9)
+        residual = y_sorted - pred_blocks[row][order_plot, :]
+        residual_rgb, residual_norm, cmap = _residual_rgb(residual, cmap_name=residual_cmap)
+        panel = np.concatenate([_obs_gray_rgb(y_sorted), residual_rgb], axis=0)
+        ax.imshow(panel, aspect="auto", interpolation="none")
+        n_cells = y_sorted.shape[0]
+        ax.axhline(n_cells - 0.5, color="white", linewidth=1.0, alpha=0.95)
+        ax.set_yticks([n_cells / 2.0, n_cells + n_cells / 2.0])
+        if row == 0:
+            ax.set_yticklabels(["Y_obs (gray)", "resid (Y_obs - v1)"])
+            ax.set_title("Observed + residual (Y_obs - v1)")
+        else:
+            ax.set_yticklabels(["Y_obs (gray)", "resid (Y_obs - v2)"])
+            ax.set_title("Observed + residual (Y_obs - v2)")
+        if row == 1:
+            ax.set_xlabel("time (sec)")
+        else:
+            ax.set_xticks([])
+        mappable = plt.cm.ScalarMappable(norm=residual_norm, cmap=cmap)
+        mappable.set_array([])
+        cbar = fig.colorbar(mappable, ax=ax, fraction=0.046, pad=0.02)
+        cbar.set_label("residual value")
 
-    if len(per_cell_losses) < 2:
-        axes[1, 2].axis("off")
+    # Right-top: per-cell MSE scatter (v1 vs v2).
+    ax_scatter = axes[0, 2]
+    if len(pred_blocks) >= 2:
+        loss_v1 = np.mean((pred_blocks[0] - y_block) ** 2, axis=1)
+        loss_v2 = np.mean((pred_blocks[1] - y_block) ** 2, axis=1)
+        finite = np.isfinite(loss_v1) & np.isfinite(loss_v2)
+        x_loss = loss_v1[finite]
+        y_loss = loss_v2[finite]
+        if x_loss.size > 0:
+            ax_scatter.scatter(x_loss, y_loss, s=14, alpha=0.65, color="black")
+            lo = float(min(np.min(x_loss), np.min(y_loss)))
+            hi = float(max(np.max(x_loss), np.max(y_loss)))
+            if np.isclose(lo, hi):
+                pad = max(1e-6, abs(lo) * 0.05 + 1e-6)
+                lo -= pad
+                hi += pad
+            ax_scatter.plot([lo, hi], [lo, hi], linestyle="--", color="gray", linewidth=1.5)
+            ax_scatter.set_xlim(lo, hi)
+            ax_scatter.set_ylim(lo, hi)
+        ax_scatter.set_xlabel("v1 per-cell MSE")
+        ax_scatter.set_ylabel("v2 per-cell MSE")
+        ax_scatter.set_title("Per-cell loss comparison")
+    else:
+        ax_scatter.text(0.5, 0.5, "need two models", ha="center", va="center")
+        ax_scatter.set_axis_off()
+
+    # Right-bottom: population mean and residual means.
+    ax_trace = axes[1, 2]
+    if len(pred_blocks) >= 2:
+        t = np.arange(y_block.shape[1])
+        pop_mean = np.mean(y_block, axis=0)
+        resid1_mean = np.mean(y_block - pred_blocks[0], axis=0)
+        resid2_mean = np.mean(y_block - pred_blocks[1], axis=0)
+        ax_trace.plot(t, pop_mean, color="black", linewidth=2, label="Population mean (Y_obs)")
+        ax_trace.plot(t, resid1_mean, color="red", linewidth=2, alpha=0.9, label="Residual mean (Y_obs-v1)")
+        ax_trace.plot(t, resid2_mean, color="blue", linewidth=2, alpha=0.9, label="Residual mean (Y_obs-v2)")
+        ax_trace.axhline(0.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.7)
+        ax_trace.set_title("Population mean and residual means")
+        ax_trace.set_xlabel("trial index")
+        ax_trace.set_ylabel("z-scored activity")
+        ax_trace.legend(fontsize=8)
+    else:
+        ax_trace.text(0.5, 0.5, "need two models", ha="center", va="center")
+        ax_trace.set_axis_off()
+
+    # Bottom row: three random single-cell traces (observed, v1, v2).
+    if len(pred_blocks) >= 2 and y_block.shape[0] > 0:
+        rng_cells = np.random.default_rng()
+        n_available_cells = y_block.shape[0]
+        n_show = min(3, n_available_cells)
+        selected = rng_cells.choice(n_available_cells, size=n_show, replace=False)
+        t = np.arange(y_block.shape[1])
+        for col in range(3):
+            ax = axes[2, col]
+            if col >= n_show:
+                ax.axis("off")
+                continue
+            cell_idx = int(selected[col])
+            y_true = y_block[cell_idx]
+            y_v1 = pred_blocks[0][cell_idx]
+            y_v2 = pred_blocks[1][cell_idx]
+            mse_v1 = float(np.mean((y_true - y_v1) ** 2))
+            mse_v2 = float(np.mean((y_true - y_v2) ** 2))
+            ax.plot(t, y_true, color="black", linewidth=1.8, label="Y_obs")
+            ax.plot(t, y_v1, color="red", linewidth=1.6, alpha=0.9, label="v1")
+            ax.plot(t, y_v2, color="blue", linewidth=1.6, alpha=0.9, label="v2")
+            ax.axhline(0.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.6)
+            ax.set_title(f"Random cell {cell_idx} | MSE v1={mse_v1:.2f}, v2={mse_v2:.2f}")
+            ax.set_xlabel("trial index")
+            if col == 0:
+                ax.set_ylabel("z-scored activity")
+            if col == 2:
+                ax.legend(fontsize=8, loc="upper right")
+    else:
+        for col in range(3):
+            ax = axes[2, col]
+            ax.text(0.5, 0.5, "need two models", ha="center", va="center")
+            ax.set_axis_off()
 
     title_parts = []
     if model_losses:
@@ -489,7 +608,7 @@ def plot_model_fits(
         title_text = f"{title_prefix} | {title_text}" if title_text else str(title_prefix)
     if title_text:
         plt.suptitle(title_text, fontsize=14)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.savefig(save_path, dpi=120, bbox_inches="tight")
     plt.close(fig)
 
@@ -588,11 +707,11 @@ def preprocess_trace(raw_trace, tv_weight=0.1, median_filter=True):
         trace = medfilt(raw_trace, kernel_size=3)
     else:
         trace = raw_trace
-
+    
     # 2. TV Denoising: Flattens the "fuzz" while keeping the big jumps
     # weight: Higher = smoother/flatter. Start at 0.1 and tune.
     clean_trace = denoise_tv_chambolle(trace, weight=tv_weight)
-
+    
     return clean_trace
 
 # Example usage on one of your cells:
