@@ -1010,6 +1010,8 @@ async def generate_new_parameter_estimator(current_island,
             with open(img_path, "rb") as f:
                 img_bytes = f.read()
         except Exception as e:
+            logging.info(f"Error generating image for parameter estimator refinement: {e}")
+            logging.info(f"Model code string was:\n{model_code_string}")
             raise RuntimeError(f"Param-estimator image generation failed: {e}") from e
 
         # Build refinement prompt using current estimator as the only parent
