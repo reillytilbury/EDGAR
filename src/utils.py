@@ -22,7 +22,10 @@ logging.getLogger("google.genai").setLevel(logging.ERROR)
 # ---------------------------------------------------------------------------
 
 def validate_data(X: Dict[str, np.ndarray]) -> None:
-    """Validate that X is a dict of arrays sharing the same last dimension.
+    """Validate that X is a dict of arrays sharing the same first and last dimensions.
+
+    All arrays must have at least 2 dimensions (n_samples, ..., n_trials), share
+    the same leading n_samples axis, and share the same trailing n_trials axis.
 
     Raises ValueError with a clear message if validation fails.
     """
@@ -30,14 +33,25 @@ def validate_data(X: Dict[str, np.ndarray]) -> None:
         raise ValueError(f"Data must be a dict, got {type(X).__name__}.")
     if len(X) == 0:
         raise ValueError("Data dict must not be empty.")
+    n_samples = None
     n_trials = None
     for key, arr in X.items():
         if not isinstance(arr, (np.ndarray, jnp.ndarray)):
             raise ValueError(
                 f"Data['{key}'] must be a numpy or JAX array, got {type(arr).__name__}."
             )
-        if arr.ndim == 0:
-            raise ValueError(f"Data['{key}'] is a scalar; all arrays must have at least 1 dimension.")
+        if arr.ndim < 2:
+            raise ValueError(
+                f"Data['{key}'] has {arr.ndim} dimension(s); all arrays must have at least "
+                f"2 dimensions (n_samples, ..., n_trials)."
+            )
+        if n_samples is None:
+            n_samples = arr.shape[0]
+        elif arr.shape[0] != n_samples:
+            raise ValueError(
+                f"All arrays must share the same first dimension (n_samples). "
+                f"First key has n_samples={n_samples}, but '{key}' has n_samples={arr.shape[0]}."
+            )
         if n_trials is None:
             n_trials = arr.shape[-1]
         elif arr.shape[-1] != n_trials:
@@ -432,7 +446,8 @@ def check_jax_translation(
 def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins=100):
     """Build evaluation grid as a data dict.
 
-    Creates a linspace grid for each specified key, broadcast to n_samples.
+    Creates a linspace grid for each specified key, broadcast to n_samples and
+    any intermediate dimensions present in the original key.
 
     Args:
         data (dict[str, np.ndarray]): Data dict with sample axis at dim 0,
@@ -446,12 +461,21 @@ def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins
 
     Returns:
         dict[str, np.ndarray]: Eval data dict where each key has shape
-            ``(n_samples, n_bins)``.
+            ``(n_samples, *mid_dims, n_bins)``, where ``mid_dims`` are the
+            intermediate dimensions of the original key between the sample and
+            trial axes (empty for 2D keys, giving shape ``(n_samples, n_bins)``).
     """
     n_samples = data_n_samples(data)
     if eval_keys is None:
         eval_keys = list(data.keys())
     n_keys = len(eval_keys)
+
+    missing = [k for k in eval_keys if k not in data]
+    if missing:
+        raise ValueError(
+            f"eval_keys contains keys not present in data: {missing}. "
+            f"Available keys: {list(data.keys())}."
+        )
 
     # Resolve per-key bounds
     if x_min is None:
@@ -476,7 +500,14 @@ def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins
     result = {}
     for i, key in enumerate(eval_keys):
         grid = np.linspace(x_min_vec[i], x_max_vec[i], n_bins)
-        result[key] = np.broadcast_to(grid[None, :], (n_samples, n_bins))
+        # mid_dims are intermediate dims between sample and trial axes.
+        # For 2D arrays (n_samples, n_trials) this is an empty tuple.
+        mid_dims = data[key].shape[1:-1]
+        out_shape = (n_samples,) + mid_dims + (n_bins,)
+        # grid_reshape is (1, 1, ..., 1, n_bins) — one leading 1 per mid dim —
+        # so that np.broadcast_to spreads the linspace across all intermediate dims.
+        grid_reshape = (1,) + (1,) * len(mid_dims) + (n_bins,)
+        result[key] = np.broadcast_to(grid.reshape(grid_reshape), out_shape)
     return result
 
 
