@@ -9,11 +9,12 @@ task: orientation_tuning
 # ========================
 # Data Defaults
 # ========================
+zscore_skip_keys : ['stimulus', 'response'] # Do not z-score along response to reproduce the initial setup 
 
 # Data-processing overrides for this task.
 data_processing_params:
-  # data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
-  data_path: /home/reilly/datasets/stringer_2021/gratings_drifting_GT1_2019_04_12_1.npy
+  data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
+  # data_path: /home/reilly/datasets/stringer_2021/gratings_drifting_GT1_2019_04_12_1.npy
   activity_threshold: 0.4
   conc_threshold: 0.55
 

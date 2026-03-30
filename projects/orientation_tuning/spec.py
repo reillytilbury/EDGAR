@@ -349,11 +349,9 @@ def plot_model_fits(
     """
     if save_path == "":
         raise ValueError("Please provide a save path for the plot")
-    x_eval_fine = np.linspace(0, 2 * np.pi, 200)
 
     stimulus = data['stimulus']    # (n_samples, n_trials)
     response = data['response']    # (n_samples, n_trials)
-    x_eval_stim = X_eval['stimulus']  # (n_samples, n_eval_trials)
     n_samples = stimulus.shape[0]
     # diff colours for 1, 2 or 3 models
     if len(programs_list) == 1:
@@ -385,7 +383,8 @@ def plot_model_fits(
         s = idx[i]
         x = stimulus[s]
         y_obs = response[s]
-        x_eval = np.asarray(x_eval_stim[s]).reshape(-1)
+        eval_data = utils.get_data_sample(X_eval, s)
+        x_eval = np.asarray(eval_data['stimulus']).reshape(-1)
 
         y_mean = compute_binned_means_on_eval(x, y_obs, x_eval)
         ax.scatter(x, y_obs, s=10, c="black", alpha=0.2, label="Observed")
@@ -395,11 +394,11 @@ def plot_model_fits(
             model = program["model"]
             params = utils.slice_params(params_by_model[j], s)
             loss = program["losses"][s]
-            y_pred = utils.call_model(model, {'stimulus': x_eval_fine}, params)
+            y_pred = utils.call_model(model, eval_data, params)
 
             label = labels[j] + f" (loss={loss:.2f})"
             ax.plot(
-                x_eval_fine,
+                x_eval,
                 np.asarray(y_pred).flatten(),
                 color=colours[j % len(colours)],
                 linewidth=3,
