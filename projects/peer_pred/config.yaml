@@ -40,6 +40,7 @@ experiment_params:
   linked_llm: gemini-2.0-flash
   use_linked_prompt: false
   swear_words: []
+  eval_keys: ['source']
   x_min: -1.0
   x_max: 1.0
   n_bins: 100
@@ -63,8 +64,8 @@ experiment_params:
       Propose specific changes to both the model structure and estimator logic.
     code_guidelines: |
       Return exactly TWO Python code blocks:
-      1) def model_v{next_version}(X, params): ...
-      2) def parameter_estimator_v{next_version}(X, Y): ...
+      1) def model_v{next_version}(data, params): ...  where data is a dict with keys 'source', 'target'
+      2) def parameter_estimator_v{next_version}(data): ...  where data is the same dict
       Keep total length under {max_lines} lines combined.
     docstring_guidelines: |
       Each function should include a short docstring.

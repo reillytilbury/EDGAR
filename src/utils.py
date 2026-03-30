@@ -3,15 +3,84 @@ import re
 import jax
 import numpy as np
 import jax.numpy as jnp
-from typing import Callable, Union
-from .data_structures import Inputs
+from typing import Callable, Dict, Union
 # Set up logging to suppress warnings from httpx, urllib3, and google.genai
 import logging
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("google.genai").setLevel(logging.ERROR)
-# load dotenv to load environment variables from .env file
+
+
+# ---------------------------------------------------------------------------
+# Data dict helpers
+# ---------------------------------------------------------------------------
+# The data structure is a plain dict[str, np.ndarray] where all values share
+# the same last dimension (n_trials). These helpers provide validation,
+# slicing, and conversion utilities.
+# ---------------------------------------------------------------------------
+
+def validate_data(X: Dict[str, np.ndarray]) -> None:
+    """Validate that X is a dict of arrays sharing the same last dimension.
+
+    Raises ValueError with a clear message if validation fails.
+    """
+    if not isinstance(X, dict):
+        raise ValueError(f"Data must be a dict, got {type(X).__name__}.")
+    if len(X) == 0:
+        raise ValueError("Data dict must not be empty.")
+    n_trials = None
+    for key, arr in X.items():
+        if not isinstance(arr, (np.ndarray, jnp.ndarray)):
+            raise ValueError(
+                f"Data['{key}'] must be a numpy or JAX array, got {type(arr).__name__}."
+            )
+        if arr.ndim == 0:
+            raise ValueError(f"Data['{key}'] is a scalar; all arrays must have at least 1 dimension.")
+        if n_trials is None:
+            n_trials = arr.shape[-1]
+        elif arr.shape[-1] != n_trials:
+            raise ValueError(
+                f"All arrays must share the same last dimension (n_trials). "
+                f"First key has n_trials={n_trials}, but '{key}' has n_trials={arr.shape[-1]}."
+            )
+
+
+def data_n_trials(X: Dict[str, np.ndarray]) -> int:
+    """Return the shared last dimension (n_trials) of the data dict."""
+    first_arr = next(iter(X.values()))
+    return int(first_arr.shape[-1])
+
+
+def data_n_samples(X: Dict[str, np.ndarray]) -> int:
+    """Return the first dimension (n_samples) of the data dict."""
+    first_arr = next(iter(X.values()))
+    return int(first_arr.shape[0])
+
+
+def slice_data_samples(X: Dict[str, np.ndarray], indices) -> Dict[str, np.ndarray]:
+    """Slice the sample axis (dim 0) of every array in the data dict."""
+    return {k: v[indices] for k, v in X.items()}
+
+
+def slice_data_trials(X: Dict[str, np.ndarray], indices) -> Dict[str, np.ndarray]:
+    """Slice the trial axis (last dim) of every array in the data dict."""
+    return {k: v[..., indices] for k, v in X.items()}
+
+
+def get_data_sample(X: Dict[str, np.ndarray], idx: int) -> Dict[str, np.ndarray]:
+    """Extract a single sample from the data dict, removing the sample axis."""
+    return {k: v[idx] for k, v in X.items()}
+
+
+def data_as_jax(X: Dict[str, np.ndarray]) -> Dict[str, jnp.ndarray]:
+    """Convert all arrays in the data dict to JAX arrays."""
+    return {k: jnp.asarray(v) for k, v in X.items()}
+
+
+def data_as_numpy(X: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    """Convert all arrays in the data dict to numpy arrays."""
+    return {k: np.asarray(v) for k, v in X.items()}
 
 
 def format_function_source(func: Callable, new_name: str, import_statement: str = "") -> str:
@@ -37,24 +106,22 @@ def format_function_source(func: Callable, new_name: str, import_statement: str 
 
 
 def vmap_over_samples(model_fn):
-    """Return a version of `model_fn` that accepts
-       (X, params_tree) and runs one row per sample.
-       
+    """Return a version of ``model_fn`` that maps over the sample axis.
+
     Args:
-        model_fn: A model function with signature:
-                  model_fn(X, params) -> (n_trials,)
-                  where X has shape (n_features, n_trials).
-    
+        model_fn: A model function with signature
+            ``model_fn(data_i, params) -> output`` for a single sample,
+            where ``data_i`` is a dict of arrays (no sample axis).
+
     Returns:
         A vmapped function that accepts:
-        - X: shape (n_samples, n_features, n_trials)
+        - data: dict of arrays with leading sample axis
         - params_tree: pytree with leading sample axis for each leaf
-        Returns shape (n_samples, n_trials).
+        Maps over dim 0 of both data and params.
     """
-    def _wrapped(X_cell, params_cell):
-        # X_cell shape: (n_features, n_trials) for one cell
-        return model_fn(X_cell, params_cell)
-    return jax.vmap(_wrapped, in_axes=(0, 0))   # both X and params batched over cells
+    def _wrapped(data_i, params_i):
+        return model_fn(data_i, params_i)
+    return jax.vmap(_wrapped, in_axes=(0, 0))
 
 
 def tree_to_jax(params):
@@ -62,23 +129,28 @@ def tree_to_jax(params):
     return jax.tree_util.tree_map(lambda x: jnp.asarray(x), params)
 
 
-def call_model(model_fn, X, params, prefer_jax: bool = True):
-    """Invoke a model with inputs/params converted to JAX arrays when possible.
+def call_model(model_fn, data, params, prefer_jax: bool = True):
+    """Invoke a model with data/params converted to JAX arrays when possible.
 
-    This avoids tracer-to-numpy conversion errors in JAX control-flow primitives
-    (e.g., `lax.scan` / `lax.fori_loop`) by ensuring captured arrays are JAX types.
+    Args:
+        model_fn: Model function with signature ``model_fn(data_i, params)``.
+        data: Single-sample data dict (no sample axis).
+        params: Parameter pytree for a single sample.
+        prefer_jax: If True, try JAX arrays first, fall back to numpy.
     """
     if prefer_jax:
         try:
-            X_jax = jnp.asarray(X)
+            data_jax = data_as_jax(data) if isinstance(data, dict) else jnp.asarray(data)
             params_jax = tree_to_jax(params)
-            return model_fn(X_jax, params_jax)
+            return model_fn(data_jax, params_jax)
         except Exception as jax_exc:
             try:
-                return model_fn(np.asarray(X), params)
+                data_np = data_as_numpy(data) if isinstance(data, dict) else np.asarray(data)
+                return model_fn(data_np, params)
             except Exception:
                 raise jax_exc
-    return model_fn(np.asarray(X), params)
+    data_np = data_as_numpy(data) if isinstance(data, dict) else np.asarray(data)
+    return model_fn(data_np, params)
 
 
 def stack_params(params_list):
@@ -258,7 +330,7 @@ def str_to_func(code_string: Union[str, None], needle: str) -> Union[Callable, N
 def check_jax_translation(
     np_func,
     jax_func,
-    eval_points,
+    data,
     params,
     sample_indices=None,
     max_eval_trials=32,
@@ -266,33 +338,24 @@ def check_jax_translation(
     atol=1e-4,
 ):
     """
-    Check NumPy vs JAX model agreement on a subset of eval points and samples.
+    Check NumPy vs JAX model agreement on a subset of data samples.
 
     Args:
-        np_func: Original NumPy model function with signature model(X, params).
-        jax_func: Translated JAX model function with signature model(X, params).
-        eval_points: Array with shape (n_samples, n_features, n_eval_trials) or
-            (n_features, n_eval_trials) for a single sample.
-    params: Pytree with leading sample axis for each leaf, or a single-sample pytree.
+        np_func: Original NumPy model with signature ``model(data_i, params)``.
+        jax_func: Translated JAX model with signature ``model(data_i, params)``.
+        data (dict[str, np.ndarray]): Data dict with sample axis at dim 0.
+        params: Pytree with leading sample axis for each leaf.
         sample_indices: Optional sample indices to validate. If None, checks up to 3 samples.
-        max_eval_trials: Max number of eval-trial points per sample used for comparison.
+        max_eval_trials: Max number of trial points per sample used for comparison.
         rtol: Relative tolerance for numeric comparison.
         atol: Absolute tolerance for numeric comparison.
 
     Raises:
-        ValueError: If shapes are incompatible or predictions mismatch.
+        ValueError: If predictions mismatch between NumPy and JAX.
     """
-    eval_arr = np.asarray(eval_points)
-    if eval_arr.ndim == 2:
-        eval_arr = eval_arr[None, :, :]
-    if eval_arr.ndim != 3:
-        raise ValueError(
-            f"eval_points must have shape (n_samples, n_features, n_eval_trials), got {eval_arr.shape}."
-        )
+    n_samples = data_n_samples(data)
+    params_arr = broadcast_params(params, n_samples)
 
-    params_arr = broadcast_params(params, eval_arr.shape[0])
-
-    n_samples = eval_arr.shape[0]
     if sample_indices is None:
         n_check = min(3, n_samples)
         sample_indices = np.linspace(0, n_samples - 1, num=n_check, dtype=int)
@@ -302,14 +365,15 @@ def check_jax_translation(
     for sample_idx in sample_indices:
         if sample_idx < 0 or sample_idx >= n_samples:
             raise ValueError(f"sample index {sample_idx} out of range for n_samples={n_samples}.")
-        x_eval = eval_arr[sample_idx]
-        if max_eval_trials is not None and x_eval.shape[1] > max_eval_trials:
-            keep_idx = np.linspace(0, x_eval.shape[1] - 1, num=max_eval_trials, dtype=int)
-            x_eval = x_eval[:, keep_idx]
+        data_i = get_data_sample(data, sample_idx)
+        n_trials = data_n_trials(data)
+        if max_eval_trials is not None and n_trials > max_eval_trials:
+            keep_idx = np.linspace(0, n_trials - 1, num=max_eval_trials, dtype=int)
+            data_i = slice_data_trials(data_i, keep_idx)
 
         sample_params = slice_params(params_arr, sample_idx)
-        np_pred = np.asarray(np_func(x_eval, sample_params))
-        jax_pred = np.asarray(jax_func(jnp.asarray(x_eval), sample_params))
+        np_pred = np.asarray(np_func(data_i, sample_params))
+        jax_pred = np.asarray(jax_func(data_as_jax(data_i), sample_params))
 
         if np_pred.shape != jax_pred.shape:
             raise ValueError(
@@ -323,53 +387,76 @@ def check_jax_translation(
             )
 
 
-def build_evaluation_points(inputs: Inputs, x_min = None, x_max = None, n_bins = 100):
-    """
-    Build evaluation grid from config bounds.
-    Parameters:
-    - inputs: Inputs object containing the shape information (n_samples, n_features, n_trials).
-    - x_min: Scalar or array-like of shape (n_features,) specifying the minimum value for each feature. 
-            If scalar, the same minimum is applied to all features. If none, set to min value in inputs.
-    - x_max: Scalar or array-like of shape (n_features,) specifying the maximum value for each feature.
-            If scalar, the same maximum is applied to all features. If none, set to max value in inputs.
-    - n_bins: Number of evaluation points to generate per feature.
+def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins=100):
+    """Build evaluation grid as a data dict.
+
+    Creates a linspace grid for each specified key, broadcast to n_samples.
+
+    Args:
+        data (dict[str, np.ndarray]): Data dict with sample axis at dim 0,
+            used to infer n_samples and default min/max bounds.
+        eval_keys (list[str] | None): Keys to create eval grids for. If None,
+            uses all keys in the data dict.
+        x_min: Scalar (applied to all keys), list (one per eval key), or None
+            (derived from data per key).
+        x_max: Same format as x_min.
+        n_bins (int): Number of evaluation points per key.
+
     Returns:
-    - eval_points: A numpy array of shape (n_samples, n_features, n_bins) containing the evaluation points for each sample and feature.
+        dict[str, np.ndarray]: Eval data dict where each key has shape
+            ``(n_samples, n_bins)``.
     """
-    n_samples, n_features, _ = inputs.shape
-    x_min = np.min(inputs.data, axis=(0, 2)) if x_min is None else x_min
-    x_max = np.max(inputs.data, axis=(0, 2)) if x_max is None else x_max
-    # now check that x_min and x_max are either scalars or arrays of shape (n_features,)
-    assert np.isscalar(x_min) or (isinstance(x_min, (list, np.ndarray)) and len(x_min) == n_features), \
-        "x_min must be a scalar or array of shape (n_features,)"
-    assert np.isscalar(x_max) or (isinstance(x_max, (list, np.ndarray)) and len(x_max) == n_features), \
-        "x_max must be a scalar or array of shape (n_features,)"
-    # set vector bounds for each feature
-    x_min_vec = np.full(n_features, x_min) if np.isscalar(x_min) else np.asarray(x_min)
-    x_max_vec = np.full(n_features, x_max) if np.isscalar(x_max) else np.asarray(x_max)
-    per_feature = np.stack(
-        [np.linspace(x_min_vec[i], x_max_vec[i], n_bins) for i in range(n_features)],
-        axis=0,
-    )
-    return np.broadcast_to(per_feature[None, :, :], (n_samples, n_features, n_bins))
+    n_samples = data_n_samples(data)
+    if eval_keys is None:
+        eval_keys = list(data.keys())
+    n_keys = len(eval_keys)
+
+    # Resolve per-key bounds
+    if x_min is None:
+        x_min_vec = [float(np.min(data[k])) for k in eval_keys]
+    elif np.isscalar(x_min):
+        x_min_vec = [float(x_min)] * n_keys
+    else:
+        x_min_vec = [float(v) for v in x_min]
+    if x_max is None:
+        x_max_vec = [float(np.max(data[k])) for k in eval_keys]
+    elif np.isscalar(x_max):
+        x_max_vec = [float(x_max)] * n_keys
+    else:
+        x_max_vec = [float(v) for v in x_max]
+
+    if len(x_min_vec) != n_keys or len(x_max_vec) != n_keys:
+        raise ValueError(
+            f"x_min/x_max length ({len(x_min_vec)}/{len(x_max_vec)}) "
+            f"must match eval_keys length ({n_keys})."
+        )
+
+    result = {}
+    for i, key in enumerate(eval_keys):
+        grid = np.linspace(x_min_vec[i], x_max_vec[i], n_bins)
+        result[key] = np.broadcast_to(grid[None, :], (n_samples, n_bins))
+    return result
 
 
 def compute_evaluation_matrix(program, params, eval_points):
-    """
-    Compute model evaluations used for logging/comparison.
+    """Compute model evaluations on an evaluation grid.
+
+    Args:
+        program: Model function with signature ``model(data_i, params)``.
+        params: Batched parameter pytree with leading sample axis.
+        eval_points (dict[str, np.ndarray]): Evaluation data dict with sample
+            axis at dim 0, as returned by ``build_evaluation_points``.
+
+    Returns:
+        jnp.ndarray: Model output evaluated on the grid.
     """
     if eval_points is None:
         raise ValueError("eval_points must be provided.")
 
     params_arr = tree_to_jax(params)
-    eval_arr = jnp.asarray(eval_points)
-
-    if eval_arr.ndim == 1:
-        eval_arr = eval_arr[:, None]
-    if eval_arr.ndim == 2:
-        eval_arr = eval_arr[None, :, :]
-    if eval_arr.ndim == 3:
-        params_arr = broadcast_params(params_arr, eval_arr.shape[0])
+    eval_data = data_as_jax(eval_points)
+    n_samples = data_n_samples(eval_data)
+    params_arr = broadcast_params(params_arr, n_samples)
 
     program_vmap = vmap_over_samples(program)
-    return program_vmap(eval_arr, params_arr)
+    return program_vmap(eval_data, params_arr)

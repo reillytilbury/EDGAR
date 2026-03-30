@@ -83,9 +83,12 @@ experiment_params:
   # Random seed used for sample/trial splitting and related stochastic operations.
   random_seed: 42
 
-  # Evaluation grid bounds for diagnostics/evaluation matrices.
-  # Scalar applies to all input features; list must match n_features.
-  # If None, defaults to the min/max of the input data.
+  # Evaluation grid configuration for diagnostics/evaluation matrices.
+  # eval_keys: list of data dict keys to create eval grids for.
+  # If None, uses all keys in the data dict.
+  eval_keys: None
+  # Scalar applies to all eval keys; list must match eval_keys length.
+  # If None, defaults to the min/max of the data.
   x_min: None
   x_max: None
   n_bins: 100
@@ -250,7 +253,7 @@ prompts:
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
-      * Model signature must be `def model(X, params):` where `params` is a dict of named arrays/scalars.
+      * Model signature must be `def model(data, params):` where `data` is a dict of named arrays (e.g. data['stimulus'], data['response']) where `params` is a dict of named arrays/scalars.
       * Ensure all free parameters are numeric, not strings.
 
     docstring_guidelines: |
@@ -341,8 +344,8 @@ prompts:
       Exploit strong patterns from the parents to improve both model and estimator.
     code_guidelines: |
       Return exactly TWO Python code blocks:
-      1) def model_v{next_version}(X, params): ...
-      2) def parameter_estimator_v{next_version}(X, Y): ...
+      1) def model_v{next_version}(data, params): ...  where data is a dict of named arrays
+      2) def parameter_estimator_v{next_version}(data): ...  where data is the same dict
       Keep total length under {max_lines} lines combined.
     docstring_guidelines: |
       Each function should include a short docstring.

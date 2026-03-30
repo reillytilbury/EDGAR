@@ -29,7 +29,6 @@ from scipy import ndimage, signal
 from scipy.ndimage import label, find_objects, maximum_filter
 
 from experiments.grid_cells.data_parser import compute_rate_map, load_and_process_data
-from src.data_structures import ensure_inputs
 from src.loss_functions import quadratic_loss
 
 # Configure logging
