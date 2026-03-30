@@ -47,6 +47,7 @@ inputs:
 # Runtime overrides for this task.
 experiment_params:
   n_iterations: 3
+  eval_keys: ['pos_x', 'pos_y']
   x_min: [-1.0, -1.0]
   x_max: [1.0, 1.0]
   n_bins: 100
@@ -174,7 +175,7 @@ prompts:
 
       '
     code_guidelines: "**Code Generation Guidelines:**\n\n* Import any packages you\
-      \ use.\n* Do not include any text other than the code.\n* Model signature must be `def model(X, params):` where `params` is a dict of named arrays/scalars.\n* Ensure all free parameters\
+      \ use.\n* Do not include any text other than the code.\n* Model signature must be `def model(data, params):` where `data` is a dict with keys 'pos_x', 'pos_y', 'response' where `params` is a dict of named arrays/scalars.\n* Ensure all free parameters\
       \ are numeric, not strings.\n* At the beginning of the code, clip the free parameters\
       \ to biologically plausible ranges:\n  - `x0 = np.clip(x0, -1.0, 1.0)` and `y0\
       \ = np.clip(y0, -1.0, 1.0)` for field center\n  - `sigma = np.clip(sigma, 0.05,\
@@ -191,19 +192,19 @@ prompts:
 
       ```
 
-      def place_model_v{next_version}(X, params):
+      def place_model_v{next_version}(data, params):
 
       ```
 
       where:
 
-      * `X` is a 2D array with shape `(n_features, n_trials)`. Each row `X[i]` is
-      a different input variable.
+      * `data` is a dict with keys "pos_x", "pos_y", "response".
 
-      * For place cells, `X[0]` is the x position and `X[1]` is the y position (both
-      normalized to [-1, 1]).
+      * `data["pos_x"]` has shape `(n_trials,)` — x position (normalized to [-1, 1]).
 
-      * Access inputs by index: `x = X[0]`, `y = X[1]`
+      * `data["pos_y"]` has shape `(n_trials,)` — y position (normalized to [-1, 1]).
+
+      * Access inputs by key: `x = data["pos_x"]`, `y = data["pos_y"]`
 
       * `params` is a dict of named free parameters (use descriptive keys).
 
@@ -295,17 +296,19 @@ prompts:
 
       ```
 
-      def parameter_estimator_v{next_version}(X, firing_rates):
+      def parameter_estimator_v{next_version}(data):
 
       ```
 
       where:
 
-      * `X` is a 2D array with shape `(n_features, n_trials)`.
+      * `data` is a dict with keys "pos_x", "pos_y", "response".
 
-      * `X[0]` is the x position and `X[1]` is the y position.
+      * `data["pos_x"]` has shape `(n_trials,)` — x position.
 
-      * `firing_rates` has shape `(n_trials,)`.
+      * `data["pos_y"]` has shape `(n_trials,)` — y position.
+
+      * `data["response"]` has shape `(n_trials,)` — firing rates.
 
       * Return: a dict of estimated parameter values matching the place model''s
       free parameters.

@@ -4,27 +4,26 @@ Welcome to the Model Discovery Engine! Fill in the components below to start bui
 NECESSARY COMPONENTS:
 
 Loading:
-- load_and_process_data(data_path, *preprocess_params) -> [X, Y]
+- load_and_process_data(data_path, *preprocess_params) -> dict[str, np.ndarray]
 - train_test_split(X) -> [train_samples, train_trials]
 
 Seed Programs:
-- model_v1(X, params) and param_est_v1(X, Y)
-- model_v2(X, params) and param_est_v2(X, Y)
+- model_v1(data, params) and param_est_v1(data)
+- model_v2(data, params) and param_est_v2(data)
 
 Loss:
-- loss_fn(Y_pred, Y_true) -> loss values
+- loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS (for enhanced diagnostics and visualization):
 
 Plotting:
-- plot_model_fits(X, Y, programs_list, X_eval, save_path, labels)
+- plot_model_fits(data, programs_list, X_eval, save_path, labels)
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Tuple
+from typing import Dict, Tuple
 
-from src.data_structures import Inputs, Outputs
 from src import utils
 
 
@@ -39,9 +38,9 @@ def load_and_process_data(
     n_samples: int = 1000,
     n_trials: int = 2000,
     noise_std: float = 0.1,
-) -> Tuple[Inputs, Outputs]:
+) -> Dict[str, np.ndarray]:
     """
-    Simulate synthetic single-input regression data and return canonical Inputs/Outputs.
+    Simulate synthetic single-input regression data.
 
     Data-generating process:
     y = (a*x^2 + b*x + c) * sin(k*x + phi_0) + epsilon,
@@ -62,10 +61,10 @@ def load_and_process_data(
 
     Returns
     -------
-    X : Inputs
-        Input tensor with shape (n_samples, 1, n_trials).
-    Y : Outputs
-        Output tensor with shape (n_samples, 1, n_trials).
+    dict[str, np.ndarray]
+        Data dict with keys:
+        - 'x': shape (n_samples, n_trials), input values
+        - 'y': shape (n_samples, n_trials), noisy output values
     """
     rng = np.random.default_rng(SEED)
 
@@ -84,13 +83,11 @@ def load_and_process_data(
 
     x_tiled = np.tile(x, (n_samples, 1))
 
-    X = Inputs.from_array(x_tiled, names=["x"])
-    Y = Outputs.from_array(y, names=["y"])
-    return X, Y
+    return {'x': x_tiled, 'y': y}
 
 
 def train_test_split(
-    X: Inputs,
+    X: Dict[str, np.ndarray],
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
     random_seed: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -99,8 +96,8 @@ def train_test_split(
 
     Parameters
     ----------
-    X : Inputs
-        Inputs object of shape (n_samples, n_input_features, n_trials).
+    X : dict[str, np.ndarray]
+        Data dict where all arrays share the same last dimension (n_trials).
     random_seed : int
         Seed for reproducible random split.
 
@@ -111,7 +108,8 @@ def train_test_split(
     train_trials : np.ndarray
         Trial indices of length n_trials // 2.
     """
-    n_samples, _, n_trials = X.shape
+    n_samples = utils.data_n_samples(X)
+    n_trials = utils.data_n_trials(X)
     assert n_samples >= 2, "Need at least 2 samples for model optimization/eval"
     assert n_trials >= 2, "Need at least 2 trials for parameter optimization/eval"
 
@@ -124,22 +122,22 @@ def train_test_split(
 # ========================
 # 2. SEED MODELS
 # ========================
-def model_v1(X, params):
+def model_v1(data, params):
     """
-    Independent variable:
-    X = [x]  # scalar input
+    Data keys used:
+    data['x']  # scalar input, shape (n_trials,)
 
     A RELU model:
     y = a * relu(x-b) = a * max(0, x-b)
     Args:
-        X (np.ndarray): Input array with shape (1, n_trials)
+        data (dict): Data dict for one sample with key 'x', shape (n_trials,).
         params (dict): Parameter dictionary with keys:
             - a: Scaling factor.
             - b: Threshold for RELU.
     Returns:
         np.ndarray: Predicted output, shape (n_trials,).
     """
-    x = X[0]
+    x = data['x']
     a = params["a"]
     b = params["b"]
     return a * np.maximum(0, x - b)
@@ -147,18 +145,17 @@ def model_v1(X, params):
 
 model_v1.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}
 
-def param_est_v1(X, Y):
+def param_est_v1(data):
     """
     Estimate parameters for model_v1 using a simple grid search.
 
     Args:
-        X (np.ndarray): Input array with shape (1, n_trials) or (n_trials,).
-        Y (np.ndarray): Target values with shape (n_trials,).
+        data (dict): Data dict for one sample with keys 'x' and 'y'.
 
     Returns:
         dict: Estimated parameters with keys {"a", "b"}.
     """
-    y = np.asarray(Y)
+    y = np.asarray(data['y'])
 
     a_values = np.linspace(0.1, 5.0, 20)
     b_values = np.linspace(-1.0, 1.0, 20)
@@ -170,8 +167,7 @@ def param_est_v1(X, Y):
 
     for a in a_values:
         for b in b_values:
-            # Keep estimator self-contained: timeout worker executes this function source in isolation.
-            y_pred = a * np.maximum(0, x - b)
+            y_pred = model_v1(data, {"a": a, "b": b})
             loss = np.mean((y - y_pred) ** 2)
             if loss < best_loss:
                 best_loss = loss
@@ -179,16 +175,16 @@ def param_est_v1(X, Y):
 
     return {"a": float(best_params[0]), "b": float(best_params[1])}
 
-def model_v2(X, params):
+def model_v2(data, params):
     """
-    Independent variable:
-    X = [x]  # scalar input
+    Data keys used:
+    data['x']  # scalar input, shape (n_trials,)
 
     A simple linear model:
     y = a*x + b
 
     Args:
-        X (np.ndarray): Input array with shape (1, n_trials) or (n_trials,).
+        data (dict): Data dict for one sample with key 'x', shape (n_trials,).
         params (dict): Parameter dictionary with keys:
             - a: Linear slope.
             - b: Linear intercept.
@@ -196,7 +192,7 @@ def model_v2(X, params):
     Returns:
         np.ndarray: Predicted output, shape (n_trials,).
     """
-    x = X[0]
+    x = data['x']
     a = params["a"]
     b = params["b"]
     return a * x + b
@@ -204,19 +200,18 @@ def model_v2(X, params):
 
 model_v2.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}
 
-def param_est_v2(X, Y):
+def param_est_v2(data):
     """
     Estimate parameters for model_v2 using least squares.
 
     Args:
-        X (np.ndarray): Input array with shape (1, n_trials) or (n_trials,).
-        Y (np.ndarray): Target values with shape (n_trials,).
+        data (dict): Data dict for one sample with keys 'x' and 'y'.
 
     Returns:
         dict: Estimated parameters with keys {"a", "b"}.
     """
-    x = X[0]
-    y = np.asarray(Y)
+    x = data['x']
+    y = np.asarray(data['y'])
 
     A = np.vstack([x, np.ones(len(x))]).T
     a, b = np.linalg.lstsq(A, y, rcond=None)[0]
@@ -227,26 +222,26 @@ def param_est_v2(X, Y):
 # 3. LOSS
 # ========================
 
-def loss_fn(Y_pred, Y_true):
+def loss_fn(model_output, data):
     """
     Scaled squared error loss function.
 
     Args:
-        Y_pred (jnp.ndarray): Predicted values, shape (1, n_trials)
-        Y_true (jnp.ndarray): True values, shape (1, n_trials)
+        model_output (jnp.ndarray): Predicted values, shape (n_trials,).
+        data (dict): Data dict for one sample. Uses key 'y' as target.
 
     Returns:
-        jnp.ndarray: Scalar loss values for each trial, shape (1, n_trials).
+        jnp.ndarray: Scalar loss value.
     """
-    return 10 * (Y_true - Y_pred) ** 2
+    y_true = data['y']
+    return 10 * (y_true - model_output) ** 2
 
 # ========================
 # 4. DIAGNOSTICS
 # ========================
 
 def plot_model_fits(
-    X,
-    Y,
+    data,
     programs_list,
     X_eval,
     save_path="",
@@ -257,26 +252,24 @@ def plot_model_fits(
 
     Parameters
     ----------
-    X : array-like or Inputs
-        Input tensor with shape (n_samples, n_features, n_trials).
-    Y : array-like or Outputs
-        Output tensor with shape (n_samples, 1, n_trials).
+    data : dict[str, np.ndarray]
+        Data dict with keys 'x' and 'y', each shape (n_samples, n_trials).
     programs_list : list[dict]
         List of dictionaries with model metadata. Expected keys include:
-        - 'model': callable model(X_one, params)
+        - 'model': callable model(data, params)
         - 'params': batched parameter pytree
         - 'losses': array of shape (n_samples,)
-    X_eval : array-like or Inputs
-        Evaluation grid with shape (n_samples, n_features, n_eval_trials).
+    X_eval : dict[str, np.ndarray]
+        Evaluation grid dict with key 'x', shape (n_samples, n_eval_trials).
     save_path : str
         Output path. If empty, raises an error.
     """
     if save_path == "":
         raise ValueError("Please provide a save path for the plot")
 
-    x_arr = _to_array3d(X)
-    y_arr = _to_array3d(Y)
-    x_eval_arr = _to_array3d(X_eval)
+    x_arr = data['x']
+    y_arr = data['y']
+    x_eval_arr = X_eval['x']
     n_samples = x_arr.shape[0]
     # diff colours depending on how many models we have
     if len(programs_list) == 1:
@@ -306,9 +299,9 @@ def plot_model_fits(
             continue
 
         s = idx[i]
-        x = x_arr[s, 0]
-        y_obs = y_arr[s, 0]
-        x_eval = np.asarray(x_eval_arr[s, 0]).reshape(-1)
+        x = x_arr[s]
+        y_obs = y_arr[s]
+        x_eval = np.asarray(x_eval_arr[s]).reshape(-1)
 
         y_mean = compute_binned_means_on_eval(x, y_obs, x_eval)
         ax.scatter(x, y_obs, s=10, c="black", alpha=0.15, label="Observed")
@@ -317,7 +310,8 @@ def plot_model_fits(
         for j, program in enumerate(programs_list):
             model = program["model"]
             params = utils.slice_params(params_by_model[j], s)
-            y_pred = utils.call_model(model, np.array([x_eval]), params)
+            sample_eval_data = {'x': x_eval}
+            y_pred = utils.call_model(model, sample_eval_data, params)
 
             label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
             if "losses" in program:
@@ -359,18 +353,6 @@ def target_function(x, a, b, c, k, phi_0):
     f(x) = (a*x^2 + b*x + c) * sin(k*x + phi_0)
     """
     return (a * x**2 + b * x + c) * np.sin(k * x + phi_0)
-
-
-def _to_array3d(obj) -> np.ndarray:
-    """
-    Convert Inputs/Outputs/ndarray-like objects to a 3D ndarray.
-    """
-    if hasattr(obj, "to_tensor"):
-        return np.asarray(obj.to_tensor())
-    arr = np.asarray(obj)
-    if arr.ndim == 2:
-        return arr[:, np.newaxis, :]
-    return arr
 
 
 def compute_binned_means(theta, y, n_bins=20, domain=(-1.0, 1.0)):

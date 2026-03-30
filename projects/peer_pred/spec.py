@@ -4,25 +4,23 @@ Welcome to the Model Discovery Engine! Fill in the components below to start bui
 NECESSARY COMPONENTS:
 
 Loading:
-- load_and_process_data(data_path, *preprocess_params) -> [X, Y]
-- train_test_split(X) -> [train_samples, train_trials]
+- load_and_process_data(data_path, *preprocess_params) -> dict[str, np.ndarray]
+- train_test_split(X, random_seed) -> [train_samples, train_trials]
 
 Seed Programs:
-- model_v1(X, params) and param_est_v1(X, Y)
-- model_v2(X, params) and param_est_v2(X, Y)
+- model_v1(data, params) and param_est_v1(data)
+- model_v2(data, params) and param_est_v2(data)
 
 LOSS FUNCTION:
-- loss_fn(Y_pred, Y_true[, params]) -> loss values
+- loss_fn(Y_pred, Y_true) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(X, Y, model_list, params_list)
+- plot_model_fits(data, programs_list, data_eval, save_path, labels)
 """
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 from typing import Tuple
 from scipy.io import loadmat
-from src.data_structures import Inputs, Outputs
 from src import utils
 from scipy.signal import medfilt, butter, filtfilt
 from skimage.restoration import denoise_tv_chambolle
@@ -40,14 +38,17 @@ def load_and_process_data(
     downsample_factor: int = 4,
     var_thresh: float = 1e-4,
     zscore: bool = True,
-) -> Tuple[Inputs, Outputs]:
+) -> Dict[str, np.ndarray]:
     """
-    Load and preprocess data and return canonical Inputs/Outputs.
-    X is the source population activity; Y is the target population activity.
-    - Input has shape (2, n_source_cells, n_time) where sample 0 is a training 
-    population and sample 1 is a held-out population for testing. 
-    - Output has shape (2, n_target_cells, n_time) where sample 0 is the training 
-    target population and sample 1 is the held-out target population for testing.
+    Load and preprocess data and return a dict of arrays.
+
+    Returns a dictionary with keys:
+    - 'source': source population activity of shape (2, n_source_cells, n_time).
+      Sample 0 is the training population, sample 1 is held-out for testing.
+    - 'target': target population activity of shape (2, n_target_cells, n_time).
+      Sample 0 is the training target population, sample 1 is held-out for testing.
+
+    All arrays share the same last dimension (n_time).
     """
     random_seed = int(random_seed)
     n_cells = int(n_cells)
@@ -100,13 +101,13 @@ def load_and_process_data(
         Y_train = zscore_rows(Y_train)
         Y_test = zscore_rows(Y_test)
 
-    X = np.stack([X_train, X_test], axis=0)  # (2, n_source, T)
-    Y = np.stack([Y_train, Y_test], axis=0)  # (2, n_target, T)
-    return Inputs.from_array(X), Outputs.from_array(Y)
+    source = np.stack([X_train, X_test], axis=0)  # (2, n_source, T)
+    target = np.stack([Y_train, Y_test], axis=0)  # (2, n_target, T)
+    return {"source": source, "target": target}
 
 
 def train_test_split(
-    X: Inputs,
+    X: Dict[str, np.ndarray],
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
     random_seed: int,
     block_size: int = 180,
@@ -116,9 +117,27 @@ def train_test_split(
     Return train sample indices and train trial indices.
 
     Sample 0 is the training population; sample 1 is held-out.
+
+    Parameters
+    ----------
+    X : dict[str, np.ndarray]
+        Data dictionary. Each value has shape (n_samples, ..., n_trials).
+    random_seed : int
+        Seed used for reproducible splitting.
+    block_size : int
+        Size of contiguous time blocks for interleaved splitting.
+    mode : str
+        Splitting mode: 'interleave' or 'half'.
+
+    Returns
+    -------
+    train_samples : np.ndarray
+        Sample indices for training (just [0]).
+    train_trials : np.ndarray
+        Trial indices for training.
     """
-    x_arr = np.asarray(X.to_tensor())
-    n_samples, n_features, n_trials = x_arr.shape
+    n_samples = utils.data_n_samples(X)
+    n_trials = utils.data_n_trials(X)
     assert n_samples == 2, "Expected exactly 2 samples for train/test split."
     train_sample_idx = 0
     train_trials, _ = make_time_split(n_trials, block_size, mode)
@@ -132,133 +151,15 @@ def train_test_split(
 
 def model_v1(X, params):
     """
-    Lagged Linear Reduced Rank Regression.
-
-    Equation: Y[t] = A @ [X[t]; X[t-1]; ... ; X[t-L]]
-
-    Args:
-        X (np.ndarray): Input array with shape (n_source_cells, n_time).
-        params (dict): Parameter dictionary with key:
-            - A: Weight matrix of shape (n_target_cells, n_source_cells * n_lags)
-
-    Returns:
-        np.ndarray: Predicted target activity, shape (n_target_cells, n_time).
-    """
-    weight_matrix_A = params["A"]
-    
-    n_source, n_time = X.shape
-    n_features_total = weight_matrix_A.shape[1]
-    
-    # Infer n_lags from the shape of the weights to avoid integers in params
-    n_lags = n_features_total // n_source
-    
-    # Construct the lagged stack: (n_source * n_lags, n_time)
-    X_list = []
-    for l in range(n_lags):
-        # Shift data and pad with the first column to maintain shape (n_time)
-        shifted = np.roll(X, l, axis=1)
-        if l > 0:
-            shifted[:, :l] = X[:, :1]
-        X_list.append(shifted)
-        
-    X_stack = np.concatenate(X_list, axis=0) # Shape: (n_source * n_lags, n_time)
-    
-    return weight_matrix_A @ X_stack
-
-
-def param_est_v1(X, Y):
-    """
-    Estimator for model_v1. Solves a regularized linear map A in closed form with a low-rank bottleneck:
-    A = U[:, :rank] @ diag(S[:rank]) @ Vt[:rank, :], where U, S, Vt = SVD(Y X^T (X X^T + lambda I)^(-1))
-
-    This approach allows us to keep the number of hyperparameters low and avoid putting integers in the params dict, 
-    which can be tricky for some optimizers to handle. 
-
-    Args:
-        X (np.ndarray): Input array with shape (n_source_cells, n_time).
-        Y (np.ndarray): Target array with shape (n_target_cells, n_time).
-    Returns:
-        dict: Parameter dictionary with key {"A"}.
-
-    """
-    def _coerce_xy(X_local, Y_local):
-        X_local = np.asarray(X_local, dtype=np.float64)
-        Y_local = np.asarray(Y_local, dtype=np.float64)
-        if X_local.ndim == 1:
-            X_local = X_local[None, :]
-        elif X_local.ndim != 2:
-            X_local = np.reshape(X_local, (X_local.shape[0], -1))
-        if Y_local.ndim == 1:
-            Y_local = Y_local[None, :]
-        elif Y_local.ndim != 2:
-            Y_local = np.reshape(Y_local, (Y_local.shape[0], -1))
-        if Y_local.shape[1] != X_local.shape[1] and Y_local.shape[0] == X_local.shape[1]:
-            Y_local = Y_local.T
-        if Y_local.shape[1] != X_local.shape[1]:
-            n_time_local = min(X_local.shape[1], Y_local.shape[1])
-            X_local = X_local[:, :n_time_local]
-            Y_local = Y_local[:, :n_time_local]
-        X_local = np.nan_to_num(X_local, nan=0.0, posinf=0.0, neginf=0.0)
-        Y_local = np.nan_to_num(Y_local, nan=0.0, posinf=0.0, neginf=0.0)
-        return X_local, Y_local
-
-    def _build_lag_stack(X_local, n_lags_local):
-        cols = []
-        n_lags_local = max(1, int(n_lags_local))
-        for lag in range(n_lags_local):
-            shifted = np.roll(X_local, lag, axis=1)
-            if lag > 0:
-                shifted[:, :lag] = X_local[:, :1]
-            cols.append(shifted)
-        return np.concatenate(cols, axis=0)
-
-    def _stable_ridge_map(X_feat_local, Y_tgt_local, ridge_local):
-        X_feat_local = np.asarray(X_feat_local, dtype=np.float64)
-        Y_tgt_local = np.asarray(Y_tgt_local, dtype=np.float64)
-        n_feat_local = X_feat_local.shape[0]
-        xx_t_local = X_feat_local @ X_feat_local.T
-        diag_scale_local = float(np.mean(np.diag(xx_t_local))) if n_feat_local > 0 else 1.0
-        if not np.isfinite(diag_scale_local) or diag_scale_local <= 0.0:
-            diag_scale_local = 1.0
-        lam_local = float(max(ridge_local, 1e-8) * diag_scale_local)
-        reg_local = lam_local * np.eye(n_feat_local, dtype=np.float64)
-        rhs_local = Y_tgt_local @ X_feat_local.T
-        try:
-            a_t_local = np.linalg.solve((xx_t_local + reg_local).T, rhs_local.T)
-            A_local = a_t_local.T
-        except Exception:
-            A_local = rhs_local @ np.linalg.pinv(xx_t_local + reg_local)
-        return np.nan_to_num(A_local, nan=0.0, posinf=0.0, neginf=0.0)
-
-    try:
-        Xc, Yc = _coerce_xy(X, Y)
-        n_source = Xc.shape[0]
-        n_target = Yc.shape[0]
-        n_lags = 2
-        X_stack = _build_lag_stack(Xc, n_lags_local=n_lags)
-        weight_matrix_A = _stable_ridge_map(X_stack, Yc, ridge_local=2e-2)
-        if weight_matrix_A.shape != (n_target, n_source * n_lags):
-            weight_matrix_A = np.resize(weight_matrix_A, (n_target, n_source * n_lags))
-        weight_matrix_A = np.nan_to_num(weight_matrix_A, nan=0.0, posinf=0.0, neginf=0.0)
-        return {"A": np.asarray(weight_matrix_A, dtype=np.float32)}
-    except Exception:
-        # Guaranteed finite fallback keeps seed estimator robust.
-        Xc, Yc = _coerce_xy(X, Y)
-        n_source = Xc.shape[0]
-        n_target = Yc.shape[0]
-        return {"A": np.zeros((n_target, n_source * 2), dtype=np.float32)}
-
-
-def model_v2(X, params):
-    """
     Linear peer-prediction model with a weight matrix. 
     
     No temporal lags, so it's a simpler model than a lagged regression, but this usually gives better held out performance (less overfitting).
     Equation: For each target cell c at timepoint t,
-    Y[c, t] = sum_{s in source_cells} A[c, s] * X[s, t]
+    Y[c, t] = sum_{s in source_cells} A[c, s] * data['source'][s, t]
 
     Args:
-        X (np.ndarray): Input array with shape (n_source_cells, n_time).
+        data (dict): Single-sample data dictionary with keys:
+            - 'source': source activity array of shape (n_source_cells, n_time).
         params (dict): Parameter dictionary with keys:
             - A: Weight matrix of shape (n_target_cells, n_source_cells)
 
@@ -266,116 +167,140 @@ def model_v2(X, params):
         np.ndarray: Predicted target activity, shape (n_target_cells, n_time).
     """
     weight_matrix_A = params["A"]
-    return weight_matrix_A @ X
+    return weight_matrix_A @ data["source"]
 
 
-def param_est_v2(X, Y):
+def param_est_v1(X, Y):
     """
     Fast "quick-and-dirty" estimator for model_v2.
     Solves a regularized linear map A in closed form:
     A = Y X^T (X X^T + lambda I)^(-1)
 
     Args:
-        X (np.ndarray): Input array with shape (n_source_cells, n_time).
-        Y (np.ndarray): Target array with shape (n_target_cells, n_time).
+        data (dict): Single-sample data dictionary with keys:
+            - 'source': source activity array of shape (n_source_cells, n_time).
+            - 'target': target activity array of shape (n_target_cells, n_time).
 
     Returns:
         dict: Parameter dictionary with key {"A"}.
     """
-    def _coerce_xy(X_local, Y_local):
-        X_local = np.asarray(X_local, dtype=np.float64)
-        Y_local = np.asarray(Y_local, dtype=np.float64)
-        if X_local.ndim == 1:
-            X_local = X_local[None, :]
-        elif X_local.ndim != 2:
-            X_local = np.reshape(X_local, (X_local.shape[0], -1))
-        if Y_local.ndim == 1:
-            Y_local = Y_local[None, :]
-        elif Y_local.ndim != 2:
-            Y_local = np.reshape(Y_local, (Y_local.shape[0], -1))
-        if Y_local.shape[1] != X_local.shape[1] and Y_local.shape[0] == X_local.shape[1]:
-            Y_local = Y_local.T
-        if Y_local.shape[1] != X_local.shape[1]:
-            n_time_local = min(X_local.shape[1], Y_local.shape[1])
-            X_local = X_local[:, :n_time_local]
-            Y_local = Y_local[:, :n_time_local]
-        X_local = np.nan_to_num(X_local, nan=0.0, posinf=0.0, neginf=0.0)
-        Y_local = np.nan_to_num(Y_local, nan=0.0, posinf=0.0, neginf=0.0)
-        return X_local, Y_local
+    from sklearn.cross_decomposition import PLSRegression
+    from sklearn.linear_model import Ridge
 
-    def _stable_ridge_map(X_feat_local, Y_tgt_local, ridge_local):
-        X_feat_local = np.asarray(X_feat_local, dtype=np.float64)
-        Y_tgt_local = np.asarray(Y_tgt_local, dtype=np.float64)
-        n_feat_local = X_feat_local.shape[0]
-        xx_t_local = X_feat_local @ X_feat_local.T
-        diag_scale_local = float(np.mean(np.diag(xx_t_local))) if n_feat_local > 0 else 1.0
-        if not np.isfinite(diag_scale_local) or diag_scale_local <= 0.0:
-            diag_scale_local = 1.0
-        lam_local = float(max(ridge_local, 1e-8) * diag_scale_local)
-        reg_local = lam_local * np.eye(n_feat_local, dtype=np.float64)
-        rhs_local = Y_tgt_local @ X_feat_local.T
-        try:
-            a_t_local = np.linalg.solve((xx_t_local + reg_local).T, rhs_local.T)
-            A_local = a_t_local.T
-        except Exception:
-            A_local = rhs_local @ np.linalg.pinv(xx_t_local + reg_local)
-        return np.nan_to_num(A_local, nan=0.0, posinf=0.0, neginf=0.0)
+    # HYPERPARAMS: Maybe add some cross-validated tuning?
+    PLS_MAX_ITER = 500
+    PLS_TOL = 1e-5
+    N_COMPONENTS_PLS = 16
+    ALPHA_RIDGE = 100.0
 
-    try:
-        Xc, Yc = _coerce_xy(X, Y)
-        n_source = Xc.shape[0]
-        n_target = Yc.shape[0]
-        weight_matrix_A = _stable_ridge_map(Xc, Yc, ridge_local=1e-2)
-        if weight_matrix_A.shape != (n_target, n_source):
-            weight_matrix_A = np.resize(weight_matrix_A, (n_target, n_source))
-        weight_matrix_A = np.nan_to_num(weight_matrix_A, nan=0.0, posinf=0.0, neginf=0.0)
-        return {"A": np.asarray(weight_matrix_A, dtype=np.float32)}
-    except Exception:
-        Xc, Yc = _coerce_xy(X, Y)
-        n_source = Xc.shape[0]
-        n_target = Yc.shape[0]
-        return {"A": np.zeros((n_target, n_source), dtype=np.float32)}
+    # 1. PLS dimensionality reduction
+    # X.T and Y.T are used because sklearn expects (n_samples, n_features)
+    pls = PLSRegression(n_components=N_COMPONENTS_PLS, scale=False, max_iter=PLS_MAX_ITER, tol=PLS_TOL)
+    Z = pls.fit_transform(X.T, Y.T)[0]  # Latent representation Z (n_time, k)
+
+    # 2. Ridge regression from Latent Space -> Target
+    # fit_intercept=False to ensure compatibility with the model equation Y = A @ X
+    ridge = Ridge(alpha=ALPHA_RIDGE, fit_intercept=False)
+    ridge.fit(Z, Y.T)
+
+    # 3. Combine PLS rotations and Ridge weights into a single linear mapping matrix A
+    # A (n_tgt, n_src) = Ridge_coef (n_tgt, k) @ PLS_rotations^T (k, n_src)
+    weight_matrix_A = ridge.coef_ @ pls.x_rotations_.T
+
+    return {"A": weight_matrix_A}
+
+
+def model_v2(X, params):
+    """
+    Linear peer-prediction with cell-specific quadratic terms.
+
+    Equation: For each target cell c at timepoint t,
+    Y[c, t] = q_c(sum_{s in source_cells} A[c, s] * X[s, t])
+    where q_c(x) = a0_c + a1_c * x + a2_c * x^2 is a cell-specific quadratic function.
+
+    Args:
+        X (np.ndarray): Input array with shape (n_source_cells, n_time).
+        params (dict): Parameter dictionary with keys:
+            - A: Weight matrix of shape (n_target_cells, n_source_cells)
+            - quadratic: Quadratic coefficients of shape (n_target_cells, 3)
+
+    Returns:
+        np.ndarray: Predicted target activity, shape (n_target_cells, n_time).
+    """
+    weight_matrix_A = params["A"]
+    quadratic_coeffs = params["quadratic"]
+    
+    intercept = quadratic_coeffs[:, 0:1]
+    linear_coef = quadratic_coeffs[:, 1:2]
+    quadratic_coef = quadratic_coeffs[:, 2:3]
+    
+    Y_pred_linear = weight_matrix_A @ X  # (n_target, n_time)
+    Y_pred = intercept + linear_coef * Y_pred_linear + quadratic_coef * (Y_pred_linear ** 2)
+    return Y_pred
+
+
+def param_est_v2(X, Y):
+    """
+    Fit parameters for model_v2 in two stages:
+    1. Fit the linear weights A using PLS-Ridge (k=16, alpha=100).
+    2. Fit the quadratic coefficients for each target cell independently using least squares.
+
+    Args:
+        X (np.ndarray): Input array with shape (n_source_cells, n_time).
+        Y (np.ndarray): Target array with shape (n_target_cells, n_time).
+
+    Returns:
+        dict: Parameter dictionary with keys {"A", "quadratic"}.
+    """
+    from sklearn.cross_decomposition import PLSRegression
+    from sklearn.linear_model import Ridge
+
+    # HYPERPARAMS: Maybe add some cross-validated tuning?
+    PLS_MAX_ITER = 500
+    PLS_TOL = 1e-5
+    N_COMPONENTS_PLS = 16
+    ALPHA_RIDGE = 100.0
+
+    # Stage 1: Fit linear weights A using PLS-Ridge logic
+    pls = PLSRegression(n_components=N_COMPONENTS_PLS, scale=False, max_iter=PLS_MAX_ITER, tol=PLS_TOL)
+    Z = pls.fit_transform(X.T, Y.T)[0]
+    ridge = Ridge(alpha=ALPHA_RIDGE, fit_intercept=False)
+    ridge.fit(Z, Y.T)
+    weight_matrix_A = ridge.coef_ @ pls.x_rotations_.T
+
+    # Generate linear predictions to serve as input for Stage 2
+    Y_pred_linear = weight_matrix_A @ X 
+    n_target_cells = Y.shape[0]
+
+    # Stage 2: Fit quadratic coefficients
+    quadratic_coeffs = np.zeros((n_target_cells, 3))
+    for c in range(n_target_cells):
+        # Design matrix for quadratic: [1, x, x^2]
+        X_c = np.stack(
+            [np.ones_like(Y_pred_linear[c]), Y_pred_linear[c], Y_pred_linear[c] ** 2],
+            axis=1,
+        )  # (n_time, 3)
+        coeffs, _, _, _ = np.linalg.lstsq(X_c, Y[c], rcond=None)
+        quadratic_coeffs[c] = coeffs
+
+    return {"A": weight_matrix_A, "quadratic": quadratic_coeffs}
 
 # ========================
 # 3. LOSS
 # ========================
 
-def loss_fn(Y_pred, Y_true, params=None):
+def loss_fn(Y_pred, Y_true):
     """
     Compute MSE plus optional parameter regularization.
 
     Args:
         Y_pred (np.ndarray): Predicted target activity, shape (n_target_cells, n_time).
         Y_true (np.ndarray): True target activity, shape (n_target_cells, n_time).
-        params (dict | None): Optional model parameter dictionary. Supports both
-            NumPy and JAX array leaves.
 
     Returns:
-        float: Scalar loss value.
+        float: Mean squared error between predicted and true target activity.
     """
-    mse = np.mean((Y_pred - Y_true) ** 2)
-    if params is None:
-        return mse
-
-    def _iter_leaves(obj):
-        if isinstance(obj, dict):
-            for v in obj.values():
-                yield from _iter_leaves(v)
-        elif isinstance(obj, (list, tuple)):
-            for v in obj:
-                yield from _iter_leaves(v)
-        else:
-            yield obj
-
-    reg_weight = 1e4
-    reg_sum = 0.0
-    for leaf in _iter_leaves(params):
-        try:
-            reg_sum = reg_sum + np.mean(leaf * leaf)
-        except Exception:
-            # Ignore non-numeric leaves.
-            continue
-    return mse + reg_weight * reg_sum
+    return np.mean((Y_pred - Y_true) ** 2)
 
 
 # ========================
@@ -383,20 +308,18 @@ def loss_fn(Y_pred, Y_true, params=None):
 # ========================
 
 def plot_model_fits(
-    X,
-    Y,
+    data,
     programs_list,
-    X_eval,
+    data_eval,
     save_path="",
     labels=None,
     title_prefix: str | None = None,
 ):
     """
-    Plot peer-prediction diagnostics in a 3x3 layout:
-    - Left column: stacked observed+prediction rasters (v1 top, v2 bottom).
-    - Middle column: stacked observed+residual rasters with residual colorbars.
-    - Right column: per-cell loss scatter (top) and population/residual means (bottom).
-    - Bottom row: three randomly chosen single-cell trace overlays (obs, v1, v2).
+    Plot observed activity and model predictions for random target cells.
+
+    Shows 4 random target cells in a 2x2 grid over a random contiguous
+    time block (default length 120).
     """
     if save_path == "":
         raise ValueError("Please provide a save path for the plot")
@@ -412,11 +335,12 @@ def plot_model_fits(
 
     x_arr = _to_array3d(X)
     y_arr = _to_array3d(Y)
-    n_samples, _, n_trials = x_arr.shape
+    n_samples, n_features, n_trials = x_arr.shape
+    _, n_targets, _ = y_arr.shape
 
     sample_idx = 0
-    x = x_arr[sample_idx]  # (n_features, n_trials)
-    y = y_arr[sample_idx]  # (n_targets, n_trials)
+    x = source_arr[sample_idx]  # (n_source, n_time)
+    y = target_arr[sample_idx]  # (n_target, n_time)
 
     block_len = 360
     if n_trials <= block_len:
@@ -441,7 +365,9 @@ def plot_model_fits(
         params = utils.slice_params(
             utils.broadcast_params(program["params"], n_samples), sample_idx
         )
-        y_pred = utils.call_model(model, x, params)
+        # Build single-sample data dict for model call
+        sample_data = {"source": x}
+        y_pred = utils.call_model(model, sample_data, params)
         y_pred = np.asarray(y_pred)
         if y_pred.ndim == 1:
             y_pred = y_pred[None, :]
@@ -454,7 +380,8 @@ def plot_model_fits(
                 model_losses.append(float(np.mean((y_pred - y) ** 2)))
         else:
             try:
-                model_losses.append(float(loss_fn(y_pred, y)))
+                sample_data_with_target = {"source": x, "target": y}
+                model_losses.append(float(loss_fn(y_pred, sample_data_with_target)))
             except Exception:
                 model_losses.append(float(np.mean((y_pred - y) ** 2)))
 
@@ -773,3 +700,19 @@ def load_mat_spont(mat_path: str, var_thresh: float = 1e-4, downsample_factor: i
     pupil_area = downsample_mean_1d(pupil_area, downsample_factor)
     pupil_com = downsample_mean_2d(pupil_com.T, downsample_factor).T
     return spks, run_speed, pupil_area, pupil_com
+
+def preprocess_trace(raw_trace, tv_weight=0.1, median_filter=True):
+    # 1. Median Filter: Kills "salt and pepper" spikes (size 3 is subtle)
+    if median_filter:
+        trace = medfilt(raw_trace, kernel_size=3)
+    else:
+        trace = raw_trace
+    
+    # 2. TV Denoising: Flattens the "fuzz" while keeping the big jumps
+    # weight: Higher = smoother/flatter. Start at 0.1 and tune.
+    clean_trace = denoise_tv_chambolle(trace, weight=tv_weight)
+    
+    return clean_trace
+
+# Example usage on one of your cells:
+# cleaned = preprocess_trace(observed_cell_691, tv_weight=0.05)

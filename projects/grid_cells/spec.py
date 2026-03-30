@@ -4,18 +4,18 @@ Welcome to the Model Discovery Engine! Fill in the components below to start bui
 NECESSARY COMPONENTS:
 
 Loading:
-- load_and_process_data(data_path, *preprocess_params) -> [X, Y]
+- load_and_process_data(data_path, *preprocess_params) -> dict[str, np.ndarray]
 - train_test_split(X) -> [train_samples, train_trials]
 
 Seed Programs:
-- model_v1(X, params) and param_est_v1(X, Y)
-- model_v2(X, params) and param_est_v2(X, Y)
+- model_v1(data, params) and param_est_v1(data)
+- model_v2(data, params) and param_est_v2(data)
 
 Loss:
-- loss_fn(Y_pred, Y_true) -> loss values
+- loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(X, Y, programs_list, X_eval, save_path, labels)
+- plot_model_fits(data, programs_list, data_eval, save_path, labels)
 """
 
 import numpy as np
@@ -23,7 +23,6 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
 from typing import Dict, Any, Optional, List, Tuple
 
-from src.data_structures import Inputs, Outputs
 from src import utils
 
 
@@ -46,9 +45,9 @@ def load_and_process_data(
     normalize_per_sample: bool = True,
     target_l2_norm: float = 1.0,
     min_l2_norm: float = 1e-6,
-) -> Tuple[Inputs, Outputs]:
+) -> Dict[str, np.ndarray]:
     """
-    Load and preprocess grid-cell data, returning canonical Inputs/Outputs.
+    Load and preprocess grid-cell data, returning a dict of arrays.
 
     Alignment strategy (moved from long comments in previous parser version):
     1. Behavioral variables (x, y, optionally others) are sampled over time and indexed by a common time vector.
@@ -78,10 +77,11 @@ def load_and_process_data(
 
     Returns
     -------
-    X : Inputs
-        Input tensor of shape `(n_samples, 2, n_trials)` for `[x, y]`.
-    Y : Outputs
-        Output tensor of shape `(n_samples, 1, n_trials)` for firing rate.
+    X : dict[str, np.ndarray]
+        Dictionary with keys:
+        - 'pos_x': shape (n_samples, n_trials) -- x positions tiled per neuron.
+        - 'pos_y': shape (n_samples, n_trials) -- y positions tiled per neuron.
+        - 'response': shape (n_samples, n_trials) -- firing rates per neuron.
     """
     spatial_bin_cm = 3.0
     smoothing_sigma = 1.5
@@ -199,18 +199,16 @@ def load_and_process_data(
     n_spatial_bins = int(np.ceil((2 * wall_val * 100) / spatial_bin_cm))
     _ = _compute_rate_maps(features["x"], features["y"], firing_rates, n_spatial_bins, smoothing_sigma)
 
-    inputs_data = np.stack([
-        np.tile(features["x"], (n_cells, 1)),
-        np.tile(features["y"], (n_cells, 1)),
-    ], axis=1)
-
-    X = Inputs(data=inputs_data, names=["x", "y"])
-    Y = Outputs.from_array(firing_rates, names=["firing_rate"])
-    return X, Y
+    X = {
+        'pos_x': np.tile(features["x"], (n_cells, 1)),   # (n_samples, n_trials)
+        'pos_y': np.tile(features["y"], (n_cells, 1)),   # (n_samples, n_trials)
+        'response': firing_rates,                          # (n_samples, n_trials)
+    }
+    return X
 
 
 def train_test_split(
-    X: Inputs,
+    X: Dict[str, np.ndarray],
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
     random_seed: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -219,8 +217,9 @@ def train_test_split(
 
     Parameters
     ----------
-    X : Inputs
-        Inputs object of shape `(n_samples, n_input_features, n_trials)`.
+    X : dict[str, np.ndarray]
+        Data dictionary. All arrays share the same first dimension (n_samples)
+        and the same last dimension (n_trials).
     random_seed : int
         RNG seed.
 
@@ -231,7 +230,8 @@ def train_test_split(
     train_trials : np.ndarray
         Trial indices for training.
     """
-    n_samples, _, n_trials = X.shape
+    n_samples = utils.data_n_samples(X)
+    n_trials = utils.data_n_trials(X)
     assert n_samples >= 2, "Need at least 2 samples for model optimization/eval"
     assert n_trials >= 2, "Need at least 2 trials for parameter optimization/eval"
 
@@ -261,7 +261,7 @@ def train_test_split(
 
 
 def model_v1(
-    X,
+    data,
     params,
 ):
     """
@@ -269,15 +269,17 @@ def model_v1(
 
     This model defines firing rate as
 
-        r(x) = baseline + amplitude * Σ_{n,m} exp( -||x - c_{n,m}||^2 / (2σ^2) )
+        r(x) = baseline + amplitude * Sigma_{n,m} exp( -||x - c_{n,m}||^2 / (2*sigma^2) )
 
     where {c_{n,m}} form a hexagonal lattice with spacing `lam`,
     rotated by `theta`, and shifted by (phi_x, phi_y).
 
     Parameters
     ----------
-    X : np.ndarray, shape (2, n_trials)
-        Position array with X[0]=x and X[1]=y (typically normalized to [-1,1]).
+    data : dict[str, np.ndarray]
+        Data dictionary for a single sample (no sample axis) with keys:
+        - 'pos_x': shape (n_trials,) -- x positions.
+        - 'pos_y': shape (n_trials,) -- y positions.
     params : dict
         Parameter dictionary with keys:
         - lam: lattice spacing
@@ -286,28 +288,16 @@ def model_v1(
         - baseline: additive baseline firing rate
         - amplitude: scaling of summed Gaussian bumps
         - sigma: isotropic Gaussian width
-    lam : float
-        Lattice spacing (distance between neighboring field centers).
-    theta : float
-        Lattice orientation (radians).
-    phi_x, phi_y : float
-        Global spatial phase shift.
-    baseline : float
-        Additive baseline firing rate.
-    amplitude : float
-        Scaling of summed Gaussian bumps.
-    sigma : float
-        Isotropic Gaussian width.
     K_MAX = 10
-        Fixed lattice truncation radius. Centers use indices n,m ∈ [-K_MAX, K_MAX].
+        Fixed lattice truncation radius. Centers use indices n,m in [-K_MAX, K_MAX].
 
     Returns
     -------
     np.ndarray, shape (n_trials,)
         Predicted firing rates.
     """
-    x = X[0]
-    y = X[1]
+    x = data['pos_x']
+    y = data['pos_y']
     lam = params["lam"]
     theta = params["theta"]
     phi_x = params["phi_x"]
@@ -353,12 +343,12 @@ model_v1.DEFAULT_PARAMS = {
 }
 
 
-def param_est_v1(X, Y):
+def param_est_v1(data):
     """
     Autocorr-based initializer for an isotropic hex-grid Gaussian-bump model.
 
     Intended model family (for context):
-        r(x,y) = baseline + amplitude * Σ_{n,m} exp(-||[x,y]-c_{n,m}||^2 / (2*sigma^2)),
+        r(x,y) = baseline + amplitude * Sigma_{n,m} exp(-||[x,y]-c_{n,m}||^2 / (2*sigma^2)),
     where {c_{n,m}} is a rotated hexagonal lattice with spacing `lam`, orientation `theta`,
     and global phase shift (phi_x, phi_y).
 
@@ -368,11 +358,19 @@ def param_est_v1(X, Y):
        For grid structure, A has a central peak and a first ring of 6 peaks.
     3) Estimate:
        - `lam` from radius (in bins -> coordinate units) of the nearest non-central peak.
-       - `theta` from the angle of that peak, reduced modulo π/3.
+       - `theta` from the angle of that peak, reduced modulo pi/3.
     4) Estimate (phi_x, phi_y) by FFT cross-correlation between R and a hex-lattice
        template (built with the estimated lam/theta and a default sigma), taking the
        argmax shift.
-    5) baseline/amplitude from Y percentiles; sigma proportional to lam.
+    5) baseline/amplitude from response percentiles; sigma proportional to lam.
+
+    Parameters
+    ----------
+    data : dict[str, np.ndarray]
+        Data dictionary for a single sample (no sample axis) with keys:
+        - 'pos_x': shape (n_trials,) -- x positions.
+        - 'pos_y': shape (n_trials,) -- y positions.
+        - 'response': shape (n_trials,) -- observed firing rates.
 
     Returns
     -------
@@ -382,9 +380,9 @@ def param_est_v1(X, Y):
     """
     from scipy.ndimage import gaussian_filter
 
-    x = np.asarray(X[0], float)
-    y = np.asarray(X[1], float)
-    yobs = np.asarray(Y, float)
+    x = np.asarray(data['pos_x'], float)
+    y = np.asarray(data['pos_y'], float)
+    yobs = np.asarray(data['response'], float)
 
     # ---------- fixed internal hyperparameters ----------
     nbins = 48
@@ -512,7 +510,7 @@ def param_est_v1(X, Y):
 
 
 def model_v2(
-    X,
+    data,
     params,
 ):
     """
@@ -521,16 +519,18 @@ def model_v2(
     This model generalizes model_v1 by allowing elliptical receptive fields
     aligned to the lattice frame. Firing rate is
 
-        r(x) = baseline + amplitude * Σ_{n,m}
-               exp( - (u^2 / (2σ_par^2) + v^2 / (2σ_perp^2)) )
+        r(x) = baseline + amplitude * Sigma_{n,m}
+               exp( - (u^2 / (2*sigma_par^2) + v^2 / (2*sigma_perp^2)) )
 
     where (u,v) are coordinates of x - c_{n,m} expressed in the rotated
     lattice frame (angle theta).
 
     Parameters
     ----------
-    X : np.ndarray, shape (2, n_trials)
-        Positions.
+    data : dict[str, np.ndarray]
+        Data dictionary for a single sample (no sample axis) with keys:
+        - 'pos_x': shape (n_trials,) -- x positions.
+        - 'pos_y': shape (n_trials,) -- y positions.
     params : dict
         Parameter dictionary with keys:
         - lam: lattice spacing
@@ -548,8 +548,8 @@ def model_v2(
     np.ndarray, shape (n_trials,)
         Predicted firing rates.
     """
-    x = X[0]
-    y = X[1]
+    x = data['pos_x']
+    y = data['pos_y']
     lam = params["lam"]
     theta = params["theta"]
     phi_x = params["phi_x"]
@@ -602,19 +602,27 @@ model_v2.DEFAULT_PARAMS = {
 }
 
 
-def param_est_v2(X, Y):
+def param_est_v2(data):
     """
     Autocorr-based initializer for an anisotropic hex-grid Gaussian-bump model.
 
     Intended model family (for context):
-        r(x,y) = baseline + amplitude * Σ exp(-(u^2/(2σ_par^2) + v^2/(2σ_perp^2))),
+        r(x,y) = baseline + amplitude * Sigma exp(-(u^2/(2*sigma_par^2) + v^2/(2*sigma_perp^2))),
     where (u,v) are coordinates of (x,y) in the lattice-aligned frame (rotation `theta`).
 
     What this estimator does (self-contained):
     - Same autocorrelation + template-shift steps as v1 to get (lam, theta, phi_x, phi_y).
-    - Then estimates anisotropy (σ_par, σ_perp) by computing a weighted second moment
+    - Then estimates anisotropy (sigma_par, sigma_perp) by computing a weighted second moment
       of the local neighborhood around a strong peak of the smoothed rate map, and
       rotating that covariance into the lattice frame.
+
+    Parameters
+    ----------
+    data : dict[str, np.ndarray]
+        Data dictionary for a single sample (no sample axis) with keys:
+        - 'pos_x': shape (n_trials,) -- x positions.
+        - 'pos_y': shape (n_trials,) -- y positions.
+        - 'response': shape (n_trials,) -- observed firing rates.
 
     Returns
     -------
@@ -624,9 +632,9 @@ def param_est_v2(X, Y):
     """
     from scipy.ndimage import gaussian_filter
 
-    x = np.asarray(X[0], float)
-    y = np.asarray(X[1], float)
-    yobs = np.asarray(Y, float)
+    x = np.asarray(data['pos_x'], float)
+    y = np.asarray(data['pos_y'], float)
+    yobs = np.asarray(data['response'], float)
 
     # ---------- fixed internal hyperparameters ----------
     nbins = 48
@@ -798,15 +806,28 @@ def param_est_v2(X, Y):
         "sigma_perp": float(sigma_perp),
     }
 
+
 # ========================
 # 3. LOSS
 # ========================
 
-def loss_fn(Y_pred, Y_true):
+def loss_fn(model_output, data):
     """
     Elementwise squared-error loss.
+
+    Parameters
+    ----------
+    model_output : np.ndarray
+        Model predictions.
+    data : dict[str, np.ndarray]
+        Data dictionary; the comparison target is extracted from data['response'].
+
+    Returns
+    -------
+    np.ndarray
+        Elementwise squared errors.
     """
-    return (Y_true - Y_pred) ** 2
+    return (data['response'] - model_output) ** 2
 
 
 # ========================
@@ -814,10 +835,9 @@ def loss_fn(Y_pred, Y_true):
 # ========================
 
 def plot_model_fits(
-    X,
-    Y,
+    data,
     programs_list,
-    X_eval,
+    data_eval,
     save_path="",
     labels=("model_v1", "model_v2"),
     n_bins: int = 40,
@@ -827,35 +847,36 @@ def plot_model_fits(
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
 ):
     """
-    Plot data and model-predicted 2D rate maps for up to 9 random samples.
+    Plot data and model-predicted 2D rate maps for up to 6 random samples.
 
     Parameters
     ----------
-    X : array-like or Inputs
-        Input tensor with shape `(n_samples, n_features, n_trials)`.
-    Y : array-like or Outputs
-        Output tensor with shape `(n_samples, 1, n_trials)`.
+    data : dict[str, np.ndarray]
+        Data dictionary with keys 'pos_x', 'pos_y', 'response'.
+        Each array has shape (n_samples, n_trials).
     programs_list : list[dict]
         List of dictionaries with keys:
         - `'model'`: callable model function
         - `'params'`: batched parameter pytree
         - optionally `'losses'`: per-sample losses
-    X_eval : array-like or Inputs
-        Evaluation grid with shape `(n_samples, n_features, n_eval_trials)`.
+    data_eval : dict[str, np.ndarray]
+        Evaluation grid dictionary with keys 'pos_x', 'pos_y'.
+        Each array has shape (n_samples, n_eval_trials).
     save_path : str
         Output figure path.
+    labels : tuple of str
+        Labels for each model in programs_list.
     """
     if save_path == "":
         raise ValueError("Please provide a save_path for the plot")
 
-    x_arr = _to_array3d(X)
-    y_arr = _to_array3d(Y)
-    x_eval_arr = _to_array3d(X_eval)
+    pos_x = np.asarray(data['pos_x'])
+    pos_y = np.asarray(data['pos_y'])
+    response = np.asarray(data['response'])
+    eval_pos_x = np.asarray(data_eval['pos_x'])
+    eval_pos_y = np.asarray(data_eval['pos_y'])
 
-    if x_arr.shape[1] < 2:
-        raise ValueError("Grid-cell diagnostics require at least 2 input features (x,y)")
-
-    n_samples = x_arr.shape[0]
+    n_samples = pos_x.shape[0]
     n_show = min(max_show, n_samples)
     # Intentionally unseeded so displayed samples vary across calls/runs.
     show_idx = np.random.default_rng().choice(n_samples, size=n_show, replace=False)
@@ -871,11 +892,11 @@ def plot_model_fits(
     ]
 
     for row, s in enumerate(show_idx):
-        x = x_arr[s, 0]
-        y = x_arr[s, 1]
-        y_obs = y_arr[s, 0]
-        x_domain = (float(np.min(x_eval_arr[s, 0])), float(np.max(x_eval_arr[s, 0])))
-        y_domain = (float(np.min(x_eval_arr[s, 1])), float(np.max(x_eval_arr[s, 1])))
+        x = pos_x[s]
+        y = pos_y[s]
+        y_obs = response[s]
+        x_domain = (float(np.min(eval_pos_x[s])), float(np.max(eval_pos_x[s])))
+        y_domain = (float(np.min(eval_pos_y[s])), float(np.max(eval_pos_y[s])))
 
         rm_obs = _bin_to_rate_map(
             x, y, y_obs, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain,
@@ -895,7 +916,8 @@ def plot_model_fits(
         for m_idx, program in enumerate(programs_list):
             model = program["model"]
             params = utils.slice_params(params_by_model[m_idx], s)
-            y_pred = utils.call_model(model, x_arr[s], params)
+            sample_data = {'pos_x': pos_x[s], 'pos_y': pos_y[s]}
+            y_pred = utils.call_model(model, sample_data, params)
             rm_pred = _bin_to_rate_map(
                 x, y, y_pred, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain,
                 smoothing_sigma=smoothing_sigma
@@ -923,15 +945,6 @@ def plot_model_fits(
 # ========================
 # 5. OPTIONAL PROJECT-SPECIFIC HELPERS
 # ========================
-
-def _to_array3d(obj) -> np.ndarray:
-    if hasattr(obj, "to_tensor"):
-        return np.asarray(obj.to_tensor())
-    arr = np.asarray(obj)
-    if arr.ndim == 2:
-        return arr[:, np.newaxis, :]
-    return arr
-
 
 def _compute_rate_maps(
     x: np.ndarray,

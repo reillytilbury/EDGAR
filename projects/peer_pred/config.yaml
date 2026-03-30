@@ -43,6 +43,7 @@ experiment_params:
   objective_timeout_s: 30.0
   model_llm: [gemini-2.5-pro, gemini-2.0-flash]
   swear_words: [sklearn, PLSRegression, scipy.optimize, optimize.minimize, curve_fit, cvxpy, torch, tensorflow]
+  eval_keys: ['source']
   x_min: -1.0
   x_max: 1.0
   n_bins: 100
@@ -101,6 +102,10 @@ prompts:
 
     code_guidelines: |
       **Code Generation Guidelines:**
+      * Return exactly TWO Python code blocks:
+      * 1) def model_v{next_version}(data, params): ...  where data is a dict with keys 'source', 'target'
+      * 2) def parameter_estimator_v{next_version}(data): ...  where data is the same dict
+      * Keep total length under {max_lines} lines combined.
       * Use only lightweight numerical code (NumPy/JAX-friendly math).
       * Do not import heavy ML/stat libraries.
       * Do not include any text other than the code.

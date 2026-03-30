@@ -34,6 +34,7 @@ experiment_params:
   exploitation_topology: [1, 2, 3, 0]
   param_estimator_refinement_rounds: 0
   open_family_tree: true
+  eval_keys: ['x']
   x_min: -1.0
   x_max: 1.0
   n_bins: 100
@@ -76,7 +77,7 @@ prompts:
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
-      * Model signature must be `def model(X, params):` where `params` is a dict of named arrays/scalars.
+      * Model signature must be `def model(data, params):` where `data` is a dict with keys "x" and "y" where `params` is a dict of named arrays/scalars.
       * Ensure all free parameters are numeric, not strings.
 
     docstring_guidelines: |

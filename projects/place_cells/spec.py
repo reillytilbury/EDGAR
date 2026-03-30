@@ -4,18 +4,18 @@ Welcome to the Model Discovery Engine! Fill in the components below to start bui
 NECESSARY COMPONENTS:
 
 Loading:
-- load_and_process_data(data_path, *preprocess_params) -> [X, Y]
-- train_test_split(X) -> [train_samples, train_trials]
+- load_and_process_data(data_path, *preprocess_params) -> dict[str, np.ndarray]
+- train_test_split(X, random_seed) -> [train_samples, train_trials]
 
 Seed Programs:
-- model_v1(X, params) and param_est_v1(X, Y)
-- model_v2(X, params) and param_est_v2(X, Y)
+- model_v1(data, params) and param_est_v1(data)
+- model_v2(data, params) and param_est_v2(data)
 
 Loss:
-- loss_fn(Y_pred, Y_true) -> loss values
+- loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(X, Y, programs_list, X_eval, save_path, labels)
+- plot_model_fits(data, programs_list, data_eval, save_path, labels)
 """
 
 import time
@@ -25,7 +25,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
-from src.data_structures import Inputs, Outputs
 from src import utils
 
 
@@ -44,13 +43,17 @@ def load_and_process_data(
     speed_threshold: float = 2.5,
     max_trials: Optional[int] = 8000,
     zscore_response: bool = True,
-) -> Tuple[Inputs, Outputs]:
+) -> Dict[str, np.ndarray]:
     """
-    Load and preprocess place-cell data and return canonical `Inputs` and `Outputs`.
+    Load and preprocess place-cell data and return a dict of arrays.
 
     This function converts raw position/spike-time recordings into:
-    - `X`: input tensor with spatial coordinates (typically x and y),
-    - `Y`: output tensor with scalar firing-rate targets.
+    - 'pos_x': x-position array of shape (n_samples, n_trials)
+    - 'pos_y': y-position array of shape (n_samples, n_trials)
+    - 'response': firing-rate array of shape (n_samples, n_trials)
+
+    All arrays share the same first dimension (n_samples = n_cells) and last
+    dimension (n_trials = n_time_bins).
 
     Parameters
     ----------
@@ -73,10 +76,9 @@ def load_and_process_data(
 
     Returns
     -------
-    X : Inputs
-        Input tensor of shape `(n_samples, n_input_features, n_trials)`.
-    Y : Outputs
-        Output tensor of shape `(n_samples, 1, n_trials)`.
+    data : dict[str, np.ndarray]
+        Dictionary with keys 'pos_x', 'pos_y', 'response'. Each value has
+        shape (n_samples, n_trials) where n_samples is the number of cells.
     """
     # Hardcoded defaults for simplified API.
     spatial_bin_cm = 3.0
@@ -210,12 +212,7 @@ def load_and_process_data(
         f"(from {n_neurons_raw} total) with >= {min_spikes} spikes"
     )
 
-    # 10) build Inputs
-    input_arrays = [np.tile(features[name], (n_cells, 1)) for name in input_names]
-    inputs_data = np.stack(input_arrays, axis=1)
-    inputs = Inputs(data=inputs_data, names=input_names)
-
-    # 11) compute ratemaps
+    # 10) compute ratemaps
     x = features["x"]
     y = features["y"]
     occupancy, _, _ = np.histogram2d(x, y, bins=n_spatial_bins, range=[[-1, 1], [-1, 1]])
@@ -235,7 +232,7 @@ def load_and_process_data(
             spike_map_s = gaussian_filter(spike_map, sigma=smoothing_sigma)
             rate_maps[c] = spike_map_s / (occupancy_s + 1e-6)
 
-    # 12) optional place-cell filtering
+    # 11) optional place-cell filtering
     if filter_place_cells:
         filter_kwargs = place_filter_kwargs or {}
         keep_idx, _ = _place_cell_filter_indices(
@@ -250,21 +247,28 @@ def load_and_process_data(
         )
         if len(keep_idx) > 0:
             firing_rates = firing_rates[keep_idx]
-            inputs_data = inputs_data[keep_idx]
             rate_maps = rate_maps[keep_idx]
-            inputs = Inputs(data=inputs_data, names=input_names)
 
-    # 13) normalize outputs
+    # 12) normalize outputs
+    n_cells = firing_rates.shape[0]
     response = firing_rates
     if zscore_response:
         response = (response - response.mean(axis=1, keepdims=True)) / (response.std(axis=1, keepdims=True) + 1e-6)
     _ = rate_maps
-    outputs = Outputs.from_array(response, names=["firing_rate"])
-    return inputs, outputs
+
+    # 13) build output dict: each array has shape (n_samples, n_trials)
+    # where n_samples = n_cells and n_trials = n_time_bins.
+    # pos_x and pos_y are tiled across cells so every sample shares positions.
+    data = {
+        "pos_x": np.tile(features["x"], (n_cells, 1)),   # (n_cells, n_trials)
+        "pos_y": np.tile(features["y"], (n_cells, 1)),   # (n_cells, n_trials)
+        "response": response,                              # (n_cells, n_trials)
+    }
+    return data
 
 
 def train_test_split(
-    X: Inputs,
+    X: Dict[str, np.ndarray],
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
     random_seed: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -277,8 +281,8 @@ def train_test_split(
 
     Parameters
     ----------
-    X : Inputs
-        Inputs object of shape `(n_samples, n_input_features, n_trials)`.
+    X : dict[str, np.ndarray]
+        Data dictionary. Each value has shape (n_samples, ..., n_trials).
     random_seed : int
         Seed used for reproducible splitting.
 
@@ -289,7 +293,8 @@ def train_test_split(
     train_trials : np.ndarray
         Trial indices of length `n_trials // 2`.
     """
-    n_samples, _, n_trials = X.shape
+    n_samples = utils.data_n_samples(X)
+    n_trials = utils.data_n_trials(X)
     assert n_samples >= 2, "Need at least 2 samples for model optimization/eval"
     assert n_trials >= 2, "Need at least 2 trials for parameter optimization/eval"
 
@@ -303,18 +308,19 @@ def train_test_split(
 # 2. SEED MODELS
 # ========================
 
-def model_v1(X, params):
+def model_v1(data, params):
     """
     Independent variable:
-    X = [x, y]  # 2D position (normalized approximately to [-1, 1])
+    data['pos_x'], data['pos_y']  # 2D position (normalized approximately to [-1, 1])
 
     A simple place-cell model with an isotropic 2D Gaussian firing field:
     r(x, y) = baseline + amplitude * exp(-0.5 * d^2 / sigma^2)
     where d^2 = (x - x0)^2 + (y - y0)^2.
 
     Args:
-        X (np.ndarray): Input array with shape (2, n_trials).
-                        X[0] is x-position, X[1] is y-position.
+        data (dict): Single-sample data dictionary with keys:
+            - 'pos_x': x-position array of shape (n_trials,).
+            - 'pos_y': y-position array of shape (n_trials,).
         params (dict): Parameter dictionary with keys:
             - x0: Place-field center x-coordinate.
             - y0: Place-field center y-coordinate.
@@ -325,8 +331,8 @@ def model_v1(X, params):
     Returns:
         np.ndarray: Predicted firing rate for each trial, shape (n_trials,).
     """
-    x = X[0]
-    y = X[1]
+    x = data["pos_x"]
+    y = data["pos_y"]
 
     x0 = np.clip(params["x0"], -1.0, 1.0)
     y0 = np.clip(params["y0"], -1.0, 1.0)
@@ -349,7 +355,7 @@ model_v1.DEFAULT_PARAMS = {
 }
 
 
-def param_est_v1(X, Y):
+def param_est_v1(data):
     """
     Estimate parameters for `model_v1` from observed responses.
 
@@ -357,17 +363,18 @@ def param_est_v1(X, Y):
     weights to recover center and width, with percentile-based baseline.
 
     Args:
-        X (np.ndarray): Input array with shape (2, n_trials).
-                        X[0] is x-position, X[1] is y-position.
-        Y (np.ndarray): Observed firing rates with shape (n_trials,).
+        data (dict): Single-sample data dictionary with keys:
+            - 'pos_x': x-position array of shape (n_trials,).
+            - 'pos_y': y-position array of shape (n_trials,).
+            - 'response': observed firing rates of shape (n_trials,).
 
     Returns:
         dict: Estimated parameters with keys
               {"x0", "y0", "sigma", "amplitude", "baseline"}.
     """
-    x = X[0]
-    y = X[1]
-    firing_rates = np.asarray(Y)
+    x = data["pos_x"]
+    y = data["pos_y"]
+    firing_rates = np.asarray(data["response"])
 
     baseline = np.percentile(firing_rates, 10)
     weights = np.clip(firing_rates - baseline, 0.0, None)
@@ -391,18 +398,19 @@ def param_est_v1(X, Y):
     }
 
 
-def model_v2(X, params):
+def model_v2(data, params):
     """
     Independent variable:
-    X = [x, y]  # 2D position (normalized approximately to [-1, 1])
+    data['pos_x'], data['pos_y']  # 2D position (normalized approximately to [-1, 1])
 
     A place-cell model with an elliptical, rotated Gaussian field:
     r(x, y) = baseline + amplitude * exp(-0.5 * (xr^2/sigma_x^2 + yr^2/sigma_y^2))
     where (xr, yr) are coordinates rotated by angle theta about (x0, y0).
 
     Args:
-        X (np.ndarray): Input array with shape (2, n_trials).
-                        X[0] is x-position, X[1] is y-position.
+        data (dict): Single-sample data dictionary with keys:
+            - 'pos_x': x-position array of shape (n_trials,).
+            - 'pos_y': y-position array of shape (n_trials,).
         params (dict): Parameter dictionary with keys:
             - x0: Place-field center x-coordinate.
             - y0: Place-field center y-coordinate.
@@ -415,8 +423,8 @@ def model_v2(X, params):
     Returns:
         np.ndarray: Predicted firing rate for each trial, shape (n_trials,).
     """
-    x = X[0]
-    y = X[1]
+    x = data["pos_x"]
+    y = data["pos_y"]
 
     x0 = np.clip(params["x0"], -1.0, 1.0)
     y0 = np.clip(params["y0"], -1.0, 1.0)
@@ -449,24 +457,25 @@ model_v2.DEFAULT_PARAMS = {
 }
 
 
-def param_est_v2(X, Y):
+def param_est_v2(data):
     """
     Estimate parameters for `model_v2` from observed responses.
 
     Uses weighted covariance of positions to infer ellipse axes and orientation.
 
     Args:
-        X (np.ndarray): Input array with shape (2, n_trials).
-                        X[0] is x-position, X[1] is y-position.
-        Y (np.ndarray): Observed firing rates with shape (n_trials,).
+        data (dict): Single-sample data dictionary with keys:
+            - 'pos_x': x-position array of shape (n_trials,).
+            - 'pos_y': y-position array of shape (n_trials,).
+            - 'response': observed firing rates of shape (n_trials,).
 
     Returns:
         dict: Estimated parameters with keys
               {"x0", "y0", "sigma_x", "sigma_y", "theta", "amplitude", "baseline"}.
     """
-    x = X[0]
-    y = X[1]
-    firing_rates = np.asarray(Y)
+    x = data["pos_x"]
+    y = data["pos_y"]
+    firing_rates = np.asarray(data["response"])
 
     baseline = np.percentile(firing_rates, 10)
     weights = np.clip(firing_rates - baseline, 0.0, None)
@@ -507,11 +516,18 @@ def param_est_v2(X, Y):
 # 3. LOSS
 # ========================
 
-def loss_fn(Y_pred, Y_true):
+def loss_fn(model_output, data):
     """
     Elementwise squared-error loss.
+
+    Args:
+        model_output (np.ndarray): Predicted firing rates.
+        data (dict): Data dictionary; the comparison target is data['response'].
+
+    Returns:
+        np.ndarray: Elementwise squared errors.
     """
-    return (Y_true - Y_pred) ** 2
+    return (data["response"] - model_output) ** 2
 
 
 # ========================
@@ -519,10 +535,9 @@ def loss_fn(Y_pred, Y_true):
 # ========================
 
 def plot_model_fits(
-    X,
-    Y,
+    data,
     programs_list,
-    X_eval,
+    data_eval,
     save_path="",
     labels=("model_v1", "model_v2"),
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
@@ -532,19 +547,21 @@ def plot_model_fits(
 
     Parameters
     ----------
-    X : array-like or Inputs
-        Input tensor with shape `(n_samples, n_features, n_trials)`.
-    Y : array-like or Outputs
-        Output tensor with shape `(n_samples, 1, n_trials)`.
+    data : dict[str, np.ndarray]
+        Data dictionary with keys 'pos_x', 'pos_y', 'response'.
+        Each value has shape (n_samples, n_trials).
     programs_list : list[dict]
         List of model dictionaries. Each dictionary should contain:
-        - `'model'`: callable model function with signature `model(x, params)`,
-        - `'params'`: batched parameter pytree,
-        - optionally `'losses'`: per-sample losses.
-    X_eval : array-like or Inputs
-        Evaluation grid with shape `(n_samples, n_features, n_eval_trials)`.
+        - 'model': callable model function with signature model(data, params),
+        - 'params': batched parameter pytree,
+        - optionally 'losses': per-sample losses.
+    data_eval : dict[str, np.ndarray]
+        Evaluation grid dict with keys 'pos_x', 'pos_y'.
+        Each value has shape (n_samples, n_eval_trials).
     save_path : str
         Output path for the saved figure.
+    labels : tuple[str, ...]
+        Labels for each model.
 
     Returns
     -------
@@ -553,9 +570,18 @@ def plot_model_fits(
     if save_path == "":
         raise ValueError("Please provide a save_path for the plot")
 
-    x_arr = _to_array3d(X)
-    y_arr = _to_array3d(Y)
-    x_eval_arr = _to_array3d(X_eval)
+    # Build 3D arrays for compatibility with existing plotting logic.
+    # pos_x and pos_y -> stack into (n_samples, 2, n_trials) input array.
+    pos_x = np.asarray(data["pos_x"])
+    pos_y = np.asarray(data["pos_y"])
+    response = np.asarray(data["response"])
+    x_arr = np.stack([pos_x, pos_y], axis=1)  # (n_samples, 2, n_trials)
+    y_arr = response[:, np.newaxis, :]          # (n_samples, 1, n_trials)
+
+    pos_x_eval = np.asarray(data_eval["pos_x"])
+    pos_y_eval = np.asarray(data_eval["pos_y"])
+    x_eval_arr = np.stack([pos_x_eval, pos_y_eval], axis=1)  # (n_samples, 2, n_eval)
+
     if x_arr.shape[1] < 2:
         raise ValueError("Place-cell diagnostics require at least 2 input features: x and y")
 
@@ -598,7 +624,12 @@ def plot_model_fits(
         for m_idx, program in enumerate(programs_list):
             model = program["model"]
             params = utils.slice_params(params_by_model[m_idx], sample_idx)
-            y_pred = utils.call_model(model, x_arr[sample_idx], params)
+            # Build single-sample data dict for model call
+            sample_data = {
+                "pos_x": x_arr[sample_idx, 0],
+                "pos_y": x_arr[sample_idx, 1],
+            }
+            y_pred = utils.call_model(model, sample_data, params)
             rm_pred = _bin_to_rate_map(
                 x, y, y_pred, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain
             )
@@ -624,15 +655,6 @@ def plot_model_fits(
 # ========================
 # 5. OPTIONAL PROJECT-SPECIFIC HELPERS
 # ========================
-
-def _to_array3d(obj) -> np.ndarray:
-    if hasattr(obj, "to_tensor"):
-        return np.asarray(obj.to_tensor())
-    arr = np.asarray(obj)
-    if arr.ndim == 2:
-        return arr[:, np.newaxis, :]
-    return arr
-
 
 def _load_data_file(data_path: str) -> Dict[str, Any]:
     data_loaded = np.load(data_path, allow_pickle=True)
