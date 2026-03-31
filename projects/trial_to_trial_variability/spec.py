@@ -256,10 +256,7 @@ def train_test_split(
     n_trials = utils.data_n_trials(X)
     assert n_samples == 2, "Expected exactly 2 samples for train/test split."
 
-    # every stimulus angle has 3 repeated trials. Select the first 2 trials for training and the last trial for testing. 
-    # Trials are not ordered, so first we need to group trials by stimulus angle
-    angles = X['stimulus'][0] # shape (n_source_cells, n_trials)
-    unique_angles = np.unique(angles)
+    angles = X['stimulus']
 
     # For BZ015 this angle had 6 repeats for some reason. Remove the extra 3 repeats 
     # repeated_angle = 0.017453292519943295
@@ -277,8 +274,7 @@ def train_test_split(
         rng = np.random.default_rng(random_seed)
         train_trials = rng.choice(n_trials, size=n_trials // 2, replace=False)
 
-    train_sample_idx = 0
-    return np.array([train_sample_idx]), train_trials
+    return np.array([0]), train_trials
 
 # ========================
 # 2. SEED MODELS
@@ -302,8 +298,8 @@ def model_v1(X, params):
     Returns : 
         jnp.ndarray : Predicted responses for the target cells with shape (n_target_cells, n_time)
     """
-    stimuli = jnp.array(X['stimulus']) # shape (n_time)
-    source_response = jnp.array(X.remove_feature('stimulus')) # shape (n_source, n_time)
+    stimuli = X['stimulus'] # shape (n_time)
+    source_response = X['source'] # shape (n_source, n_time)
 
     source_tuning_params = params['source_tuning_params'] # shape (n_source_cells, n_params)
     source_coupling_factor = params['source_coupling_factor'] # shape (n_source_cells,)
