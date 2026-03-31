@@ -89,6 +89,28 @@ def _display_test_loss(rec):
     return rec.get("test_loss")
 
 
+def _merge_duplicate_records(records):
+    """Merge duplicate records by program id, preserving later non-null fields."""
+    merged_by_id = {}
+    record_order = []
+
+    for rec in records:
+        node_id = make_program_id(*record_key(rec))
+        if node_id is None:
+            continue
+        if node_id not in merged_by_id:
+            merged_by_id[node_id] = dict(rec)
+            record_order.append(node_id)
+            continue
+
+        merged = merged_by_id[node_id]
+        for key, value in rec.items():
+            if value is not None or key not in merged:
+                merged[key] = value
+
+    return [merged_by_id[node_id] for node_id in record_order]
+
+
 def _compute_hierarchical_layout(G, records_by_id, island_gap=1.5):
     """Compute a hierarchical layout with iteration as Y-level.
 
@@ -552,7 +574,6 @@ function showSidebar(nodeId) {{
   h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
-  h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Complexity Penalty:</span> <span class="field-value">' + escapeHtml(d.complexity_penalty !== null && d.complexity_penalty !== undefined ? Number(d.complexity_penalty).toFixed(4) : null) + '</span></div>';
   h += '<div class="field"><span class="field-label">N Params:</span> <span class="field-value">' + escapeHtml(d.n_params) + '</span></div>';
   h += '<div class="field"><span class="field-label">Mode:</span> <span class="field-value">' + escapeHtml(d.mode) + '</span></div>';
@@ -645,7 +666,7 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
         print(f"[family_tree] No generation log found at {generation_log_path}, skipping.")
         return
 
-    records = load_generation_log(generation_log_path)
+    records = _merge_duplicate_records(load_generation_log(generation_log_path))
     if not records:
         print("[family_tree] Generation log is empty, skipping.")
         return

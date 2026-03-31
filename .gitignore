@@ -2,6 +2,9 @@
 .env
 .vscode/ 
 
+CLAUDE.md
+.codex
+
 # programs database
 git rm --cached -r program_databases
 program_databases/
@@ -13,7 +16,4 @@ __pycache__/
 *.pyo
 *.pyd
 
-CLAUDE.md
-
-# my notebook
 *scratchpad.ipynb

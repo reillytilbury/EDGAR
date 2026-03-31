@@ -2131,6 +2131,7 @@ async def hypothesis_engine(
             "llm_name": None,
             "temperature": None,
             "mode": "seed",
+            "is_seed": True,
         })
 
     # seed each island with the initial programs
@@ -2229,14 +2230,25 @@ async def hypothesis_engine(
         except Exception as e:
             logging.info(f"Seed fit plotting failed: {e}")
 
-    # Write seed records to generation log for family tree
+    # Patch seed records with fit diagnostics instead of appending duplicates.
+    seed_log_updates = {}
     for idx in range(len(jax_programs)):
-        _append_generation_record(generation_log_path, {
+        seed_n_params = None
+        seed_complexity_penalty = None
+        if idx < len(seed_train_params):
+            seed_n_params = utils.params_numel_per_sample(
+                seed_train_params[idx],
+                n_samples=n_samples,
+            )
+            seed_complexity_penalty = float(param_penalty_weight * seed_n_params)
+        seed_log_updates[(-1, -1, idx)] = {
             "iteration_number": -1,
             "birth_island": -1,
             "batch_index": idx,
             "train_loss": float(seed_losses[idx]),
             "initial_loss": float(seed_initial_losses[idx]) if idx < len(seed_initial_losses) else None,
+            "n_params": seed_n_params,
+            "complexity_penalty": seed_complexity_penalty,
             "optimization_time_s": float(initial_programs.iloc[idx].get("optimization_time_s"))
             if idx < len(initial_programs) else None,
             "train_fit_loss": seed_train_fit_losses[idx],
@@ -2258,7 +2270,8 @@ async def hypothesis_engine(
             "train_fit_image_path": seed_train_fit_paths[idx],
             "test_fit_image_path": seed_test_fit_paths[idx],
             "is_seed": True,
-        })
+        }
+    _update_generation_log_records(generation_log_path, seed_log_updates)
 
     # -----------------------------
     # HYPOTHESIS ENGINE
