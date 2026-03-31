@@ -32,12 +32,21 @@ experiment_params:
 # ========================
   linked_prompt:
     base: |
-      You are an AI scientist. Generate BOTH a new model_v{next_version} and a new parameter_estimator_v{next_version}.
+      You are an AI scientist. The programs below are biological models of neurons, predicting the neural activity vector of the target cells from source cells given some stimulus. 
+      Generate BOTH a new model_v{next_version} and a new parameter_estimator_v{next_version}.
       The parents below show models and their estimators, sorted by loss.
-    explore: |
-      Explore new model structure while keeping the estimator simple and stable.
-    exploit: |
-      Exploit strong patterns from the parents to improve both model and estimator.
+    explore: | 
+      Use the models below as *inspiration*, but be *creative* and *invent*
+      something new. Which features in the models below correlate with lower loss?
+      Find these features and *extrapolate* them. You should also *combine* features
+      from several models, and *experiment* with new ideas.
+    exploit: | 
+      Use the models below as a *template* to create a new model. 
+      Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. 
+      Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
+      Are the parameter ranges correct? If not, adjust them to be more appropriate.
+      You will be *penalized* for complexity, so make the new model as *simple* as possible while still
+      being better than the previous models.
     image_analysis: |
       **Image Analysis Instructions:**
       Attached is a 2x2 plot of target-cell traces (observed vs models).
