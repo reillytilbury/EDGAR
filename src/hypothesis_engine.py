@@ -1055,168 +1055,6 @@ async def generate_new_model(current_island, llm_name, client,
     return code_string, program_prompt, llm_output, (parent1_id, parent2_id)
 
 
-async def generate_linked_model_and_estimator(
-    current_island,
-    llm_name,
-    client,
-    data,
-    x_eval,
-    prompt_manager,
-    mode='explore',
-    k_max=2,
-    temp=1,
-    thinking_budget=1,
-    img_dir=None,
-    plot_model_fits=None,
-    loss_fn=None,
-    complexity_penalty: float = 0.0,
-):
-    """
-    Propose a new model and parameter estimator in a single linked prompt.
-
-    Returns:
-        tuple[str | None, str | None, str | None, str | None, tuple]:
-            (model_code_string, param_est_code_string, prompt, llm_output, parent_ids)
-    """
-    k = min(k_max, len(current_island))
-    random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
-    random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
-    parent1_id = (
-        random_programs['iteration_number'][0],
-        random_programs['birth_island'][0],
-        random_programs['batch_index'][0],
-    )
-    parent2_id = (
-        random_programs['iteration_number'][1],
-        random_programs['birth_island'][1],
-        random_programs['batch_index'][1],
-    )
-
-    use_image = (
-        img_dir is not None
-        and plot_model_fits is not None
-    )
-
-    prompt = prompt_manager.get_linked_prompt_legacy(
-        random_programs,
-        mode=mode,
-        use_image=use_image,
-    )
-
-    if use_image:
-        if loss_fn is None:
-            raise ValueError("Linked prompt image diagnostics require loss_fn.")
-        programs_list = _programs_df_to_programs_list(
-            random_programs,
-            loss_func=loss_fn,
-            data=data,
-            complexity_penalty=complexity_penalty,
-        )
-        plot_model_fits(
-            data=data,
-            programs_list=programs_list,
-            X_eval=x_eval,
-            save_path=img_dir,
-            labels=[f"v_{i+1}" for i in range(len(random_programs))],
-        )
-
-    llm_output = await llm_helper.call_llm_async(
-        prompt,
-        model_name=llm_name,
-        client=client,
-        temperature=temp,
-        thinking_budget=thinking_budget,
-        img_bytes=None,
-    )
-
-    model_name = prompt_manager.get_model_name()
-
-    def _extract_top_level_def(lines, prefixes):
-        start = None
-        for idx, line in enumerate(lines):
-            stripped = line.lstrip()
-            if stripped.startswith("def "):
-                for p in prefixes:
-                    if stripped.startswith(f"def {p}"):
-                        start = idx
-                        break
-            if start is not None:
-                break
-        if start is None:
-            return None
-        end = len(lines)
-        for idx in range(start + 1, len(lines)):
-            if lines[idx].lstrip().startswith("def "):
-                end = idx
-                break
-        return "\n".join(lines[start:end]).strip()
-
-    def _ensure_numpy_import(code: str) -> str:
-        if "np." in code and not re.search(r"^\s*(import numpy as np|from numpy import)", code, flags=re.M):
-            return "import numpy as np\n" + code
-        return code
-
-    # Combine all fenced code blocks if present; otherwise fall back to raw output.
-    code_blocks = utils.extract_code_blocks(llm_output)
-    code_text = "\n\n".join(code_blocks).strip() if code_blocks else (llm_output or "").strip()
-    # Normalize indentation so top-level defs are detected correctly, even with nested defs.
-    code_text = textwrap.dedent(code_text).strip()
-
-    # Collect import lines from the combined code text.
-    imports = []
-    for line in code_text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("import ") or stripped.startswith("from "):
-            imports.append(stripped)
-    import_block = "\n".join(dict.fromkeys(imports))
-
-    def _extract_func(code: str, name_prefixes: list[str]) -> str | None:
-        for prefix in name_prefixes:
-            safe_prefix = re.escape(prefix)
-            # Only stop at the next top-level def (column 0) so nested defs don't truncate the block.
-            pattern = rf"^def\s+{safe_prefix}\d*\s*\(.*?(?=^def\s+|\Z)"
-            match = re.search(pattern, code, flags=re.MULTILINE | re.DOTALL)
-            if match:
-                return match.group(0).strip()
-        return None
-
-    model_block = _extract_func(code_text, [f"{model_name}_v", model_name, "model_v", "model"])
-    param_block = _extract_func(code_text, ["parameter_estimator_v", "parameter_estimator"])
-
-    if model_block and param_block:
-        def _strip_imports(block: str) -> str:
-            return "\n".join(
-                line for line in block.splitlines()
-                if not line.strip().startswith(("import ", "from "))
-            ).strip()
-
-        model_block = _strip_imports(model_block)
-        param_block = _strip_imports(param_block)
-        model_code_string = "\n".join([import_block, model_block]).strip() if import_block else model_block
-        param_est_code_string = "\n".join([import_block, param_block]).strip() if import_block else param_block
-        model_code_string = _ensure_numpy_import(model_code_string)
-        param_est_code_string = _ensure_numpy_import(param_est_code_string)
-    else:
-        return None, None, prompt, llm_output, (parent1_id, parent2_id)
-
-    model_code_string = _normalize_generated_model_code(
-        model_code_string,
-        model_name=model_name,
-        expected_version=k + 1,
-    )
-    param_est_code_string = re.sub(
-        r"def\s+parameter_estimator_v\d+\s*\(", "def parameter_estimator(", param_est_code_string
-    )
-    param_est_code_string = re.sub(
-        r"def\s+parameter_estimator_prev\s*\(", "def parameter_estimator(", param_est_code_string
-    )
-    param_est_code_string = re.sub(r"\bmodel_v\d+\b", "model", param_est_code_string)
-
-    if re.search(r"\bmodel\s*\(", param_est_code_string) and not re.search(r"^def\s+model", param_est_code_string, flags=re.M):
-        param_est_code_string = f"{model_code_string}\n\n{param_est_code_string}"
-
-    return model_code_string, param_est_code_string, prompt, llm_output, (parent1_id, parent2_id)
-
 async def generate_new_parameter_estimator(current_island,
                                            model_code_string: str,
                                            model_fn,
@@ -1806,7 +1644,7 @@ async def hypothesis_engine(
         chat_token_limit=50000,  # Max tokens per chat before auto-summarize and reset. 0 = unlimited
         param_estimator_refinement_rounds=0,
         exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0], exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
-        model_llm = None, param_est_llm = None, jax_translator_llm = None, linked_llm = None,
+        model_llm = None, param_est_llm = None, jax_translator_llm = None,
         max_iter = 1_000, learning_rate = 3e-3,
         penalty_denominator = 1,
         numpy_programs = None, param_estimators = None,
@@ -1815,7 +1653,6 @@ async def hypothesis_engine(
         prompt_manager = None, trial_batch_size = None, swear_words = None,
         open_family_tree = False,
         use_simple_objective: bool = False,
-        use_linked_prompt: bool = False,
         log_prompts: bool = False,
         log_jax_translations: bool = False,
         random_seed = 42, # consider setting up a seed_manager to make behaviours more robustly reproducible.
@@ -1857,7 +1694,6 @@ async def hypothesis_engine(
         model_llm (str | list[str]): LLM(s) for model generation. Lists are traversed by iteration.
         param_est_llm (str | list[str]): LLM(s) for parameter estimator generation.
         jax_translator_llm (str | list[str]): LLM(s) for JAX translation.
-        linked_llm (str | list[str]): LLM(s) for linked model+estimator prompts.
         max_iter (int): Max optimization steps inside ``objective``.
         learning_rate (float): Optimizer learning rate inside ``objective``.
         numpy_programs (list[callable]): Seed NumPy model functions.
@@ -1872,7 +1708,6 @@ async def hypothesis_engine(
         swear_words (list[str] | None): Blacklist for generated estimator code.
         open_family_tree (bool): Open the combined family tree HTML at the end of the run.
         use_simple_objective (bool): Use the minimal objective implementation everywhere.
-        use_linked_prompt (bool): Generate model + parameter estimator in a single prompt.
         log_prompts (bool): If True, include prompt/response text in logs and generation records.
         log_jax_translations (bool): If True, include JAX translator prompt/response/code in logs.
         random_seed (int): Run seed for deterministic split-dependent operations.
@@ -1896,7 +1731,6 @@ async def hypothesis_engine(
     model_llm_seq = _normalize_llm_sequence(model_llm, "model_llm")
     param_est_llm_seq = _normalize_llm_sequence(param_est_llm, "param_est_llm")
     jax_llm_seq = _normalize_llm_sequence(jax_translator_llm, "jax_translator_llm")
-    linked_llm_seq = _normalize_llm_sequence(linked_llm, "linked_llm")
 
     # load api keys
     load_dotenv()
@@ -2288,11 +2122,7 @@ async def hypothesis_engine(
         
         logging.info(f"Iteration {i}")
         llm_name = model_llm_seq[i % len(model_llm_seq)]
-        if use_linked_prompt:
-            linked_llm_name = linked_llm_seq[i % len(linked_llm_seq)]
-            logging.info(f"Using linked LLM: {linked_llm_name}")
-        else:
-            logging.info(f"Using model LLM: {llm_name}")
+        logging.info(f"Using model LLM: {llm_name}")
         use_large_model = use_chat_mode and (llm_name == large_model_name)
         mode = 'explore' if i < n_iterations * exploit_point else 'exploit'
         temperature = 1 + np.exp(-i / n_iterations)
@@ -2306,84 +2136,37 @@ async def hypothesis_engine(
                 else:
                     model_image_dirs[island_idx, j] = None
                     # param_est_image_dirs[island_idx, j] = None
-        if use_linked_prompt:
-            if island_chat_manager is not None:
-                raise ValueError("Linked prompts are not supported with chat mode.")
-            if param_estimator_refinement_rounds > 0:
-                raise ValueError("Linked prompts cannot be used with parameter_estimator_refinement_rounds > 0.")
-            linked_llm_name = linked_llm_seq[i % len(linked_llm_seq)]
-            model_generation_tasks = [
-                generate_linked_model_and_estimator(
-                    islands[island_idx],
-                    llm_name=linked_llm_name,
-                    client=client,
-                    data=X[0, 0],
-                    x_eval=X_eval_train,
-                    prompt_manager=prompt_manager,
-                    mode=mode,
-                    k_max=k_max,
-                    temp=temperature,
-                    thinking_budget=1.0,
-                    img_dir=model_image_dirs[island_idx, j],
-                    plot_model_fits=plot_model_fits,
-                    loss_fn=loss_fn,
-                    complexity_penalty=param_penalty_weight,
-                )
-                for island_idx in range(n_islands)
-                for j in range(batch_size)
-            ]
-            logging.info(
-                f"Generating {n_islands * batch_size} linked model+estimator pairs... "
-                f"LLM Model: {linked_llm_name}, mode: {mode}, temperature: {temperature:.2f}"
+        model_generation_tasks = [generate_new_model(islands[island_idx], 
+                                                    llm_name=llm_name, 
+                                                    client=client, 
+                                                    mode=mode, 
+                                                    k_max=k_max, 
+                                                    temp=temperature,
+                                                    data=X[0, 0],
+                                                    x_eval=X_eval_train,
+                                                    prompt_manager=prompt_manager,
+                                                    img_dir=model_image_dirs[island_idx, j],
+                                                    plot_model_fits=plot_model_fits,
+                                                    island_chat_manager=island_chat_manager,
+                                                    island_id=island_idx,
+                                                    batch_id=j,
+                                                    loss_fn=loss_fn,
+                                                    loss_data=X[0, 1],
+                                                    complexity_penalty=param_penalty_weight,
+                                                    use_large_model=use_large_model) 
+                                         for island_idx in range(n_islands) for j in range(batch_size)]
+        logging.info(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
+        print(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
+        raw_model_results = await asyncio.gather(*model_generation_tasks)
+        model_results = [
+            ModelGenerationResult(
+                numpy_code=model_code_string,
+                prompt=prompt,
+                llm_response=llm_output,
             )
-            print(
-                f"Generating {n_islands * batch_size} linked model+estimator pairs... "
-                f"LLM Model: {linked_llm_name}, mode: {mode}, temperature: {temperature:.2f}"
-            )
-            linked_results = await asyncio.gather(*model_generation_tasks)
-            model_results = [
-                ModelGenerationResult(
-                    numpy_code=model_code_string,
-                    prompt=prompt,
-                    llm_response=llm_output,
-                )
-                for model_code_string, _param_est_code_string, prompt, llm_output, _parent_ids in linked_results
-            ]
-            param_est_code_strings = [result[1] for result in linked_results]
-            parent_ids = [result[4] for result in linked_results]
-        else:
-            # generate new programs
-            model_generation_tasks = [generate_new_model(islands[island_idx], 
-                                                        llm_name=llm_name, 
-                                                        client=client, 
-                                                        mode=mode, 
-                                                        k_max=k_max, 
-                                                        temp=temperature,
-                                                        data=X[0, 0],
-                                                        x_eval=X_eval_train,
-                                                        prompt_manager=prompt_manager,
-                                                        img_dir=model_image_dirs[island_idx, j],
-                                                        plot_model_fits=plot_model_fits,
-                                                        island_chat_manager=island_chat_manager,
-                                                        island_id=island_idx,
-                                                        batch_id=j,
-                                                        loss_fn=loss_fn,
-                                                        loss_data=X[0, 1],
-                                                        complexity_penalty=param_penalty_weight,
-                                                        use_large_model=use_large_model) 
-                                             for island_idx in range(n_islands) for j in range(batch_size)]
-            logging.info(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
-            print(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
-            raw_model_results = await asyncio.gather(*model_generation_tasks)
-            model_results = [
-                ModelGenerationResult(
-                    numpy_code=model_code_string,
-                    prompt=prompt,
-                    llm_response=llm_output,
-                )
-                for model_code_string, prompt, llm_output, _parent_ids in raw_model_results
-            ]
-            parent_ids = [result[3] for result in raw_model_results]
+            for model_code_string, prompt, llm_output, _parent_ids in raw_model_results
+        ]
+        parent_ids = [result[3] for result in raw_model_results]
 
         model_code_strings = [result.numpy_code for result in model_results]
 
@@ -2474,72 +2257,57 @@ async def hypothesis_engine(
             )
 
         # build parameter‑estimator tasks
-        if use_linked_prompt:
-            param_est_results = []
-            for code_string in param_est_code_strings:
-                if code_string is None:
-                    param_est_results.append(
-                        ParamEstimatorGenerationResult(None, None, {"linked_prompt": True})
-                    )
-                    continue
-                func = utils.str_to_func(code_string, 'parameter_estimator')
-                if func is None:
-                    pass
-                param_est_results.append(
-                    ParamEstimatorGenerationResult(code_string, func, {"linked_prompt": True})
-                )
-        else:
-            if param_estimator_refinement_rounds > 0 and not has_spec_plotter:
-                raise ValueError(
-                    "Parameter estimator refinement requires image diagnostics. "
-                    "Define plot_model_fits in the project spec or disable refinement."
-                )
-            param_estimation_tasks = [
-                generate_new_parameter_estimator(
-                    current_island=islands[island_idx],
-                    model_code_string=model_code_strings[island_idx * batch_size + j],
-                    model_fn=model_results[island_idx * batch_size + j].jax_callable,
-                    llm_name=param_est_llm_seq[i % len(param_est_llm_seq)],
-                    client=client,
-                    data=[X[0,0], X[0,1]],
-                    loss_fn=loss_fn,
-                    prompt_manager=prompt_manager,
-                    mode=mode,
-                    k_max=2,
-                    temp=temperature,
-                    param_estimator_max_lines=100,
-                    refine_rounds=param_estimator_refinement_rounds,
-                    param_penalty_weight=param_penalty_weight,
-                    random_seed=random_seed,
-                    swear_words=swear_words,
-                    island_chat_manager=island_chat_manager,
-                    island_id=island_idx,
-                    batch_id=j,
-                    iteration=i,
-                    use_simple_objective=use_simple_objective,
-                    plot_model_fits=plot_model_fits,
-                    x_eval=X_eval_train,
-                    image_refinement_dir=image_param_est_refine_dir,
-                    param_estimator_timeout_s=param_estimator_timeout_s,
-                    objective_timeout_s=objective_timeout_s,
-                )
-                for island_idx in range(n_islands)
-                for j in range(batch_size)
-            ]
+        if param_estimator_refinement_rounds > 0 and not has_spec_plotter:
+            raise ValueError(
+                "Parameter estimator refinement requires image diagnostics. "
+                "Define plot_model_fits in the project spec or disable refinement."
+            )
+        param_estimation_tasks = [
+            generate_new_parameter_estimator(
+                current_island=islands[island_idx],
+                model_code_string=model_code_strings[island_idx * batch_size + j],
+                model_fn=model_results[island_idx * batch_size + j].jax_callable,
+                llm_name=param_est_llm_seq[i % len(param_est_llm_seq)],
+                client=client,
+                data=[X[0,0], X[0,1]],
+                loss_fn=loss_fn,
+                prompt_manager=prompt_manager,
+                mode=mode,
+                k_max=2,
+                temp=temperature,
+                param_estimator_max_lines=100,
+                refine_rounds=param_estimator_refinement_rounds,
+                param_penalty_weight=param_penalty_weight,
+                random_seed=random_seed,
+                swear_words=swear_words,
+                island_chat_manager=island_chat_manager,
+                island_id=island_idx,
+                batch_id=j,
+                iteration=i,
+                use_simple_objective=use_simple_objective,
+                plot_model_fits=plot_model_fits,
+                x_eval=X_eval_train,
+                image_refinement_dir=image_param_est_refine_dir,
+                param_estimator_timeout_s=param_estimator_timeout_s,
+                objective_timeout_s=objective_timeout_s,
+            )
+            for island_idx in range(n_islands)
+            for j in range(batch_size)
+        ]
 
-            logging.info(
-                f"Generating {n_islands * batch_size} parameter estimators "
-                f"(LLM={param_est_llm_seq[i % len(param_est_llm_seq)]}, mode={mode}, T={temperature:.2f})"
-            )
-            logging.info(
-                f"Generating {n_islands * batch_size} new parameter estimators... "
-                f"Model: {param_est_llm_seq[i % len(param_est_llm_seq)]}, mode: {mode}, temperature: {temperature:.2f}"
-            )
-            raw_param_est_results = await asyncio.gather(*param_estimation_tasks)
-            param_est_results = [
-                ParamEstimatorGenerationResult(param_est_code_string, param_est_new, pe_metadata)
-                for param_est_code_string, param_est_new, pe_metadata in raw_param_est_results
-            ]
+        logging.info(
+            f"Generating {n_islands * batch_size} parameter estimators "
+            f"(LLM={param_est_llm_seq[i % len(param_est_llm_seq)]}, mode={mode}, T={temperature:.2f})"
+        )
+        logging.info(
+            f"Generating {n_islands * batch_size} new parameter estimators... "
+            f"Model: {param_est_llm_seq[i % len(param_est_llm_seq)]}, mode: {mode}, temperature: {temperature:.2f}"
+        )
+        raw_param_est_results = await asyncio.gather(*param_estimation_tasks)
+        param_est_results = [
+            ParamEstimatorGenerationResult(param_est_code_string, param_est_new, pe_metadata)
+            for param_est_code_string, param_est_new, pe_metadata in raw_param_est_results
+        ]
 
         param_est_updates = {}
         for candidate_idx, param_est_result in enumerate(param_est_results):
@@ -2605,42 +2373,36 @@ async def hypothesis_engine(
 
             print(
                 f"=== iter={i} island={island_idx} batch={j} === "
-                f"(mode={mode}, linked={use_linked_prompt})",
+                f"(mode={mode})",
                 flush=True,
             )
             log_lines = [
                 f"=== iter={i} island={island_idx} batch={j} ===",
-                f"mode={mode} use_linked_prompt={use_linked_prompt}",
+                f"mode={mode}",
                 f"parent_ids={parent1_id},{parent2_id}",
             ]
             score_line_idx = len(log_lines)
             log_lines.append("score=<pending>")
             if log_prompts:
-                if use_linked_prompt:
-                    log_lines.append("[Linked prompt]")
-                    log_lines.append(prompt or "<none>")
-                    log_lines.append("[Linked response]")
-                    log_lines.append(model_llm_response or "<none>")
-                else:
-                    log_lines.append("[Model prompt]")
-                    log_lines.append(prompt or "<none>")
-                    log_lines.append("[Model response]")
-                    log_lines.append(model_llm_response or "<none>")
-                    if isinstance(pe_metadata, dict):
-                        log_lines.append("[Param estimator prompt]")
-                        log_lines.append(pe_metadata.get("initial_prompt") or "<none>")
-                        log_lines.append("[Param estimator response]")
-                        log_lines.append(pe_metadata.get("initial_response") or "<none>")
-                        if pe_metadata.get("refinement_prompts"):
-                            for ridx, ref_prompt in enumerate(pe_metadata.get("refinement_prompts", []), start=1):
-                                ref_resp = pe_metadata.get("refinement_responses", [None] * ridx)
-                                ref_code = pe_metadata.get("refinement_codes", [None] * ridx)
-                                log_lines.append(f"[Refinement {ridx} prompt]")
-                                log_lines.append(ref_prompt or "<none>")
-                                log_lines.append(f"[Refinement {ridx} response]")
-                                log_lines.append(ref_resp[ridx - 1] if ridx - 1 < len(ref_resp) else "<none>")
-                                log_lines.append(f"[Refinement {ridx} code]")
-                                log_lines.append(ref_code[ridx - 1] if ridx - 1 < len(ref_code) else "<none>")
+                log_lines.append("[Model prompt]")
+                log_lines.append(prompt or "<none>")
+                log_lines.append("[Model response]")
+                log_lines.append(model_llm_response or "<none>")
+                if isinstance(pe_metadata, dict):
+                    log_lines.append("[Param estimator prompt]")
+                    log_lines.append(pe_metadata.get("initial_prompt") or "<none>")
+                    log_lines.append("[Param estimator response]")
+                    log_lines.append(pe_metadata.get("initial_response") or "<none>")
+                    if pe_metadata.get("refinement_prompts"):
+                        for ridx, ref_prompt in enumerate(pe_metadata.get("refinement_prompts", []), start=1):
+                            ref_resp = pe_metadata.get("refinement_responses", [None] * ridx)
+                            ref_code = pe_metadata.get("refinement_codes", [None] * ridx)
+                            log_lines.append(f"[Refinement {ridx} prompt]")
+                            log_lines.append(ref_prompt or "<none>")
+                            log_lines.append(f"[Refinement {ridx} response]")
+                            log_lines.append(ref_resp[ridx - 1] if ridx - 1 < len(ref_resp) else "<none>")
+                            log_lines.append(f"[Refinement {ridx} code]")
+                            log_lines.append(ref_code[ridx - 1] if ridx - 1 < len(ref_code) else "<none>")
 
             if log_jax_translations:
                 log_lines.append("[JAX translator prompt]")

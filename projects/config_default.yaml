@@ -120,9 +120,6 @@ experiment_params:
   # Token budget per chat before summarize/reset (0 = unlimited).
   chat_token_limit: 50000
 
-  # If true, use a single linked prompt to generate model + parameter estimator.
-  use_linked_prompt: false
-
   # If true, write full prompt/response text to hypothesis_engine.log and generation JSONL.
   log_prompts: false
 
@@ -140,7 +137,6 @@ experiment_params:
   model_llm: [gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash]
   param_est_llm: gemini-2.0-flash
   jax_translator_llm: gemini-2.0-flash-lite
-  linked_llm: gemini-2.0-flash
 
 
   # Banned function calls/fragments during code generation.
@@ -197,7 +193,6 @@ _metadata:
 
   optional_prompts:
     - prompts.program_prompt.image_analysis
-    - prompts.linked_prompt.image_analysis
 
   allowed_variables:
     program_prompt:
@@ -234,21 +229,6 @@ _metadata:
     jax_translator_prompt:
       - function_code
 
-    linked_prompt:
-      _default:
-        - k
-        - next_version
-        - model_name
-      code_guidelines:
-        - max_lines
-        - next_version
-        - model_name
-      per_model_detail:
-        - model_idx
-        - train_loss
-        - optimization_time_s
-        - program_code_string
-        - parameter_estimator_code_string
 
 
 # ========================
@@ -361,30 +341,3 @@ prompts:
       Here is the code to translate:
       {function_code}
 
-  linked_prompt:
-    base: |
-      You are an AI scientist. Generate BOTH a new {model_name}_v{next_version} and a new parameter_estimator_v{next_version}.
-      The parents below show models and their estimators, sorted by loss.
-    explore: |
-      Explore new model structure while keeping the estimator simple and stable.
-    exploit: |
-      Exploit strong patterns from the parents to improve both model and estimator.
-    code_guidelines: |
-      **Code Generation Guidelines:**
-      * Respond with exactly TWO Python code blocks and no other text.
-      * Return exactly TWO Python code blocks:
-      1) def model_v{next_version}(data, params): ...  where data is a dict of named arrays
-      2) def parameter_estimator_v{next_version}(data): ...  where data is the same dict
-      Keep total length under {max_lines} lines combined.
-    docstring_guidelines: |
-      **Docstring Guidelines:**
-      * Each function should include a short docstring.
-      * Begin by listing the parent models and give them a name that describes their key features.
-      * Never refer to the parents as v1/v2; use their descriptive names instead.
-      * Any commentary about the parents or prior models must be inside docstrings.
-    per_model_detail: |
-      **Parent {model_idx} (loss={train_loss})**
-      Model:
-      {program_code_string}
-      Estimator:
-      {parameter_estimator_code_string}

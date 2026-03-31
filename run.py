@@ -471,7 +471,6 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             model_llm=_require_llm('model_llm'),
             param_est_llm=_require_llm('param_est_llm'),
             jax_translator_llm=_require_llm('jax_translator_llm'),
-            linked_llm=_require_llm('linked_llm'),
             use_chat_mode=params.get('use_chat_mode', False),  # Default to legacy mode
             chat_token_limit=params.get('chat_token_limit', 50000),  # Max tokens per chat before auto-reset
             param_estimator_refinement_rounds=params.get('param_estimator_refinement_rounds', 0),
@@ -485,7 +484,6 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             swear_words=params.get('swear_words'),
             open_family_tree=params.get('open_family_tree', False),
             loss_fn=loss_fn,
-            use_linked_prompt=params.get('use_linked_prompt', False),
             random_seed=random_seed,
         )
 
