@@ -13,10 +13,12 @@ import textwrap
 import numpy as np
 import jax, jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
+from dataclasses import dataclass, field
 import timeout_decorator
 import optax
 import pandas as pd
 from pathlib import Path
+from typing import Any, Callable
 from . import utils, llm_helper
 from . import genetic_helpers_v2 as genetic_helpers  # Using v2 with compatibility API
 from .timeout_worker import run_estimator_from_source
@@ -39,6 +41,32 @@ class ObjectiveTimeout(Exception):
 
 class ProcessTimeoutUnavailable(RuntimeError):
     """Raised when process-based timeout backend cannot be used."""
+
+
+@dataclass(slots=True)
+class ModelGenerationResult:
+    numpy_code: str | None
+    prompt: str | None
+    llm_response: str | None
+    jax_code: str | None = None
+    jax_callable: Callable | None = None
+    jax_prompt: str | None = None
+    jax_raw_response: str | None = None
+
+
+@dataclass(slots=True)
+class ParamEstimatorGenerationResult:
+    code: str | None
+    callable_obj: Callable | None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class CandidateGenerationResult:
+    model: ModelGenerationResult
+    param_estimator: ParamEstimatorGenerationResult
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(relativeCreated)dms | %(message)s",
@@ -2081,8 +2109,9 @@ async def hypothesis_engine(
         )
 
     # Write seed programs to generation log
+    n_samples=utils.data_n_samples(X[0, 0])
     for seed_idx, row in initial_programs.iterrows():
-        seed_n_params = int(row['params'][0].shape[-1])
+        seed_n_params = utils.params_numel_per_sample(row['params'], n_samples=n_samples)
         _append_generation_record(generation_log_path, {
             "iteration_number": -1,
             "birth_island": -1,
@@ -2299,10 +2328,15 @@ async def hypothesis_engine(
                 f"LLM Model: {linked_llm_name}, mode: {mode}, temperature: {temperature:.2f}"
             )
             linked_results = await asyncio.gather(*model_generation_tasks)
-            model_code_strings = [result[0] for result in linked_results]
+            model_results = [
+                ModelGenerationResult(
+                    numpy_code=model_code_string,
+                    prompt=prompt,
+                    llm_response=llm_output,
+                )
+                for model_code_string, _param_est_code_string, prompt, llm_output, _parent_ids in linked_results
+            ]
             param_est_code_strings = [result[1] for result in linked_results]
-            model_prompts = [result[2] for result in linked_results]
-            model_llm_responses = [result[3] for result in linked_results]
             parent_ids = [result[4] for result in linked_results]
         else:
             # generate new programs
@@ -2327,18 +2361,26 @@ async def hypothesis_engine(
                                              for island_idx in range(n_islands) for j in range(batch_size)]
             logging.info(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
             print(f"Generating {n_islands * batch_size} new programs... LLM Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
-            model_results = await asyncio.gather(*model_generation_tasks)
-            model_code_strings = [result[0] for result in model_results]
-            model_prompts = [result[1] for result in model_results]
-            model_llm_responses = [result[2] for result in model_results]
-            parent_ids = [result[3] for result in model_results]
+            raw_model_results = await asyncio.gather(*model_generation_tasks)
+            model_results = [
+                ModelGenerationResult(
+                    numpy_code=model_code_string,
+                    prompt=prompt,
+                    llm_response=llm_output,
+                )
+                for model_code_string, prompt, llm_output, _parent_ids in raw_model_results
+            ]
+            parent_ids = [result[3] for result in raw_model_results]
+
+        model_code_strings = [result.numpy_code for result in model_results]
 
         for candidate_idx in range(n_islands * batch_size):
             island_idx = candidate_idx // batch_size
             batch_idx = candidate_idx % batch_size
-            model_code_string = model_code_strings[candidate_idx]
-            model_prompt = model_prompts[candidate_idx]
-            model_llm_response = model_llm_responses[candidate_idx]
+            model_result = model_results[candidate_idx]
+            model_code_string = model_result.numpy_code
+            model_prompt = model_result.prompt
+            model_llm_response = model_result.llm_response
             parent1_id, parent2_id = parent_ids[candidate_idx]
             model_generated = model_code_string is not None
             _append_generation_record(generation_log_path, {
@@ -2378,7 +2420,12 @@ async def hypothesis_engine(
         model_function_translation_tasks = [translate_to_jax(code_string, client, prompt_manager, jax_llm_name) for code_string in model_code_strings]
         jax_results = await asyncio.gather(*model_function_translation_tasks)
         translation_updates = {}
-        for candidate_idx, (jax_code_string, jax_func) in enumerate(jax_results):
+        for candidate_idx, (jax_code_string, jax_func, jax_prompt, jax_response) in enumerate(jax_results):
+            model_result = model_results[candidate_idx]
+            model_result.jax_code = jax_code_string
+            model_result.jax_callable = jax_func
+            model_result.jax_prompt = jax_prompt
+            model_result.jax_raw_response = jax_response
             if model_code_strings[candidate_idx] is None:
                 continue
             island_idx = candidate_idx // batch_size
@@ -2405,7 +2452,6 @@ async def hypothesis_engine(
                 })
             translation_updates[key] = update
         _update_generation_log_records(generation_log_path, translation_updates)
-        model_results = [(model_code_strings[j], model_prompts[j], model_llm_responses[j], jax_results[j][0], jax_results[j][1]) for j in range(n_islands * batch_size)]
         
         # build parameter‑estimator tasks
         if param_estimator_refinement_rounds > 0 and not has_spec_plotter:
@@ -2419,12 +2465,16 @@ async def hypothesis_engine(
             param_est_results = []
             for code_string in param_est_code_strings:
                 if code_string is None:
-                    param_est_results.append((None, None, {"linked_prompt": True}))
+                    param_est_results.append(
+                        ParamEstimatorGenerationResult(None, None, {"linked_prompt": True})
+                    )
                     continue
                 func = utils.str_to_func(code_string, 'parameter_estimator')
                 if func is None:
                     pass
-                param_est_results.append((code_string, func, {"linked_prompt": True}))
+                param_est_results.append(
+                    ParamEstimatorGenerationResult(code_string, func, {"linked_prompt": True})
+                )
         else:
             if param_estimator_refinement_rounds > 0 and not has_spec_plotter:
                 raise ValueError(
@@ -2435,7 +2485,7 @@ async def hypothesis_engine(
                 generate_new_parameter_estimator(
                     current_island=islands[island_idx],
                     model_code_string=model_code_strings[island_idx * batch_size + j],
-                    model_fn=model_results[island_idx * batch_size + j][4],
+                    model_fn=model_results[island_idx * batch_size + j].jax_callable,
                     llm_name=param_est_llm_seq[i % len(param_est_llm_seq)],
                     client=client,
                     data=[X[0,0], X[0,1]],
@@ -2472,12 +2522,19 @@ async def hypothesis_engine(
                 f"Generating {n_islands * batch_size} new parameter estimators... "
                 f"Model: {param_est_llm_seq[i % len(param_est_llm_seq)]}, mode: {mode}, temperature: {temperature:.2f}"
             )
-            param_est_results = await asyncio.gather(*param_estimation_tasks)
+            raw_param_est_results = await asyncio.gather(*param_estimation_tasks)
+            param_est_results = [
+                ParamEstimatorGenerationResult(param_est_code_string, param_est_new, pe_metadata)
+                for param_est_code_string, param_est_new, pe_metadata in raw_param_est_results
+            ]
 
         param_est_updates = {}
-        for candidate_idx, (param_est_code_string, param_est_new, pe_metadata) in enumerate(param_est_results):
+        for candidate_idx, param_est_result in enumerate(param_est_results):
             if model_code_strings[candidate_idx] is None:
                 continue
+            param_est_code_string = param_est_result.code
+            param_est_new = param_est_result.callable_obj
+            pe_metadata = param_est_result.metadata
             island_idx = candidate_idx // batch_size
             batch_idx = candidate_idx % batch_size
             key = (i, island_idx, batch_idx)
@@ -2488,7 +2545,7 @@ async def hypothesis_engine(
                 "param_est_refinement_prompts": pe_metadata.get("refinement_prompts", []),
                 "param_est_refinement_responses": pe_metadata.get("refinement_responses", []),
             }
-            if model_results[candidate_idx][4] is not None:
+            if model_results[candidate_idx].jax_callable is not None:
                 if param_est_new is None:
                     update.update({
                         "status": "param_estimator_failed",
@@ -2504,14 +2561,32 @@ async def hypothesis_engine(
             param_est_updates[key] = update
         _update_generation_log_records(generation_log_path, param_est_updates)
         # combine results
-        island_results = [[model_results[island_idx * batch_size + j] + param_est_results[island_idx * batch_size + j] for j in range(batch_size)] for island_idx in range(n_islands)]
+        island_results = [[
+            CandidateGenerationResult(
+                model=model_results[island_idx * batch_size + j],
+                param_estimator=param_est_results[island_idx * batch_size + j],
+            )
+            for j in range(batch_size)
+        ] for island_idx in range(n_islands)]
 
         # now loop through the results and compute losses
         success_rate = 0.0
         evaluation_log_updates = {}
         for island_idx, j in np.ndindex(n_islands, batch_size):
             _clear_jax_runtime_cache()
-            model_code_string, prompt, model_llm_response, model_code_string_jax, model_new, jax_prompt, jax_raw_response, param_est_code_string, param_est_new, pe_metadata = island_results[island_idx][j]
+            candidate_result = island_results[island_idx][j]
+            model_result = candidate_result.model
+            param_est_result = candidate_result.param_estimator
+            model_code_string = model_result.numpy_code
+            prompt = model_result.prompt
+            model_llm_response = model_result.llm_response
+            model_code_string_jax = model_result.jax_code
+            model_new = model_result.jax_callable
+            jax_prompt = model_result.jax_prompt
+            jax_raw_response = model_result.jax_raw_response
+            param_est_code_string = param_est_result.code
+            param_est_new = param_est_result.callable_obj
+            pe_metadata = param_est_result.metadata
             parent1_id, parent2_id = parent_ids[island_idx * batch_size + j]
             candidate_key = (i, island_idx, j)
 
