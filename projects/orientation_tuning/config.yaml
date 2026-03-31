@@ -47,7 +47,8 @@ prompts:
       The models are sorted from highest to lowest loss.
 
       Your task is to create a new neuron model, neuron_model_v{next_version}, that
-      has a lower loss than the models below.
+      has a lower loss than the models below. 
+      All models take input X as the first argument, which only contains one element theta - the stimulus orientation in radians. 
 
       *Analyze* the progression of the models, *generalize* the improvements, and
       *create* a new model that is better than *all* previous models.

@@ -1,7 +1,6 @@
 anthropic==0.50.0
 google-genai==1.51.0
-jax==0.4.38
-jaxlib==0.4.38
+jax[cuda12]==0.4.38
 jaxopt==0.8.5
 matplotlib==3.10.3
 networkx>=3.2
