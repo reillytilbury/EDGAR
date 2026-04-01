@@ -38,7 +38,7 @@ def load_and_process_data(
     downsample_factor: int = 4,
     var_thresh: float = 1e-4,
     zscore: bool = True,
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """
     Load and preprocess data and return a dict of arrays.
 
