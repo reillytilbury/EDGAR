@@ -43,6 +43,7 @@ def _build_seed_nodes():
             "birth_island": -1,
             "batch_index": batch_idx,
             "train_loss": None,
+            "train_fit_loss": None,
             "initial_loss": None,
             "n_params": None,
             "complexity_penalty": None,
@@ -61,10 +62,53 @@ def _build_seed_nodes():
             "image_prompt_path": None,
             "train_fit_image_path": None,
             "test_fit_image_path": None,
+            "test_fit_loss": None,
             "is_seed": True,
             "is_winner": False,
         })
     return seeds
+
+
+def _display_train_loss(rec):
+    """Return train-fit loss if available, otherwise fall back to objective train loss."""
+    if not rec:
+        return None
+    train_fit = rec.get("train_fit_loss")
+    if train_fit is not None:
+        return train_fit
+    return rec.get("train_loss")
+
+
+def _display_test_loss(rec):
+    """Return test-fit loss if available, otherwise fall back to objective test loss."""
+    if not rec:
+        return None
+    test_fit = rec.get("test_fit_loss")
+    if test_fit is not None:
+        return test_fit
+    return rec.get("test_loss")
+
+
+def _merge_duplicate_records(records):
+    """Merge duplicate records by program id, preserving later non-null fields."""
+    merged_by_id = {}
+    record_order = []
+
+    for rec in records:
+        node_id = make_program_id(*record_key(rec))
+        if node_id is None:
+            continue
+        if node_id not in merged_by_id:
+            merged_by_id[node_id] = dict(rec)
+            record_order.append(node_id)
+            continue
+
+        merged = merged_by_id[node_id]
+        for key, value in rec.items():
+            if value is not None or key not in merged:
+                merged[key] = value
+
+    return [merged_by_id[node_id] for node_id in record_order]
 
 
 def _compute_hierarchical_layout(G, records_by_id, island_gap=1.5):
@@ -149,6 +193,12 @@ def _build_sidebar_data(records_by_id):
             "display_label": rec.get("display_label"),
             "island_label": island_label(rec.get("birth_island", -1)),
             "test_loss": rec.get("test_loss"),
+            "train_fit_loss": rec.get("train_fit_loss"),
+            "test_fit_loss": rec.get("test_fit_loss"),
+            "initial_loss": rec.get("initial_loss"),
+            "mode": rec.get("mode"),
+            "temperature": rec.get("temperature"),
+            "llm_name": rec.get("llm_name"),
             "parent1_id": _parse_parent_id(rec.get("parent1_id")),
             "parent2_id": _parse_parent_id(rec.get("parent2_id")),
             "is_migrant": rec.get("is_migrant", False),
@@ -217,9 +267,10 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
         if records_by_id.get(node, {}).get("removal_reason") is not None
     }
 
-    # Compute loss range for coloring (exclude dead nodes so they don't skew the scale)
-    losses = [r.get("train_loss") for nid, r in records_by_id.items()
-              if r.get("train_loss") is not None and nid not in dead_nodes]
+    # Compute loss range for coloring
+    losses = [(_display_train_loss(r)) for r in records_by_id.values()
+              if _display_train_loss(r) is not None]
+
     min_loss = min(losses) if losses else None
     max_loss = max(losses) if losses else None
     # Use 95th percentile as max to avoid outlier skew
@@ -238,8 +289,8 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
         is_seed = rec.get("is_seed", False)
         iteration = rec.get("iteration_number", "?")
         batch = rec.get("batch_index", "?")
-        loss = rec.get("train_loss")
-        test_loss = rec.get("test_loss")
+        loss = _display_train_loss(rec)
+        test_loss = _display_test_loss(rec)
         mode = rec.get("mode", "")
         llm = rec.get("llm_name", "")
 
@@ -253,9 +304,9 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
 
         hover_parts = [f"<b>{label}</b>"]
         if loss is not None:
-            hover_parts.append(f"train loss: {loss:.4f}")
+            hover_parts.append(f"primary train metric loss: {loss:.4f}")
         if test_loss is not None:
-            hover_parts.append(f"test loss: {test_loss:.4f}")
+            hover_parts.append(f"primary test metric loss: {test_loss:.4f}")
         hover_parts.append(f"mode: {mode}")
         if llm:
             hover_parts.append(f"LLM: {llm}")
@@ -514,10 +565,15 @@ function showSidebar(nodeId) {{
   h += '<div class="field"><span class="field-label">ID:</span> <span class="field-value">' + escapeHtml(d.program_id) + '</span></div>';
   h += '<div class="field"><span class="field-label">Generation:</span> <span class="field-value">' + escapeHtml(d.iteration) + '</span></div>';
   h += '<div class="field"><span class="field-label">Island:</span> <span class="field-value">' + escapeHtml(d.island_label || d.island) + '</span></div>';
+  if (d.is_migrant) {{
+    h += '<div class="field"><span class="field-label">Migrant From:</span> <span class="field-value">' + escapeHtml(d.migrant_from_label || d.migrant_from_id) + '</span></div>';
+  }}
+  if (d.is_extinct) {{
+    h += '<div class="field"><span class="field-label">Status:</span> <span class="field-value">Extinct</span></div>';
+  }}
   h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
-  h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Complexity Penalty:</span> <span class="field-value">' + escapeHtml(d.complexity_penalty !== null && d.complexity_penalty !== undefined ? Number(d.complexity_penalty).toFixed(4) : null) + '</span></div>';
   h += '<div class="field"><span class="field-label">N Params:</span> <span class="field-value">' + escapeHtml(d.n_params) + '</span></div>';
   h += '<div class="field"><span class="field-label">Mode:</span> <span class="field-value">' + escapeHtml(d.mode) + '</span></div>';
@@ -610,14 +666,19 @@ def create_family_tree(generation_log_path, output_dir, n_islands):
         print(f"[family_tree] No generation log found at {generation_log_path}, skipping.")
         return
 
-    records = load_generation_log(generation_log_path)
+    records = _merge_duplicate_records(load_generation_log(generation_log_path))
     if not records:
         print("[family_tree] Generation log is empty, skipping.")
         return
 
-    # Add seed nodes
-    seed_nodes = _build_seed_nodes()
-    all_records = seed_nodes + records
+    has_seed_records = any(
+        rec.get("is_seed") or rec.get("iteration_number") == -1 for rec in records
+    )
+    if has_seed_records:
+        all_records = records
+    else:
+        seed_nodes = _build_seed_nodes()
+        all_records = seed_nodes + records
 
     # Build lookup by node ID
     records_by_id = {}

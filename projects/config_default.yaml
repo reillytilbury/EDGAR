@@ -83,9 +83,12 @@ experiment_params:
   # Random seed used for sample/trial splitting and related stochastic operations.
   random_seed: 42
 
-  # Evaluation grid bounds for diagnostics/evaluation matrices.
-  # Scalar applies to all input features; list must match n_features.
-  # If None, defaults to the min/max of the input data.
+  # Evaluation grid configuration for diagnostics/evaluation matrices.
+  # eval_keys: list of data dict keys to create eval grids for.
+  # If None, uses all keys in the data dict.
+  eval_keys: None
+  # Scalar applies to all eval keys; list must match eval_keys length.
+  # If None, defaults to the min/max of the data.
   x_min: None
   x_max: None
   n_bins: 100
@@ -99,6 +102,15 @@ experiment_params:
   # Whether to use parameter estimators.
   use_param_estimator: true
 
+  # Per-sample timeout (seconds) for parameter estimator calls.
+  # Set to 0 or null to disable timeout.
+  param_estimator_timeout_s: 5.0
+
+  # Hard timeout (seconds) for each full objective evaluation
+  # (parameter init + optimization + evaluation).
+  # Set to 0 or null to disable this cap.
+  objective_timeout_s: 60.0
+
   # Number of refinement rounds for parameter estimators.
   param_estimator_refinement_rounds: 3
 
@@ -108,23 +120,24 @@ experiment_params:
   # Token budget per chat before summarize/reset (0 = unlimited).
   chat_token_limit: 50000
 
+  # If true, write full prompt/response text to hypothesis_engine.log and generation JSONL.
+  log_prompts: false
+
+  # If true, write JAX translation prompt/response/code text to logs and generation JSONL.
+  log_jax_translations: false
+
   # Island graph for exploration exchanges.
   exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
 
   # Island graph for exploitation exchanges.
   exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
 
-  # Small model used for lightweight generation tasks.
-  tiny_lm_name: gemini-2.0-flash-lite
+  # LLMs for different tasks. Each can be a string or a list.
+  # If a list is provided, it is traversed in order by iteration.
+  model_llm: [gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash]
+  param_est_llm: gemini-2.0-flash
+  jax_translator_llm: gemini-2.0-flash-lite
 
-  # Medium model used for normal generation tasks.
-  little_lm_name: gemini-2.0-flash
-
-  # Large model used periodically for stronger proposals.
-  large_lm_name: gemini-2.5-flash
-
-  # Use large model every N iterations.
-  use_large_every: 3
 
   # Banned function calls/fragments during code generation.
   swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
@@ -186,11 +199,15 @@ _metadata:
       _default:
         - k
         - next_version
+        - model_name
       code_guidelines:
         - max_lines
+        - next_version
+        - model_name
       per_model_detail:
         - model_idx
         - train_loss
+        - optimization_time_s
         - program_code_string
 
     parameter_estimator:
@@ -198,17 +215,20 @@ _metadata:
         - k
         - next_version
         - max_lines
+        - model_name
       code_guidelines:
         - max_lines
         - next_version
       per_model_detail:
         - model_idx
         - train_loss
+        - optimization_time_s
         - program_code_string
         - parameter_estimator_code_string
 
     jax_translator_prompt:
       - function_code
+
 
 
 # ========================
@@ -219,7 +239,7 @@ prompts:
   program_prompt:
     base: |
       You are an AI scientist. Below are two models describing a phenomenon, sorted from hightest to lowest loss.
-      Your task is to create a new model, model_v{next_version}, that has a lower loss than the models below.
+      Your task is to create a new model, {model_name}_v{next_version}, that has a lower loss than the models below.
 
       *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
 
@@ -237,13 +257,14 @@ prompts:
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
+      * Model signature must be `def model(data, params):` where `data` is a dict of named arrays (e.g. data['stimulus'], data['response']) where `params` is a dict of named arrays/scalars.
       * Ensure all free parameters are numeric, not strings.
 
     docstring_guidelines: |
       **Docstring Guidelines:**
       * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`.
-      * Never refer to the models as `model_v1`, `model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names.
-      * Do not refer to the current model as `model_v{next_version}`. Instead, refer to it as "this model".
+      * Never refer to the models as `{model_name}_v1`, `{model_name}_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names.
+      * Do not refer to the current model as `{model_name}_v{next_version}`. Instead, refer to it as "this model".
       * Provide a simple equation for the model, including all free parameters.
       * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
 
@@ -255,7 +276,7 @@ prompts:
       \n
   parameter_estimator:
     generation_base: |
-      You are an AI scientist. Your task is to create a simple parameter estimator function, parameter_estimator_v{next_version}, to estimate the free parameters of the latest model, model_v{next_version}.
+      You are an AI scientist. Your task is to create a simple parameter estimator function, parameter_estimator_v{next_version}, to estimate the free parameters of the latest model, {model_name}_v{next_version}.
       The parameter should be estimated directly, using statistical principles.
       *Analyze* the progression of the parameter estimators, *generalize* the improvements, and *create* a new parameter estimator that is better than *all* previous estimators.
 
@@ -269,6 +290,7 @@ prompts:
       * Import any packages you use.
       * Do not include any text other than the code.
       * The only arguments to the function should be the inputs (X) and the spike count.
+      * Return a parameter dict with the same keys expected by the model.
       * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
       * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`.
       * Do not call the model function in your parameter_estimator code, as you will not have access to it! Instead, use direct statistical relationships between the inputs and outputs to estimate parameters.
@@ -276,8 +298,8 @@ prompts:
     docstring_guidelines: |
       **Docstring Guidelines:**
       * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`.
-      * Never refer to the models as `model_v1`, `model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names.
-      * Do not refer to the current model as `model_v{next_version}`. Instead, refer to it as "this model".
+      * Never refer to the models as `{model_name}_v1`, `{model_name}_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names.
+      * Do not refer to the current model as `{model_name}_v{next_version}`. Instead, refer to it as "this model".
       * Provide a simple equation for the model, including all free parameters.
       * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
 
@@ -301,6 +323,9 @@ prompts:
 
       Include all necessary imports, and ensure that the function is compatible with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.
 
+      Treat all arrays as JAX arrays (`jnp.ndarray`). Do not mention NumPy in docstrings or type hints.
+      Use `jnp` everywhere (no `np`). Inputs should be described as `jnp.ndarray`.
+
       CRITICAL JAX compatibility requirements:
       * Replace all boolean indexing (e.g., `array[condition]`) with `jnp.where(condition, true_value, false_value)`
       * Replace NumPy functions with JAX equivalents (np.array → jnp.array, np.sin → jnp.sin, etc.)
@@ -315,3 +340,4 @@ prompts:
       Update the function name to be the original name without "_v*".
       Here is the code to translate:
       {function_code}
+

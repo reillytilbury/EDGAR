@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import yaml
+from . import utils
 
 
 # Default values for EvolutionConfig
@@ -157,7 +158,7 @@ class Program:
         """Number of free parameters."""
         if self.params is None:
             return 0
-        return self.params.shape[1] if self.params.ndim == 2 else len(self.params)
+        return utils.params_numel_per_sample(self.params)
     
     @property
     def code_hash(self) -> str:
@@ -196,7 +197,7 @@ class Program:
         # Fast path 2: Different parameter count → structurally different programs
         # (e.g., linear vs quadratic model can't be the same)
         if self.params is not None and other.params is not None:
-            if self.params.shape != other.params.shape:
+            if utils.params_signature(self.params) != utils.params_signature(other.params):
                 return False
         
         # Fast path 3: Losses too different → likely different programs
@@ -1010,25 +1011,25 @@ def compare_programs(program1: pd.Series, program2: pd.Series,
     params1 = program1.get('params')
     params2 = program2.get('params')
     if params1 is not None and params2 is not None:
-        params1 = jnp.array(params1)
-        params2 = jnp.array(params2)
-        if params1.shape != params2.shape:
-            return _result(False, "parameter_shape_mismatch", shape1=tuple(params1.shape), shape2=tuple(params2.shape))
+        if utils.params_signature(params1) != utils.params_signature(params2):
+            return False
     
     # Fast path 3: Losses too different → likely different programs
     # This speeds up comparison by skipping expensive cosine computation
     loss1 = program1.get(loss_type)
     loss2 = program2.get(loss_type)
     if loss1 is not None and loss2 is not None:
-        max_loss = max(abs(loss1), abs(loss2), 1e-6)
-        relative_loss_delta = abs(loss1 - loss2) / max_loss
-        if relative_loss_delta > loss_tol:
-            return _result(
-                False,
-                "loss_gap_exceeds_tolerance",
-                relative_loss_delta=float(relative_loss_delta),
-                loss_tol=float(loss_tol),
-            )
+        try:
+            loss1_f = float(loss1)
+            loss2_f = float(loss2)
+        except (TypeError, ValueError):
+            loss1_f = None
+            loss2_f = None
+        if loss1_f is not None and loss2_f is not None:
+            if np.isfinite(loss1_f) and np.isfinite(loss2_f):
+                max_loss = max(abs(loss1_f), abs(loss2_f), 1e-6)
+                if abs(loss1_f - loss2_f) / max_loss > loss_tol:
+                    return False
     
     # Simple mode: only structural comparison (code string)
     # This is a weak check - programs with different code can be behaviorally identical
@@ -1487,35 +1488,80 @@ def perform_probabilistic_migration(islands: List[pd.DataFrame],
         logging.info("No destination islands provided, using default ring migration strategy.")
         destination_islands = [(i + 1) % n_islands for i in range(n_islands)]
 
-    # DEBUG: Check for NaN or inf in train_loss before computing probabilities
+    # Calculate migration probabilities based on relative losses.
+    # Non-finite losses are treated as worst candidates (lowest migration chance),
+    # not as fatal errors.
+    temp = max(temperature, 1e-3)
+    migration_prob: List[np.ndarray] = []
     for i, island in enumerate(islands):
-        train_losses = island['train_loss'].values
-        n_nan = np.sum(np.isnan(train_losses))
-        n_inf = np.sum(np.isinf(train_losses))
-        if n_nan > 0 or n_inf > 0:
-            raise ValueError(
-                f"Island {i} has {n_nan} NaN and {n_inf} inf values in train_loss.\n"
-                f"train_loss values: {train_losses}\n"
-                f"Island columns: {island.columns.tolist()}\n"
-                f"Island shape: {island.shape}"
+        n_programs = len(island)
+        if n_programs == 0:
+            migration_prob.append(np.array([], dtype=float))
+            continue
+
+        if 'train_loss' in island.columns:
+            raw_losses = pd.to_numeric(island['train_loss'], errors='coerce').to_numpy(dtype=float)
+        else:
+            raw_losses = np.full(n_programs, np.nan, dtype=float)
+
+        finite_mask = np.isfinite(raw_losses)
+        n_bad = int((~finite_mask).sum())
+
+        if finite_mask.any():
+            finite_losses = raw_losses[finite_mask]
+            best = float(np.min(finite_losses))
+            worst = float(np.max(finite_losses))
+            spread = max(worst - best, 1.0)
+            penalized_losses = np.where(finite_mask, raw_losses, worst + spread)
+            relative = penalized_losses - float(np.min(penalized_losses))
+            rel_std = float(np.std(relative))
+            scaled = relative / (rel_std + 1e-6)
+            logits = -(scaled / temp)
+            logits = logits - float(np.max(logits))
+            prob = np.exp(logits)
+        else:
+            # If every loss is invalid, avoid bias and sample uniformly.
+            prob = np.ones(n_programs, dtype=float)
+
+        prob_sum = float(np.sum(prob))
+        if not np.isfinite(prob_sum) or prob_sum <= 0:
+            prob = np.full(n_programs, 1.0 / n_programs, dtype=float)
+        else:
+            prob = prob / prob_sum
+
+        if n_bad > 0:
+            logging.info(
+                "Migration: island %s contains %s non-finite train_loss values; "
+                "these programs are down-weighted for migration sampling.",
+                i,
+                n_bad,
             )
 
-    # Calculate migration probabilities based on relative losses
-    temp = max(temperature, 1e-3)
-    relative_losses = [np.array(island['train_loss'] - island['train_loss'].min()) for island in islands]
-    rel_loss_std = [np.std(losses) for losses in relative_losses]
-    losses = [relative_losses[i] / (rel_loss_std[i] + 1e-6) for i in range(n_islands)]
-    migration_prob = [np.exp(-(losses[i] / temp)) for i in range(n_islands)]
-    migration_prob = [prob / np.sum(prob) for prob in migration_prob]
+        migration_prob.append(prob)
 
     # Create a list of migrants for each island
     migrants_list = []
     for island_id in range(n_islands):
         n_programs = len(islands[island_id])
-        n_nonzero_probs = np.sum(migration_prob[island_id] > 0)
-        n_migrants_i = min(n_migrants, n_nonzero_probs)
-        sampled_indices = np.random.choice(np.arange(n_programs), size=n_migrants_i, replace=False, p=migration_prob[island_id])
-        migrants = islands[island_id].iloc[sampled_indices].reset_index(drop=True) 
+        if n_programs == 0:
+            migrants = islands[island_id].iloc[0:0].reset_index(drop=True)
+            migrants_list.append(migrants)
+            continue
+
+        n_nonzero_probs = int(np.sum(migration_prob[island_id] > 0))
+        n_migrants_i = min(n_migrants, n_nonzero_probs, n_programs)
+        if n_migrants_i <= 0:
+            migrants = islands[island_id].iloc[0:0].reset_index(drop=True)
+            migrants_list.append(migrants)
+            continue
+
+        sampled_indices = np.random.choice(
+            np.arange(n_programs),
+            size=n_migrants_i,
+            replace=False,
+            p=migration_prob[island_id],
+        )
+        migrants = islands[island_id].iloc[sampled_indices].reset_index(drop=True)
         dest_id = destination_islands[island_id]
         for idx in sampled_indices:
             migrant = islands[island_id].iloc[idx]

@@ -4,26 +4,26 @@ Welcome to the Model Discovery Engine! Fill in the components below to start bui
 NECESSARY COMPONENTS:
 
 Loading:
-- load_and_process_data(data_path, *preprocess_params) -> [X, Y]
+- load_and_process_data(data_path, *preprocess_params) -> dict[str, np.ndarray]
 - train_test_split(X) -> [train_samples, train_trials]
 
 Seed Programs:
-- model_v1(X, *params) and param_est_v1(X, Y)
-- model_v2(X, *params) and param_est_v2(X, Y)
+- model_v1(data, params) and param_est_v1(data)
+- model_v2(data, params) and param_est_v2(data)
 
 Loss:
-- loss_fn(Y_pred, Y_true) -> loss values
+- loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(X, Y, programs_list, X_eval, save_path, labels)
+- plot_model_fits(data, programs_list, X_eval, save_path, labels)
 """
 import numpy as np
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 from projects.synthetic_data.spec import compute_binned_means_on_eval
-from src.data_structures import Inputs, Outputs
+from src import utils
 
 
 # ========================
@@ -31,15 +31,18 @@ from src.data_structures import Inputs, Outputs
 # ========================
 
 def load_and_process_data(
-    data_path: str, 
+    data_path: str,
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
-    activity_threshold: float = 0.1, 
+    activity_threshold: float = 0.1,
     conc_threshold: float = 0.1,
-) -> Tuple[Inputs, Outputs]:
+) -> Dict[str, np.ndarray]:
     """
-    Load and preprocess neural data and return data in the form of 
-    Inputs and Outputs objects. 
-    
+    Load and preprocess neural data and return data as a dictionary
+    mapping descriptive key names to numpy arrays.
+
+    All arrays have shape (n_samples, ..., n_trials) with n_trials as the
+    last dimension.
+
     Parameters
     ----------
     data_path : str
@@ -48,16 +51,14 @@ def load_and_process_data(
         Threshold for activity to select good cells.
     conc_threshold : float
         Threshold for concentration to select good cells.
-    # TODO: ADD back a way to create input and output variable names
-    # Left this out as I don't know if this should be a list or a string. 
-    # If a list, same number of entries as features? This gets unwieldy 
-    # for high-dim problems...
 
     Returns
     -------
-    X: Inputs object
-    Y: Outputs object
-        """
+    data : dict[str, np.ndarray]
+        Dictionary with keys:
+        - 'stimulus': np.ndarray of shape (n_samples, n_trials), stimulus angles.
+        - 'response': np.ndarray of shape (n_samples, n_trials), neural responses.
+    """
     # load and preprocess data
     neural_data = np.load(data_path, allow_pickle=True)
     neural_data = neural_data.item()
@@ -68,14 +69,14 @@ def load_and_process_data(
     n_trials = response.shape[1]
     n_trials_small = int(n_trials * activity_threshold)
 
-    # filter 
+    # filter
     active = (response > 0).astype(np.float32)
     firing_probs = np.mean(active, axis=1)
     conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
     good_cells = np.where((firing_probs > activity_threshold) & (conc > conc_threshold))[0]
     n_good_cells = len(good_cells)
 
-    # update angles and response to be (n_cells_small, n_trials_small) and (n_cells_small, n_trials_small)
+    # update angles and response to be (n_cells_small, n_trials_small)
     response_cropped, angles_cropped = np.zeros((n_good_cells, n_trials_small)), np.zeros((n_good_cells, n_trials_small))
     for i, cell in enumerate(good_cells):
         active_trials = response[cell] > 0
@@ -84,19 +85,17 @@ def load_and_process_data(
         angles_cropped[i] = angles[active_trials_idx]
 
     response_cropped = normalize_response(response_cropped)
-    
-    # Create Inputs object with the angles as the first (and currently only) input
-    # Shape: (n_cells, 1, n_trials)
-    X = Inputs.from_array(angles_cropped)
-    
-    # Create Outputs object wrapping the response
-    # Shape: (n_cells, 1, n_trials) - scalar output per cell
-    Y = Outputs.from_array(response_cropped)
 
-    return X, Y
+    # Return dict with shape (n_samples, n_trials) arrays
+    data = {
+        'stimulus': angles_cropped,   # shape (n_samples, n_trials)
+        'response': response_cropped,  # shape (n_samples, n_trials)
+    }
+
+    return data
 
 def train_test_split(
-        X: Inputs, 
+        X: Dict[str, np.ndarray],
         # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
         random_seed: int
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -104,19 +103,22 @@ def train_test_split(
     This function defines a way to generate:
      - sample splits for model optimization (train samples) and evaluation (test samples),
      - trial splits for parameter optimization (train trials) and evaluation (test trials) conditional on a model.
-    
+
     Parameters
     ----
-    X: Inputs object of shape (n_samples, n_input_features, n_trials)
-    # NB: Must have n_samples >= 2 & n_trials >= 2
-    random_seed: int defining RNG seed.
+    X : dict[str, np.ndarray]
+        Data dictionary where each value has shape (n_samples, ..., n_trials).
+        n_samples >= 2 and n_trials >= 2 are required.
+    random_seed : int
+        RNG seed.
 
-    Returns 
+    Returns
     ----
     train_samples: np.ndarray of length n_samples//2
     train_trials: np.ndarray of length n_trials//2
     """
-    n_samples, _, n_trials = X.shape
+    n_samples = utils.data_n_samples(X)
+    n_trials = utils.data_n_trials(X)
     assert n_samples >= 2, 'Need at least 2 samples for cross-validated model optimzation/eval'
     assert n_trials >= 2, 'Need at least 2 trials for cross-validated params optimzation/eval'
 
@@ -137,44 +139,54 @@ def train_test_split(
 # 2. SEED MODELS
 # ========================
 
-def model_v1(X, # independent variable: X = [theta] 
-             theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=1.0):
+def model_v1(data, params):  # independent variable: data['stimulus'] = theta
     """
     Independent variable:
-    X = [theta]  # stimulus angle (radians)
+    data['stimulus'] = theta  # stimulus angle (radians)
 
     A simple neuron model that computes the response based on a Gaussian tuning curve.
     Args:
-        X (np.ndarray): Input array with shape (1, n_trials).
-                        X[0] is the stimulus angle theta in radians.
-        theta_pref (float): Preferred direction of the neuron.
-        baseline (float): Baseline firing rate.
-        amplitude (float): Maximum firing rate above baseline.
-        tuning_width (float): Width of the tuning curve.
+        data (dict): Data dictionary for one sample (no sample axis).
+                     data['stimulus'] is the stimulus angle theta in radians, shape (n_trials,).
+        params (dict): Parameter dictionary with keys:
+            - theta_pref: Preferred direction of the neuron.
+            - baseline: Baseline firing rate.
+            - amplitude: Maximum firing rate above baseline.
+            - tuning_width: Width of the tuning curve.
     Returns:
         np.ndarray: The firing rate of the neuron, shape (n_trials,).
     """
-    theta = X[0]  # Extract theta from first input
-    theta_pref = np.clip(theta_pref, 0, 2 * np.pi)
-    baseline = np.clip(baseline, 0, None)
-    amplitude = np.clip(amplitude, 0, None)
-    tuning_width = np.clip(tuning_width, 0.01, None)
+    theta = data['stimulus']
+    theta_pref = np.clip(params["theta_pref"], 0, 2 * np.pi)
+    baseline = np.clip(params["baseline"], 0, None)
+    amplitude = np.clip(params["amplitude"], 0, None)
+    tuning_width = np.clip(params["tuning_width"], 0.01, None)
 
     circ_dist_rad = lambda theta1, theta2: np.abs(np.arctan2(np.sin(theta1 - theta2), np.cos(theta1 - theta2)))
     dist = circ_dist_rad(theta, theta_pref)
     return baseline + amplitude * np.exp(-0.5 * (dist / tuning_width) ** 2)
 
-def param_est_v1(X, Y):
+
+model_v1.DEFAULT_PARAMS = {
+    "theta_pref": 0.0,
+    "baseline": 0.0,
+    "amplitude": 1.0,
+    "tuning_width": 1.0,
+}
+
+def param_est_v1(data):
     """
-    Estimates the parameters of the gaussian neuron model. We do this by creating a binned tuning curve and picking out salient features.
+    Estimates the parameters of the gaussian neuron model. We do this by creating a
+    binned tuning curve and picking out salient features.
     Args:
-        X (np.ndarray): Input array with shape (1, n_trials).
-                        X[0] is the stimulus angle theta in radians.
-        Y (np.ndarray): Spike counts corresponding to each trial, shape (n_trials,).
+        data (dict): Data dictionary for one sample (no sample axis).
+                     data['stimulus'] is the stimulus angle theta in radians, shape (n_trials,).
+                     data['response'] is the spike counts, shape (n_trials,).
     Returns:
-        np.ndarray: Estimated parameters [theta_pref, baseline, amplitude, tuning_width].
+        dict: Estimated parameters with keys {"theta_pref", "baseline", "amplitude", "tuning_width"}.
     """
-    theta = X[0]  # Extract theta from first input
+    theta = data['stimulus']
+    Y = data['response']
     n_bins = 20
     bin_idx = ((theta * n_bins) / (2 * np.pi)).astype(np.int32)
     bin_idx = np.clip(bin_idx, 0, n_bins - 1)
@@ -191,49 +203,66 @@ def param_est_v1(X, Y):
     above_half_max = tuning_curve[indices] >= half_max
     full_width_half_max = 2 * np.pi * np.sum(above_half_max) / n_bins
     tuning_width = full_width_half_max / (2.0 * np.sqrt(2 * np.log(2)))
-    return np.array([theta_pref, baseline, amplitude, tuning_width])
+    return {
+        "theta_pref": float(theta_pref),
+        "baseline": float(baseline),
+        "amplitude": float(amplitude),
+        "tuning_width": float(tuning_width),
+    }
 
-def model_v2(X, # independent variable: X = [theta] 
-             theta_pref=0.0, baseline=0.0, amplitude_1=1.0, amplitude_2=0.0, tuning_width=1.0):
+def model_v2(data, params):  # independent variable: data['stimulus'] = theta
     """
     Independent variable:
-    X = [theta]  # stimulus angle (radians)
+    data['stimulus'] = theta  # stimulus angle (radians)
 
-    A neuron model that computes the response based on a double peaked gaussian tuning curve, with peaks at theta_pref and (theta_pref + pi) % 2pi.
+    A neuron model that computes the response based on a double peaked gaussian tuning
+    curve, with peaks at theta_pref and (theta_pref + pi) % 2pi.
     Args:
-        X (np.ndarray): Input array with shape (1, n_trials).
-                        X[0] is the stimulus angle theta in radians.
-        theta_pref (float): Preferred angle in radians.
-        baseline (float): Baseline firing rate.
-        amplitude_1 (float): Amplitude of the first peak.
-        amplitude_2 (float): Amplitude of the second peak.
-        tuning_width (float): Width of the tuning curves around preferred angles.
+        data (dict): Data dictionary for one sample (no sample axis).
+                     data['stimulus'] is the stimulus angle theta in radians, shape (n_trials,).
+        params (dict): Parameter dictionary with keys:
+            - theta_pref: Preferred angle in radians.
+            - baseline: Baseline firing rate.
+            - amplitude_1: Amplitude of the first peak.
+            - amplitude_2: Amplitude of the second peak.
+            - tuning_width: Width of the tuning curves around preferred angles.
     Returns:
         np.ndarray: The response of the neuron model, shape (n_trials,).
     """
-    theta = X[0]  # Extract theta from first input
-    theta_pref = np.clip(theta_pref, 0, 2 * np.pi)
-    baseline = np.clip(baseline, 0, None)
-    amplitude_1 = np.clip(amplitude_1, 0, None)
-    amplitude_2 = np.clip(amplitude_2, 0, None)
-    tuning_width = np.clip(tuning_width, 0.01, None)
-    
+    theta = data['stimulus']
+    theta_pref = np.clip(params["theta_pref"], 0, 2 * np.pi)
+    baseline = np.clip(params["baseline"], 0, None)
+    amplitude_1 = np.clip(params["amplitude_1"], 0, None)
+    amplitude_2 = np.clip(params["amplitude_2"], 0, None)
+    tuning_width = np.clip(params["tuning_width"], 0.01, None)
+
     circ_dist_rad = lambda theta1, theta2: np.abs(np.arctan2(np.sin(theta1 - theta2), np.cos(theta1 - theta2)))
     dist_1 = circ_dist_rad(theta, theta_pref)
     dist_2 = circ_dist_rad(theta, (theta_pref + np.pi) % (2 * np.pi))
     return baseline + amplitude_1 * np.exp(-0.5 * (dist_1 / tuning_width) ** 2) + amplitude_2 * np.exp(-0.5 * (dist_2 / tuning_width) ** 2)
 
-def param_est_v2(X, Y):
+
+model_v2.DEFAULT_PARAMS = {
+    "theta_pref": 0.0,
+    "baseline": 0.0,
+    "amplitude_1": 1.0,
+    "amplitude_2": 0.0,
+    "tuning_width": 1.0,
+}
+
+def param_est_v2(data):
     """
-    A parameter estimator for the double peaked neuron model. Creates a binned tuning curve from spike counts and estimates parameters using features from the tuning curve.
+    A parameter estimator for the double peaked neuron model. Creates a binned tuning
+    curve from spike counts and estimates parameters using features from the tuning curve.
     Args:
-        X (np.ndarray): Input array with shape (1, n_trials).
-                        X[0] is the stimulus angle theta in radians.
-        Y (np.ndarray): Spike counts corresponding to the angles, shape (n_trials,).
+        data (dict): Data dictionary for one sample (no sample axis).
+                     data['stimulus'] is the stimulus angle theta in radians, shape (n_trials,).
+                     data['response'] is the spike counts, shape (n_trials,).
     Returns:
-        np.ndarray: Estimated parameters [theta_pref, baseline, amplitude_1, amplitude_2, tuning_width].
+        dict: Estimated parameters with keys {"theta_pref", "baseline", "amplitude_1", "amplitude_2", "tuning_width"}.
     """
-    theta = X[0]  # Extract theta from first input
+    theta = data['stimulus']
+    Y = data['response']
     n_bins = 50
     bin_idx = ((theta * n_bins) / (2 * np.pi)).astype(np.int32)
     bin_idx = np.clip(bin_idx, 0, n_bins - 1)
@@ -260,18 +289,32 @@ def param_est_v2(X, Y):
     above_half_max = tuning_curve[indices] >= half_max
     full_width_half_max = 2 * np.pi * np.sum(above_half_max) / n_bins
     tuning_width = full_width_half_max / (2.0 * np.sqrt(2 * np.log(2)))
-    return np.array([theta_pref, baseline, amplitude_1, amplitude_2, tuning_width])
+    return {
+        "theta_pref": float(theta_pref),
+        "baseline": float(baseline),
+        "amplitude_1": float(amplitude_1),
+        "amplitude_2": float(amplitude_2),
+        "tuning_width": float(tuning_width),
+    }
 
 
 # ========================
 # 3. LOSS
 # ========================
 
-def loss_fn(Y_pred, Y_true):
+def loss_fn(model_output, data):
     """
     Elementwise squared-error loss.
+
+    Parameters
+    ----------
+    model_output : np.ndarray
+        Predicted values from the model, shape (n_trials,).
+    data : dict
+        Data dictionary; the comparison target is data['response'].
     """
-    return 10 * (Y_true - Y_pred) ** 2
+    Y_true = data['response']
+    return 10 * (Y_true - model_output) ** 2
 
 
 # ========================
@@ -279,8 +322,7 @@ def loss_fn(Y_pred, Y_true):
 # ========================
 
 def plot_model_fits(
-    X,
-    Y,
+    data,
     programs_list,
     X_eval,
     save_path="",
@@ -291,28 +333,26 @@ def plot_model_fits(
 
     Parameters
     ----------
-    X : array-like or Inputs
-        Input tensor with shape (n_samples, n_features, n_trials).
-    Y : array-like or Outputs
-        Output tensor with shape (n_samples, 1, n_trials).
+    data : dict[str, np.ndarray]
+        Data dictionary with keys 'stimulus' and 'response', each of shape
+        (n_samples, n_trials).
     programs_list : list[dict]
         List of dictionaries with model metadata. Expected keys include:
-        - 'model': callable model(X_one, *params)
-        - 'params': array of shape (n_samples, n_params)
+        - 'model': callable model(data_one, params)
+        - 'params': batched parameter pytree
         - 'losses': array of shape (n_samples,)
-    X_eval : array-like or Inputs
-        Evaluation grid with shape (n_samples, n_features, n_eval_trials).
+    X_eval : dict[str, np.ndarray]
+        Evaluation grid dictionary with key 'stimulus' of shape
+        (n_samples, n_eval_trials).
     save_path : str
         Output path. If empty, raises an error.
     """
     if save_path == "":
         raise ValueError("Please provide a save path for the plot")
-    x_eval_fine = np.linspace(0, 2 * np.pi, 200)
 
-    x_arr = _to_array3d(X)
-    y_arr = _to_array3d(Y)
-    x_eval_arr = _to_array3d(X_eval)
-    n_samples = x_arr.shape[0]
+    stimulus = data['stimulus']    # (n_samples, n_trials)
+    response = data['response']    # (n_samples, n_trials)
+    n_samples = stimulus.shape[0]
     # diff colours for 1, 2 or 3 models
     if len(programs_list) == 1:
         colours = ["tab:red"]
@@ -326,6 +366,11 @@ def plot_model_fits(
     # Intentionally unseeded so diagnostic samples vary across calls/runs.
     idx = np.random.default_rng().choice(n_samples, size=n_show, replace=False)
 
+    params_by_model = [
+        utils.broadcast_params(program["params"], n_samples)
+        for program in programs_list
+    ]
+
     fig, axes = plt.subplots(3, 3, figsize=(18, 18))
     axes = axes.reshape(3, 3)
 
@@ -336,9 +381,10 @@ def plot_model_fits(
             continue
 
         s = idx[i]
-        x = x_arr[s, 0]
-        y_obs = y_arr[s, 0]
-        x_eval = np.asarray(x_eval_arr[s, 0]).reshape(-1)
+        x = stimulus[s]
+        y_obs = response[s]
+        eval_data = utils.get_data_sample(X_eval, s)
+        x_eval = np.asarray(eval_data['stimulus']).reshape(-1)
 
         y_mean = compute_binned_means_on_eval(x, y_obs, x_eval)
         ax.scatter(x, y_obs, s=10, c="black", alpha=0.2, label="Observed")
@@ -346,13 +392,13 @@ def plot_model_fits(
 
         for j, program in enumerate(programs_list):
             model = program["model"]
-            params = program["params"][s]
+            params = utils.slice_params(params_by_model[j], s)
             loss = program["losses"][s]
-            y_pred = model(np.array([x_eval_fine]), *params)
+            y_pred = utils.call_model(model, eval_data, params)
 
             label = labels[j] + f" (loss={loss:.2f})"
             ax.plot(
-                x_eval_fine,
+                x_eval,
                 np.asarray(y_pred).flatten(),
                 color=colours[j % len(colours)],
                 linewidth=3,
@@ -379,7 +425,7 @@ def plot_model_fits(
     plt.close(fig)
 
 
-    
+
 # ========================
 # 5. OPTIONAL PROJECT-SPECIFIC HELPERS
 # ========================
@@ -413,7 +459,7 @@ def extract_stimulus_related_response(data: dict, n_pcs: int = 8, z_score: bool 
 def normalize_response(response: np.ndarray) -> np.ndarray:
     """
     Normalizes the response matrix
-    
+
     Args:
         response (np.ndarray): The neural response matrix of shape (n_cells, n_trials).
     Returns:
@@ -430,18 +476,6 @@ def target_function(x, a, b, c, k, phi_0):
     f(x) = (a*x^2 + b*x + c) * sin(k*x + phi_0)
     """
     return (a * x**2 + b * x + c) * np.sin(k * x + phi_0)
-
-
-def _to_array3d(obj) -> np.ndarray:
-    """
-    Convert Inputs/Outputs/ndarray-like objects to a 3D ndarray.
-    """
-    if hasattr(obj, "to_tensor"):
-        return np.asarray(obj.to_tensor())
-    arr = np.asarray(obj)
-    if arr.ndim == 2:
-        return arr[:, np.newaxis, :]
-    return arr
 
 
 def compute_binned_means(theta, y, n_bins=20, domain=(-1.0, 1.0)):

@@ -152,14 +152,12 @@ Examples:
         - model output: `(N, n_trials)` (or equivalent canonical outputs tensor with `n_targets=N`)
 
 Current limitation:
-- The full `hypothesis_engine` run path currently assumes scalar targets (`n_targets=1`).
-- Multi-target objective logic exists, but end-to-end evolutionary runs currently require a single target per sample.
+- Data is represented as a plain `dict[str, np.ndarray]` where all values share the same last dimension (n_trials).
 
 ```python
 import numpy as np
 import jax
 import jax.numpy as jnp
-from src.data_structures import Inputs, Outputs
 
 
 def load_and_process_data(data_path, **kwargs):
@@ -171,13 +169,11 @@ def load_and_process_data(data_path, **kwargs):
     response = data["response"]
     stimulus = data["stimulus"]
 
-    n_samples, _ = response.shape
-    inputs_arr = np.tile(stimulus.reshape(1, 1, -1), (n_samples, 1, 1))
+    n_samples, n_trials = response.shape
+    # Broadcast stimulus to (n_samples, n_trials)
+    stimulus_tiled = np.tile(stimulus.reshape(1, -1), (n_samples, 1))
 
-    inputs = Inputs.from_array(inputs_arr, names=["stimulus"])
-    outputs = Outputs.from_array(response, names=["response"])
-
-    return {"inputs": inputs, "outputs": outputs}
+    return {'stimulus': stimulus_tiled, 'response': response}
 
 
 def create_train_test_sample_split(n_samples, training_sample_ratio=0.5, random_seed=0):
@@ -246,10 +242,9 @@ experiment_params:
   FAILED_PROGRAM_COST: .inf
   exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
   exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
-  tiny_lm_name: gemini-2.0-flash-lite
-  little_lm_name: gemini-2.0-flash
-  large_lm_name: gemini-2.5-flash
-  use_large_every: 3
+  model_llm: gemini-2.5-flash
+  param_est_llm: gemini-2.0-flash
+  jax_translator_llm: gemini-2.0-flash-lite
 ```
 
 Then run:

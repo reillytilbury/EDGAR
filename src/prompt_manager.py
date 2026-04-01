@@ -2,7 +2,6 @@ import yaml
 import re
 import pandas as pd
 from pathlib import Path
-from .prompt_test import PromptValidator
 
 class PromptManager:
     def __init__(self, config_path="config.yaml", config: dict = None, validate=True):
@@ -20,6 +19,8 @@ class PromptManager:
                 self.config = yaml.safe_load(f)
         
         if validate:
+            # Lazy import avoids pulling pytest into unrelated subprocesses.
+            from .prompt_test import PromptValidator
             validator = PromptValidator(config=self.config)
             try:
                 validator.test_required_prompts_exist()
@@ -45,6 +46,8 @@ class PromptManager:
         normalized = self._normalize_template_text(template_text)
         if not normalized:
             return ""
+        if "{model_name}" in normalized and "model_name" not in kwargs:
+            kwargs["model_name"] = self.get_model_name()
         return normalized.format(**kwargs)
 
     @staticmethod
@@ -53,6 +56,13 @@ class PromptManager:
             return f"{float(train_loss):.2f}"
         except Exception:
             return str(train_loss)
+
+    @staticmethod
+    def _format_seconds(value) -> str:
+        try:
+            return f"{float(value):.2f}s"
+        except Exception:
+            return "n/a"
 
     @staticmethod
     def _normalize_model_code_for_prompt(code_string: str, model_name: str, model_idx: int) -> str:
@@ -131,7 +141,7 @@ class PromptManager:
             self._render_template(templates['base'], k=f"{k}", next_version=next_version),
             self._render_template(templates['exploit'] if mode == 'exploit' else templates['explore'], k=f"{k}", next_version=next_version),
             self._render_image_analysis(templates, "program_prompt", k, use_image),
-            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}"),
+            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}", next_version=next_version),
             self._render_template(templates['docstring_guidelines'], next_version=next_version),
             "**Parent Models:**",
         ]
@@ -140,6 +150,7 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
+            optimization_time_s = programs_df.iloc[i].get('optimization_time_s')
             program_code_string = self._normalize_model_code_for_prompt(
                 programs_df.iloc[i]['program_code_string'],
                 model_name,
@@ -149,6 +160,7 @@ class PromptManager:
                 templates['per_model_detail'],
                 model_idx=f"{model_idx}",
                 train_loss=self._format_loss(train_loss),
+                optimization_time_s=self._format_seconds(optimization_time_s),
                 program_code_string=program_code_string,
             )
             prompt += "\n\n" + per_model_prompt
@@ -174,7 +186,7 @@ class PromptManager:
         next_version = f"{k+1}"
         sections = [
             self._render_template(templates.get('generation_base', templates.get('base', '')), k=f"{k}", next_version=next_version),
-            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}"),
+            self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}", next_version=next_version),
             self._render_template(templates['docstring_guidelines'], next_version=next_version),
             "**Parent Models and Estimators:**",
         ]
@@ -183,6 +195,7 @@ class PromptManager:
         for i in range(k):
             model_idx = i + 1 
             train_loss = programs_df.iloc[i]['train_loss']
+            optimization_time_s = programs_df.iloc[i].get('optimization_time_s')
             program_code_string = self._normalize_model_code_for_prompt(
                 programs_df.iloc[i]['program_code_string'],
                 model_name,
@@ -193,13 +206,19 @@ class PromptManager:
                 templates['per_model_detail'],
                 model_idx=f"{model_idx}",
                 train_loss=self._format_loss(train_loss),
+                optimization_time_s=self._format_seconds(optimization_time_s),
                 program_code_string=program_code_string,
                 parameter_estimator_code_string=parameter_estimator_code_string,
             )
             prompt += "\n\n" + per_model_prompt
 
-        # add the model code string to the prompt
-        prompt += "\n\n**New Model:**\n\n" + model_code_string + "\n"
+        # Add versioned model code to the prompt for consistent naming cues.
+        model_code_for_prompt = self._normalize_model_code_for_prompt(
+            model_code_string,
+            model_name,
+            k + 1,
+        )
+        prompt += "\n\n**New Model:**\n\n" + model_code_for_prompt + "\n"
 
         return prompt
 
@@ -309,7 +328,12 @@ class PromptManager:
 
         # Add the new model code string
         prompt_parts.append(f"**New {model_name} to create parameter estimator for:**")
-        prompt_parts.append(model_code_string)
+        model_code_for_prompt = self._normalize_model_code_for_prompt(
+            model_code_string,
+            model_name,
+            k + 1,
+        )
+        prompt_parts.append(model_code_for_prompt)
 
         return "\n\n".join([p for p in prompt_parts if p])
 
@@ -336,7 +360,7 @@ class PromptManager:
             else:
                 image_block = "**Image analysis instructions:**\n" + image_instructions
             prompt_parts.append(image_block)
-        prompt_parts.append(self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}"))
+        prompt_parts.append(self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}", next_version="next"))
         if not model_code_string or not str(model_code_string).strip():
             raise ValueError("Refinement prompt requires current model code string.")
         prompt_parts.append("**Current model:**")
@@ -378,7 +402,7 @@ class PromptManager:
             else:
                 image_block = "**Image analysis instructions:**\n" + image_instructions
             prompt_parts.append(image_block)
-        prompt_parts.append(self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}"))
+        prompt_parts.append(self._render_template(templates['code_guidelines'], max_lines=f"{max_lines}", next_version="next"))
         if not model_code_string or not str(model_code_string).strip():
             raise ValueError("Refinement prompt requires current model code string.")
         prompt_parts.append("**Current model:**")
@@ -430,11 +454,11 @@ class PromptManager:
             program_templates['base'].format(k="N", next_version="N+1"),
             f"\n# CURRENT MODE: {mode.upper()}",
             program_templates[mode].format(k="N", next_version="N+1"),
-            self._render_template(program_templates['code_guidelines'], max_lines="100"),
+            self._render_template(program_templates['code_guidelines'], max_lines="100", next_version="N+1"),
             program_templates['docstring_guidelines'].format(next_version="N+1"),
             "\n# PARAMETER ESTIMATOR GUIDELINES",
             param_est_templates['base'].format(k="N", next_version="N+1"),
-            self._render_template(param_est_templates['code_guidelines'], max_lines="100"),
+            self._render_template(param_est_templates['code_guidelines'], max_lines="100", next_version="N+1"),
             param_est_templates['docstring_guidelines'].format(next_version="N+1"),
         ]
         

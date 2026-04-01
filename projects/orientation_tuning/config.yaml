@@ -9,11 +9,12 @@ task: orientation_tuning
 # ========================
 # Data Defaults
 # ========================
+zscore_skip_keys : ['stimulus', 'response'] # Do not z-score along response to reproduce the initial setup 
 
 # Data-processing overrides for this task.
 data_processing_params:
-  # data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
-  data_path: /home/reilly/datasets/stringer_2021/gratings_drifting_GT1_2019_04_12_1.npy
+  data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
+  # data_path: /home/reilly/datasets/stringer_2021/gratings_drifting_GT1_2019_04_12_1.npy
   activity_threshold: 0.4
   conc_threshold: 0.55
 
@@ -28,10 +29,12 @@ inputs:
 # ========================
 
 experiment_params:
+  eval_keys: ['stimulus']
   x_min: 0.0
   x_max: 6.283185307179586
   n_bins: 40
-  # param_estimator_refinement_rounds : 0
+  param_estimator_refinement_rounds: 0
+
 
 # ========================
 # Prompt Defaults
@@ -101,6 +104,8 @@ prompts:
 
       * Do NOT include any text other than the code.
 
+      * Model signature must be `def model(data, params):` where `data` is a dict that contains only two keys "stimulus" and "response" and `params` is a dict of named arrays/scalars.
+
       * Ensure all free parameters are numeric, not strings.
 
       * At the beginning of the code, clip the free parameters to a biologically plausible
@@ -131,7 +136,9 @@ prompts:
       \ be estimated directly, using statistical principles and knowledge of what\
       \ the parameters represent biologically. \n*Analyze* the progression of the\
       \ parameter estimators, *generalize* the improvements, and *create* a new parameter\
-      \ estimator that is better than *all* previous estimators.\n"
+      \ estimator that is better than *all* previous estimators.\
+      \ parameter_estimator function must have signature `def parameter_estimator(data):`\
+      \ where data only contains the two keys 'stimulus' and 'response'.\n"
     refinement_image_instructions: |
       Image instructions:
       - Compare predicted tuning curves to binned means across multiple cells.
@@ -140,7 +147,7 @@ prompts:
       - Base changes on repeated patterns, not single-cell outliers.
     
     code_guidelines: "**Code Generation Guidelines:**\n* Import any packages you use.\n\
-      * Do not include any text other than the code.\n* The only arguments to the\
+      * Do not include any text other than the code.\n* Return a parameter dict with the same keys expected by the model.\n* The only arguments to the\
       \ function should be the inputs (X) and the spike count.\n* Your response **must**\
       \ be less than {max_lines} lines (including imports). If it is longer, it will\
       \ be immediately rejected. \n* Do not attempt to fit the parameters using complex\
@@ -175,5 +182,5 @@ prompts:
     \ Do not use dynamic array shapes or indexing with non-constant indices\n  * Use\
     \ `jnp.clip()` instead of boolean masking for bounds\n  \n  Do not include any\
     \ text other than the code. \n  Update the function name to be the original name\
-    \ without \"_v*\". For example, `def neuron_model_v1(X, param1=0.5):` should become\
-    \ `def neuron_model(X, param1=0.5):`.\n  Here is the code to translate:\n  {function_code}\n"
+    \ without \"_v*\". For example, `def neuron_model_v1(data, param1=0.5):` should become\
+    \ `def neuron_model(data, param1=0.5):`.\n  Here is the code to translate:\n  {function_code}\n"

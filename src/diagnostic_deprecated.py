@@ -3,8 +3,10 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # Set non-GUI backend before importing pyplot
 import matplotlib.pyplot as plt
+import jax
 import jax.numpy as jnp
 from typing import Optional, Callable, Sequence
+from . import utils
 
 
 def _ensure_input_format(x_cell: jnp.ndarray) -> jnp.ndarray:
@@ -35,9 +37,9 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
         programs_df:
             - must have columns 'program' and 'params'. 
             - must have n_rows <= 3
-            - 'program': callable (written in JAX): (X: jnp.ndarray, *params) -> jnp.ndarray
+            - 'program': callable (written in JAX): (X: jnp.ndarray, params) -> jnp.ndarray
                          where X has shape (n_features, n_trials)
-            - 'params': jnp.ndarray (n_cells, n_params)
+            - 'params': pytree with leading sample axis for each leaf
         loss_function: 
             - callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
         x: Input data. Can be:
@@ -74,7 +76,10 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     models = programs_df['program'].tolist()
     params = programs_df['params'].tolist()
     cell_idx = jnp.array(cell_selection)
-    params = [p[cell_idx] for p in params]
+    params = [
+        jax.tree_util.tree_map(lambda x: x[cell_idx], utils.broadcast_params(p, x_arr.shape[0]))
+        for p in params
+    ]
     spike_matrix = y[cell_idx]
     
     # Handle both 2D (n_cells, n_trials) and 3D (n_cells, n_features, n_trials) input
@@ -102,9 +107,9 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     point_losses = jnp.zeros((n_models, n_cells, n_trials))
     for i, model in enumerate(models):
         for c in range(n_cells):
-            params_ic = params[i][c]
+            params_ic = utils.slice_params(params[i], c)
             X_cell = stimuli_3d[c]  # (n_features, n_trials)
-            predicted_response = model(X_cell, *params_ic)
+            predicted_response = model(X_cell, params_ic)
             point_losses = point_losses.at[i, c].set(loss_function(predicted_response, spike_matrix[c]))
     
     # compute running mean (using first input for binning)
@@ -122,8 +127,8 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     model_outputs = jnp.zeros((n_models, n_cells, n_eval))
     for i, model in enumerate(models):
         for c in range(n_cells):
-            params_ic = params[i][c]
-            model_outputs = model_outputs.at[i, c].set(model(X_eval, *params_ic))
+            params_ic = utils.slice_params(params[i], c)
+            model_outputs = model_outputs.at[i, c].set(model(X_eval, params_ic))
 
     for c in range(n_cells):
         row, col = divmod(c, n_row_cols)
@@ -159,7 +164,7 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
     plt.close(fig)
     
 def plot_single_model_fit(model: Callable, loss_function: Callable, 
-                          x: jnp.ndarray, y: jnp.ndarray, params: jnp.ndarray, 
+                          x: jnp.ndarray, y: jnp.ndarray, params, 
                           n_eval: int = 100, n_mean: int = 50,
                           dpi: float = 100.0, title: str = '', 
                           save_path: Optional[str] = None,
@@ -167,14 +172,14 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
     """
     Plots the fit of a single model to a selection of cells in x and y, along with the running mean.
     Args:
-        model: callable (written in JAX): (X: jnp.ndarray, *params) -> jnp.ndarray
+        model: callable (written in JAX): (X: jnp.ndarray, params) -> jnp.ndarray
                where X has shape (n_features, n_trials)
         loss_function: callable (written in JAX): (y_est: jnp.ndarray, y_true: jnp.ndarray) -> jnp.ndarray
         x: Input data. Can be:
            - 2D array (n_cells, n_trials) - will use as single input
            - 3D array (n_cells, n_features, n_trials)
         y: (n_cells x n_trials) - jnp.ndarray
-        params: (n_cells x n_params) - jnp.ndarray
+        params: params pytree with leading sample axis for each leaf
         input_idx (int): Index of the input to use for plotting (x-axis). Default is 0.
                              Must be 0 if x is 2D.
     
@@ -212,11 +217,12 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
     n_cells, n_features, n_trials = x_3d.shape
 
     # Calculate loss for each cell and trial
+    params_batched = utils.broadcast_params(params, n_cells)
     point_losses = jnp.zeros((n_cells, n_trials))
     for c in range(n_cells):
-        params_c = params[c]
+        params_c = utils.slice_params(params_batched, c)
         X_cell = x_3d[c]  # (n_features, n_trials)
-        predicted_response = model(X_cell, *params_c)
+        predicted_response = model(X_cell, params_c)
         point_losses = point_losses.at[c].set(loss_function(predicted_response, y[c]))
 
     # compute running mean (using first input for binning)
@@ -233,8 +239,8 @@ def plot_single_model_fit(model: Callable, loss_function: Callable,
     X_eval = x_values_eval.reshape(1, -1)  # (1, n_eval) - single input format
     model_output = jnp.zeros((n_cells, n_eval))
     for c in range(n_cells):
-        params_c = params[c]
-        model_output = model_output.at[c].set(model(X_eval, *params_c))
+        params_c = utils.slice_params(params_batched, c)
+        model_output = model_output.at[c].set(model(X_eval, params_c))
 
     n_row_cols = int(np.sqrt(n_cells))
     fig, ax = plt.subplots(n_row_cols, n_row_cols, figsize=(20, 20))

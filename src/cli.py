@@ -33,22 +33,23 @@ SPEC_TEMPLATE = dedent(
     NECESSARY COMPONENTS:
 
     Loading:
-    - load_and_process_data(data_path, *preprocess_params) -> [X, Y]
+    - load_and_process_data(data_path, *preprocess_params) -> dict[str, np.ndarray]
     - train_test_split(X) -> [train_samples, train_trials]
 
     Seed Programs:
-    - model_v1(X, *params) and param_est_v1(X, Y)
-    - model_v2(X, *params) and param_est_v2(X, Y)
+    - model_v1(data, params) and param_est_v1(data)
+    - model_v2(data, params) and param_est_v2(data)
+    - data is a dict of named arrays (e.g. data['stimulus'], data['response'])
+    - params is a dict of named arrays/scalars
 
     LOSS FUNCTION:
-    - loss_fn(Y_pred, Y_true) -> loss values
+    - loss_fn(model_output, data) -> loss values
 
     OPTIONAL COMPONENTS:
-    - plot_model_fits(X, Y, model_list, params_list)
+    - plot_model_fits(data, programs_list, X_eval, save_path, labels)
     """
     import numpy as np
-    from typing import Tuple
-    from src.data_structures import Inputs, Outputs
+    from typing import Tuple, Dict
 
 
     # ========================
@@ -59,15 +60,16 @@ SPEC_TEMPLATE = dedent(
         data_path: str,
         # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
         random_seed: int = 42,
-    ) -> Tuple[Inputs, Outputs]:
+    ) -> Dict[str, np.ndarray]:
         """
-        Load and preprocess data and return canonical Inputs/Outputs.
+        Load and preprocess data. Return a dict of arrays sharing the same
+        last dimension (n_trials).
         """
         raise NotImplementedError
 
 
     def train_test_split(
-        X: Inputs,
+        X: Dict[str, np.ndarray],
         # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
         random_seed: int,
     ) -> Tuple[np.ndarray, np.ndarray]:
@@ -81,19 +83,19 @@ SPEC_TEMPLATE = dedent(
     # 2. SEED MODELS
     # ========================
 
-    def model_v1(X):
+    def model_v1(data, params):
         raise NotImplementedError
 
 
-    def param_est_v1(X, Y):
+    def param_est_v1(data):
         raise NotImplementedError
 
 
-    def model_v2(X):
+    def model_v2(data, params):
         raise NotImplementedError
 
 
-    def param_est_v2(X, Y):
+    def param_est_v2(data):
         raise NotImplementedError
 
 
@@ -101,7 +103,7 @@ SPEC_TEMPLATE = dedent(
     # 3. LOSS
     # ========================
 
-    def loss_fn(Y_pred, Y_true):
+    def loss_fn(model_output, data):
         raise NotImplementedError
 
 
@@ -109,7 +111,7 @@ SPEC_TEMPLATE = dedent(
     # 4. DIAGNOSTICS
     # ========================
 
-    def plot_model_fits(X, Y, programs_list, save_path=""):
+    def plot_model_fits(data, programs_list, X_eval, save_path="", labels=None):
         raise NotImplementedError
 
 
