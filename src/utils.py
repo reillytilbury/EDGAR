@@ -39,9 +39,11 @@ def data_n_trials(X: Dict[str, np.ndarray]) -> int:
 
 
 def data_n_samples(X: Dict[str, np.ndarray]) -> int:
-    """Return the first dimension (n_samples) of the data dict."""
-    first_arr = next(iter(X.values()))
-    return int(first_arr.shape[0])
+    """Return the first dimension (n_samples) of the data dict. If the element has only 1 dimension, interrogate the next element in the dictionary"""        
+    for key, arr in X.items():
+        if arr.ndim >= 2:
+            return int(arr.shape[0])
+    raise ValueError("All arrays in data dict have less than 2 dimensions; cannot determine n_samples.")
 
 
 def slice_data_samples(X: Dict[str, np.ndarray], indices) -> Dict[str, np.ndarray]:
@@ -62,6 +64,18 @@ def slice_data(X: Dict[str, np.ndarray], sample_indices, trial_indices) -> Dict[
 def get_data_sample(X: Dict[str, np.ndarray], idx: int) -> Dict[str, np.ndarray]:
     """Extract a single sample from the data dict, removing the sample axis."""
     return {k: v[idx] for k, v in X.items()}
+
+
+def get_data_sample_with_trial_slice(X: Dict[str, np.ndarray], sample_idx: int, trial_indices) -> Dict[str, np.ndarray]:
+    """Extract a single sample from the data dict, removing the sample axis, and slicing the trial axis."""
+    out = {}
+    for k, v in X.items():
+        if v.ndim < 2:
+            # just apply the trial slice 
+            out[k] = v[trial_indices]
+        else:
+            out[k] = v[sample_idx][..., trial_indices]
+    return out
 
 
 def data_as_jax(X: Dict[str, np.ndarray]) -> Dict[str, jnp.ndarray]:

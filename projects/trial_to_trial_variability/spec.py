@@ -13,16 +13,15 @@ Seed Programs:
 - params is a dict of named arrays/scalars (same keys for model + estimator)
 
 LOSS FUNCTION:
-- loss_fn(Y_pred, Y_true) -> loss values
+- loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(X, Y, model_list, params_list)
+- plot_model_fits(data, model_list, params_list)
 """
 import numpy as np
 import scipy
-from typing import Tuple
-from src.data_structures import Inputs, Outputs
-
+from typing import Tuple, Dict
+import src.utils as utils
 
 # ========================
 # 1. DATA
@@ -42,10 +41,9 @@ def load_and_process_data_jacob(
     random_seed: int = 42,
     train_to_test_split_ratio: float = 0.5,
     conc_threshold: float = 0.55,
-) -> Tuple[Inputs, Outputs]:
+) -> Dict[str, np.ndarray]:
     """
     Load and preprocess neural data and return data in the form of 
-    Inputs and Outputs objects. 
     
     Parameters
     ----------
@@ -170,10 +168,9 @@ def load_and_process_data(
     random_seed: int = 42,
     train_to_test_split_ratio: float = 0.5,
     conc_threshold: float = 0.55,
-    ) -> Tuple[Inputs, Outputs]:
+    ) -> Dict[str, np.ndarray]:
     """
-    Load and preprocess neural data and return data in the form of 
-    Inputs and Outputs objects. 
+    Load and preprocess neural data and return data in the form of a dictionary
     
     Parameters
     ----------
@@ -307,7 +304,7 @@ def model_v1(X, params):
     target_coupling_factor = params['target_coupling_factor'] # shape (n_target_cells,)    
 
     source_stimuli = jnp.tile(stimuli[None, :], (source_tuning_params.shape[0], 1)) # shape (n_source, n_time)
-    g_source = jax.vmap(lambda stim, params: neuron_model(stim, *params), in_axes=(0, 0))(source_stimuli, source_tuning_params) # shape (n_source, n_time)
+    g_source = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(source_stimuli, source_tuning_params) # shape (n_source, n_time)
 
     eps = 1e-8
     multiplicative_gain = jnp.sum(g_source * source_response, axis=0) / (jnp.sum(g_source**2, axis=0) + eps) # shape (n_time,)
@@ -317,21 +314,21 @@ def model_v1(X, params):
     additive_offset = jnp.sum(source_residual * source_coupling_factor[None, :], axis=1) / (jnp.sum(source_coupling_factor**2) + eps) # shape (n_time,)
 
     target_stimuli = jnp.tile(stimuli[None, :], (target_tuning_params.shape[0], 1)) # shape (n_target, n_time)
-    g_target = jax.vmap(lambda stim, params: neuron_model(stim, *params), in_axes=(0, 0))(target_stimuli, target_tuning_params).T # shape (n_time, n_target)
+    g_target = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(target_stimuli, target_tuning_params).T # shape (n_time, n_target)
     pred = multiplicative_gain[:, None] * g_target + additive_offset[:, None] * target_coupling_factor[None, :]
     # clip to non-negative firing rates
     pred = jnp.clip(pred, a_min=0.0)
     return pred.T
 
-def param_est_v1(X, Y):
+def param_est_v1(data):
     """ Parameter estimator for model_v1. This function estimates params and from the data.
     Tuning_params : contain per cell level parameters for both source and target cells that are independent of trials
 
     Args :
-        X (jnp.ndarray) : Input array of Training responses of source cells with shape (n_source_cells + 1 , n_time), including an angle feature. You can get the neural responses only by removing the 'stimulus' feature from X.
-        Y (jnp.ndarray) : Output array of Training responses of target cells with shape (n_target_cells + 1, n_time), including an angle feature. You can get the neural responses only by removing the 'stimulus' target from Y.
-        neuron_model (function) : Tuning function to fit for each cell. Should take in stimulus and cell-specific parameters and output predicted response.
-        parameter_estimator_jax (function) : Function to estimate tuning parameters for each cell given the stimulus and responses. Should return parameters in the correct order for the neuron_model. Should be JAX-compatible for use in gradient-based optimization.
+        data (dict) : Dictionary containing input and output arrays. Keys:
+            - 'stimulus' : shape (n_time,)
+            - 'source' : shape (n_source_cells, n_time)
+            - 'target' : shape (n_target_cells, n_time)
     
     Returns :
         params (dict) : Estimated tuning parameters for target cells. Keys:
@@ -341,9 +338,9 @@ def param_est_v1(X, Y):
             - target_cell_coupling_factor : shape (n_target_cells,)
     """
     # first sort the response of x and y by the stimulus angles 
-    stims = X['stimulus'][0] # shape (n_time,)
-    x = jnp.array(X.remove_feature('stimulus')) # shape (n_source, n_time)
-    y = jnp.array(Y.remove_target('stimulus')) # shape (n_target, n_time)
+    stims = data['stimulus'] # shape (n_time,)
+    x = jnp.array(data['source']) # shape (n_source, n_time)
+    y = jnp.array(data['target']) # shape (n_target, n_time)
 
     stims_idx = jnp.argsort(stims)
     stims = stims[stims_idx]
@@ -365,6 +362,89 @@ def param_est_v1(X, Y):
     y_binned_counts = jnp.zeros(n_bins).at[bin_idx].add(1.0)
     y_binned_spike_rate = jnp.zeros_like(y_binned_spike_counts).at[:, :].set(jnp.where(y_binned_counts > 0, y_binned_spike_counts / y_binned_counts, 0.0))
 
+    def single_cell_tuning_function(theta,
+                    theta_pref_1=0.0,
+                    baseline=0.0,
+                    amplitude_1=1.0,
+                    width_ccw_1=1.0,
+                    width_cw_1=1.0,
+                    exponent_1=2.0,
+                    theta_pref_2=jnp.pi,
+                    amplitude_2=0.0,
+                    width_ccw_2=1.0,
+                    width_cw_2=1.0,
+                    exponent_2=2.0):
+
+        min_width = 5e-2
+        eps = 1e-12
+        min_exponent, max_exponent = 0.1, 5.0
+        width_ccw_1, width_cw_1 = jnp.clip(width_ccw_1, min_width, None), jnp.clip(width_cw_1, min_width, None)
+        width_ccw_2, width_cw_2 = jnp.clip(width_ccw_2, min_width, None), jnp.clip(width_cw_2, min_width, None)
+        exponent_1, exponent_2 = jnp.clip(exponent_1, min_exponent, max_exponent), jnp.clip(exponent_2, min_exponent, max_exponent)
+        baseline = jnp.clip(baseline, 0.0, None)
+        amplitude_1, amplitude_2 = jnp.clip(amplitude_1, 0.0, None), jnp.clip(amplitude_2, 0.0, None)
+
+        def _signed_circ_diff_rad(angle_radians, preferred_angle_radians):
+            delta = angle_radians - preferred_angle_radians
+            return jnp.arctan2(jnp.sin(delta), jnp.cos(delta))
+            
+        signed_diff_1 = _signed_circ_diff_rad(theta, theta_pref_1) + eps  # Add small epsilon to avoid log(0) issues
+        width_1_effective = jnp.where(signed_diff_1 < 0, width_ccw_1, width_cw_1)
+        width_1_effective = jnp.maximum(width_1_effective, 1e-6)
+        peak1_component = amplitude_1 * jnp.exp(-0.5 * (jnp.abs(signed_diff_1) / width_1_effective) ** exponent_1)
+
+        signed_diff_2 = _signed_circ_diff_rad(theta, theta_pref_2) + eps  # Add small epsilon to avoid log(0) issues
+        width_2_effective = jnp.where(signed_diff_2 < 0, width_ccw_2, width_cw_2)
+        width_2_effective = jnp.maximum(width_2_effective, 1e-6)
+        peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
+        return baseline + peak1_component + peak2_component
+
+    def parameter_estimator_jax(theta, spike_counts):
+        n_bins = 75
+
+        # Bin angles into [0, n_bins-1]
+        bin_idx = ((theta * n_bins) / (2 * jnp.pi)).astype(jnp.int32)
+        bin_idx = jnp.clip(bin_idx, 0, n_bins - 1)
+
+        # Weighted and unweighted bin counts
+        sums = jnp.bincount(bin_idx, weights=spike_counts, length=n_bins)
+        counts = jnp.bincount(bin_idx, length=n_bins)
+
+        # Gaussian smoothing kernel
+        k = jnp.exp(-0.5 * (jnp.arange(-5, 6) ** 2))
+        k = k / jnp.sum(k)
+
+        # Circular padding
+        sums_padded = jnp.pad(sums, (5, 5), mode="wrap")
+        counts_padded = jnp.pad(counts, (5, 5), mode="wrap")
+
+        # Smoothed tuning curve
+        smoothed_sums = jnp.convolve(sums_padded, k, mode="valid")
+        smoothed_counts = jnp.convolve(counts_padded, k, mode="valid")
+        tuning_curve = smoothed_sums / (smoothed_counts + 1e-8)
+
+        baseline = jnp.min(tuning_curve)
+
+        peak_1_idx = jnp.argmax(tuning_curve)
+        theta_pref = peak_1_idx * (2 * jnp.pi / n_bins)
+
+        amplitude_1 = tuning_curve[peak_1_idx] - baseline
+
+        anti_pref_idx = (peak_1_idx + n_bins // 2) % n_bins
+        amplitude_2 = jnp.maximum(0.0, tuning_curve[anti_pref_idx] - baseline)
+
+        theta_pref_2_est = anti_pref_idx * (2 * jnp.pi / n_bins)
+        angle_offset_2 = theta_pref_2_est - ((theta_pref + jnp.pi) % (2 * jnp.pi))
+
+        tuning_width_1_left = jnp.pi / 8
+        tuning_width_1_right = jnp.pi / 8
+        tuning_width_2_left = jnp.pi / 8
+        tuning_width_2_right = jnp.pi / 8
+        exponent_1 = 2.0
+        exponent_2 = 2.0
+
+        return jnp.array([theta_pref, baseline, amplitude_1, amplitude_2, tuning_width_1_left, tuning_width_1_right, tuning_width_2_left, tuning_width_2_right, exponent_1, exponent_2, angle_offset_2,])
+
     # Step 1 : For every source cell, fit a peaky tuning curve 
     source_params_init = jax.vmap(parameter_estimator_jax, in_axes=(None, 0))(bin_centers, x_binned_spike_rate) # shape (n_source, n_params)
     # use gradient descent to optimise the tuning parameters 
@@ -375,7 +455,7 @@ def param_est_v1(X, Y):
 
     # Step 2 : Fit the gain factor using leastsq 
     source_stimuli = jnp.tile(stims[None, :], (source_tuning_params.shape[0], 1)) # shape (n_source, n_time)
-    g_source = jax.vmap(lambda stim, params: neuron_model(stim, *params), in_axes=(0, 0))(source_stimuli, source_tuning_params) # shape (n_source, n_time)
+    g_source = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(source_stimuli, source_tuning_params) # shape (n_source, n_time)
 
     n_source, n_t = g_source.shape
 
@@ -391,7 +471,7 @@ def param_est_v1(X, Y):
     # Step 4 : Fit the target cell coupling factor using the multiplicative_gain and additive offset
     n_target = target_tuning_params.shape[0]
     target_stims = jnp.tile(stims[None, :], (n_target, 1)) # shape (n_target, n_time)
-    g_target = jax.vmap(lambda stim, params: neuron_model(stim, *params), in_axes=(0, 0))(target_stims, target_tuning_params) # shape (n_target, n_time)
+    g_target = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(target_stims, target_tuning_params) # shape (n_target, n_time)
 
     multiplicative_only_pred = multiplicative_gain[:, None] * g_target.T # shape (n_time, n_target)
     residual_target = y.T - multiplicative_only_pred # shape (n_time, n_target
@@ -423,35 +503,34 @@ def model_v2(X, params):
         jnp.ndarray : Predicted responses for the target cells with shape (n_target_cells, n_time)
     """
     stimuli = jnp.array(X['stimulus']) # shape (n_time)
-    source_response = jnp.array(X.remove_feature('stimulus')) # shape (n_source, n_time)
+    source_response = jnp.array(X['source']) # shape (n_source, n_time)
 
     source_tuning_params = params['source_tuning_params'] # shape (n_source_cells, n_params)
     target_tuning_params = params['target_tuning_params'] # shape (n_target_cells, n_params)
     coupling_factor = params['target_coupling_factor'] # shape (n_target_cells, n_source_cells)    
 
     source_stimuli = jnp.tile(stimuli[None, :], (source_tuning_params.shape[0], 1)) # shape (n_source, n_time)
-    g_source = jax.vmap(lambda stim, params: neuron_model(stim, *params), in_axes=(0, 0))(source_stimuli, source_tuning_params) # shape (n_source, n_time)
+    g_source = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(source_stimuli, source_tuning_params) # shape (n_source, n_time)
 
     eps = 1e-8
     multiplicative_gain = jnp.sum(g_source * source_response, axis=0) / (jnp.sum(g_source**2, axis=0) + eps) # shape (n_time,)
 
     target_stimuli = jnp.tile(stimuli[None, :], (target_tuning_params.shape[0], 1)) # shape (n_target, n_time)
-    g_target = jax.vmap(lambda stim, params: neuron_model(stim, *params), in_axes=(0, 0))(target_stimuli, target_tuning_params).T # shape (n_time, n_target)
+    g_target = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(target_stimuli, target_tuning_params).T # shape (n_time, n_target)
     pred = multiplicative_gain[:, None] * g_target + (coupling_factor @ source_response).T # shape (n_time, n_target)
     # clip to non-negative firing rates
     pred = jnp.clip(pred, a_min=0.0)
     return pred.T
 
-def param_est_v2(X, Y):
+def param_est_v2(data):
     """ Parameter estimator for model_v1. This function estimates params and from the data.
     Tuning_params : contain per cell level parameters for both source and target cells that are independent of trials
 
     Args :
-        stims (jnp.ndarray) : Stimulus angles with shape (n_time,)
-        x (jnp.ndarray) : Training responses of source cells with shape (n_source_cells, n_time)
-        y (jnp.ndarray) : Training responses of target cells with shape (n_target_cells, n_time)
-        neuron_model (function) : Tuning function to fit for each cell. Should take in stimulus and cell-specific parameters and output predicted response.
-        parameter_estimator_jax (function) : Function to estimate tuning parameters for each cell given the stimulus and responses. Should return parameters in the correct order for the neuron_model. Should be JAX-compatible for use in gradient-based optimization.
+        data (dict) : Dictionary containing input and output arrays. Keys:
+            - 'stimulus' : shape (n_time,)
+            - 'source' : shape (n_source_cells, n_time)
+            - 'target' : shape (n_target_cells, n_time)
     
     Returns :
         params (dict) : Estimated tuning parameters for target cells. Keys:
@@ -460,9 +539,9 @@ def param_est_v2(X, Y):
             - coupling_factor : shape (n_target_cells, n_source_cells)
     """
     # first sort the response of x and y by the stimulus angles 
-    stims = X['stimulus'][0] # shape (n_time,)
-    x = jnp.array(X.remove_feature('stimulus')) # shape (n_source, n_time)
-    y = jnp.array(Y.remove_target('stimulus')) # shape (n_target, n_time)
+    stims = data['stimulus'] # shape (n_time,)
+    x = jnp.array(data['source']) # shape (n_source, n_time)
+    y = jnp.array(data['target']) # shape (n_target, n_time)
 
     stims_idx = jnp.argsort(stims)
     stims = stims[stims_idx]
@@ -484,6 +563,89 @@ def param_est_v2(X, Y):
     y_binned_counts = jnp.zeros(n_bins).at[bin_idx].add(1.0)
     y_binned_spike_rate = jnp.zeros_like(y_binned_spike_counts).at[:, :].set(jnp.where(y_binned_counts > 0, y_binned_spike_counts / y_binned_counts, 0.0))
 
+    def single_cell_tuning_function(theta,
+                    theta_pref_1=0.0,
+                    baseline=0.0,
+                    amplitude_1=1.0,
+                    width_ccw_1=1.0,
+                    width_cw_1=1.0,
+                    exponent_1=2.0,
+                    theta_pref_2=jnp.pi,
+                    amplitude_2=0.0,
+                    width_ccw_2=1.0,
+                    width_cw_2=1.0,
+                    exponent_2=2.0):
+
+        min_width = 5e-2
+        eps = 1e-12
+        min_exponent, max_exponent = 0.1, 5.0
+        width_ccw_1, width_cw_1 = jnp.clip(width_ccw_1, min_width, None), jnp.clip(width_cw_1, min_width, None)
+        width_ccw_2, width_cw_2 = jnp.clip(width_ccw_2, min_width, None), jnp.clip(width_cw_2, min_width, None)
+        exponent_1, exponent_2 = jnp.clip(exponent_1, min_exponent, max_exponent), jnp.clip(exponent_2, min_exponent, max_exponent)
+        baseline = jnp.clip(baseline, 0.0, None)
+        amplitude_1, amplitude_2 = jnp.clip(amplitude_1, 0.0, None), jnp.clip(amplitude_2, 0.0, None)
+
+        def _signed_circ_diff_rad(angle_radians, preferred_angle_radians):
+            delta = angle_radians - preferred_angle_radians
+            return jnp.arctan2(jnp.sin(delta), jnp.cos(delta))
+            
+        signed_diff_1 = _signed_circ_diff_rad(theta, theta_pref_1) + eps  # Add small epsilon to avoid log(0) issues
+        width_1_effective = jnp.where(signed_diff_1 < 0, width_ccw_1, width_cw_1)
+        width_1_effective = jnp.maximum(width_1_effective, 1e-6)
+        peak1_component = amplitude_1 * jnp.exp(-0.5 * (jnp.abs(signed_diff_1) / width_1_effective) ** exponent_1)
+
+        signed_diff_2 = _signed_circ_diff_rad(theta, theta_pref_2) + eps  # Add small epsilon to avoid log(0) issues
+        width_2_effective = jnp.where(signed_diff_2 < 0, width_ccw_2, width_cw_2)
+        width_2_effective = jnp.maximum(width_2_effective, 1e-6)
+        peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
+        return baseline + peak1_component + peak2_component
+
+    def parameter_estimator_jax(theta, spike_counts):
+        n_bins = 75
+
+        # Bin angles into [0, n_bins-1]
+        bin_idx = ((theta * n_bins) / (2 * jnp.pi)).astype(jnp.int32)
+        bin_idx = jnp.clip(bin_idx, 0, n_bins - 1)
+
+        # Weighted and unweighted bin counts
+        sums = jnp.bincount(bin_idx, weights=spike_counts, length=n_bins)
+        counts = jnp.bincount(bin_idx, length=n_bins)
+
+        # Gaussian smoothing kernel
+        k = jnp.exp(-0.5 * (jnp.arange(-5, 6) ** 2))
+        k = k / jnp.sum(k)
+
+        # Circular padding
+        sums_padded = jnp.pad(sums, (5, 5), mode="wrap")
+        counts_padded = jnp.pad(counts, (5, 5), mode="wrap")
+
+        # Smoothed tuning curve
+        smoothed_sums = jnp.convolve(sums_padded, k, mode="valid")
+        smoothed_counts = jnp.convolve(counts_padded, k, mode="valid")
+        tuning_curve = smoothed_sums / (smoothed_counts + 1e-8)
+
+        baseline = jnp.min(tuning_curve)
+
+        peak_1_idx = jnp.argmax(tuning_curve)
+        theta_pref = peak_1_idx * (2 * jnp.pi / n_bins)
+
+        amplitude_1 = tuning_curve[peak_1_idx] - baseline
+
+        anti_pref_idx = (peak_1_idx + n_bins // 2) % n_bins
+        amplitude_2 = jnp.maximum(0.0, tuning_curve[anti_pref_idx] - baseline)
+
+        theta_pref_2_est = anti_pref_idx * (2 * jnp.pi / n_bins)
+        angle_offset_2 = theta_pref_2_est - ((theta_pref + jnp.pi) % (2 * jnp.pi))
+
+        tuning_width_1_left = jnp.pi / 8
+        tuning_width_1_right = jnp.pi / 8
+        tuning_width_2_left = jnp.pi / 8
+        tuning_width_2_right = jnp.pi / 8
+        exponent_1 = 2.0
+        exponent_2 = 2.0
+
+        return jnp.array([theta_pref, baseline, amplitude_1, amplitude_2, tuning_width_1_left, tuning_width_1_right, tuning_width_2_left, tuning_width_2_right, exponent_1, exponent_2, angle_offset_2,])
+
     # Step 1 : For every source cell, fit a peaky tuning curve 
     source_params_init = jax.vmap(parameter_estimator_jax, in_axes=(None, 0))(bin_centers, x_binned_spike_rate) # shape (n_source, n_params)
     # use gradient descent to optimise the tuning parameters 
@@ -494,7 +656,7 @@ def param_est_v2(X, Y):
 
     # Step 2 : Fit the gain factor using leastsq 
     source_stimuli = jnp.tile(stims[None, :], (source_tuning_params.shape[0], 1)) # shape (n_source, n_time)
-    g_source = jax.vmap(lambda stim, params: neuron_model(stim, *params), in_axes=(0, 0))(source_stimuli, source_tuning_params) # shape (n_source, n_time)
+    g_source = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(source_stimuli, source_tuning_params) # shape (n_source, n_time)
 
     n_source, n_t = g_source.shape
 
