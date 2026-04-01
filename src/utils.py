@@ -190,8 +190,9 @@ def broadcast_params(params, n_samples: int):
             return arr
         if arr.shape[0] == 1:
             return jnp.broadcast_to(arr, (n_samples,) + arr.shape[1:])
+        orig_shape = arr.shape
         arr = arr[None, ...]
-        return jnp.broadcast_to(arr, (n_samples,) + arr.shape)
+        return jnp.broadcast_to(arr, (n_samples,) + orig_shape)
 
     return jax.tree_util.tree_map(_broadcast, params)
 
