@@ -30,70 +30,6 @@ from src import utils
 # 1. DATA
 # ========================
 
-def load_and_process_data(
-    data_path: str,
-    # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
-    activity_threshold: float = 0.1,
-    conc_threshold: float = 0.1,
-) -> Dict[str, np.ndarray]:
-    """
-    Load and preprocess neural data and return data as a dictionary
-    mapping descriptive key names to numpy arrays.
-
-    All arrays have shape (n_samples, ..., n_trials) with n_trials as the
-    last dimension.
-
-    Parameters
-    ----------
-    data_path : str
-        Path to the .npy file containing neural data.
-    activity_threshold : float
-        Threshold for activity to select good cells.
-    conc_threshold : float
-        Threshold for concentration to select good cells.
-
-    Returns
-    -------
-    data : dict[str, np.ndarray]
-        Dictionary with keys:
-        - 'stimulus': np.ndarray of shape (n_samples, n_trials), stimulus angles.
-        - 'response': np.ndarray of shape (n_samples, n_trials), neural responses.
-    """
-    # load and preprocess data
-    neural_data = np.load(data_path, allow_pickle=True)
-    neural_data = neural_data.item()
-    # Use passed data extraction function or fall back to default
-    response = extract_stimulus_related_response(neural_data, n_pcs=0)
-
-    angles = neural_data['istim']
-    n_trials = response.shape[1]
-    n_trials_small = int(n_trials * activity_threshold)
-
-    # filter
-    active = (response > 0).astype(np.float32)
-    firing_probs = np.mean(active, axis=1)
-    conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
-    good_cells = np.where((firing_probs > activity_threshold) & (conc > conc_threshold))[0]
-    n_good_cells = len(good_cells)
-
-    # update angles and response to be (n_cells_small, n_trials_small)
-    response_cropped, angles_cropped = np.zeros((n_good_cells, n_trials_small)), np.zeros((n_good_cells, n_trials_small))
-    for i, cell in enumerate(good_cells):
-        active_trials = response[cell] > 0
-        active_trials_idx = np.where(active_trials)[0][:n_trials_small]
-        response_cropped[i] = response[cell, active_trials_idx]
-        angles_cropped[i] = angles[active_trials_idx]
-
-    response_cropped = normalize_response(response_cropped)
-
-    # Return dict with shape (n_samples, n_trials) arrays
-    data = {
-        'stimulus': angles_cropped,   # shape (n_samples, n_trials)
-        'response': response_cropped,  # shape (n_samples, n_trials)
-    }
-
-    return data
-
 def train_test_split(
         X: Dict[str, np.ndarray],
         # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
@@ -134,6 +70,84 @@ def train_test_split(
     train_trials = np.asarray(shuffled_trials[: n_trials // 2], dtype=np.int64)
 
     return train_samples, train_trials
+
+def load_and_process_data(
+    data_path: str,
+    # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
+    activity_threshold: float = 0.1,
+    conc_threshold: float = 0.1,
+) ->  list[list[dict[str, np.ndarray]]]:
+    """
+    Load and preprocess neural data and return data as a dictionary
+    mapping descriptive key names to numpy arrays.
+
+    All arrays have shape (n_samples, ..., n_trials) with n_trials as the
+    last dimension.
+
+    Parameters
+    ----------
+    data_path : str
+        Path to the .npy file containing neural data.
+    activity_threshold : float
+        Threshold for activity to select good cells.
+    conc_threshold : float
+        Threshold for concentration to select good cells.
+
+    Returns
+    -------
+    2 x 2 list of dicts: [[data_train_train, data_train_test], [data_test_train, data_test_test]]
+        Each dict contains preprocessed data arrays for the corresponding sample and trial splits.
+    """
+    # load and preprocess data
+    neural_data = np.load(data_path, allow_pickle=True)
+    neural_data = neural_data.item()
+    # Use passed data extraction function or fall back to default
+    response = extract_stimulus_related_response(neural_data, n_pcs=0)
+
+    angles = neural_data['istim']
+    n_trials = response.shape[1]
+    n_trials_small = int(n_trials * activity_threshold)
+
+    # filter
+    active = (response > 0).astype(np.float32)
+    firing_probs = np.mean(active, axis=1)
+    conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
+    good_cells = np.where((firing_probs > activity_threshold) & (conc > conc_threshold))[0]
+    n_good_cells = len(good_cells)
+
+    # update angles and response to be (n_cells_small, n_trials_small)
+    response_cropped, angles_cropped = np.zeros((n_good_cells, n_trials_small)), np.zeros((n_good_cells, n_trials_small))
+    for i, cell in enumerate(good_cells):
+        active_trials = response[cell] > 0
+        active_trials_idx = np.where(active_trials)[0][:n_trials_small]
+        response_cropped[i] = response[cell, active_trials_idx]
+        angles_cropped[i] = angles[active_trials_idx]
+
+    response_cropped = normalize_response(response_cropped)
+
+    # Return dict with shape (n_samples, n_trials) arrays
+    data = {
+        'stimulus': angles_cropped,   # shape (n_samples, n_trials)
+        'response': response_cropped,  # shape (n_samples, n_trials)
+    }
+    
+    train_samples, train_trials = train_test_split(data, random_seed=42)
+    test_samples = np.setdiff1d(np.arange(response_cropped.shape[0], dtype=np.int64), train_samples, assume_unique=False)
+    test_trials = np.setdiff1d(np.arange(response_cropped.shape[1], dtype=np.int64), train_trials, assume_unique=False)
+    
+    data_train_train = utils.slice_data(data, train_samples, train_trials)
+    data_train_test = utils.slice_data(data, train_samples, test_trials)
+    data_test_train = utils.slice_data(data, test_samples, train_trials)
+    data_test_test = utils.slice_data(data, test_samples, test_trials)
+
+    # zscore each dictionary separately 
+    data_train_train = utils.zscore_data(data_train_train, skip_keys=['stimulus'])
+    data_train_test = utils.zscore_data(data_train_test, skip_keys=['stimulus'])
+    data_test_train = utils.zscore_data(data_test_train, skip_keys=['stimulus'])
+    data_test_test = utils.zscore_data(data_test_test, skip_keys=['stimulus'])
+
+    return [[data_train_train, data_train_test], [data_test_train, data_test_test]]
+
 
 # ========================
 # 2. SEED MODELS

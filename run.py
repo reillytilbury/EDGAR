@@ -94,27 +94,6 @@ def _build_load_and_process_data_fn(spec_load_and_process_data_fn):
     return _wrapped_load_and_process_data_fn
 
 
-def _build_train_test_split_fn(spec_train_test_split_fn):
-    """
-    Wrap spec.train_test_split so hypothesis_engine gets fully materialized
-    sample+trial train/test indices.
-    """
-    def _wrapped_train_test_split_fn(data: dict, random_seed: int):
-        train_samples_raw, train_trials_raw = spec_train_test_split_fn(
-            data,
-            random_seed,
-        )
-        n_samples = utils.data_n_samples(data)
-        n_trials = utils.data_n_trials(data)
-        train_samples = np.asarray(train_samples_raw).reshape(-1).astype(np.int64, copy=False)
-        train_trials = np.asarray(train_trials_raw).reshape(-1).astype(np.int64, copy=False)
-        test_samples = np.setdiff1d(np.arange(n_samples, dtype=np.int64), train_samples, assume_unique=False)
-        test_trials = np.setdiff1d(np.arange(n_trials, dtype=np.int64), train_trials, assume_unique=False)
-        return train_samples, test_samples, train_trials, test_trials
-
-    return _wrapped_train_test_split_fn
-
-
 def _build_loss_fn(raw_loss_fn):
     """
     Validate loss signature for the engine contract:
@@ -325,13 +304,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
 
     # Data extraction/splits: require unified split API from spec.
     spec_load_and_process_data_fn = getattr(spec_module, 'load_and_process_data')
-    spec_train_test_split_fn = getattr(spec_module, 'train_test_split', None)
-    if not callable(spec_train_test_split_fn):
-        raise ValueError(
-            f"{spec_module_path} must define callable train_test_split(X, random_seed)."
-        )
     load_and_process_data_fn = _build_load_and_process_data_fn(spec_load_and_process_data_fn)
-    train_test_split_fn = _build_train_test_split_fn(spec_train_test_split_fn)
 
     # Loss function: required in spec
     spec_loss_fn = getattr(spec_module, "loss_fn", None)
@@ -409,39 +382,25 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     for i in range(params['num_runs']):
         random_seed = params.get('random_seed', 42)
         data = load_and_process_data_fn(**data_processing_params)
-        train_samples, test_samples, train_trials, test_trials = train_test_split_fn(
-            data,
-            random_seed,
-        )
-        train_samples = np.asarray(train_samples).reshape(-1).astype(np.int64, copy=False)
-        test_samples = np.asarray(test_samples).reshape(-1).astype(np.int64, copy=False)
-        train_trials = np.asarray(train_trials).reshape(-1).astype(np.int64, copy=False)
-        test_trials = np.asarray(test_trials).reshape(-1).astype(np.int64, copy=False)
+        data_train_train = data[0, 0]
 
-        # Create 2x2 nested holdout splits
-        data_train_train = utils.slice_data_trials(utils.slice_data_samples(data, train_samples), train_trials)
-        data_train_test = utils.slice_data_trials(utils.slice_data_samples(data, train_samples), test_trials)
-        data_test_train = utils.slice_data_trials(utils.slice_data_samples(data, test_samples), train_trials)
-        data_test_test = utils.slice_data_trials(utils.slice_data_samples(data, test_samples), test_trials)
-
-        # Z-score each split independently
-        data_train_train = _zscore_data(data_train_train, skip_keys=zscore_skip_keys)
-        data_train_test = _zscore_data(data_train_test, skip_keys=zscore_skip_keys)
-        data_test_train = _zscore_data(data_test_train, skip_keys=zscore_skip_keys)
-        data_test_test = _zscore_data(data_test_test, skip_keys=zscore_skip_keys)
-
-        X = np.empty((2, 2), dtype=object)
-        X[0, 0] = data_train_train
-        X[0, 1] = data_train_test
-        X[1, 0] = data_test_train
-        X[1, 1] = data_test_test
-
-        X_eval = utils.build_evaluation_points(
-            data=X[0, 0],
+        data_eval = utils.build_evaluation_points(
+            data=data,
             eval_keys=params.get('eval_keys'),
             x_min=params.get('x_min'),
             x_max=params.get('x_max'),
             n_bins=params.get('n_bins', 100),
+        )
+
+        # Save split/data summary from preprocessed run-level data.
+        save_data_summary(
+            data=data,
+            training_samples=train_samples,
+            test_samples=test_samples,
+            train_trials=train_trials,
+            test_trials=test_trials,
+            output_dir=full_dir,
+            random_seed=random_seed,
         )
 
         print("running with standard params")
@@ -476,8 +435,8 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             param_estimator_refinement_rounds=params.get('param_estimator_refinement_rounds', 0),
             numpy_programs=models,
             param_estimators=param_estimators,
-            X=X,
-            X_eval=X_eval,
+            data=data,
+            data_eval=data_eval,
             plot_model_fits=plot_model_fits_fn,
             prompt_manager=prompt_manager,
             trial_batch_size=params.get('trial_batch_size', None),
@@ -485,18 +444,6 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             open_family_tree=params.get('open_family_tree', False),
             loss_fn=loss_fn,
             random_seed=random_seed,
-        )
-
-        # Save split/data summary from preprocessed run-level data.
-        save_data_summary(
-            data=data,
-            training_samples=train_samples,
-            test_samples=test_samples,
-            train_trials=train_trials,
-            test_trials=test_trials,
-            output_dir=full_dir,
-            random_seed=random_seed,
-            train_test_split_fn=spec_train_test_split_fn,
         )
 
 
