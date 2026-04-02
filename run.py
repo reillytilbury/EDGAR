@@ -132,31 +132,6 @@ def _build_loss_fn(raw_loss_fn):
     return _wrapped_loss_fn
 
 
-def _zscore_data(data: dict, skip_keys: list | None = None, eps: float = 1e-12) -> dict:
-    """
-    Z-score each array in the data dict across the last dimension (trials).
-
-    For each key, z-scores independently along the trial axis. Arrays are expected
-    to have shape (..., n_trials).
-
-    Args:
-        data: Data dict where all arrays share the same last dimension.
-        skip_keys: Keys to skip (e.g., categorical features).
-        eps: Small constant to avoid division by zero.
-    """
-    skip = set(skip_keys or [])
-    result = {}
-    for key, arr in data.items():
-        if key in skip:
-            result[key] = arr
-        else:
-            arr = np.asarray(arr)
-            mu = arr.mean(axis=-1, keepdims=True)
-            sd = arr.std(axis=-1, keepdims=True)
-            result[key] = (arr - mu) / (sd + eps)
-    return result
-
-
 def _broadcast_model_loss(loss_value, n_samples: int):
     if loss_value is None:
         return None
@@ -350,10 +325,6 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         # Keep test mode fast by shrinking common data-generation sizes when present.
         if 'n_samples' in data_processing_params:
             data_processing_params['n_samples'] = min(int(data_processing_params['n_samples']), 120)
-        if 'n_trials' in data_processing_params:
-            data_processing_params['n_trials'] = min(int(data_processing_params['n_trials']), 300)
-        if 'n_cells' in data_processing_params:
-            data_processing_params['n_cells'] = min(int(data_processing_params['n_cells']), 600)
 
     def _ring_topology(n_islands: int) -> list[int]:
         if n_islands <= 0:
