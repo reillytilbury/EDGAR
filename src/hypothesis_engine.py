@@ -1648,7 +1648,7 @@ async def hypothesis_engine(
         max_iter = 1_000, learning_rate = 3e-3,
         penalty_denominator = 1,
         numpy_programs = None, param_estimators = None,
-        X = None, X_eval = None,
+        data = None, data_eval = None,
         plot_model_fits = None, loss_fn = None,
         prompt_manager = None, trial_batch_size = None, swear_words = None,
         open_family_tree = False,
@@ -1656,6 +1656,7 @@ async def hypothesis_engine(
         log_prompts: bool = False,
         log_jax_translations: bool = False,
         random_seed = 42, # consider setting up a seed_manager to make behaviours more robustly reproducible.
+        full_dir = None,
         ):
     """
     Run the full island-based hypothesis search loop.
@@ -1698,9 +1699,9 @@ async def hypothesis_engine(
         learning_rate (float): Optimizer learning rate inside ``objective``.
         numpy_programs (list[callable]): Seed NumPy model functions.
         param_estimators (list[callable]): Seed parameter estimators.
-        X: Split data container with shape ``(2, 2)`` where each cell is a
-            data dict. ``X[0,*]`` is train-sample split, ``X[1,*]`` is test-sample split.
-        X_eval (np.ndarray): Evaluation grid used for diagnostics/comparison.
+        data: Split data container with shape ``(2, 2)`` where each cell is a
+            data dict. ``data[0,*]`` is train-sample split, ``data[1,*]`` is test-sample split.
+        data_eval (np.ndarray): Evaluation grid used for diagnostics/comparison.
         plot_model_fits (callable | None): Optional plotting callback.
         loss_fn (callable | None): Objective loss function override.
         prompt_manager: PromptManager for all prompt construction.
@@ -1711,11 +1712,13 @@ async def hypothesis_engine(
         log_prompts (bool): If True, include prompt/response text in logs and generation records.
         log_jax_translations (bool): If True, include JAX translator prompt/response/code in logs.
         random_seed (int): Run seed for deterministic split-dependent operations.
-
-    Returns:
-        str: Path to the run output directory containing logs, plots, and program DBs.
+        full_dir (str): Directory path for saving outputs. Must be specified.
     """
+    X = data
+    X_eval = data_eval
     has_spec_plotter = plot_model_fits is not None
+    if full_dir is None:
+        raise ValueError("full_dir must be specified to save outputs.")
 
     def _normalize_llm_sequence(value, label: str):
         if value is None:
@@ -1827,15 +1830,6 @@ async def hypothesis_engine(
                                              'initial_loss', 'initial_params', 'llm_name', 'parent1_id', 'parent2_id', 'evaluation_matrix']))
     initial_programs = pd.DataFrame([])
 
-    # wherever you run “python script.py” from…
-    base_dir = os.path.join(os.getcwd(), 'program_databases')
-    print("Base directory:", base_dir)
-    os.makedirs(base_dir, exist_ok=True)
-    date_stamp = pd.Timestamp.now().strftime("%m-%d")
-    time_stamp = pd.Timestamp.now().strftime("%H-%M-%S")
-    full_dir = os.path.join(base_dir, date_stamp, time_stamp)
-    os.makedirs(full_dir, exist_ok=True)
-    print("Created folder:", full_dir)
     # create a directory for image diagnostics
     image_feedback_dir = os.path.join(full_dir, 'image_feedback')
     os.makedirs(image_feedback_dir, exist_ok=True)
@@ -3000,4 +2994,4 @@ async def hypothesis_engine(
     if island_chat_manager is not None:
         island_chat_manager.log_final_summary()
 
-    return full_dir
+    print("Run complete. Outputs saved to:", full_dir, flush=True)

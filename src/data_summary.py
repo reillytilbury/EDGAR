@@ -8,38 +8,52 @@ from . import utils
 
 
 def save_data_summary(
-    data: dict,
-    training_samples: np.ndarray,
-    test_samples: np.ndarray,
-    train_trials: np.ndarray,
-    test_trials: np.ndarray,
+    data,
     output_dir: str,
     random_seed: int = 0,
-    train_test_split_fn=None,
+    training_samples: np.ndarray | None = None,
 ) -> pd.DataFrame:
-    """Save a summary of the realized sample/trial splits and per-key shapes to CSV.
+    """Save a summary of realized sample/trial splits and per-key shapes to CSV.
 
     Args:
-        data (dict[str, np.ndarray]): Full data dict (before sample split) with
-            shape ``(n_samples, ..., n_trials)`` per key.
-        training_samples (np.ndarray): Indices of training samples.
-        test_samples (np.ndarray): Indices of test samples.
-        train_trials (np.ndarray): Indices of training trials.
-        test_trials (np.ndarray): Indices of test trials.
+        data: Pre-split 2x2 container
+            ``[[train_train, train_test], [test_train, test_test]]``.
         output_dir (str): Directory to write ``data_summary.csv``.
         random_seed (int): Seed used for splitting.
-        train_test_split_fn: The function used for train/test splitting (for metadata).
 
     Returns:
         pd.DataFrame: Summary dataframe.
     """
-    n_samples = utils.data_n_samples(data)
-    n_trials = utils.data_n_trials(data)
+    data_arr = np.asarray(data, dtype=object)
+    if data_arr.shape != (2, 2):
+        raise ValueError("Pre-split data must have shape (2, 2).")
 
-    training_samples_np = np.asarray(training_samples).reshape(-1)
-    test_samples_np = np.asarray(test_samples).reshape(-1)
-    train_trials_np = np.asarray(train_trials).reshape(-1)
-    test_trials_np = np.asarray(test_trials).reshape(-1)
+    split_mode = "pre_split"
+    data_train_train = data_arr[0, 0]
+    data_train_test = data_arr[0, 1]
+    data_test_train = data_arr[1, 0]
+    data_test_test = data_arr[1, 1]
+    for split_data in (data_train_train, data_train_test, data_test_train, data_test_test):
+        utils.validate_data(split_data)
+
+    n_train_samples = utils.data_n_samples(data_train_train)
+    n_test_samples = utils.data_n_samples(data_test_test)
+    n_train_trials = utils.data_n_trials(data_train_train)
+    n_test_trials = utils.data_n_trials(data_test_test)
+    n_samples = n_train_samples + n_test_samples
+    n_trials = n_train_trials + n_test_trials
+
+    training_samples_np = np.arange(n_train_samples, dtype=np.int64)
+    test_samples_np = np.arange(n_train_samples, n_train_samples + n_test_samples, dtype=np.int64)
+    train_trials_np = np.arange(n_train_trials, dtype=np.int64)
+    test_trials_np = np.arange(n_train_trials, n_train_trials + n_test_trials, dtype=np.int64)
+    data_blocks = [
+        ("data_train_train", data_train_train),
+        ("data_train_test", data_train_test),
+        ("data_test_train", data_test_train),
+        ("data_test_test", data_test_test),
+    ]
+
     n_train_samples = int(training_samples_np.size)
     n_test_samples = int(test_samples_np.size)
     n_train_trials = int(train_trials_np.size)
@@ -74,8 +88,6 @@ def save_data_summary(
     trial_stats = _split_stats(train_trials_np, test_trials_np, n_trials)
 
     sample_split_method = (
-        f"fn={_describe_fn(train_test_split_fn)}; "
-        f"random_seed={random_seed}; "
         f"disjoint={sample_stats['disjoint']}; cover_all={sample_stats['cover_all']}; "
         f"overlap={sample_stats['n_overlap']}; uncovered={sample_stats['n_uncovered']}; "
         f"train_has_duplicates={sample_stats['train_has_duplicates']}; "
@@ -83,11 +95,10 @@ def save_data_summary(
         f"train_first10={sample_stats['train_first10']}; "
         f"test_first10={sample_stats['test_first10']}"
     )
+    if split_mode == "pre_split":
+        sample_split_method += "; note=indices shown are synthetic summaries derived from split sizes"
 
     trial_split_method = (
-        f"fn={_describe_fn(train_test_split_fn)}; "
-        f"random_seed={random_seed}; "
-        f"n_trials={n_trials}; "
         f"disjoint={trial_stats['disjoint']}; cover_all={trial_stats['cover_all']}; "
         f"overlap={trial_stats['n_overlap']}; uncovered={trial_stats['n_uncovered']}; "
         f"train_has_duplicates={trial_stats['train_has_duplicates']}; "
@@ -188,20 +199,21 @@ def save_data_summary(
 
     # === PER-KEY DATA SUMMARY ===
     total_size = 0
-    for key, arr in data.items():
-        arr_np = np.asarray(arr)
-        key_size = calc_size(arr_np.shape, arr_np.dtype)
-        total_size += key_size
-        rows.append({
-            'category': 'DATA_KEY',
-            'matrix_name': f"data['{key}']",
-            'description': f"Key '{key}' — full dataset",
-            'shape': str(arr_np.shape),
-            'dtype': str(arr_np.dtype),
-            'size_bytes': key_size,
-            'size_human': format_size(key_size),
-            'n_elements': int(np.prod(arr_np.shape)),
-        })
+    for block_name, block_data in data_blocks:
+        for key, arr in block_data.items():
+            arr_np = np.asarray(arr)
+            key_size = calc_size(arr_np.shape, arr_np.dtype)
+            total_size += key_size
+            rows.append({
+                'category': 'DATA_KEY',
+                'matrix_name': f"{block_name}['{key}']",
+                'description': f"Key '{key}' — {block_name}",
+                'shape': str(arr_np.shape),
+                'dtype': str(arr_np.dtype),
+                'size_bytes': key_size,
+                'size_human': format_size(key_size),
+                'n_elements': int(np.prod(arr_np.shape)),
+            })
 
     # Create DataFrame and save
     df = pd.DataFrame(rows)
@@ -223,9 +235,11 @@ def save_data_summary(
         f"seed={random_seed}, disjoint={trial_stats['disjoint']}, "
         f"cover_all={trial_stats['cover_all']})"
     )
-    print(f"Data keys:    {list(data.keys())}")
-    for key, arr in data.items():
-        print(f"  '{key}': shape={np.asarray(arr).shape}, dtype={np.asarray(arr).dtype}")
+    print(f"Data blocks:  {[name for name, _ in data_blocks]}")
+    for block_name, block_data in data_blocks:
+        print(f"  {block_name}:")
+        for key, arr in block_data.items():
+            print(f"    '{key}': shape={np.asarray(arr).shape}, dtype={np.asarray(arr).dtype}")
     print(f"Total Data:   {format_size(total_size)}")
     print(f"Saved to:     {csv_path}")
     print("=" * 70 + "\n")

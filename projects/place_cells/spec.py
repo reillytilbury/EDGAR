@@ -35,6 +35,7 @@ from src import utils
 def load_and_process_data(
     data_path: str,
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
+    random_seed: int = 42,
     time_start: Optional[float] = None,
     time_end: Optional[float] = None,
     time_bin_ms: int = 20,
@@ -43,7 +44,7 @@ def load_and_process_data(
     speed_threshold: float = 2.5,
     max_trials: Optional[int] = 8000,
     zscore_response: bool = True,
-) -> Dict[str, np.ndarray]:
+) -> list[list[dict[str, np.ndarray]]]:
     """
     Load and preprocess place-cell data and return a dict of arrays.
 
@@ -76,9 +77,8 @@ def load_and_process_data(
 
     Returns
     -------
-    data : dict[str, np.ndarray]
-        Dictionary with keys 'pos_x', 'pos_y', 'response'. Each value has
-        shape (n_samples, n_trials) where n_samples is the number of cells.
+    2 x 2 list of dicts
+        ``[[data_train_train, data_train_test], [data_test_train, data_test_test]]``.
     """
     # Hardcoded defaults for simplified API.
     spatial_bin_cm = 3.0
@@ -264,7 +264,23 @@ def load_and_process_data(
         "pos_y": np.tile(features["y"], (n_cells, 1)),   # (n_cells, n_trials)
         "response": response,                              # (n_cells, n_trials)
     }
-    return data
+
+    train_samples, train_trials = train_test_split(data, random_seed=random_seed)
+    test_samples = np.setdiff1d(np.arange(n_cells, dtype=np.int64), train_samples, assume_unique=False)
+    test_trials = np.setdiff1d(np.arange(n_time_bins, dtype=np.int64), train_trials, assume_unique=False)
+
+    data_train_train = utils.slice_data(data, train_samples, train_trials)
+    data_train_test = utils.slice_data(data, train_samples, test_trials)
+    data_test_train = utils.slice_data(data, test_samples, train_trials)
+    data_test_test = utils.slice_data(data, test_samples, test_trials)
+
+    skip_keys = ["pos_x", "pos_y"]
+    data_train_train = utils.zscore_data(data_train_train, skip_keys=skip_keys)
+    data_train_test = utils.zscore_data(data_train_test, skip_keys=skip_keys)
+    data_test_train = utils.zscore_data(data_test_train, skip_keys=skip_keys)
+    data_test_test = utils.zscore_data(data_test_test, skip_keys=skip_keys)
+
+    return [[data_train_train, data_train_test], [data_test_train, data_test_test]]
 
 
 def train_test_split(

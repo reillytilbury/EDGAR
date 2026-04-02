@@ -6,6 +6,7 @@ import importlib
 import os, argparse
 import inspect
 import numpy as np
+import pandas as pd 
 
 # JAX/XLA runtime guards to reduce GPU OOM frequency during large program sweeps.
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -80,16 +81,21 @@ def load_config_with_defaults(config_path: Path, project_root: Path) -> dict:
 def _build_load_and_process_data_fn(spec_load_and_process_data_fn):
     """
     Wrap spec.load_and_process_data so hypothesis_engine always receives
-    a validated data dict (dict[str, np.ndarray]).
+    a validated 2x2 container of data dicts.
     """
     def _wrapped_load_and_process_data_fn(**kwargs):
         data = spec_load_and_process_data_fn(**kwargs)
-        if not isinstance(data, dict):
+        data_arr = np.asarray(data, dtype=object)
+        if data_arr.shape != (2, 2):
             raise ValueError(
-                "load_and_process_data must return a dict[str, np.ndarray]."
+                "load_and_process_data must return a 2x2 container "
+                "[[data_train_train, data_train_test], [data_test_train, data_test_test]]."
             )
-        utils.validate_data(data)
-        return data
+        for split_data in data_arr.reshape(-1):
+            if not isinstance(split_data, dict):
+                raise ValueError("Each split returned by load_and_process_data must be a dict[str, np.ndarray].")
+            utils.validate_data(split_data)
+        return data_arr
 
     return _wrapped_load_and_process_data_fn
 
@@ -381,24 +387,37 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
 
     for i in range(params['num_runs']):
         random_seed = params.get('random_seed', 42)
-        data = load_and_process_data_fn(**data_processing_params)
+        load_kwargs = dict(data_processing_params)
+        if (
+            'random_seed' in inspect.signature(spec_load_and_process_data_fn).parameters
+            and 'random_seed' not in load_kwargs
+        ):
+            load_kwargs['random_seed'] = random_seed
+
+        data = load_and_process_data_fn(**load_kwargs)
         data_train_train = data[0, 0]
 
         data_eval = utils.build_evaluation_points(
-            data=data,
+            data=data_train_train,
             eval_keys=params.get('eval_keys'),
             x_min=params.get('x_min'),
             x_max=params.get('x_max'),
             n_bins=params.get('n_bins', 100),
         )
 
-        # Save split/data summary from preprocessed run-level data.
+
+        # Create full_dir wherever you run “python script.py” from…
+        base_dir = os.path.join(os.getcwd(), 'program_databases')
+        print("Base directory:", base_dir)
+        os.makedirs(base_dir, exist_ok=True)
+        date_stamp = pd.Timestamp.now().strftime("%m-%d")
+        time_stamp = pd.Timestamp.now().strftime("%H-%M-%S")
+        full_dir = os.path.join(base_dir, date_stamp, time_stamp)
+        os.makedirs(full_dir, exist_ok=True)
+        print("Created folder:", full_dir)
+
         save_data_summary(
             data=data,
-            training_samples=train_samples,
-            test_samples=test_samples,
-            train_trials=train_trials,
-            test_trials=test_trials,
             output_dir=full_dir,
             random_seed=random_seed,
         )
@@ -409,7 +428,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             if value is None:
                 raise ValueError(f"Missing required experiment_params.{name} in config.")
             return value
-        full_dir = await hypothesis_engine.hypothesis_engine(
+        await hypothesis_engine.hypothesis_engine(
             n_iterations=params['n_iterations'],
             time_limit=params['time_limit'],
             param_penalty_weight=params['param_penalty_weight'],
@@ -444,6 +463,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             open_family_tree=params.get('open_family_tree', False),
             loss_fn=loss_fn,
             random_seed=random_seed,
+            full_dir=full_dir,
         )
 
 

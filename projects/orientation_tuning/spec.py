@@ -74,6 +74,7 @@ def train_test_split(
 def load_and_process_data(
     data_path: str,
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
+    random_seed: int = 42,
     activity_threshold: float = 0.1,
     conc_threshold: float = 0.1,
 ) ->  list[list[dict[str, np.ndarray]]]:
@@ -131,7 +132,7 @@ def load_and_process_data(
         'response': response_cropped,  # shape (n_samples, n_trials)
     }
     
-    train_samples, train_trials = train_test_split(data, random_seed=42)
+    train_samples, train_trials = train_test_split(data, random_seed=random_seed)
     test_samples = np.setdiff1d(np.arange(response_cropped.shape[0], dtype=np.int64), train_samples, assume_unique=False)
     test_trials = np.setdiff1d(np.arange(response_cropped.shape[1], dtype=np.int64), train_trials, assume_unique=False)
     

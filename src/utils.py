@@ -83,6 +83,11 @@ def slice_data_trials(X: Dict[str, np.ndarray], indices) -> Dict[str, np.ndarray
     return {k: v[..., indices] for k, v in X.items()}
 
 
+def slice_data(X: Dict[str, np.ndarray], sample_indices, trial_indices) -> Dict[str, np.ndarray]:
+    """Slice both sample and trial axes of every array in the data dict."""
+    return slice_data_trials(slice_data_samples(X, sample_indices), trial_indices)
+
+
 def get_data_sample(X: Dict[str, np.ndarray], idx: int) -> Dict[str, np.ndarray]:
     """Extract a single sample from the data dict, removing the sample axis."""
     return {k: v[idx] for k, v in X.items()}
@@ -96,6 +101,21 @@ def data_as_jax(X: Dict[str, np.ndarray]) -> Dict[str, jnp.ndarray]:
 def data_as_numpy(X: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     """Convert all arrays in the data dict to numpy arrays."""
     return {k: np.asarray(v) for k, v in X.items()}
+
+
+def zscore_data(X: Dict[str, np.ndarray], skip_keys: list | None = None, eps: float = 1e-12) -> Dict[str, np.ndarray]:
+    """Z-score each array in the data dict across the last dimension (trials)."""
+    skip = set(skip_keys or [])
+    result = {}
+    for key, arr in X.items():
+        arr_np = np.asarray(arr)
+        if key in skip:
+            result[key] = arr_np
+            continue
+        mu = arr_np.mean(axis=-1, keepdims=True)
+        sd = arr_np.std(axis=-1, keepdims=True)
+        result[key] = (arr_np - mu) / (sd + eps)
+    return result
 
 
 def format_function_source(func: Callable, new_name: str, import_statement: str = "") -> str:

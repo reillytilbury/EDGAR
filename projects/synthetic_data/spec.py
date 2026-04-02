@@ -35,10 +35,11 @@ def load_and_process_data(
     data_path: str = "",
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
     SEED: int = 42,
+    random_seed: int = 42,
     n_samples: int = 1000,
     n_trials: int = 2000,
     noise_std: float = 0.1,
-) -> Dict[str, np.ndarray]:
+) -> list[list[dict[str, np.ndarray]]]:
     """
     Simulate synthetic single-input regression data.
 
@@ -61,10 +62,9 @@ def load_and_process_data(
 
     Returns
     -------
-    dict[str, np.ndarray]
-        Data dict with keys:
-        - 'x': shape (n_samples, n_trials), input values
-        - 'y': shape (n_samples, n_trials), noisy output values
+    2 x 2 list of dicts
+        ``[[data_train_train, data_train_test], [data_test_train, data_test_test]]``
+        with the same split semantics as the legacy runner-managed split.
     """
     rng = np.random.default_rng(SEED)
 
@@ -83,7 +83,23 @@ def load_and_process_data(
 
     x_tiled = np.tile(x, (n_samples, 1))
 
-    return {'x': x_tiled, 'y': y}
+    data = {'x': x_tiled, 'y': y}
+
+    train_samples, train_trials = train_test_split(data, random_seed=random_seed)
+    test_samples = np.setdiff1d(np.arange(n_samples, dtype=np.int64), train_samples, assume_unique=False)
+    test_trials = np.setdiff1d(np.arange(n_trials, dtype=np.int64), train_trials, assume_unique=False)
+
+    data_train_train = utils.slice_data(data, train_samples, train_trials)
+    data_train_test = utils.slice_data(data, train_samples, test_trials)
+    data_test_train = utils.slice_data(data, test_samples, train_trials)
+    data_test_test = utils.slice_data(data, test_samples, test_trials)
+
+    data_train_train = utils.zscore_data(data_train_train)
+    data_train_test = utils.zscore_data(data_train_test)
+    data_test_train = utils.zscore_data(data_test_train)
+    data_test_test = utils.zscore_data(data_test_test)
+
+    return [[data_train_train, data_train_test], [data_test_train, data_test_test]]
 
 
 def train_test_split(
@@ -162,8 +178,6 @@ def param_est_v1(data):
 
     best_loss = float("inf")
     best_params = (1.0, 0.0)
-
-    x = np.asarray(X[0] if np.asarray(X).ndim > 1 else X)
 
     for a in a_values:
         for b in b_values:
