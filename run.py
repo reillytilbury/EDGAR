@@ -412,7 +412,8 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         os.makedirs(base_dir, exist_ok=True)
         date_stamp = pd.Timestamp.now().strftime("%m-%d")
         time_stamp = pd.Timestamp.now().strftime("%H-%M-%S")
-        full_dir = os.path.join(base_dir, date_stamp, time_stamp)
+        full_dir_tuple = (base_dir, date_stamp, time_stamp)
+        full_dir = os.path.join(*full_dir_tuple)
         os.makedirs(full_dir, exist_ok=True)
         print("Created folder:", full_dir)
 
@@ -463,7 +464,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             open_family_tree=params.get('open_family_tree', False),
             loss_fn=loss_fn,
             random_seed=random_seed,
-            full_dir=full_dir,
+            full_dir_tuple=full_dir_tuple,
         )
 
 

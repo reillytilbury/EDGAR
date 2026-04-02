@@ -1656,7 +1656,7 @@ async def hypothesis_engine(
         log_prompts: bool = False,
         log_jax_translations: bool = False,
         random_seed = 42, # consider setting up a seed_manager to make behaviours more robustly reproducible.
-        full_dir = None,
+        full_dir_tuple = None,
         ):
     """
     Run the full island-based hypothesis search loop.
@@ -1712,13 +1712,15 @@ async def hypothesis_engine(
         log_prompts (bool): If True, include prompt/response text in logs and generation records.
         log_jax_translations (bool): If True, include JAX translator prompt/response/code in logs.
         random_seed (int): Run seed for deterministic split-dependent operations.
-        full_dir (str): Directory path for saving outputs. Must be specified.
+        full_dir_tuple (tuple): Directory path components for saving outputs. Must be specified.
     """
     X = data
     X_eval = data_eval
     has_spec_plotter = plot_model_fits is not None
-    if full_dir is None:
-        raise ValueError("full_dir must be specified to save outputs.")
+    if full_dir_tuple is None:
+        raise ValueError("full_dir_tuple must be specified to save outputs.")
+    base_dir, date_stamp, time_stamp = full_dir_tuple
+    full_dir = os.path.join(*full_dir_tuple)
 
     def _normalize_llm_sequence(value, label: str):
         if value is None:
