@@ -1012,7 +1012,7 @@ def compare_programs(program1: pd.Series, program2: pd.Series,
     params2 = program2.get('params')
     if params1 is not None and params2 is not None:
         if utils.params_signature(params1) != utils.params_signature(params2):
-            return False
+            return _result(False, "parameter_signature_mismatch")
     
     # Fast path 3: Losses too different → likely different programs
     # This speeds up comparison by skipping expensive cosine computation
@@ -1029,7 +1029,14 @@ def compare_programs(program1: pd.Series, program2: pd.Series,
             if np.isfinite(loss1_f) and np.isfinite(loss2_f):
                 max_loss = max(abs(loss1_f), abs(loss2_f), 1e-6)
                 if abs(loss1_f - loss2_f) / max_loss > loss_tol:
-                    return False
+                    return _result(
+                        False,
+                        "loss_difference_above_threshold",
+                        loss1=loss1_f,
+                        loss2=loss2_f,
+                        relative_difference=abs(loss1_f - loss2_f) / max_loss,
+                        loss_tol=float(loss_tol),
+                    )
     
     # Simple mode: only structural comparison (code string)
     # This is a weak check - programs with different code can be behaviorally identical
