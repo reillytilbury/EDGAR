@@ -430,7 +430,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             data_eval=data_eval,
             plot_model_fits=plot_model_fits_fn,
             prompt_manager=prompt_manager,
-            trial_batch_size=params.get('trial_batch_size', None),
+            grad_descent_batch_size=params.get('grad_descent_batch_size', None),
             swear_words=params.get('swear_words'),
             open_family_tree=params.get('open_family_tree', False),
             loss_fn=loss_fn,

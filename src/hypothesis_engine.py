@@ -507,7 +507,7 @@ def objective(model, param_estimator, data,
               loss_fn=None, param_penalty_weight=0.1, penalty_denominator=1,
               fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000, learning_rate=3e-3,
-              use_param_estimator=True, trial_batch_size=None,
+              use_param_estimator=True, grad_descent_batch_size=None,
               timeout_s: float | None = 5.0,
               objective_timeout_s: float | None = None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
@@ -533,7 +533,7 @@ def objective(model, param_estimator, data,
         FAILED_PROGRAM_COST (float): Cost assigned to failed models. Default is np.inf.
         max_iter (int): Maximum number of iterations for optimization. Default is 1_000.
         use_param_estimator (bool): Whether to use the parameter estimator to compute initial parameters. Default is True.
-        trial_batch_size (int | None): Ignored. Trial batching is disabled.
+        grad_descent_batch_size (int | None): Batch size for gradient descent. Default is None.
         timeout_s (float | None): Per-sample timeout (seconds) for
             ``param_estimator`` calls during initialization.
             Set ``None`` or ``<=0`` to disable per-sample estimator timeout.
@@ -669,7 +669,7 @@ def objective(model, param_estimator, data,
     loss_total = jax.vmap(loss_single_sample, in_axes=(0, 0), out_axes=0)
 
     n_train_trials = utils.data_n_trials(data_train)
-    effective_trial_batch_size = n_train_trials if trial_batch_size is None else int(trial_batch_size)
+    effective_grad_descent_batch_size = n_train_trials if grad_descent_batch_size is None else int(grad_descent_batch_size)
 
     @jax.jit
     def loss_single_batch(params_tree, data_batch):
@@ -691,9 +691,9 @@ def objective(model, param_estimator, data,
         total_loss = 0.0
         total_grad = jnp.zeros_like(flat_params)
 
-        for start_idx in range(0, n_train_trials, effective_trial_batch_size):
+        for start_idx in range(0, n_train_trials, effective_grad_descent_batch_size):
             _check_timeout("loss/grad computation")
-            end_idx = min(start_idx + effective_trial_batch_size, n_train_trials)
+            end_idx = min(start_idx + effective_grad_descent_batch_size, n_train_trials)
             batch_weight = (end_idx - start_idx) / n_train_trials
             data_batch = utils.slice_data_trials(data_train, slice(start_idx, end_idx))
 
@@ -756,9 +756,9 @@ def objective(model, param_estimator, data,
         """Compute loss by iterating over trial batches."""
         n_eval_trials = utils.data_n_trials(data_eval)
         weighted_sum = 0.0
-        for start_idx in range(0, n_eval_trials, effective_trial_batch_size):
+        for start_idx in range(0, n_eval_trials, effective_grad_descent_batch_size):
             _check_timeout("final loss evaluation")
-            end_idx = min(start_idx + effective_trial_batch_size, n_eval_trials)
+            end_idx = min(start_idx + effective_grad_descent_batch_size, n_eval_trials)
             batch_size = end_idx - start_idx
             data_batch = utils.slice_data_trials(data_eval, slice(start_idx, end_idx))
             weighted_sum += eval_single_batch(params_tree, data_batch) * (batch_size / n_eval_trials)
@@ -1650,7 +1650,7 @@ async def hypothesis_engine(
         numpy_programs = None, param_estimators = None,
         data = None, data_eval = None,
         plot_model_fits = None, loss_fn = None,
-        prompt_manager = None, trial_batch_size = None, swear_words = None,
+        prompt_manager = None, grad_descent_batch_size = None, swear_words = None,
         open_family_tree = False,
         use_simple_objective: bool = False,
         log_prompts: bool = False,
@@ -1705,7 +1705,7 @@ async def hypothesis_engine(
         plot_model_fits (callable | None): Optional plotting callback.
         loss_fn (callable | None): Objective loss function override.
         prompt_manager: PromptManager for all prompt construction.
-        trial_batch_size (int | None): Trial batching size used by ``objective``.
+        grad_descent_batch_size (int | None): Batch size for gradient descent. Default is None.
         swear_words (list[str] | None): Blacklist for generated estimator code.
         open_family_tree (bool): Open the combined family tree HTML at the end of the run.
         use_simple_objective (bool): Use the minimal objective implementation everywhere.
@@ -1881,7 +1881,7 @@ async def hypothesis_engine(
             learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
             max_iter=max_iter,
-            trial_batch_size=trial_batch_size,
+            grad_descent_batch_size=grad_descent_batch_size,
             timeout_s=param_estimator_timeout_s,
             # Keep seed scoring unconstrained by objective timeout so good seeds
             # are not discarded due strict per-candidate runtime caps.
@@ -2542,7 +2542,7 @@ async def hypothesis_engine(
                 fit_params=fit_params,
                 use_param_estimator=use_param_estimator,
                 max_iter=max_iter,
-                trial_batch_size=trial_batch_size,
+                grad_descent_batch_size=grad_descent_batch_size,
                 timeout_s=param_estimator_timeout_s,
                 objective_timeout_s=objective_timeout_s,
             )
@@ -2872,7 +2872,7 @@ async def hypothesis_engine(
                     max_iter=max_iter,
                     param_penalty_weight=param_penalty_weight,
                     use_param_estimator=use_param_estimator,
-                    trial_batch_size=trial_batch_size,
+                    grad_descent_batch_size=grad_descent_batch_size,
                     timeout_s=param_estimator_timeout_s,
                     objective_timeout_s=objective_timeout_s,
                 )

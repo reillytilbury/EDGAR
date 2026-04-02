@@ -93,7 +93,7 @@ def test_objective_improves_grid_cell_loss_with_dict_data():
         fit_params=True,
         max_iter=200,
         learning_rate=0.05,
-        trial_batch_size=32,
+        grad_descent_batch_size=32,
     )
 
     assert final_loss < initial_loss
