@@ -249,8 +249,7 @@ def compute_initial_params(
             ``param_estimator(data_i) -> params_i`` for a single sample.
         model (callable): Model function used only for fallback default parameter
             inference when estimation fails.
-        data (dict[str, np.ndarray]): Data dict where all arrays have shape
-            ``(n_samples, ..., n_trials)``.
+        data (dict[str, np.ndarray]): Data dict
         timeout_s (float | None): Per-sample timeout in seconds. If ``None`` or
             non-positive, no explicit per-sample timeout is applied.
         deadline_s (float | None): Absolute wall-clock deadline expressed in
@@ -503,6 +502,110 @@ def validate_model_execution(
         return False, f"Model failed to run or is incompatible with JAX tracing: {e}"
 
 
+def _optimize_params(flat_params, unflatten, check_timeout,
+                     fit_params, initial_params, learning_rate, max_iter,
+                     loss_total, data_train, n_samples, n_train_trials,
+                     effective_grad_descent_batch_size):
+    """Run Adam optimization on flattened parameters.
+
+    This is a standalone function extracted from ``objective`` so it can be
+    reused independently.
+
+    Args:
+        flat_params: 1-D array of ravelled initial parameters.
+        unflatten: Callable(flat_params) -> params pytree.
+        check_timeout: Callable(stage_str) that raises on timeout.
+        fit_params: If False, return *initial_params* immediately.
+        initial_params: The original (un-optimized) parameter pytree, returned
+            on early-exit paths.
+        learning_rate: Adam learning rate.
+        max_iter: Maximum number of gradient-descent steps.
+        loss_total: vmapped per-sample loss function.
+            Signature: loss_total(params_tree, data_batch) -> (n_samples,).
+        data_train: Training data dict (JAX arrays).
+        n_samples: Number of samples.
+        n_train_trials: Number of training trials.
+        effective_grad_descent_batch_size: Batch size for iterating over trials.
+
+    Returns:
+        (params_pytree, failed: bool)
+    """
+    if not fit_params:
+        return initial_params, False
+
+    # -- loss / gradient pipeline (only used during optimization) -----------
+    @jax.jit
+    def loss_single_batch(params_tree, data_batch):
+        """Compute sum of losses for one batch (JIT-compiled)."""
+        batch_losses = loss_total(params_tree, data_batch)  # (n_samples,)
+        return jnp.sum(batch_losses)
+
+    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
+
+    def loss_and_grad_batched(flat_params):
+        """Compute loss and gradient by accumulating over trial batches."""
+        params_tree = unflatten(flat_params)
+        total_loss = 0.0
+        total_grad = jnp.zeros_like(flat_params)
+
+        for start_idx in range(0, n_train_trials, effective_grad_descent_batch_size):
+            check_timeout("loss/grad computation")
+            end_idx = min(start_idx + effective_grad_descent_batch_size, n_train_trials)
+            batch_weight = (end_idx - start_idx) / n_train_trials
+            data_batch = utils.slice_data_trials(data_train, slice(start_idx, end_idx))
+
+            batch_loss, batch_grad_tree = loss_and_grad_single_batch(params_tree, data_batch)
+            batch_grad_flat, _ = ravel_pytree(batch_grad_tree)
+
+            total_loss += batch_loss * batch_weight
+            total_grad += batch_grad_flat * batch_weight
+
+        return total_loss / n_samples, total_grad / n_samples
+    # ----------------------------------------------------------------------
+
+    learning_rate_local = float(learning_rate)
+    opt = optax.adam(learning_rate_local, b1=0.9, b2=0.999, eps=1e-8)
+    opt_state = opt.init(flat_params)
+
+    def train_step(params, opt_state):
+        loss, grad = loss_and_grad_batched(params)
+        updates, new_opt_state = opt.update(grad, opt_state, params)
+        new_params = optax.apply_updates(params, updates)
+        return new_params, new_opt_state, loss
+
+    print_every = 50
+    params = flat_params
+    initial_loss, _ = loss_and_grad_batched(params)
+
+    CATASTROPHIC_LOSS_THRESHOLD = 1e6
+    if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
+        print(f"Initial loss {initial_loss:.2e} exceeds threshold. Skipping optimization.")
+        logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
+        return initial_params, True
+
+    best_loss, best_params = initial_loss.copy(), params.copy()
+    for step in range(1, max_iter + 1):
+        check_timeout("optimization")
+        params, opt_state, loss_val = train_step(params, opt_state)
+        check_timeout("optimization")
+        if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
+            logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
+            print(f"Final loss: {loss_val:.4f} at step {step}")
+            break
+        if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
+            logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
+            print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
+            return initial_params, True
+        if loss_val < best_loss:
+            best_loss = loss_val.copy()
+            best_params = params.copy()
+        if step % print_every == 0:
+            print(f"step {step:4d}  loss {loss_val:.4f}")
+    params = unflatten(best_params)
+    print(f"params optimized. Loss: {best_loss:.4f}")
+    return params, False
+
+
 def objective(model, param_estimator, data,
               loss_fn=None, param_penalty_weight=0.1, penalty_denominator=1,
               fit_params=True,
@@ -564,11 +667,13 @@ def objective(model, param_estimator, data,
     if not (isinstance(data, (list, tuple, np.ndarray)) and len(data) == 2):
         raise ValueError("objective expects data as length-2 container: [data_train, data_test].")
 
+    # 1. Convert data to JAX arrays
     data_train = utils.data_as_jax(data[0])
     data_test = utils.data_as_jax(data[1])
 
     n_samples = utils.data_n_samples(data_train)
 
+    # 2. Parameter initialization with robust timeouts and fallbacks
     try:
         _check_timeout("parameter initialization")
         # Compute initial parameters
@@ -601,6 +706,7 @@ def objective(model, param_estimator, data,
 
     initial_params = utils.broadcast_params(initial_params, n_samples)
 
+    # 3a. Validate parameters - enforce memory guard  
     n_params_raw = utils.params_numel_per_sample(initial_params, n_samples=n_samples)
     n_params = n_params_raw / max(1, penalty_denominator)
     # Memory guard: reject candidates with very large per-sample parameter payloads.
@@ -625,7 +731,7 @@ def objective(model, param_estimator, data,
         # Keep objective robust even if size introspection fails.
         pass
 
-    # Fail immediately if fit_params is True and non-numeric params
+    # 3b. Validate parameters - fail immediately if fit_params is True and non-numeric params
     if not utils.params_all_finite(initial_params):
         logging.info("Error: Parameters contain non-numeric or non-finite values.")
         print("Program failed: parameters contain non-numeric or non-finite values.")
@@ -639,7 +745,7 @@ def objective(model, param_estimator, data,
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
     _check_timeout("model validation")
     
-    # Validate model execution and output shape
+    # 3c. Validate model execution and output shape
     is_valid, error_msg = validate_model_execution(
         model, data_train, initial_params, n_samples,
         n_validation_samples=10
@@ -656,6 +762,7 @@ def objective(model, param_estimator, data,
 
     flat_init, unflatten = ravel_pytree(initial_params)
 
+    # 4. Parameter optimisation loop based on per-sample loss
     # Per-sample loss function: model receives per-sample data dict, loss_fn receives model output + data
     def loss_single_sample(params, data_i):
         model_output = model(data_i, params)
@@ -672,84 +779,10 @@ def objective(model, param_estimator, data,
     effective_grad_descent_batch_size = n_train_trials if grad_descent_batch_size is None else int(grad_descent_batch_size)
 
     @jax.jit
-    def loss_single_batch(params_tree, data_batch):
-        """Compute sum of losses for one batch (JIT-compiled)."""
-        batch_losses = loss_total(params_tree, data_batch)  # (n_samples,)
-        return jnp.sum(batch_losses)
-
-    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
-
-    @jax.jit
     def eval_single_batch(params_tree, data_batch):
         """Compute nansum of losses for one batch (JIT-compiled, no grad)."""
         batch_losses = loss_total(params_tree, data_batch)
         return jnp.nansum(batch_losses)
-
-    def loss_and_grad_batched(flat_params):
-        """Compute loss and gradient by accumulating over trial batches."""
-        params_tree = unflatten(flat_params)
-        total_loss = 0.0
-        total_grad = jnp.zeros_like(flat_params)
-
-        for start_idx in range(0, n_train_trials, effective_grad_descent_batch_size):
-            _check_timeout("loss/grad computation")
-            end_idx = min(start_idx + effective_grad_descent_batch_size, n_train_trials)
-            batch_weight = (end_idx - start_idx) / n_train_trials
-            data_batch = utils.slice_data_trials(data_train, slice(start_idx, end_idx))
-
-            batch_loss, batch_grad_tree = loss_and_grad_single_batch(params_tree, data_batch)
-            batch_grad_flat, _ = ravel_pytree(batch_grad_tree)
-
-            total_loss += batch_loss * batch_weight
-            total_grad += batch_grad_flat * batch_weight
-
-        return total_loss / n_samples, total_grad / n_samples
-
-    def _optimize_params(flat_params):
-        if not fit_params:
-            return initial_params, False
-
-        learning_rate_local = float(learning_rate)
-        opt = optax.adam(learning_rate_local, b1=0.9, b2=0.999, eps=1e-8)
-        opt_state = opt.init(flat_params)
-
-        def train_step(params, opt_state):
-            loss, grad = loss_and_grad_batched(params)
-            updates, new_opt_state = opt.update(grad, opt_state, params)
-            new_params = optax.apply_updates(params, updates)
-            return new_params, new_opt_state, loss
-
-        print_every = 50
-        params = flat_params
-        initial_loss, _ = loss_and_grad_batched(params)
-
-        CATASTROPHIC_LOSS_THRESHOLD = 1e6
-        if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
-            print(f"Initial loss {initial_loss:.2e} exceeds threshold. Skipping optimization.")
-            logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
-            return initial_params, True
-
-        best_loss, best_params = initial_loss.copy(), params.copy()
-        for step in range(1, max_iter + 1):
-            _check_timeout("optimization")
-            params, opt_state, loss_val = train_step(params, opt_state)
-            _check_timeout("optimization")
-            if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
-                logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
-                print(f"Final loss: {loss_val:.4f} at step {step}")
-                break
-            if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
-                logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
-                print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
-                return initial_params, True
-            if loss_val < best_loss:
-                best_loss = loss_val.copy()
-                best_params = params.copy()
-            if step % print_every == 0:
-                print(f"step {step:4d}  loss {loss_val:.4f}")
-        params = unflatten(best_params)
-        print(f"params optimized. Loss: {best_loss:.4f}")
-        return params, False
 
     # Compute final loss on test set
     def eval_loss_batched(params_tree, data_eval):
@@ -765,7 +798,12 @@ def objective(model, param_estimator, data,
         return weighted_sum / n_samples
 
     try:
-        params, failed_opt = _optimize_params(flat_init)
+        params, failed_opt = _optimize_params(
+            flat_init, unflatten, _check_timeout,
+            fit_params, initial_params, learning_rate, max_iter,
+            loss_total, data_train, n_samples, n_train_trials,
+            effective_grad_descent_batch_size,
+        )
         if failed_opt:
             return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
@@ -2702,7 +2740,7 @@ async def hypothesis_engine(
             
             islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
 
-            n_params = int(optimized_params.shape[1])
+            n_params = utils.params_numel_per_sample(optimized_params)
             complexity_penalty = float(param_penalty_weight * n_params)
             evaluation_log_updates[candidate_key] = {
                 "train_loss": float(loss),
