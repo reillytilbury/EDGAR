@@ -504,8 +504,7 @@ def validate_model_execution(
 
 def optimize_params_fn(flat_params, unflatten, check_timeout,
                      fit_params, initial_params, learning_rate, max_iter,
-                     loss_total, data_train, n_samples, n_train_trials,
-                     effective_grad_descent_batch_size):
+                     loss_total, data_train):
     """Run Adam optimization on flattened parameters.
 
     This is a standalone function extracted from ``objective`` so it can be
@@ -523,15 +522,16 @@ def optimize_params_fn(flat_params, unflatten, check_timeout,
         loss_total: JIT-compiled batch loss function.
             Signature: loss_total(params_tree, data_batch, use_nansum) -> scalar.
         data_train: Training data dict (JAX arrays).
-        n_samples: Number of samples.
-        n_train_trials: Number of training trials.
-        effective_grad_descent_batch_size: Batch size for iterating over trials.
 
     Returns:
         (params_pytree, failed: bool)
     """
     if not fit_params:
         return initial_params, False
+
+    n_train_samples = utils.data_n_samples(data_train)
+    n_train_trials = utils.data_n_trials(data_train)
+    effective_grad_descent_batch_size = n_train_trials if grad_descent_batch_size is None else int(grad_descent_batch_size)
 
     # -- loss / gradient pipeline (only used during optimization) -----------
     loss_and_grad_single_batch = jax.jit(jax.value_and_grad(
@@ -556,7 +556,7 @@ def optimize_params_fn(flat_params, unflatten, check_timeout,
             total_loss += batch_loss * batch_weight
             total_grad += batch_grad_flat * batch_weight
 
-        return total_loss / n_samples, total_grad / n_samples
+        return total_loss / n_train_samples, total_grad / n_train_samples
     # ----------------------------------------------------------------------
 
     learning_rate_local = float(learning_rate)
@@ -668,7 +668,7 @@ def objective(model, param_estimator, data,
     data_train = utils.data_as_jax(data[0])
     data_test = utils.data_as_jax(data[1])
 
-    n_samples = utils.data_n_samples(data_train)
+    n_train_samples = utils.data_n_samples(data_train)
 
     # 2. Parameter initialization with robust timeouts and fallbacks
     try:
@@ -701,10 +701,10 @@ def objective(model, param_estimator, data,
         empty_params = {}
         return FAILED_PROGRAM_COST, empty_params, FAILED_PROGRAM_COST, empty_params
 
-    initial_params = utils.broadcast_params(initial_params, n_samples)
+    initial_params = utils.broadcast_params(initial_params, n_train_samples)
 
     # 3a. Validate parameters - enforce memory guard  
-    n_params_raw = utils.params_numel_per_sample(initial_params, n_samples=n_samples)
+    n_params_raw = utils.params_numel_per_sample(initial_params, n_samples=n_train_samples)
     n_params = n_params_raw / max(1, penalty_denominator)
     # Memory guard: reject candidates with very large per-sample parameter payloads.
     try:
@@ -736,7 +736,7 @@ def objective(model, param_estimator, data,
     if fit_params and not utils.params_all_inexact(initial_params):
         logging.info(
             "Error: Parameters contain int/bool leaves; rejecting before GD.\n%s",
-            utils.params_tree_summary(initial_params, n_samples=n_samples),
+            utils.params_tree_summary(initial_params, n_samples=n_train_samples),
         )
         print("Program failed: parameters must be floating-point for GD (found int/bool dtype).")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
@@ -744,7 +744,7 @@ def objective(model, param_estimator, data,
     
     # 3c. Validate model execution and output shape
     is_valid, error_msg = validate_model_execution(
-        model, data_train, initial_params, n_samples,
+        model, data_train, initial_params, n_train_samples,
         n_validation_samples=10
     )
     if not is_valid:
@@ -771,12 +771,11 @@ def objective(model, param_estimator, data,
     # Vectorize over samples. Dict is a native JAX pytree, so in_axes=0
     # maps over axis 0 of every leaf array.
     n_train_trials = utils.data_n_trials(data_train)
-    effective_grad_descent_batch_size = n_train_trials if grad_descent_batch_size is None else int(grad_descent_batch_size)
 
     def loss_total(params_tree, data, use_nansum=False):
         """Compute sum of losses."""
-        batch_losses = jax.vmap(loss_single_sample, in_axes=(0, 0), out_axes=0)(params_tree, data)
-        return jnp.nansum(batch_losses) if use_nansum else jnp.sum(batch_losses)
+        losses = jax.vmap(loss_single_sample, in_axes=(0, 0), out_axes=0)(params_tree, data)
+        return jnp.nansum(losses) if use_nansum else jnp.sum(losses)
     # static_argnums=(2,) tells JAX to treat use_nansum as a compile-time
     # constant, so it traces a separate compiled version for True vs False
     # rather than trying to trace through the Python if/else.
@@ -784,15 +783,17 @@ def objective(model, param_estimator, data,
 
     def eval_loss_batched(params_tree, data_eval):
         """Compute loss by iterating over trial batches."""
-        n_eval_trials = utils.data_n_trials(data_eval)
+        n_samples = utils.data_n_samples(data_eval)
+        n_trials = utils.data_n_trials(data_eval)
+        effective_grad_descent_batch_size = n_trials if grad_descent_batch_size is None else int(grad_descent_batch_size)
         weighted_sum = 0.0
-        for start_idx in range(0, n_eval_trials, effective_grad_descent_batch_size):
+        for start_idx in range(0, n_trials, effective_grad_descent_batch_size):
             _check_timeout("final loss evaluation")
-            end_idx = min(start_idx + effective_grad_descent_batch_size, n_eval_trials)
+            end_idx = min(start_idx + effective_grad_descent_batch_size, n_trials)
             batch_size = end_idx - start_idx
             data_batch = utils.slice_data_trials(data_eval, slice(start_idx, end_idx))
             # Use argument True in loss_total because we don't need to calculate gradients during evaluation
-            weighted_sum += loss_total(params_tree, data_batch, True) * (batch_size / n_eval_trials)
+            weighted_sum += loss_total(params_tree, data_batch, True) * (batch_size / n_trials)
         return weighted_sum / n_samples
 
     # 5. Run parameter optimisation on data_train and calculate final loss on data_test 
@@ -800,8 +801,7 @@ def objective(model, param_estimator, data,
         params, failed_opt = optimize_params_fn(
             flat_init, unflatten, _check_timeout,
             fit_params, initial_params, learning_rate, max_iter,
-            loss_total, data_train, n_samples, n_train_trials,
-            effective_grad_descent_batch_size,
+            loss_total, data_train,
         )
         if failed_opt:
             return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
