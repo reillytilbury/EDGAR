@@ -520,8 +520,8 @@ def optimize_params_fn(flat_params, unflatten, check_timeout,
             on early-exit paths.
         learning_rate: Adam learning rate.
         max_iter: Maximum number of gradient-descent steps.
-        loss_total: vmapped per-sample loss function.
-            Signature: loss_total(params_tree, data_batch) -> (n_samples,).
+        loss_total: JIT-compiled batch loss function.
+            Signature: loss_total(params_tree, data_batch, use_nansum) -> scalar.
         data_train: Training data dict (JAX arrays).
         n_samples: Number of samples.
         n_train_trials: Number of training trials.
@@ -534,13 +534,9 @@ def optimize_params_fn(flat_params, unflatten, check_timeout,
         return initial_params, False
 
     # -- loss / gradient pipeline (only used during optimization) -----------
-    @jax.jit
-    def loss_single_batch(params_tree, data_batch):
-        """Compute sum of losses for one batch (JIT-compiled)."""
-        batch_losses = loss_total(params_tree, data_batch)  # (n_samples,)
-        return jnp.sum(batch_losses)
-
-    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
+    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(
+        lambda p, d: loss_total(p, d, False)
+    ))
 
     def loss_and_grad_batched(flat_params):
         """Compute loss and gradient by accumulating over trial batches."""
@@ -774,16 +770,17 @@ def objective(model, param_estimator, data,
 
     # Vectorize over samples. Dict is a native JAX pytree, so in_axes=0
     # maps over axis 0 of every leaf array.
-    loss_total = jax.vmap(loss_single_sample, in_axes=(0, 0), out_axes=0)
-
     n_train_trials = utils.data_n_trials(data_train)
     effective_grad_descent_batch_size = n_train_trials if grad_descent_batch_size is None else int(grad_descent_batch_size)
 
-    @jax.jit
-    def eval_single_batch(params_tree, data_batch):
-        """Compute nansum of losses for one batch (JIT-compiled, no grad)."""
-        batch_losses = loss_total(params_tree, data_batch)
-        return jnp.nansum(batch_losses)
+    def loss_total(params_tree, data, use_nansum=False):
+        """Compute sum of losses."""
+        batch_losses = jax.vmap(loss_single_sample, in_axes=(0, 0), out_axes=0)(params_tree, data)
+        return jnp.nansum(batch_losses) if use_nansum else jnp.sum(batch_losses)
+    # static_argnums=(2,) tells JAX to treat use_nansum as a compile-time
+    # constant, so it traces a separate compiled version for True vs False
+    # rather than trying to trace through the Python if/else.
+    loss_total = jax.jit(loss_total, static_argnums=(2,))
 
     def eval_loss_batched(params_tree, data_eval):
         """Compute loss by iterating over trial batches."""
@@ -794,10 +791,11 @@ def objective(model, param_estimator, data,
             end_idx = min(start_idx + effective_grad_descent_batch_size, n_eval_trials)
             batch_size = end_idx - start_idx
             data_batch = utils.slice_data_trials(data_eval, slice(start_idx, end_idx))
-            weighted_sum += eval_single_batch(params_tree, data_batch) * (batch_size / n_eval_trials)
+            # Use argument True in loss_total because we don't need to calculate gradients during evaluation
+            weighted_sum += loss_total(params_tree, data_batch, True) * (batch_size / n_eval_trials)
         return weighted_sum / n_samples
 
-    # 5. Run parameter optimisation and calculate final loss on data_test 
+    # 5. Run parameter optimisation on data_train and calculate final loss on data_test 
     try:
         params, failed_opt = optimize_params_fn(
             flat_init, unflatten, _check_timeout,
