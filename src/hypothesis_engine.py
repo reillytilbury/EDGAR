@@ -502,7 +502,7 @@ def validate_model_execution(
         return False, f"Model failed to run or is incompatible with JAX tracing: {e}"
 
 
-def _optimize_params(flat_params, unflatten, check_timeout,
+def optimize_params_fn(flat_params, unflatten, check_timeout,
                      fit_params, initial_params, learning_rate, max_iter,
                      loss_total, data_train, n_samples, n_train_trials,
                      effective_grad_descent_batch_size):
@@ -607,7 +607,8 @@ def _optimize_params(flat_params, unflatten, check_timeout,
 
 
 def objective(model, param_estimator, data,
-              loss_fn=None, param_penalty_weight=0.1, penalty_denominator=1,
+              loss_fn=None, optimize_params_fn=optimize_params_fn,
+              param_penalty_weight=0.1, penalty_denominator=1,
               fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000, learning_rate=3e-3,
               use_param_estimator=True, grad_descent_batch_size=None,
@@ -784,7 +785,6 @@ def objective(model, param_estimator, data,
         batch_losses = loss_total(params_tree, data_batch)
         return jnp.nansum(batch_losses)
 
-    # Compute final loss on test set
     def eval_loss_batched(params_tree, data_eval):
         """Compute loss by iterating over trial batches."""
         n_eval_trials = utils.data_n_trials(data_eval)
@@ -797,8 +797,9 @@ def objective(model, param_estimator, data,
             weighted_sum += eval_single_batch(params_tree, data_batch) * (batch_size / n_eval_trials)
         return weighted_sum / n_samples
 
+    # 5. Run parameter optimisation and calculate final loss on data_test 
     try:
-        params, failed_opt = _optimize_params(
+        params, failed_opt = optimize_params_fn(
             flat_init, unflatten, _check_timeout,
             fit_params, initial_params, learning_rate, max_iter,
             loss_total, data_train, n_samples, n_train_trials,
@@ -807,6 +808,7 @@ def objective(model, param_estimator, data,
         if failed_opt:
             return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
+        # Compute final loss on test set
         def _eval_loss(params_tree, data_eval, label: str):
             _check_timeout(f"{label} loss evaluation")
             loss_val = eval_loss_batched(params_tree, data_eval)
