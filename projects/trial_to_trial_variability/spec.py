@@ -4,23 +4,25 @@ Welcome to the Model Discovery Engine! Fill in the components below to start bui
 NECESSARY COMPONENTS:
 
 Loading:
-- load_and_process_data(data_path, *preprocess_params) -> [X, Y]
-- train_test_split(X) -> [train_samples, train_trials]
+- load_and_process_data(data_path, *preprocess_params) -> [[d_train_train, d_train_test], [d_test_train, d_test_test]]
 
 Seed Programs:
-- model_v1(X, params) and param_est_v1(X, Y)
-- model_v2(X, params) and param_est_v2(X, Y)
+- model_v1(data, params) and param_est_v1(data)
+- model_v2(data, params) and param_est_v2(data)
 - params is a dict of named arrays/scalars (same keys for model + estimator)
 
 LOSS FUNCTION:
 - loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(data, model_list, params_list)
+- plot_model_fits(data, programs_list, eval_grid, save_path, labels)
 """
 import numpy as np
+import jax
+import jax.numpy as jnp
+from jax.flatten_util import ravel_pytree
 import scipy
-from typing import Tuple, Dict
+from typing import Dict
 import src.utils as utils
 
 # ========================
@@ -163,121 +165,109 @@ def load_and_process_data_jacob(
     return {"stimulus" : angles, "source": source, "target": target}
 
 def load_and_process_data(
-    data_path: str, 
+    data_path: str,
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
     random_seed: int = 42,
     train_to_test_split_ratio: float = 0.5,
     conc_threshold: float = 0.55,
-    ) -> Dict[str, np.ndarray]:
+) -> list[list[Dict[str, np.ndarray]]]:
     """
-    Load and preprocess neural data and return data in the form of a dictionary
-    
+    Load and preprocess neural data, split into train/test samples and trials,
+    and return a 2x2 container of data dicts.
+
+    The sample split divides cells into two independent halves (for
+    source and target separately). The trial split randomly assigns half
+    the trials for training and half for testing.
+
     Parameters
     ----------
     data_path : str
         Path to the .npy file containing neural data.
     random_seed : int
-        Random seed for reproducibility of source / target cell split 
+        Random seed for reproducibility of cell and trial splits.
     train_to_test_split_ratio : float
-        Ratio of source cells to target cells (e.g. 0.7 means 70% of cells are in the training pouplation)     
+        Fraction of cells assigned to source vs target (e.g. 0.5 means
+        equal source and target populations).
+    conc_threshold : float
+        Orientation-selectivity threshold for cell filtering.
 
     Returns
     -------
-     data dict with keys 'stimulus', 'source', and 'target'.
-    'stimulus' is a 1D array of angles (n_trials,)
-    'source' is a 3D array of shape (2, n_source_cells, n_trials) where sample 0 is a training population and sample 1 is the held-out population for testing 
-    'target' is a 3D array of shape (2, n_target_cells, n_trials) where sample 0 is a training population and sample 1 is the held-out population for testing
+    2x2 list of dicts:
+        [[data_train_train, data_train_test],
+         [data_test_train, data_test_test]]
+        Each dict has keys 'stimulus', 'source', 'target'.
+        'stimulus' has shape (n_trials,), 'source' has shape
+        (n_source_cells, n_trials), 'target' has shape
+        (n_target_cells, n_trials).
     """
-    # load and preprocess data
     neural_data = np.load(data_path, allow_pickle=True)
     neural_data = neural_data.item()
     response = np.asarray(neural_data['sresp'])
 
-    angles = neural_data['istim'] # shape (n_trials)
+    angles = neural_data['istim']
     assert max(angles) <= 2 * np.pi, "Expected angles to be in radians and between 0 and 2pi"
     n_trials = response.shape[1]
 
     if conc_threshold is not None:
         conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
         good_cells = np.where(conc > conc_threshold)[0]
-
         print(f"Filtering for orientation selectivity. Kept {len(good_cells)} out of {response.shape[0]} cells.")
         response = response[good_cells]
 
     rng = np.random.default_rng(random_seed)
 
-    # Source/Target split for trial to trial variability 
+    # --- Cell split: source vs target ---
     cell_idx = rng.permutation(response.shape[0])
     n_source_cells = int(train_to_test_split_ratio * response.shape[0])
     source_cells = cell_idx[:n_source_cells]
     target_cells = cell_idx[n_source_cells:]
 
     if source_cells.size == 0 or target_cells.size == 0:
-        raise ValueError("Train to test split ratio results in empty source or target cell population. Please adjust the ratio.")    
+        raise ValueError("Train to test split ratio results in empty source or target cell population. Please adjust the ratio.")
 
-    half_source = source_cells.size // 2 
-    half_target = target_cells.size // 2 
+    # --- Sample split: each population halved into train/test samples ---
+    half_source = source_cells.size // 2
+    half_target = target_cells.size // 2
     train_source = source_cells[:half_source]
-    # make sure we handle odd number of cells by putting the extra cell in the training set
     test_source = source_cells[-half_source:]
     train_target = target_cells[:half_target]
     test_target = target_cells[-half_target:]
 
-    # TODO : think about whether z_scoring should happen after the cell and trial split or before? Currently it's after 
-    X_train = response[train_source]
-    X_test = response[test_source]
-    Y_train = response[train_target]
-    Y_test = response[test_target]
+    # --- Trial split: random half for training, rest for testing ---
+    train_trials = np.sort(rng.choice(n_trials, size=n_trials // 2, replace=False))
+    test_trials = np.setdiff1d(np.arange(n_trials), train_trials)
 
-    # rather than zscore, just divide by the std 
+    # Normalise per cell (divide by std)
     eps = 1e-12
-    X_train = X_train / (X_train.std(axis=1, keepdims=True) + eps)
-    X_test = X_test / (X_test.std(axis=1, keepdims=True) + eps)
-    Y_train = Y_train / (Y_train.std(axis=1, keepdims=True) + eps)
-    Y_test = Y_test / (Y_test.std(axis=1, keepdims=True) + eps)
+    source_train = response[train_source]
+    source_test = response[test_source]
+    target_train = response[train_target]
+    target_test = response[test_target]
+    source_train = source_train / (source_train.std(axis=1, keepdims=True) + eps)
+    source_test = source_test / (source_test.std(axis=1, keepdims=True) + eps)
+    target_train = target_train / (target_train.std(axis=1, keepdims=True) + eps)
+    target_test = target_test / (target_test.std(axis=1, keepdims=True) + eps)
 
-    source = np.stack([X_train, X_test], axis=0)  # (2, n_source, T)
-    target = np.stack([Y_train, Y_test], axis=0)  # (2, n_target, T)
-    return {"stimulus" : angles, "source": source, "target": target}
+    def _make_data_dict(source, target, trial_idx):
+        return {
+            'stimulus': angles[trial_idx],
+            'source': source[:, trial_idx],
+            'target': target[:, trial_idx],
+        }
 
-def train_test_split(
-    X: Dict[str, np.ndarray],
-    # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
-    random_seed: int = 42,
-    expected_number_of_repeats = None,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Return train sample indices and train trial indices.
-    """    
-    n_samples = utils.data_n_samples(X)
-    n_trials = utils.data_n_trials(X)
-    assert n_samples == 2, "Expected exactly 2 samples for train/test split."
-
-    angles = X['stimulus']
-
-    # For BZ015 this angle had 6 repeats for some reason. Remove the extra 3 repeats 
-    # repeated_angle = 0.017453292519943295
-    if expected_number_of_repeats is not None:
-        assert (len(unique_angles) + 1) * 3 == n_trials, f"Expected each unique angle to have 3 repeated trials. But got {len(unique_angles)} unique angles and {n_trials} total trials."
-
-    if expected_number_of_repeats == 3 :
-        train_trials = []
-        for angle in unique_angles:
-            angle_trials = np.where(angles == angle)[0]
-            # select the first 2 trials for training and the last trial for testing
-            train_trials.extend(angle_trials[:2])
-    else: 
-        # randomly select 0.5 of the trials for training and 0.5 for testing
-        rng = np.random.default_rng(random_seed)
-        train_trials = rng.choice(n_trials, size=n_trials // 2, replace=False)
-
-    return np.array([0]), train_trials
+    return [
+        [_make_data_dict(source_train, target_train, train_trials),
+         _make_data_dict(source_train, target_train, test_trials)],
+        [_make_data_dict(source_test, target_test, train_trials),
+         _make_data_dict(source_test, target_test, test_trials)],
+    ]
 
 # ========================
 # 2. SEED MODELS
 # ========================
 
-def model_v1(X, params):
+def model_v1(data, params):
     """ Gain Modulation + per cell modulation
 
     Equation : For each target cell c at timepoint t with stimulus angle theta, 
@@ -285,7 +275,7 @@ def model_v1(X, params):
     where g(theta(t); cell_params) is some tuning function. 
 
     Args : 
-        X (dict) : Inputs object with keys 'stimulus', neural responses with shape (n_source_cells + 1 , n_time). You can get the neural responses only by removing the 'stimulus' feature from X. 
+        data (dict) : Inputs object with keys 'stimulus', neural responses with shape (n_source_cells + 1 , n_time). You can get the neural responses only by removing the 'stimulus' feature from X. 
         params (dict) : Parameter dictionary with keys: 
             - source_tuning_params : parameters for the tuning function g(theta) (shape (n_source_cells, n_params))
             - source_coupling_factor : coupling_factor (shape (n_source_cells,)) 
@@ -295,8 +285,8 @@ def model_v1(X, params):
     Returns : 
         jnp.ndarray : Predicted responses for the target cells with shape (n_target_cells, n_time)
     """
-    stimuli = X['stimulus'] # shape (n_time)
-    source_response = X['source'] # shape (n_source, n_time)
+    stimuli = data['stimulus'] # shape (n_time)
+    source_response = data['source'] # shape (n_source, n_time)
 
     source_tuning_params = params['source_tuning_params'] # shape (n_source_cells, n_params)
     source_coupling_factor = params['source_coupling_factor'] # shape (n_source_cells,)
@@ -399,7 +389,7 @@ def param_est_v1(data):
         peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
         return baseline + peak1_component + peak2_component
 
-    def parameter_estimator_jax(theta, spike_counts):
+    def tuning_parameter_estimator_jax(theta, spike_counts):
         n_bins = 75
 
         # Bin angles into [0, n_bins-1]
@@ -446,11 +436,11 @@ def param_est_v1(data):
         return jnp.array([theta_pref, baseline, amplitude_1, amplitude_2, tuning_width_1_left, tuning_width_1_right, tuning_width_2_left, tuning_width_2_right, exponent_1, exponent_2, angle_offset_2,])
 
     # Step 1 : For every source cell, fit a peaky tuning curve 
-    source_params_init = jax.vmap(parameter_estimator_jax, in_axes=(None, 0))(bin_centers, x_binned_spike_rate) # shape (n_source, n_params)
+    source_params_init = jax.vmap(tuning_parameter_estimator_jax, in_axes=(None, 0))(bin_centers, x_binned_spike_rate) # shape (n_source, n_params)
     # use gradient descent to optimise the tuning parameters 
-    source_tuning_params = _optimize_params(source_params_init, stims, x) 
+    source_tuning_params = _optimize_params(source_params_init, stims, y) 
 
-    target_params_init = jax.vmap(parameter_estimator_jax, in_axes=(None, 0))(bin_centers, y_binned_spike_rate) # shape (n_target, n_params)
+    target_params_init = jax.vmap(tuning_parameter_estimator_jax, in_axes=(None, 0))(bin_centers, y_binned_spike_rate) # shape (n_target, n_params)
     target_tuning_params = _optimize_params(target_params_init, stims, y) 
 
     # Step 2 : Fit the gain factor using leastsq 
@@ -485,7 +475,7 @@ def param_est_v1(data):
     }
     return params
 
-def model_v2(X, params):
+def model_v2(data, params):
     """ Gain Modulation + source to target coupling 
 
     Equation : For each target cell c at timepoint t with stimulus angle theta, 
@@ -493,7 +483,7 @@ def model_v2(X, params):
     where g(theta(t); cell_params) is some tuning function, source_cell_response(t) is the response of the source cell at time t (shape n_source,) and the coupling weight is the coupling factor for each target cell (shape n_source,).
 
     Args : 
-        X (dict) : Inputs object with keys 'stimulus', neural responses with shape (n_source_cells + 1 , n_time). You can get the neural responses only by removing the 'stimulus' feature from X. 
+        data (dict) : Inputs object with keys 'stimulus', neural responses with shape (n_source_cells + 1 , n_time). You can get the neural responses only by removing the 'stimulus' feature from X. 
         params (dict) : Parameter dictionary with keys: 
             - source_tuning_params : parameters for the tuning function g(theta) (shape (n_source_cells, n_params))
             - target_tuning_params : parameters for the tuning function g(theta) (shape (n_target_cells, n_params))
@@ -502,8 +492,8 @@ def model_v2(X, params):
     Returns : 
         jnp.ndarray : Predicted responses for the target cells with shape (n_target_cells, n_time)
     """
-    stimuli = jnp.array(X['stimulus']) # shape (n_time)
-    source_response = jnp.array(X['source']) # shape (n_source, n_time)
+    stimuli = jnp.array(data['stimulus']) # shape (n_time)
+    source_response = jnp.array(data['source']) # shape (n_source, n_time)
 
     source_tuning_params = params['source_tuning_params'] # shape (n_source_cells, n_params)
     target_tuning_params = params['target_tuning_params'] # shape (n_target_cells, n_params)
@@ -600,7 +590,7 @@ def param_est_v2(data):
         peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
         return baseline + peak1_component + peak2_component
 
-    def parameter_estimator_jax(theta, spike_counts):
+    def tuning_parameter_estimator_jax(theta, spike_counts):
         n_bins = 75
 
         # Bin angles into [0, n_bins-1]
@@ -647,11 +637,11 @@ def param_est_v2(data):
         return jnp.array([theta_pref, baseline, amplitude_1, amplitude_2, tuning_width_1_left, tuning_width_1_right, tuning_width_2_left, tuning_width_2_right, exponent_1, exponent_2, angle_offset_2,])
 
     # Step 1 : For every source cell, fit a peaky tuning curve 
-    source_params_init = jax.vmap(parameter_estimator_jax, in_axes=(None, 0))(bin_centers, x_binned_spike_rate) # shape (n_source, n_params)
+    source_params_init = jax.vmap(tuning_parameter_estimator_jax, in_axes=(None, 0))(bin_centers, x_binned_spike_rate) # shape (n_source, n_params)
     # use gradient descent to optimise the tuning parameters 
     source_tuning_params = _optimize_params(source_params_init, stims, x) 
 
-    target_params_init = jax.vmap(parameter_estimator_jax, in_axes=(None, 0))(bin_centers, y_binned_spike_rate) # shape (n_target, n_params)
+    target_params_init = jax.vmap(tuning_parameter_estimator_jax, in_axes=(None, 0))(bin_centers, y_binned_spike_rate) # shape (n_target, n_params)
     target_tuning_params = _optimize_params(target_params_init, stims, y) 
 
     # Step 2 : Fit the gain factor using leastsq 
@@ -678,18 +668,25 @@ def param_est_v2(data):
 # 3. LOSS
 # ========================
 
-def loss_fn(Y_pred, Y_true):
+def loss_fn(model_output, data):
     """
     Elementwise squared-error loss.
-    """
-    return (Y_true - Y_pred) ** 2
 
+    Parameters
+    ----------
+    model_output : jnp.ndarray
+        Predicted target-cell responses, shape (n_target_cells, n_trials).
+    data : dict
+        Data dictionary; the comparison target is data['target'].
+    """
+    Y_true = data['target']
+    return (Y_true - model_output) ** 2
 
 # ========================
 # 4. DIAGNOSTICS
 # ========================
 
-def plot_model_fits(X, Y, programs_list, save_path=""):
+def plot_model_fits(data, programs_list, eval_grid, save_path="", labels=None):
     raise NotImplementedError
 
 
