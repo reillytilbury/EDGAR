@@ -504,7 +504,7 @@ def validate_model_execution(
 
 def optimize_params_fn(flat_params, unflatten, check_timeout,
                      fit_params, initial_params, learning_rate, max_iter,
-                     loss_total, data_train):
+                     loss_total, data_train, grad_descent_batch_size=None):
     """Run Adam optimization on flattened parameters.
 
     This is a standalone function extracted from ``objective`` so it can be
@@ -781,7 +781,7 @@ def objective(model, param_estimator, data,
     # rather than trying to trace through the Python if/else.
     loss_total = jax.jit(loss_total, static_argnums=(2,))
 
-    def eval_loss_batched(params_tree, data_eval):
+    def eval_loss_batched(params_tree, data_eval, grad_descent_batch_size=None):
         """Compute loss by iterating over trial batches."""
         n_samples = utils.data_n_samples(data_eval)
         n_trials = utils.data_n_trials(data_eval)
@@ -801,7 +801,7 @@ def objective(model, param_estimator, data,
         params, failed_opt = optimize_params_fn(
             flat_init, unflatten, _check_timeout,
             fit_params, initial_params, learning_rate, max_iter,
-            loss_total, data_train,
+            loss_total, data_train, grad_descent_batch_size,
         )
         if failed_opt:
             return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
@@ -809,7 +809,7 @@ def objective(model, param_estimator, data,
         # Compute final loss on test set
         def _eval_loss(params_tree, data_eval, label: str):
             _check_timeout(f"{label} loss evaluation")
-            loss_val = eval_loss_batched(params_tree, data_eval)
+            loss_val = eval_loss_batched(params_tree, data_eval, grad_descent_batch_size)
             # loss_val = loss_val + param_penalty_weight * n_params
             n_nans = jnp.sum(jnp.isnan(loss_val))
             if n_nans > 0:
