@@ -426,7 +426,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             param_estimator_refinement_rounds=params.get('param_estimator_refinement_rounds', 0),
             numpy_programs=models,
             param_estimators=param_estimators,
-            data=data,
+            X=data,
             eval_grid=data_eval,
             plot_model_fits=plot_model_fits_fn,
             prompt_manager=prompt_manager,

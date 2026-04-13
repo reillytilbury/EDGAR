@@ -1667,7 +1667,7 @@ async def hypothesis_engine(
         max_iter = 1_000, learning_rate = 3e-3,
         penalty_denominator = 1,
         numpy_programs = None, param_estimators = None,
-        data = None, eval_grid = None,
+        X = None, eval_grid = None,
         plot_model_fits = None, loss_fn = None,
         prompt_manager = None, grad_descent_batch_size = None, swear_words = None,
         open_family_tree = False,
@@ -1718,8 +1718,8 @@ async def hypothesis_engine(
         learning_rate (float): Optimizer learning rate inside ``objective``.
         numpy_programs (list[callable]): Seed NumPy model functions.
         param_estimators (list[callable]): Seed parameter estimators.
-        data: Split data container with shape ``(2, 2)`` where each cell is a
-            data dict. ``data[0,*]`` is train-sample split, ``data[1,*]`` is test-sample split.
+        X: Split data container with shape ``(2, 2)`` where each cell is a
+            data dict. ``X[0,*]`` is train-sample split, ``X[1,*]`` is test-sample split.
         eval_grid (dict[str, np.ndarray]): Linearly spaced evaluation grid used
             for visualising and sanity-checking model predictions.
         plot_model_fits (callable | None): Optional plotting callback.
@@ -1734,7 +1734,6 @@ async def hypothesis_engine(
         random_seed (int): Run seed for deterministic split-dependent operations.
         full_dir_tuple (tuple): Directory path components for saving outputs. Must be specified.
     """
-    X = data
     has_spec_plotter = plot_model_fits is not None
     if full_dir_tuple is None:
         raise ValueError("full_dir_tuple must be specified to save outputs.")
