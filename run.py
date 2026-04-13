@@ -172,7 +172,7 @@ def _build_plot_model_fits_fn(spec_plot_fn):
     Build a stable plotting interface for hypothesis_engine.
 
     Engine-facing contract:
-      plot_fn(data, programs_list, X_eval, save_path, labels=None)
+      plot_fn(data, programs_list, eval_grid, save_path, labels=None)
     """
     if not callable(spec_plot_fn):
         return None
@@ -186,7 +186,7 @@ def _build_plot_model_fits_fn(spec_plot_fn):
     def _wrapped_plot_fn(
         *,
         data,
-        X_eval,
+        eval_grid,
         save_path: str,
         programs_df=None,
         programs_list=None,
@@ -222,7 +222,7 @@ def _build_plot_model_fits_fn(spec_plot_fn):
         call_kwargs = {
             "data": data,
             "programs_list": programs_list_local,
-            "X_eval": X_eval,
+            "eval_grid": eval_grid,
             "save_path": save_path,
             **kwargs,
         }

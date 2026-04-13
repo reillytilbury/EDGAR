@@ -467,12 +467,12 @@ def check_jax_translation(
 def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins=100):
     """Build evaluation grid as a data dict.
 
-    Creates a linspace grid for each specified key, broadcast to n_samples and
-    any intermediate dimensions present in the original key.
+    Creates a linspace grid for each specified key. The returned arrays have no
+    sample axis — they represent a single shared evaluation grid.
 
     Args:
         data (dict[str, np.ndarray]): Data dict with sample axis at dim 0,
-            used to infer n_samples and default min/max bounds.
+            used to infer default min/max bounds and intermediate dimensions.
         eval_keys (list[str] | None): Keys to create eval grids for. If None,
             uses all keys in the data dict.
         x_min: Scalar (applied to all keys), list (one per eval key), or None
@@ -481,12 +481,11 @@ def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins
         n_bins (int): Number of evaluation points per key.
 
     Returns:
-        dict[str, np.ndarray]: Eval data dict where each key has shape
-            ``(n_samples, *mid_dims, n_bins)``, where ``mid_dims`` are the
-            intermediate dimensions of the original key between the sample and
-            trial axes (empty for 2D keys, giving shape ``(n_samples, n_bins)``).
+        dict[str, np.ndarray]: Eval grid dict where each key has shape
+            ``(*mid_dims, n_bins)``, where ``mid_dims`` are the intermediate
+            dimensions of the original key between the sample and trial axes
+            (empty for 2D keys, giving shape ``(n_bins,)``).
     """
-    n_samples = data_n_samples(data)
     if eval_keys is None:
         eval_keys = list(data.keys())
     n_keys = len(eval_keys)
@@ -524,10 +523,8 @@ def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins
         # mid_dims are intermediate dims between sample and trial axes.
         # For 2D arrays (n_samples, n_trials) this is an empty tuple.
         mid_dims = data[key].shape[1:-1]
-        out_shape = (n_samples,) + mid_dims + (n_bins,)
-        # grid_reshape is (1, 1, ..., 1, n_bins) — one leading 1 per mid dim —
-        # so that np.broadcast_to spreads the linspace across all intermediate dims.
-        grid_reshape = (1,) + (1,) * len(mid_dims) + (n_bins,)
+        out_shape = mid_dims + (n_bins,)
+        grid_reshape = (1,) * len(mid_dims) + (n_bins,)
         result[key] = np.broadcast_to(grid.reshape(grid_reshape), out_shape)
     return result
 
@@ -538,19 +535,26 @@ def compute_evaluation_matrix(program, params, eval_points):
     Args:
         program: Model function with signature ``model(data_i, params)``.
         params: Batched parameter pytree with leading sample axis.
-        eval_points (dict[str, np.ndarray]): Evaluation data dict with sample
-            axis at dim 0, as returned by ``build_evaluation_points``.
+        eval_points (dict[str, np.ndarray]): Evaluation grid without a sample
+            axis, as returned by ``build_evaluation_points``.
 
     Returns:
-        jnp.ndarray: Model output evaluated on the grid.
+        jnp.ndarray: Model output evaluated on the grid, shape
+            ``(n_samples, *eval_shape)``.
     """
     if eval_points is None:
         raise ValueError("eval_points must be provided.")
 
     params_arr = tree_to_jax(params)
-    eval_data = data_as_jax(eval_points)
-    n_samples = data_n_samples(eval_data)
+    first_leaf = jax.tree_util.tree_leaves(params_arr)[0]
+    n_samples = first_leaf.shape[0]
     params_arr = broadcast_params(params_arr, n_samples)
+
+    # Broadcast eval grid to (n_samples, ...) so vmap can map over dim 0.
+    eval_data = {
+        k: jnp.broadcast_to(jnp.asarray(v), (n_samples,) + v.shape)
+        for k, v in eval_points.items()
+    }
 
     program_vmap = vmap_over_samples(program)
     return program_vmap(eval_data, params_arr)

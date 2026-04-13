@@ -1032,7 +1032,7 @@ async def generate_new_model(current_island, llm_name, client,
             plot_model_fits(
                 data=data,
                 programs_list=programs_list,
-                X_eval=x_eval,
+                eval_grid=x_eval,
                 save_path=img_dir,
                 labels=[f"v_{i+1}" for i in range(len(random_programs))],
             )
@@ -1258,7 +1258,7 @@ async def generate_new_parameter_estimator(current_island,
                         "losses": np.full(utils.data_n_samples(data[0]), float(current_loss)),
                     }
                 ],
-                X_eval=x_eval,
+                eval_grid=x_eval,
                 save_path=img_path,
                 labels=['PE'],
             )
@@ -2008,7 +2008,7 @@ async def hypothesis_engine(
         plot_model_fits(
             data=X[0, 0],
             programs_list=seed_programs_list,
-            X_eval=eval_grid,
+            eval_grid=eval_grid,
             save_path=os.path.join(image_prompts_dir, 'initial_programs.png'),
             labels=['seed_1', 'seed_2'],
         )
@@ -2041,7 +2041,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[0, 0],
                     programs_list=seed_train_programs_list,
-                    X_eval=eval_grid,
+                    eval_grid=eval_grid,
                     save_path=seed_train_path,
                     labels=[seed_label],
                     title_prefix=f"Train fits ({seed_label})",
@@ -2068,7 +2068,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[0, 1],
                     programs_list=seed_test_programs_list,
-                    X_eval=eval_grid,
+                    eval_grid=eval_grid,
                     save_path=seed_test_path,
                     labels=[seed_label],
                     title_prefix=f"Test fits ({seed_label})",
@@ -2622,7 +2622,7 @@ async def hypothesis_engine(
                             "losses": np.full(utils.data_n_samples(X[0, 0]), float(loss)),
                         },
                     ],
-                    X_eval=eval_grid,
+                    eval_grid=eval_grid,
                     save_path=os.path.join(image_param_est_vs_gd_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est_vs_gd.png'),
                     labels=['PE', 'GD'],
                 )
@@ -2647,7 +2647,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[0, 0],
                     programs_list=train_programs_list,
-                    X_eval=eval_grid,
+                    eval_grid=eval_grid,
                     save_path=train_fit_path,
                     labels=['PE', 'GD'],
                     title_prefix="Train fits",
@@ -2672,7 +2672,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[0, 1],
                     programs_list=test_programs_list,
-                    X_eval=eval_grid,
+                    eval_grid=eval_grid,
                     save_path=test_fit_path,
                     labels=['PE', 'GD'],
                     title_prefix="Test fits",
@@ -2827,7 +2827,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[0, 0],
                     programs_list=top_programs_list,
-                    X_eval=eval_grid,
+                    eval_grid=eval_grid,
                     save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
                 )
         
@@ -2844,7 +2844,7 @@ async def hypothesis_engine(
             plot_model_fits(
                 data=X[0, 0],
                 programs_list=top_programs_list,
-                X_eval=eval_grid,
+                eval_grid=eval_grid,
                 save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
             )
         
@@ -2974,7 +2974,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[1, 1],
                     programs_list=programs_list,
-                    X_eval=eval_grid,
+                    eval_grid=eval_grid,
                     save_path=os.path.join(df_dirs[i], 'top_model_fits.png'),
                 )
                 # Plot top models separately using the same plot_model_fits pathway.
@@ -2988,7 +2988,7 @@ async def hypothesis_engine(
                             data=X[1, 1],
                             complexity_penalty=param_penalty_weight,
                         ),
-                        X_eval=eval_grid,
+                        eval_grid=eval_grid,
                         save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png'),
                         labels=['model'],
                     )
