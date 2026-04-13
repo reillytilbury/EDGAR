@@ -22,43 +22,14 @@ logging.getLogger("google.genai").setLevel(logging.ERROR)
 # ---------------------------------------------------------------------------
 
 def validate_data(X: Dict[str, np.ndarray]) -> None:
-    """Validate that X is a dict of arrays sharing the same first and last dimensions.
-
-    All arrays must have at least 2 dimensions (n_samples, ..., n_trials), share
-    the same leading n_samples axis, and share the same trailing n_trials axis.
-
+    """Validate that X is a dictionary of arrays. # Update this further if necessary! 
+    
     Raises ValueError with a clear message if validation fails.
     """
     if not isinstance(X, dict):
         raise ValueError(f"Data must be a dict, got {type(X).__name__}.")
     if len(X) == 0:
         raise ValueError("Data dict must not be empty.")
-    n_samples = None
-    n_trials = None
-    for key, arr in X.items():
-        if not isinstance(arr, (np.ndarray, jnp.ndarray)):
-            raise ValueError(
-                f"Data['{key}'] must be a numpy or JAX array, got {type(arr).__name__}."
-            )
-        if arr.ndim < 2:
-            raise ValueError(
-                f"Data['{key}'] has {arr.ndim} dimension(s); all arrays must have at least "
-                f"2 dimensions (n_samples, ..., n_trials)."
-            )
-        if n_samples is None:
-            n_samples = arr.shape[0]
-        elif arr.shape[0] != n_samples:
-            raise ValueError(
-                f"All arrays must share the same first dimension (n_samples). "
-                f"First key has n_samples={n_samples}, but '{key}' has n_samples={arr.shape[0]}."
-            )
-        if n_trials is None:
-            n_trials = arr.shape[-1]
-        elif arr.shape[-1] != n_trials:
-            raise ValueError(
-                f"All arrays must share the same last dimension (n_trials). "
-                f"First key has n_trials={n_trials}, but '{key}' has n_trials={arr.shape[-1]}."
-            )
 
 
 def data_n_trials(X: Dict[str, np.ndarray]) -> int:
