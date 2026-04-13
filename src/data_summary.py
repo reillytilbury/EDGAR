@@ -11,7 +11,6 @@ def save_data_summary(
     data,
     output_dir: str,
     random_seed: int = 0,
-    training_samples: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Save a summary of realized sample/trial splits and per-key shapes to CSV.
 
