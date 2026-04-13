@@ -15,7 +15,7 @@ LOSS FUNCTION:
 - loss_fn(Y_pred, Y_true) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(data, programs_list, data_eval, save_path, labels)
+- plot_model_fits(data, programs_list, eval_grid, save_path, labels)
 """
 import numpy as np
 import matplotlib.pyplot as plt
@@ -329,7 +329,7 @@ def loss_fn(Y_pred, Y_true):
 def plot_model_fits(
     data,
     programs_list,
-    data_eval,
+    eval_grid,
     save_path="",
     labels=None,
     title_prefix: str | None = None,

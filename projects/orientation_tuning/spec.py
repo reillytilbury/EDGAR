@@ -15,7 +15,7 @@ Loss:
 - loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(data, programs_list, X_eval, save_path, labels)
+- plot_model_fits(data, programs_list, eval_grid, save_path, labels)
 """
 import numpy as np
 import jax
@@ -334,7 +334,7 @@ def loss_fn(model_output, data):
 def plot_model_fits(
     data,
     programs_list,
-    X_eval,
+    eval_grid,
     save_path="",
     labels=("model_v1", "model_v2"),
 ):
@@ -351,9 +351,8 @@ def plot_model_fits(
         - 'model': callable model(data_one, params)
         - 'params': batched parameter pytree
         - 'losses': array of shape (n_samples,)
-    X_eval : dict[str, np.ndarray]
-        Evaluation grid dictionary with key 'stimulus' of shape
-        (n_samples, n_eval_trials).
+    eval_grid : dict[str, np.ndarray]
+        Evaluation grid dictionary with key 'stimulus' of shape (n_eval_points,).
     save_path : str
         Output path. If empty, raises an error.
     """
@@ -393,8 +392,7 @@ def plot_model_fits(
         s = idx[i]
         x = stimulus[s]
         y_obs = response[s]
-        eval_data = utils.get_data_sample(X_eval, s)
-        x_eval = np.asarray(eval_data['stimulus']).reshape(-1)
+        x_eval = np.asarray(eval_grid['stimulus']).reshape(-1)
 
         y_mean = compute_binned_means_on_eval(x, y_obs, x_eval)
         ax.scatter(x, y_obs, s=10, c="black", alpha=0.2, label="Observed")
@@ -404,7 +402,7 @@ def plot_model_fits(
             model = program["model"]
             params = utils.slice_params(params_by_model[j], s)
             loss = program["losses"][s]
-            y_pred = utils.call_model(model, eval_data, params)
+            y_pred = utils.call_model(model, eval_grid, params)
 
             label = labels[j] + f" (loss={loss:.2f})"
             ax.plot(

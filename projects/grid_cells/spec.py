@@ -15,7 +15,7 @@ Loss:
 - loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(data, programs_list, data_eval, save_path, labels)
+- plot_model_fits(data, programs_list, eval_grid, save_path, labels)
 """
 
 import numpy as np
@@ -852,7 +852,7 @@ def loss_fn(model_output, data):
 def plot_model_fits(
     data,
     programs_list,
-    data_eval,
+    eval_grid,
     save_path="",
     labels=("model_v1", "model_v2"),
     n_bins: int = 40,
@@ -874,9 +874,9 @@ def plot_model_fits(
         - `'model'`: callable model function
         - `'params'`: batched parameter pytree
         - optionally `'losses'`: per-sample losses
-    data_eval : dict[str, np.ndarray]
+    eval_grid : dict[str, np.ndarray]
         Evaluation grid dictionary with keys 'pos_x', 'pos_y'.
-        Each array has shape (n_samples, n_eval_trials).
+        Each array has shape (n_eval_points,).
     save_path : str
         Output figure path.
     labels : tuple of str
@@ -888,8 +888,8 @@ def plot_model_fits(
     pos_x = np.asarray(data['pos_x'])
     pos_y = np.asarray(data['pos_y'])
     response = np.asarray(data['response'])
-    eval_pos_x = np.asarray(data_eval['pos_x'])
-    eval_pos_y = np.asarray(data_eval['pos_y'])
+    eval_pos_x = np.asarray(eval_grid['pos_x']).reshape(-1)
+    eval_pos_y = np.asarray(eval_grid['pos_y']).reshape(-1)
 
     n_samples = pos_x.shape[0]
     n_show = min(max_show, n_samples)
@@ -910,8 +910,8 @@ def plot_model_fits(
         x = pos_x[s]
         y = pos_y[s]
         y_obs = response[s]
-        x_domain = (float(np.min(eval_pos_x[s])), float(np.max(eval_pos_x[s])))
-        y_domain = (float(np.min(eval_pos_y[s])), float(np.max(eval_pos_y[s])))
+        x_domain = (float(np.min(eval_pos_x)), float(np.max(eval_pos_x)))
+        y_domain = (float(np.min(eval_pos_y)), float(np.max(eval_pos_y)))
 
         rm_obs = _bin_to_rate_map(
             x, y, y_obs, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain,

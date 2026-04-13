@@ -17,7 +17,7 @@ Loss:
 OPTIONAL COMPONENTS (for enhanced diagnostics and visualization):
 
 Plotting:
-- plot_model_fits(data, programs_list, X_eval, save_path, labels)
+- plot_model_fits(data, programs_list, eval_grid, save_path, labels)
 """
 
 import numpy as np
@@ -257,7 +257,7 @@ def loss_fn(model_output, data):
 def plot_model_fits(
     data,
     programs_list,
-    X_eval,
+    eval_grid,
     save_path="",
     labels=("model_v1", "model_v2"),
 ):
@@ -273,8 +273,8 @@ def plot_model_fits(
         - 'model': callable model(data, params)
         - 'params': batched parameter pytree
         - 'losses': array of shape (n_samples,)
-    X_eval : dict[str, np.ndarray]
-        Evaluation grid dict with key 'x', shape (n_samples, n_eval_trials).
+    eval_grid : dict[str, np.ndarray]
+        Evaluation grid dict with key 'x', shape (n_eval_points,).
     save_path : str
         Output path. If empty, raises an error.
     """
@@ -283,7 +283,7 @@ def plot_model_fits(
 
     x_arr = data['x']
     y_arr = data['y']
-    x_eval_arr = X_eval['x']
+    x_eval = np.asarray(eval_grid['x']).reshape(-1)
     n_samples = x_arr.shape[0]
     # diff colours depending on how many models we have
     if len(programs_list) == 1:
@@ -315,7 +315,6 @@ def plot_model_fits(
         s = idx[i]
         x = x_arr[s]
         y_obs = y_arr[s]
-        x_eval = np.asarray(x_eval_arr[s]).reshape(-1)
 
         y_mean = compute_binned_means_on_eval(x, y_obs, x_eval)
         ax.scatter(x, y_obs, s=10, c="black", alpha=0.15, label="Observed")
@@ -324,8 +323,7 @@ def plot_model_fits(
         for j, program in enumerate(programs_list):
             model = program["model"]
             params = utils.slice_params(params_by_model[j], s)
-            sample_eval_data = {'x': x_eval}
-            y_pred = utils.call_model(model, sample_eval_data, params)
+            y_pred = utils.call_model(model, eval_grid, params)
 
             label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
             if "losses" in program:
