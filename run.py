@@ -427,7 +427,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             numpy_programs=models,
             param_estimators=param_estimators,
             data=data,
-            data_eval=data_eval,
+            eval_grid=data_eval,
             plot_model_fits=plot_model_fits_fn,
             prompt_manager=prompt_manager,
             grad_descent_batch_size=params.get('grad_descent_batch_size', None),
