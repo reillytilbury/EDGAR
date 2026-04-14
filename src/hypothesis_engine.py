@@ -1066,7 +1066,24 @@ def _programs_df_to_programs_list(
             raw = jnp.asarray(loss_func(model_output, data_i))
             return jnp.mean(raw) if raw.ndim > 0 else raw
 
-        losses = jax.vmap(_sample_loss, in_axes=(0, 0))(params_tree, data_jax)
+        try:
+            losses = jax.vmap(_sample_loss, in_axes=(0, 0))(params_tree, data_jax)
+        except Exception as exc:
+            logging.info(
+                "_programs_df_to_programs_list: vectorized loss computation failed "
+                "(falling back to per-sample evaluation): %s",
+                exc,
+            )
+            params_cpu = _broadcast_params_cpu(params, n_samples)
+            data_np = utils.data_as_numpy(data)
+            losses_np = []
+            for sample_idx in range(n_samples):
+                data_i = utils.get_data_sample(data_np, sample_idx)
+                params_i = _slice_params_cpu(params_cpu, sample_idx)
+                model_output = np.asarray(utils.call_model(model, data_i, params_i, prefer_jax=False))
+                raw = np.asarray(loss_func(model_output, data_i))
+                losses_np.append(float(np.mean(raw) if raw.ndim > 0 else raw))
+            losses = jnp.asarray(losses_np, dtype=jnp.float32)
 
         penalty_term = float(complexity_penalty) * n_free_params
         losses = losses + penalty_term
@@ -2028,7 +2045,7 @@ async def hypothesis_engine(
         f"Using {n_training_samples} samples for training and {n_test_samples} samples for testing."
     )
 
-    logging.info("Translating NumPy seeds to JAX via LLM.")
+    logging.info("Preparing seed models for JAX execution.")
     model_name = prompt_manager.get_model_name()
     seed_code_strings = [
         utils.format_function_source(
@@ -2037,18 +2054,34 @@ async def hypothesis_engine(
         for i, program in enumerate(numpy_programs)
     ]
     seed_jax_llm = jax_llm_seq[0]
-    # Translate seed models sequentially to reduce burst quota/rate-limit failures.
-    jax_results = []
-    for code_string in seed_code_strings:
-        jax_results.append(
-            await translate_to_jax(code_string, client, prompt_manager, seed_jax_llm)
-        )
-
     jax_programs = []
     jax_code_strings = []
-    for i, (jax_code_string, jax_func, _jax_prompt, _jax_response) in enumerate(
-        jax_results
-    ):
+    for i, (program, code_string) in enumerate(zip(numpy_programs, seed_code_strings)):
+        try:
+            _run_translation_check_on_eval(
+                np_func=program,
+                jax_func=program,
+                param_estimator=param_estimators[i],
+                data_train_trials=X[0, 0],
+                x_eval=X_eval_train,
+            )
+            logging.info("Seed model %d is already JAX-compatible; skipping LLM translation.", i + 1)
+            jax_programs.append(program)
+            jax_code_strings.append(code_string)
+            continue
+        except Exception as native_exc:
+            logging.info(
+                "Seed model %d failed native JAX check (%s); falling back to LLM translation.",
+                i + 1,
+                native_exc,
+            )
+
+        jax_code_string, jax_func, _jax_prompt, _jax_response = await translate_to_jax(
+            code_string,
+            client,
+            prompt_manager,
+            seed_jax_llm,
+        )
         if not callable(jax_func):
             raise RuntimeError(
                 "Failed to translate seed model "
@@ -2057,7 +2090,7 @@ async def hypothesis_engine(
                 "Please retry after cooldown or lower request pressure."
             )
         _run_translation_check_on_eval(
-            np_func=numpy_programs[i],
+            np_func=program,
             jax_func=jax_func,
             param_estimator=param_estimators[i],
             data_train_trials=X[0, 0],

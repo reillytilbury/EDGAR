@@ -1,0 +1,126 @@
+model:
+  base:
+    text: |
+      You are an AI scientist. Below are {k} models describing a phenomenon, sorted from highest to lowest loss.
+      Your task is to create a new model, {model_name}, that has a lower loss than the models below.
+
+      *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
+    allowed_variables: ["k", "model_name"]
+
+  explore:
+    text: |
+      Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss?
+      Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
+    allowed_variables: []
+
+  exploit:
+    text: |
+      Use the models below as a *template* to create a new model.
+      Which features in the models below correlate with lower loss? Find these features and *extrapolate* them.
+      Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
+      You will be *penalized* for complexity, so make the new model as *simple* as possible while still being better than the previous models.
+    allowed_variables: []
+
+  code_guidelines:
+    text: |
+      **Code Generation Guidelines:**
+      * Import any packages you use.
+      * Model signature must be `def model(data, params):` where `data` is a dict of named arrays (e.g. data['stimulus'], data['response']) where `params` is a dict of named arrays/scalars.
+      * Ensure all free parameters are numeric, not strings.
+    allowed_variables: ["model_name"]
+
+  docstring_guidelines:
+    text: |
+      **Docstring Guidelines:**
+      * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `{model_name}_v1`, `{model_name}_v2`, etc. Instead, refer to them by their descriptive names.
+      * Provide a simple equation for the model, including all free parameters.
+      * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+    allowed_variables: ["model_name"]
+
+  image_analysis_instructions: null
+
+  parent_detail_template:
+    text: |
+      loss of model {model_idx}: {loss}
+      {model_code_string}
+      ----------------------------
+    allowed_variables: ["model_idx", "loss", "model_code_string"]
+    
+parameter_estimator:
+  base:
+    text: |
+      You are an AI scientist. Your task is to improve the existing parameter estimator function, parameter_estimator_prev.
+      This function estimates the free parameters of the current model. Both the current model and its parameter estimator are included below.
+      The parameters should be estimated directly, using statistical principles.
+
+    allowed_variables: ["model_name", "next_version"]
+
+  explore: null
+  exploit: null
+
+  code_guidelines:
+    text: |
+      **Code Generation Guidelines:**
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * The only arguments to the function should be the inputs (X) and the spike count.
+      * Return a parameter dict with the same keys expected by the model.
+      * Your response **must** be less than {max_lines} lines (including imports).
+      * Do not attempt to fit the parameters using complex fitting functions like `curve_fit` or `minimize`.
+      * Use direct statistical relationships to estimate parameters.
+    allowed_variables: ["max_lines"]
+
+  docstring_guidelines:
+    text: |
+      **Docstring Guidelines:**
+      * Refer to parent models by descriptive names.
+      * Do not refer to the current model as `{model_name}_v{next_version}`. Instead, refer to it as "this model".
+      * Explain the statistical derivation used for the estimation.
+    allowed_variables: ["model_name", "next_version"]
+
+  image_analysis_instructions:
+    text: null 
+    allowed_variables: []
+
+  parent_detail_template:
+    text: |
+      loss of model {model_idx}: {loss}
+      {model_code_string}
+
+      Current Parameter Estimator:
+      {parameter_estimator_code_string}
+      ----------------------------
+    allowed_variables: ["model_idx", "loss", "model_code_string", "parameter_estimator_code_string"]
+  
+jax_translator:
+  base:
+    text: |
+      Convert the following function to a JAX-compatible function.
+      Include all necessary imports (jax, jax.numpy as jnp).
+      Ensure compatibility with jax.jit, jax.grad, and jax.vmap.
+    allowed_variables: []
+
+  explore: null
+  exploit: null
+
+  code_guidelines:
+    text: |
+      CRITICAL JAX compatibility requirements:
+      * Replace all boolean indexing with `jnp.where`.
+      * Use `jnp` everywhere (no `np`).
+      * Avoid Python control flow (if/for) that depends on array values.
+      * Do not use dynamic array shapes.
+      * Never call Python `int()` / `float()` on JAX values.
+    allowed_variables: []
+
+  docstring_guidelines:
+    text: |
+      Do not include any text other than the code. Update the function name to remove version suffixes.
+    allowed_variables: []
+
+  image_analysis_instructions: null
+
+  parent_detail_template:
+    text: |
+      {function_code}
+    allowed_variables: ["function_code"]
