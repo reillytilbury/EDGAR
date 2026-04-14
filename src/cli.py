@@ -45,9 +45,10 @@ SPEC_TEMPLATE = dedent(
     LOSS FUNCTION:
     - loss_fn(model_output, data) -> loss values
 
-    OPTIONAL COMPONENTS:
-    - plot_model_fits(data, programs_list, X_eval, save_path, labels)
-    """
+OPTIONAL COMPONENTS:
+- plot_model_fits(data, programs_list, X_eval, save_path, labels)
+- build_evaluation_points(data, random_seed=0, n_eval_images=256, source="train_anchor")
+"""
     import numpy as np
     from typing import Tuple, Dict
 
@@ -116,8 +117,16 @@ SPEC_TEMPLATE = dedent(
 
 
     # ========================
-    # 4. OPTIONAL PROJECT-SPECIFIC HELPERS
+    # 5. OPTIONAL PROJECT-SPECIFIC HELPERS
     # ========================
+
+    def build_evaluation_points(
+        data,
+        random_seed: int = 0,
+        n_eval_images: int = 256,
+        source: str = "train_anchor",
+    ):
+        return data
     '''
 )
 

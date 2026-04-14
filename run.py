@@ -341,6 +341,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     # Image diagnostics are enabled automatically if spec defines plot_model_fits.
     spec_plot_fn = getattr(spec_module, "plot_model_fits", None)
     plot_model_fits_fn = _build_plot_model_fits_fn(spec_plot_fn) if callable(spec_plot_fn) else None
+    spec_build_eval_points_fn = getattr(spec_module, "build_evaluation_points", None)
 
     raw_loss_fn = spec_loss_fn
     loss_fn = _build_loss_fn(raw_loss_fn)
@@ -375,6 +376,14 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             data_processing_params['n_trials'] = min(int(data_processing_params['n_trials']), 300)
         if 'n_cells' in data_processing_params:
             data_processing_params['n_cells'] = min(int(data_processing_params['n_cells']), 600)
+        if 'max_cells' in data_processing_params:
+            data_processing_params['max_cells'] = min(int(data_processing_params['max_cells']), 16)
+        if 'max_train_images' in data_processing_params:
+            data_processing_params['max_train_images'] = min(int(data_processing_params['max_train_images']), 128)
+        if 'anchor_cell_count' in data_processing_params:
+            data_processing_params['anchor_cell_count'] = min(int(data_processing_params['anchor_cell_count']), 4)
+        if 'eval_image_count' in params:
+            params['eval_image_count'] = min(int(params['eval_image_count']), 32)
 
     def _ring_topology(n_islands: int) -> list[int]:
         if n_islands <= 0:
@@ -436,13 +445,26 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         X[1, 0] = data_test_train
         X[1, 1] = data_test_test
 
-        X_eval = utils.build_evaluation_points(
-            data=X[0, 0],
-            eval_keys=params.get('eval_keys'),
-            x_min=params.get('x_min'),
-            x_max=params.get('x_max'),
-            n_bins=params.get('n_bins', 100),
-        )
+        if callable(spec_build_eval_points_fn):
+            X_eval = spec_build_eval_points_fn(
+                data=X[0, 0],
+                random_seed=random_seed,
+                n_eval_images=int(params.get('eval_image_count', params.get('n_bins', 100))),
+                source=params.get('eval_image_source', 'train_anchor'),
+            )
+            if not isinstance(X_eval, dict):
+                raise ValueError(
+                    f"{spec_module_path}.build_evaluation_points must return dict[str, np.ndarray]."
+                )
+            utils.validate_data(X_eval)
+        else:
+            X_eval = utils.build_evaluation_points(
+                data=X[0, 0],
+                eval_keys=params.get('eval_keys'),
+                x_min=params.get('x_min'),
+                x_max=params.get('x_max'),
+                n_bins=params.get('n_bins', 100),
+            )
 
         print("running with standard params")
         def _require_llm(name: str):
