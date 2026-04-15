@@ -12,18 +12,17 @@ data_processing_params:
 #     description: "Input variable"
 
 experiment_params:
-  n_iterations: 2
-  batch_size: 3
-  n_islands: 4
+  n_iterations: 6
+  batch_size: 4
+  n_islands: 6
   param_penalty_weight: 0.0
-  exploration_topology: [1, 2, 3, 0]
-  exploitation_topology: [1, 2, 3, 0]
+  exploration_topology: [1, 2, 3, 4, 5, 0]
+  exploitation_topology: [1, 2, 3, 4, 5, 0]
   param_estimator_refinement_rounds: 0
   open_family_tree: true
   fit_params: false
-  linked_llm: gemini-2.0-flash
-  use_linked_prompt: false
-  swear_words: []
+  model_llm: [gemini-2.5-pro, gemini-2.0-flash]
+  swear_words: [sklearn, PLSRegression, scipy.optimize, optimize.minimize, curve_fit, cvxpy, torch, tensorflow]
   eval_keys: ['stimulus', 'source', 'target', 'source_tuning_params', 'target_tuning_params', 'source_mean_pred', 'target_mean_pred']
   x_min: 0
   x_max: 6.28318530718
@@ -83,7 +82,7 @@ prompts:
       range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
       '
     docstring_guidelines: |
-      Each function should include a short docstring.
+      Each function should include a short docstring. At the start of each model docstring, provide an equation or mathematical description of the model. Use LaTeX formatting for equations.
     per_model_detail: |
       **Parent {model_idx} (loss={train_loss})**
       Model:
