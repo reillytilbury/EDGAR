@@ -378,7 +378,8 @@ def fit_tuning_parameters_jax(stims, spike_counts):
             return sample_loss
         return jnp.mean(sample_loss)
 
-    def _optimize_params(params, x, y, learning_rate=1e-3, max_iter=2000):
+    # TODO : remember to revert this max_iter to 2000
+    def _optimize_params(params, x, y, learning_rate=1e-3, max_iter=100):
         learning_rate_local = float(learning_rate)
         opt = optax.adam(learning_rate_local, b1=0.9, b2=0.999, eps=1e-8)
         # flat_params, unflatten = ravel_pytree(params)
@@ -430,7 +431,12 @@ def fit_tuning_parameters_jax(stims, spike_counts):
 
     return params
 
-def load_and_process_data(
+def load_and_process_data(data_path : str, *args, **kwargs) -> np.ndarray:
+    base_dir = "/home/dabin/code/EDGAR-gamma/projects/trial_to_trial_variability/"
+    X = np.load(f"{base_dir}data_train_trials.npy", allow_pickle=True)
+    return X
+
+def load_and_process_data_true(
     data_path: str,
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
     random_seed: int = 42,
@@ -526,13 +532,14 @@ def load_and_process_data(
         target_pred = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(stimuli_tiled, target_tuning_params) # shape (n_source, n_time)
         
         return {
-            'stimulus': stimulus,
-            'source': source[:, trial_idx],
-            'target': target[:, trial_idx],
-            'source_tuning_params': source_tuning_params,
-            'target_tuning_params': target_tuning_params,
-            'source_mean_pred' : source_pred, 
-            'target_mean_pred' : target_pred,
+            # convert to numpy arrays to save memory since we won't be doing any jax operations on these in the model
+            'stimulus': np.array(stimulus),
+            'source': np.array(source[:, trial_idx]),
+            'target': np.array(target[:, trial_idx]),
+            'source_tuning_params': np.array(source_tuning_params),
+            'target_tuning_params': np.array(target_tuning_params),
+            'source_mean_pred' : np.array(source_pred), 
+            'target_mean_pred' : np.array(target_pred),
         }
 
     return [
@@ -584,12 +591,16 @@ def model_v1(data, params):
     # we already know the source_coupling_factor
     additive_offset = jnp.sum(source_coupling_factor[:, None] * source_residual[None, :], axis=0) / (jnp.sum(source_coupling_factor**2) + eps) # shape (n_time,)
 
-    print((g_target * multiplicative_gain).shape)
-    print(target_coupling_factor[:, None] * additive_offset[None, :].shape)
-    pred = g_target * multiplicative_gain + target_coupling_factor[:, None] * additive_offset[None, :] # shape (n_target, n_time)
+    pred = g_target * multiplicative_gain + target_coupling_factor[:, None] * additive_offset # shape (n_target, n_time)
     # clip to non-negative firing rates
     pred = jnp.clip(pred, a_min=0.0)
     return pred
+
+# TODO : fix this - the numer of cells is hardcoded here to fit Striger's data 
+model_v1.DEFAULT_PARAMS = {
+    "source_coupling_factor": jnp.zeros(743), # shape (n_source,)
+    "target_coupling_factor": jnp.zeros(743), # shape (n_target,)
+}
 
 def param_est_v1(data):
     """ Parameter estimator for model_v1. This function estimates params and from the data.
@@ -661,14 +672,14 @@ def model_v2(data, params):
     stimuli = jnp.array(data['stimulus']) # shape (n_time)
     source_response = jnp.array(data['source']) # shape (n_source, n_time)
     g_source = jnp.array(data['source_mean_pred']) # shape (n_source, n_time)
-    g_target = jnp.array(data['target_mean_pred']) # shape (n_starget, n_time)
+    g_target = jnp.array(data['target_mean_pred']) # shape (n_target, n_time)
 
-    coupling_factor = params['target_coupling_factor'] # shape (n_target_cells, n_source_cells)    
+    coupling_factor = params['coupling_factor'] # shape (n_target_cells, n_source_cells)    
 
     eps = 1e-8
     multiplicative_gain = jnp.sum(g_source * source_response, axis=0) / (jnp.sum(g_source**2, axis=0) + eps) # shape (n_time,)
 
-    pred = g_target * multiplicative_gain[:, None] + (source_response[None, : ] @ coupling_factor) # shape (n_target, n_time)
+    pred = g_target * multiplicative_gain + (coupling_factor @ source_response) # shape (n_target, n_time)
 
     # clip to non-negative firing rates
     pred = jnp.clip(pred, a_min=0.0)
@@ -699,17 +710,15 @@ def param_est_v2(data):
     g_source = jnp.array(data['source_mean_pred']) # shape (n_source, n_time)
 
     # Step 2 : Fit the gain factor using leastsq 
-    n_source, n_t = g_source.shape
-
     eps = 1e-8
     multiplicative_gain = jnp.sum(g_source * x, axis=0) / (jnp.sum(g_source**2, axis=0) + eps) # shape (n_time,)
 
     # Step 3 : Fit the coupling factor by regressing the residual against the source cell responses
-    residual = x.T - (g_source * multiplicative_gain[None, :]) # has shape (n_source, n_time)
-    coupling_factor = jnp.linalg.lstsq(y, residual, rcond=None)[0].T # shape (n_target, n_source)
+    residual = x - (g_source * multiplicative_gain) # has shape (n_source, n_time)
+    coupling_factor = jnp.linalg.lstsq(y.T, residual.T, rcond=None)[0] # shape (n_target, n_source)
 
     params = {
-        'coupling_factor' : coupling_factor
+        'coupling_factor' : coupling_factor.T # shape (n_target, n_source)
     }
     return params
 
@@ -735,9 +744,187 @@ def loss_fn(model_output, data):
 # 4. DIAGNOSTICS
 # ========================
 
-def plot_model_fits(data, programs_list, eval_grid, save_path="", labels=None):
-    raise NotImplementedError
+def plot_model_fits(
+    data,
+    programs_list,
+    eval_grid,
+    save_path="",
+    labels=("model_v1", "model_v2"),
+):
+    """
+    Plot observed target responses and overlaid model predictions for 9 random
+    stimulus angles, with binned per-angle MSE shown underneath each panel.
 
+    Parameters
+    ----------
+    data : dict[str, np.ndarray]
+        Expected keys:
+        - 'stimulus': array of shape (n_stims,)
+        - 'target': array of shape (n_target_cells, n_stims)
+        - 'target_tuning_params': array of shape (n_target_cells, n_params),
+          where column 0 contains preferred angles
+    programs_list : list[dict]
+        List of model program dictionaries. Expected keys include:
+        - 'model': callable model(data, params)
+        - 'params': parameter pytree or parameter object for the model
+        Optionally:
+        - 'losses': array-like
+    eval_grid : dict[str, np.ndarray]
+        Included to preserve interface compatibility. Not used here.
+    save_path : str
+        Output path. If empty, raises an error.
+    labels : tuple[str, ...]
+        Labels for plotted models.
+    """
+    if save_path == "":
+        raise ValueError("Please provide a save path for the plot")
+
+    if len(programs_list) < 2:
+        raise ValueError("programs_list must contain at least 2 models")
+
+    stims = np.asarray(data["stimulus"]).reshape(-1)
+    target = np.asarray(data["target"])
+    target_tuning_params = np.asarray(data["target_tuning_params"])
+
+    n_show = min(9, len(stims))
+    random_angles_idx = np.random.default_rng().choice(len(stims), size=n_show, replace=False)
+
+    preferred_angles = target_tuning_params[:, 0]
+    preferred_angles_sorted_indices = np.argsort(preferred_angles)
+    preferred_angles = preferred_angles[preferred_angles_sorted_indices]
+
+    actual_response = target[preferred_angles_sorted_indices]
+
+    # Compute predictions for each model on the full dataset
+    predictions = []
+    binned_mse_losses = []
+
+    n_bins = 60
+    bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    bin_indices = np.digitize(preferred_angles, bin_edges) - 1
+    bin_indices = np.clip(bin_indices, 0, n_bins - 1)
+
+    for program in programs_list[:2]:
+        model = program["model"]
+        params = program["params"]
+
+        y_pred = model(data, params)
+        y_pred = np.asarray(y_pred)[preferred_angles_sorted_indices]
+        predictions.append(y_pred)
+
+        resid = y_pred - actual_response
+        squared_loss = resid ** 2
+
+        binned_mse_loss = np.zeros((n_bins, squared_loss.shape[1]))
+        for i in range(n_bins):
+            mask = bin_indices == i
+            if np.any(mask):
+                binned_mse_loss[i] = np.mean(squared_loss[mask], axis=0)
+            else:
+                binned_mse_loss[i] = 0.0
+
+        binned_mse_losses.append(binned_mse_loss)
+
+    colours = ["tab:orange", "tab:blue"]
+    actual_colour = "tab:grey"
+
+    fig = plt.figure(figsize=(15, 15))
+    outer_gs = fig.add_gridspec(3, 3, hspace=0.5, wspace=0.3)
+
+    for i in range(9):
+        row, col = divmod(i, 3)
+
+        ax_slot = outer_gs[row, col]
+        inner_gs = ax_slot.subgridspec(
+            2,
+            1,
+            height_ratios=[4, 1],
+            hspace=0.05,
+        )
+
+        ax1 = fig.add_subplot(inner_gs[0])
+        ax2 = fig.add_subplot(inner_gs[1], sharex=ax1)
+
+        if i >= n_show:
+            ax1.axis("off")
+            ax2.axis("off")
+            continue
+
+        angle_idx = random_angles_idx[i]
+        random_angle = stims[angle_idx]
+
+        # Top plot: actual vs two model predictions
+        ax1.scatter(
+            preferred_angles,
+            actual_response[:, angle_idx],
+            color=actual_colour,
+            label="Actual Response",
+            alpha=0.4,
+            s=12,
+        )
+
+        for j, y_pred in enumerate(predictions):
+            label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
+
+            ax1.plot(
+                preferred_angles,
+                y_pred[:, angle_idx],
+                color=colours[j],
+                label=label,
+                alpha=0.4,
+                linewidth=1,
+            )
+
+        ax1.axvline(random_angle, color="gray", linestyle="--", label="Stimulus Angle")
+        ax1.set_ylabel("Cell Response")
+        ax1.set_title(f"Stimulus Angle = {random_angle:.2f} radians")
+        ax1.legend()
+        # ax1.legend(loc="upper left", fontsize=9)
+        ax1.tick_params(axis="x", labelbottom=False)
+
+        # Bottom plot: binned MSE for both models
+        for j, binned_mse_loss in enumerate(binned_mse_losses):
+            mse_label = (
+                f"{labels[j]} binned MSE"
+                if labels is not None and j < len(labels)
+                else f"Model {j+1} binned MSE"
+            )
+            ax2.plot(
+                bin_centers,
+                binned_mse_loss[:, angle_idx],
+                color=colours[j],
+                alpha=0.9,
+                linewidth=2,
+                label=mse_label,
+            )
+
+        ax2.axvline(random_angle, color="gray", linestyle="--")
+        ax2.set_xlabel("Preferred Angle of Target Cell (radians)")
+        ax2.set_ylabel("Binned\nMSE", fontsize=9)
+        ax2.legend(fontsize=8)
+
+    mean_loss_parts = []
+    for j, program in enumerate(programs_list[:2]):
+        if "losses" in program and np.size(program["losses"]) > 0:
+            mean_loss_parts.append(
+                f"{labels[j] if labels is not None and j < len(labels) else f'Model {j+1}'} "
+                f"Loss: {np.mean(program['losses']):.2f}"
+            )
+        else:
+            mean_loss_parts.append(
+                f"{labels[j] if labels is not None and j < len(labels) else f'Model {j+1}'} "
+                f"Loss: n/a"
+            )
+
+    summary = "\n".join(mean_loss_parts)
+    fig.suptitle(
+        f"Observed vs Model Predictions for 9 Random Stimulus Angles\n{summary}",
+        y=0.995,
+        fontsize=16,
+    )
+    plt.savefig(save_path, dpi=100.0, bbox_inches="tight")
+    plt.close(fig)
 
 # ========================
 # 4. OPTIONAL PROJECT-SPECIFIC HELPERS
