@@ -368,7 +368,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         data = load_and_process_data_fn(**load_kwargs)
         data_train_train = data[0, 0]
 
-        data_eval = utils.build_evaluation_points(
+        eval_grid = utils.build_evaluation_points(
             data=data_train_train,
             eval_keys=params.get('eval_keys'),
             x_min=params.get('x_min'),
@@ -427,7 +427,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             numpy_programs=models,
             param_estimators=param_estimators,
             X=data,
-            eval_grid=data_eval,
+            eval_grid=eval_grid,
             plot_model_fits=plot_model_fits_fn,
             prompt_manager=prompt_manager,
             grad_descent_batch_size=params.get('grad_descent_batch_size', None),

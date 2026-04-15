@@ -21,6 +21,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
+import matplotlib.pyplot as plt
 import scipy
 from typing import Dict
 import optax
@@ -393,7 +394,6 @@ def fit_tuning_parameters_jax(stims, spike_counts):
         # if x.size != y.size & x.shape[0] == y.shape[1]:
         #     # tile x to match y's shape - y has shpae (n_features, n_trials) whereas x has shape (n_trials,) so we need to tile x by n_features times
         x = jnp.tile(x, (y.shape[0], 1))
-        print(f"DEBUG : {x.shape}, {y.shape}, {params.shape}")
         loss_param = lambda params: jnp.mean(loss_total(params, x, y))
         loss_param_and_grad = jax.value_and_grad(loss_param)
 
@@ -431,10 +431,10 @@ def fit_tuning_parameters_jax(stims, spike_counts):
 
     return params
 
-def load_and_process_data(data_path : str, *args, **kwargs) -> np.ndarray:
+def load_and_process_data(data_path : str, *args, **kwargs) -> list:
     base_dir = "/home/dabin/code/EDGAR-gamma/projects/trial_to_trial_variability/"
     X = np.load(f"{base_dir}data_train_trials.npy", allow_pickle=True)
-    return X
+    return X.tolist()
 
 def load_and_process_data_true(
     data_path: str,
@@ -531,15 +531,18 @@ def load_and_process_data_true(
         source_pred = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(stimuli_tiled, source_tuning_params) # shape (n_source, n_time)
         target_pred = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(stimuli_tiled, target_tuning_params) # shape (n_source, n_time)
         
+        # Add a leading size-1 sample axis so data_n_samples returns 1 and
+        # slice_data_samples(data, 0) cleanly removes it, restoring the original
+        # 2D/3D shapes that model_v1 and param_est_v1 expect.
         return {
             # convert to numpy arrays to save memory since we won't be doing any jax operations on these in the model
-            'stimulus': np.array(stimulus),
-            'source': np.array(source[:, trial_idx]),
-            'target': np.array(target[:, trial_idx]),
-            'source_tuning_params': np.array(source_tuning_params),
-            'target_tuning_params': np.array(target_tuning_params),
-            'source_mean_pred' : np.array(source_pred), 
-            'target_mean_pred' : np.array(target_pred),
+            'stimulus': np.array(stimulus)[np.newaxis],
+            'source': np.array(source[:, trial_idx])[np.newaxis],
+            'target': np.array(target[:, trial_idx])[np.newaxis],
+            'source_tuning_params': np.array(source_tuning_params)[np.newaxis],
+            'target_tuning_params': np.array(target_tuning_params)[np.newaxis],
+            'source_mean_pred' : np.array(source_pred)[np.newaxis],
+            'target_mean_pred' : np.array(target_pred)[np.newaxis],
         }
 
     return [
@@ -589,18 +592,13 @@ def model_v1(data, params):
 
     source_residual = source_response - (g_source * multiplicative_gain) # shape (n_source, n_time)
     # we already know the source_coupling_factor
-    additive_offset = jnp.sum(source_coupling_factor[:, None] * source_residual[None, :], axis=0) / (jnp.sum(source_coupling_factor**2) + eps) # shape (n_time,)
+    additive_offset = jnp.sum(source_coupling_factor[:, None] * source_residual, axis=0) / (jnp.sum(source_coupling_factor**2) + eps) # shape (n_time,)
 
     pred = g_target * multiplicative_gain + target_coupling_factor[:, None] * additive_offset # shape (n_target, n_time)
     # clip to non-negative firing rates
     pred = jnp.clip(pred, a_min=0.0)
     return pred
 
-# TODO : fix this - the numer of cells is hardcoded here to fit Striger's data 
-model_v1.DEFAULT_PARAMS = {
-    "source_coupling_factor": jnp.zeros(743), # shape (n_source,)
-    "target_coupling_factor": jnp.zeros(743), # shape (n_target,)
-}
 
 def param_est_v1(data):
     """ Parameter estimator for model_v1. This function estimates params and from the data.
@@ -662,8 +660,6 @@ def model_v2(data, params):
     Args : 
         data (dict) : Inputs object with keys 'stimulus', neural responses with shape (n_source_cells + 1 , n_time). You can get the neural responses only by removing the 'stimulus' feature from X. 
         params (dict) : Parameter dictionary with keys: 
-            - source_tuning_params : parameters for the tuning function g(theta) (shape (n_source_cells, n_params))
-            - target_tuning_params : parameters for the tuning function g(theta) (shape (n_target_cells, n_params))
             - coupling_factor : coupling_factor (shape (n_target_cells, n_source_cells)) 
 
     Returns : 
@@ -675,7 +671,6 @@ def model_v2(data, params):
     g_target = jnp.array(data['target_mean_pred']) # shape (n_target, n_time)
 
     coupling_factor = params['coupling_factor'] # shape (n_target_cells, n_source_cells)    
-
     eps = 1e-8
     multiplicative_gain = jnp.sum(g_source * source_response, axis=0) / (jnp.sum(g_source**2, axis=0) + eps) # shape (n_time,)
 
@@ -686,9 +681,7 @@ def model_v2(data, params):
     return pred
 
 def param_est_v2(data):
-    """ Parameter estimator for model_v1. This function estimates params and from the data.
-    Tuning_params : contain per cell level parameters for both source and target cells that are independent of trials
-
+    """ 
     Args :
         data (dict) : Dictionary containing input and output arrays. Keys:
             - 'stimulus' : shape (n_time,)
@@ -704,21 +697,24 @@ def param_est_v2(data):
             - coupling_factor : shape (n_target_cells, n_source_cells)
     """
     # first sort the response of x and y by the stimulus angles 
-    stims = data['stimulus'] # shape (n_time,)
     x = jnp.array(data['source']) # shape (n_source, n_time)
     y = jnp.array(data['target']) # shape (n_target, n_time)
     g_source = jnp.array(data['source_mean_pred']) # shape (n_source, n_time)
+    g_target = jnp.array(data['target_mean_pred']) # shape (n_target, n_time)
 
     # Step 2 : Fit the gain factor using leastsq 
     eps = 1e-8
     multiplicative_gain = jnp.sum(g_source * x, axis=0) / (jnp.sum(g_source**2, axis=0) + eps) # shape (n_time,)
 
     # Step 3 : Fit the coupling factor by regressing the residual against the source cell responses
-    residual = x - (g_source * multiplicative_gain) # has shape (n_source, n_time)
-    coupling_factor = jnp.linalg.lstsq(y.T, residual.T, rcond=None)[0] # shape (n_target, n_source)
+
+    residual = y - (g_target * multiplicative_gain[None, :]) # has shape (n_target, n_time)
+    # x has shape (n_source, n_time) and residual has shape (n_target, n_time), we want to regress residual against x to get coupling_factor with shape (n_target, n_source)
+    XtX = x @ x.T + eps * jnp.eye(x.shape[0])
+    coupling_factor = jnp.linalg.solve(XtX, x @ residual.T).T
 
     params = {
-        'coupling_factor' : coupling_factor.T # shape (n_target, n_source)
+        'coupling_factor' : coupling_factor # shape (n_target, n_source)
     }
     return params
 
@@ -782,9 +778,13 @@ def plot_model_fits(
     if len(programs_list) < 2:
         raise ValueError("programs_list must contain at least 2 models")
 
-    stims = np.asarray(data["stimulus"]).reshape(-1)
-    target = np.asarray(data["target"])
-    target_tuning_params = np.asarray(data["target_tuning_params"])
+    # The engine passes a size-1 sample axis into project plotters, but the
+    # seed models in this spec expect a single sample with no leading batch dim.
+    plot_data = utils.slice_data_samples(data, 0)
+
+    stims = np.asarray(plot_data["stimulus"]).reshape(-1)
+    target = np.asarray(plot_data["target"])
+    target_tuning_params = np.asarray(plot_data["target_tuning_params"])
 
     n_show = min(9, len(stims))
     random_angles_idx = np.random.default_rng().choice(len(stims), size=n_show, replace=False)
@@ -809,7 +809,14 @@ def plot_model_fits(
         model = program["model"]
         params = program["params"]
 
-        y_pred = model(data, params)
+        params_leaves = jax.tree_util.tree_leaves(params)
+        plot_params = (
+            utils.slice_params(params, 0)
+            if any(np.asarray(leaf).ndim > 1 for leaf in params_leaves)
+            else params
+        )
+
+        y_pred = model(plot_data, plot_params)
         y_pred = np.asarray(y_pred)[preferred_angles_sorted_indices]
         predictions.append(y_pred)
 

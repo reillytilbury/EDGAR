@@ -109,8 +109,7 @@ def test_objective_improves_grid_cell_loss_with_dict_data():
 def test_objective_accepts_single_sample_dicts_after_trial_splitting():
     data = _make_dataset(n_samples=2, n_trials=60)
     train = utils.slice_data_trials(data, slice(None, None, 2))
-    sample = utils.get_data_sample(train, 0)
-
+    sample = utils.slice_data_samples(train, 0)
     params = _param_estimator(sample)
     prediction = _jax_grid_model(sample, params)
 

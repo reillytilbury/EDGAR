@@ -314,7 +314,7 @@ def compute_initial_params(
         )
 
     for sample_idx in range(n_samples):
-        data_i = utils.data_as_numpy(utils.get_data_sample(data, sample_idx))
+        data_i = utils.data_as_numpy(utils.slice_data_samples(data, sample_idx))
         timeout_limit = _effective_timeout(sample_idx)
 
         try:
@@ -485,7 +485,7 @@ def validate_model_execution(
         model_jit = jax.jit(model)
 
         for sample_idx in np.random.choice(n_samples, size=min(n_validation_samples, n_samples), replace=False):
-            data_i = utils.get_data_sample(data, sample_idx)
+            data_i = utils.slice_data_samples(data, sample_idx)
             data_i_jax = utils.data_as_jax(data_i)
             params_i = utils.slice_params(initial_params, sample_idx)
             output = model_jit(data_i_jax, params_i)
@@ -850,13 +850,13 @@ def objective_simple(
     n_samples = utils.data_n_samples(data_train)
     params_list = []
     for i in range(n_samples):
-        data_i = utils.get_data_sample(data_train, i)
+        data_i = utils.slice_data_samples(data_train, i)
         params_list.append(param_estimator(data_i))
 
     losses = []
     for i in range(n_samples):
         params_i = params_list[i]
-        data_i = utils.get_data_sample(data_test, i)
+        data_i = utils.slice_data_samples(data_test, i)
         model_output = np.asarray(model(data_i, params_i))
         losses.append(float(np.asarray(loss_fn(model_output, data_i)).mean()))
     print(f"Losses for each sample: {losses}")

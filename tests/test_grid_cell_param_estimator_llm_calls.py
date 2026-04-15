@@ -49,7 +49,7 @@ def _make_grid_cell_batch(n_samples: int = 3, n_trials: int = 144) -> dict[str, 
 
 def test_grid_cell_param_estimators_accept_single_sample_dict_data():
     data = _make_grid_cell_batch(n_samples=1, n_trials=196)
-    sample = utils.get_data_sample(data, 0)
+    sample = utils.slice_data_samples(data, 0)
 
     for estimator, expected_keys in (
         (spec.param_est_v1, set(spec.model_v1.DEFAULT_PARAMS)),

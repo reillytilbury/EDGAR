@@ -53,17 +53,12 @@ def slice_data_samples(X: Dict[str, np.ndarray], indices) -> Dict[str, np.ndarra
 
 def slice_data_trials(X: Dict[str, np.ndarray], indices) -> Dict[str, np.ndarray]:
     """Slice the trial axis (last dim) of every array in the data dict."""
-    return {k: v[..., indices] for k, v in X.items()}
+    return {k: (v[..., indices] if v.ndim > 1 else v[indices]) for k, v in X.items()}
 
 
 def slice_data(X: Dict[str, np.ndarray], sample_indices, trial_indices) -> Dict[str, np.ndarray]:
     """Slice both sample and trial axes of every array in the data dict."""
     return slice_data_trials(slice_data_samples(X, sample_indices), trial_indices)
-
-
-def get_data_sample(X: Dict[str, np.ndarray], idx: int) -> Dict[str, np.ndarray]:
-    """Extract a single sample from the data dict, removing the sample axis."""
-    return {k: v[idx] for k, v in X.items()}
 
 
 def get_data_sample_with_trial_slice(X: Dict[str, np.ndarray], sample_idx: int, trial_indices) -> Dict[str, np.ndarray]:
@@ -412,11 +407,17 @@ def check_jax_translation(
     for sample_idx in sample_indices:
         if sample_idx < 0 or sample_idx >= n_samples:
             raise ValueError(f"sample index {sample_idx} out of range for n_samples={n_samples}.")
-        data_i = get_data_sample(data, sample_idx)
+        data_i = slice_data_samples(data, sample_idx)
         n_trials = data_n_trials(data)
         if max_eval_trials is not None and n_trials > max_eval_trials:
             keep_idx = np.linspace(0, n_trials - 1, num=max_eval_trials, dtype=int)
-            data_i = slice_data_trials(data_i, keep_idx)
+            # data_i = slice_data_trials(data_i, keep_idx)
+            # # Only slice arrays whose last dim matches n_trials; arrays like
+            # # tuning_params have a different last dim and must not be trial-sliced.
+            data_i = {
+                k: (v[..., keep_idx] if v.ndim > 0 and v.shape[-1] == n_trials else v)
+                for k, v in data_i.items()
+            }
 
         sample_params = slice_params(params_arr, sample_idx)
         np_pred = np.asarray(np_func(data_i, sample_params))
