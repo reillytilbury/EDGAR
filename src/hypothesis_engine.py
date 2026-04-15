@@ -1464,11 +1464,10 @@ def _run_translation_check_on_eval(
         trial_idx = np.arange(n_trials)
     else:
         trial_idx = rng.choice(n_trials, size=n_eval_trials, replace=False)
-    data_subset = utils.slice_data_trials(data_train_trials, trial_idx)
 
     n_check = min(max_samples, n_samples)
     sample_idx = np.linspace(0, n_samples - 1, num=n_check, dtype=int)
-    data_subset = utils.slice_data_samples(data_subset, sample_idx)
+    data_subset = utils.slice_data_samples(data_train_trials, sample_idx)
 
     params_subset = compute_initial_params(
         param_estimator,
