@@ -76,8 +76,9 @@ EDGAR-gamma/
 │   └── ...
 ├── src/
 │   ├── hypothesis_engine.py
-│   ├── diagnostics_manager.py
-│   ├── prompt_manager.py
+│   ├── llm/
+│   ├── scoring/
+│   ├── evolution/
 │   └── ...
 ├── run.py
 └── tests/
