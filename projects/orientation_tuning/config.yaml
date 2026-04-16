@@ -1,103 +1,60 @@
-# ========================
-# Project Identity
-# ========================
-
-# Task folder name under projects/.
-task: orientation_tuning
-
-
-# ========================
-# Data Defaults
-# ========================
-zscore_skip_keys : ['stimulus', 'response'] # Do not z-score along response to reproduce the initial setup 
-
-# Data-processing overrides for this task.
-data_processing_params:
+task:
+  name: orientation_tuning
   data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
-  # data_path: /home/reilly/datasets/stringer_2021/gratings_drifting_GT1_2019_04_12_1.npy
+zscore_skip_keys:
+- stimulus
+- response
+data_processing_params:
   activity_threshold: 0.4
   conc_threshold: 0.55
-
-# Input variable definitions used by prompts and model code.
 inputs:
 - name: theta
   description: "Stimulus orientation angle in radians [0, 2\u03C0]"
-
-
-# ========================
-# Experiment Runtime
-# ========================
-
-experiment_params:
-  eval_keys: ['stimulus']
+scoring:
+  parameter_estimation:
+    param_estimator_refinement_rounds: 0
+diagnostics:
+  eval_keys:
+  - stimulus
   x_min: 0.0
   x_max: 6.283185307179586
   n_bins: 40
-  param_estimator_refinement_rounds: 0
-
-
-# ========================
-# Prompt Defaults
-# ========================
-
-# Prompt text overrides for this task.
 prompts:
-  program_prompt:
-    base: 'You are an AI scientist. The programs below are biological models of neurons.
-      The models are sorted from highest to lowest loss.
+  parameter_estimator:
+    base: "You are an AI scientist. Your task is to create a simple parameter estimator function, parameter_estimator_v{next_version}, to estimate the free parameters of the latest neuron model, neuron_model_v{next_version}.\nThe parameter should be estimated directly, using statistical principles and knowledge of what the parameters represent biologically. \n*Analyze* the progression of the parameter estimators, *generalize* the improvements, and *create* a new parameter estimator that is better than *all* previous estimators. parameter_estimator function must have signature `def parameter_estimator(data):` where data only contains the two keys 'stimulus' and 'response'.\n"
+    refinement_image_instructions: 'Image instructions:
 
-      Your task is to create a new neuron model, neuron_model_v{next_version}, that
-      has a lower loss than the models below. 
-      All models take input X as the first argument, which only contains one element theta - the stimulus orientation in radians. 
+      - Compare predicted tuning curves to binned means across multiple cells.
 
-      *Analyze* the progression of the models, *generalize* the improvements, and
-      *create* a new model that is better than *all* previous models.
+      - Identify systematic mismatches in preferred orientation, bandwidth, and baseline.
+
+      - Adjust parameter estimation to correct consistent shifts or width errors.
+
+      - Base changes on repeated patterns, not single-cell outliers.
 
       '
-    explore: 'Use the models below as *inspiration*, but be *creative* and *invent*
-      something new. Which features in the models below correlate with lower loss?
-      Find these features and *extrapolate* them. You should also *combine* features
-      from several models, and *experiment* with new ideas.'
-    exploit: 'Use the models below as a *template* to create a new model. \nWhich\
-      \ features in the models below correlate with lower loss? Find these features\
-      \ and *extrapolate* them. \nFocus on *exploiting* the strengths of the existing\
-      \ models and *eliminating* their weaknesses or *redundancies*.\nAre the parameter\
-      \ ranges correct? If not, adjust them to be more appropriate.\nYou will be *penalized*\
-      \ for complexity, so make the new model as *simple* as possible while still\
-      \ being better than the previous models.\n'
-    image_analysis: "**Image Analysis Instructions:**\n\n
-      Attached is a scatter plot of the neuron models' performance on top of raw neural data. 
-      The binned mean is plotted in **sky-blue**, `neuron_model_v1` is plotted in **green**, 
-      and `neuron_model_v2` is plotted in **red**.\n
+    code_guidelines: "**Code Generation Guidelines:**\n* Import any packages you use.\n* Do not include any text other than the code.\n* Return a parameter dict with the same keys expected by the model.\n* Function signature must be `def parameter_estimator(data):`.\n* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected. \n* Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point for the parameter estimation.\n"
+    docstring_guidelines: '**Docstring Guidelines:**
 
-      Analyse the models' fits to the data in the image below. Identify systematic weaknesses 
-      of the models by observing patterns across multiple cell plots. For instance, consider:\n
-         **Model Comparisons:** Which models are better for each cell? That is to say, which 
-        models track the blue curve better? Which features of the models are responsible 
-        for improving the fit?\n
-         **Model Fit:** How well do the models fit the binned data mean? Look for places where 
-        even the models (**red** curve for best model, **green** for second best model) deviate 
-        most from the binned data mean (**blue** curve). This is where the models are weakest, 
-        and where you should focus your improvements. \n
-         **Model Shape:** Do the models' shapes (e.g., peak sharpness, width, skewness, amplitude, etc.) 
-        align with the binned data mean (**blue**) and raw data scatter points (**black**)? If not, how 
-        do they differ? How can you change the model to better match the data shape? \n
-         **Parameter Flexibility:** Are there free parameters that could be introduced or modified to 
-        better capture the observed response profiles? Utilize your analysis of the shortcomings of 
-        the current models' shapes and add free parameters or modify existing ones to address these issues.\n
+      * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`, `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
 
-      Use this analysis to inform the design of a new neuron model, `neuron_model_v{next_version}`, that 
-      improves upon the previous models.\n
+      * Do not refer to the current model as `neuron_model_v{next_version}`. Instead, refer to it as "this model".
 
-      Start by documenting the strengths and weaknesses of the existing models based on the image analysis, 
-      making reference to specific cells and the features that are well or poorly captured by the models. 
-      Then say how you will address the weaknesses in the new model.\n
+      * Provide a simple equation for the model, including all free parameters.
 
-      For every innovation you make, explicitly link it to a part of the plot that inspired it. For example,
-      you might say 'Added independent widths between peaks, this will improve the fit for cells 1, 3 and 5 
-      where the peaks have different widths and the current models fail to capture this.'\n
-      
-      Finally, implement the new model in code."
+      * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+
+      '
+  model:
+    base: 'You are an AI scientist. The programs below are biological models of neurons. The models are sorted from highest to lowest loss.
+
+      Your task is to create a new neuron model, neuron_model_v{next_version}, that has a lower loss than the models below. All models take input X as the first argument, which only contains one element theta - the stimulus orientation in radians.
+
+      *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
+
+      '
+    explore: Use the models below as *inspiration*, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
+    exploit: Use the models below as a *template* to create a new model. \nWhich\ \ features in the models below correlate with lower loss? Find these features\ \ and *extrapolate* them. \nFocus on *exploiting* the strengths of the existing\ \ models and *eliminating* their weaknesses or *redundancies*.\nAre the parameter\ \ ranges correct? If not, adjust them to be more appropriate.\nYou will be *penalized*\ \ for complexity, so make the new model as *simple* as possible while still\ \ being better than the previous models.\n
     code_guidelines: '**Code Generation Guidelines:**
 
       * Import any packages you use.
@@ -108,79 +65,27 @@ prompts:
 
       * Ensure all free parameters are numeric, not strings.
 
-      * At the beginning of the code, clip the free parameters to a biologically plausible
-      range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
+      * At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
 
       '
     docstring_guidelines: '**Docstring Guidelines:**
 
-      * Begin by listing the parent models and give them a name that describes their
-      key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2:
-      double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`,
-      `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive
-      names (e.g. `simple_exponential_decay_model`).
+      * Begin by listing the parent models and give them a name that describes their key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`, `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names (e.g. `simple_exponential_decay_model`).
 
-      * Do not refer to the current model as `neuron_model_v{next_version}`. Instead,
-      refer to it as "this model".
+      * Do not refer to the current model as `neuron_model_v{next_version}`. Instead, refer to it as "this model".
 
       * Provide a simple equation for the model, including all free parameters.
 
-      * Include a brief description of how the model improves upon the previous models,
-      citing specific features or changes that lead to lower loss.
+      * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
 
       '
-  parameter_estimator:
-    base: "You are an AI scientist. Your task is to create a simple parameter estimator\
-      \ function, parameter_estimator_v{next_version}, to estimate the free parameters\
-      \ of the latest neuron model, neuron_model_v{next_version}.\nThe parameter should\
-      \ be estimated directly, using statistical principles and knowledge of what\
-      \ the parameters represent biologically. \n*Analyze* the progression of the\
-      \ parameter estimators, *generalize* the improvements, and *create* a new parameter\
-      \ estimator that is better than *all* previous estimators.\
-      \ parameter_estimator function must have signature `def parameter_estimator(data):`\
-      \ where data only contains the two keys 'stimulus' and 'response'.\n"
-    refinement_image_instructions: |
-      Image instructions:
-      - Compare predicted tuning curves to binned means across multiple cells.
-      - Identify systematic mismatches in preferred orientation, bandwidth, and baseline.
-      - Adjust parameter estimation to correct consistent shifts or width errors.
-      - Base changes on repeated patterns, not single-cell outliers.
-    
-    code_guidelines: "**Code Generation Guidelines:**\n* Import any packages you use.\n\
-      * Do not include any text other than the code.\n* Return a parameter dict with the same keys expected by the model.\n* The only arguments to the\
-      \ function should be the inputs (X) and the spike count.\n* Your response **must**\
-      \ be less than {max_lines} lines (including imports). If it is longer, it will\
-      \ be immediately rejected. \n* Do not attempt to fit the parameters using complex\
-      \ fitting functions like `curve_fit`, `least_squares` or `minimize`. This function\
-      \ should be a simple starting point for the parameter estimation.\n"
-
-    docstring_guidelines: '**Docstring Guidelines:**
-
-      * Begin by listing the parent models and give them a name that describes their
-      key features, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2:
-      double_exponential_decay_model`. Never refer to the models as `neuron_model_v1`,
-      `neuron_model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive
-      names (e.g. `simple_exponential_decay_model`).
-
-      * Do not refer to the current model as `neuron_model_v{next_version}`. Instead,
-      refer to it as "this model".
-
-      * Provide a simple equation for the model, including all free parameters.
-
-      * Include a brief description of how the model improves upon the previous models,
-      citing specific features or changes that lead to lower loss.
-
-      '
-  jax_translator_prompt: "Convert the following function to a JAX-compatible function.\n\
-    \n  Include all necessary imports, and ensure that the function is compatible\
-    \ with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.\n  \n \
-    \ CRITICAL JAX compatibility requirements:\n  * Replace all boolean indexing (e.g.,\
-    \ `array[condition]`) with `jnp.where(condition, true_value, false_value)`\n \
-    \ * Replace NumPy functions with JAX equivalents (np.array \u2192 jnp.array, np.sin\
-    \ \u2192 jnp.sin, etc.)\n  * Avoid Python control flow (if/for) that depends on\
-    \ array values - use `jnp.where`, `jax.lax.cond`, `jax.lax.scan` instead\n  *\
-    \ Do not use dynamic array shapes or indexing with non-constant indices\n  * Use\
-    \ `jnp.clip()` instead of boolean masking for bounds\n  \n  Do not include any\
-    \ text other than the code. \n  Update the function name to be the original name\
-    \ without \"_v*\". For example, `def neuron_model_v1(data, param1=0.5):` should become\
-    \ `def neuron_model(data, param1=0.5):`.\n  Here is the code to translate:\n  {function_code}\n"
+    image_analysis_instructions: "**Image Analysis Instructions:**\n\n Attached is a scatter plot of the neuron models' performance on top of raw neural data. The binned mean is plotted in **sky-blue**, `neuron_model_v1` is plotted in **green**, and `neuron_model_v2` is plotted in **red**.\n\nAnalyse the models' fits to the data in the image below. Identify systematic weaknesses of the models by observing patterns across multiple cell plots. For instance, consider:\n **Model Comparisons:** Which models are better for each cell? That is to say, which models track the blue curve better? Which features of the models are responsible for improving the fit?\n **Model Fit:** How well do the models fit the binned data mean? Look for places where even the models (**red** curve for best model, **green** for second best model) deviate most from the binned data mean (**blue** curve). This is where the models are weakest, and where you should focus your improvements. \n **Model Shape:** Do the models'\
+      \ shapes (e.g., peak sharpness, width, skewness, amplitude, etc.) align with the binned data mean (**blue**) and raw data scatter points (**black**)? If not, how do they differ? How can you change the model to better match the data shape? \n **Parameter Flexibility:** Are there free parameters that could be introduced or modified to better capture the observed response profiles? Utilize your analysis of the shortcomings of the current models' shapes and add free parameters or modify existing ones to address these issues.\n\nUse this analysis to inform the design of a new neuron model, `neuron_model_v{next_version}`, that improves upon the previous models.\n\nStart by documenting the strengths and weaknesses of the existing models based on the image analysis, making reference to specific cells and the features that are well or poorly captured by the models. Then say how you will address the weaknesses in the new model.\n\nFor every innovation you make, explicitly link it to a part of\
+      \ the plot that inspired it. For example, you might say 'Added independent widths between peaks, this will improve the fit for cells 1, 3 and 5 where the peaks have different widths and the current models fail to capture this.'\n\nFinally, implement the new model in code."
+  jax_translator:
+    base: "Convert the following function to a JAX-compatible function.\n\n  Include all necessary imports, and ensure that the function is compatible with JAX transformations like `jax.jit`, `jax.grad`, and `jax.vmap`.\n  \n  CRITICAL JAX compatibility requirements:\n  * Replace all boolean indexing (e.g., `array[condition]`) with `jnp.where(condition, true_value, false_value)`\n  * Replace NumPy functions with JAX equivalents (np.array \u2192 jnp.array, np.sin \u2192 jnp.sin, etc.)\n  * Avoid Python control flow (if/for) that depends on array values - use `jnp.where`, `jax.lax.cond`, `jax.lax.scan` instead\n  * Do not use dynamic array shapes or indexing with non-constant indices\n  * Use `jnp.clip()` instead of boolean masking for bounds\n  \n  Do not include any text other than the code. \n  Update the function name to be the original name without \"_v*\". For example, `def neuron_model_v1(data, param1=0.5):` should become `def neuron_model(data, param1=0.5):`.\n  Here is the code to\
+      \ translate:\n  {function_code}\n"
+    code_guidelines: ''
+    docstring_guidelines: ''
+    parent_detail_template: ''
+model_name: neuron_model

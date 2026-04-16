@@ -4,7 +4,9 @@ from pathlib import Path
 from textwrap import dedent
 import sys
 
+# TODO: Make logging choices part of the command 
 
+# Don't need these all, since the spc.py will have different pythong functions now
 REQUIRED_SPEC_FUNCTIONS = [
     "load_and_process_data",
     "train_test_split",

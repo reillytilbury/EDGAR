@@ -15,7 +15,7 @@ if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
     os.environ["XLA_FLAGS"] = (_xla_flags + " --xla_gpu_enable_command_buffer=").strip()
 
 from src import hypothesis_engine, utils
-from src.prompt_manager import PromptManager
+from src.llm.prompts import with_default_prompts
 from src.data_summary import save_data_summary
 
 
@@ -346,8 +346,8 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     raw_loss_fn = spec_loss_fn
     loss_fn = _build_loss_fn(raw_loss_fn)
 
-    # Initialize prompt manager with merged config (includes DEFAULT prompts)
-    prompt_manager = PromptManager(config=config)
+    # Ensure prompt defaults are present; prompt rendering is stateless.
+    config = with_default_prompts(config)
 
     # Extract input names from config (for multi-input support)
     # These stay in data_config for the data loading function to use
@@ -493,15 +493,13 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             model_llm=_require_llm('model_llm'),
             param_est_llm=_require_llm('param_est_llm'),
             jax_translator_llm=_require_llm('jax_translator_llm'),
-            use_chat_mode=params.get('use_chat_mode', False),  # Default to legacy mode
-            chat_token_limit=params.get('chat_token_limit', 50000),  # Max tokens per chat before auto-reset
             param_estimator_refinement_rounds=params.get('param_estimator_refinement_rounds', 0),
             numpy_programs=models,
             param_estimators=param_estimators,
             X=X,
             X_eval=X_eval,
             plot_model_fits=plot_model_fits_fn,
-            prompt_manager=prompt_manager,
+            prompt_config=config,
             trial_batch_size=params.get('trial_batch_size', None),
             swear_words=params.get('swear_words'),
             open_family_tree=params.get('open_family_tree', False),

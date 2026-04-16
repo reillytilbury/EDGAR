@@ -1,19 +1,14 @@
-# ========================
-# Project Identity
-# ========================
-
-task: minimodel_discovery
-model_name: analytic_minimodel
-
-
-# ========================
-# Data Defaults
-# ========================
-
-zscore_skip_keys: ['image', 'response', 'response_repeats', 'stimulus_id', 'cell_index']
-
-data_processing_params:
+task:
+  name: minimodel_discovery
   data_path: /home/reilly/datasets/image_responses/FX8_nat60k_2023_05_16.npz
+model_name: analytic_minimodel
+zscore_skip_keys:
+- image
+- response
+- response_repeats
+- stimulus_id
+- cell_index
+data_processing_params:
   image_path: /home/reilly/datasets/image_responses/nat60k_text16.mat
   mouse_id: 4
   min_fev: 0.15
@@ -24,138 +19,165 @@ data_processing_params:
   teacher_checkpoint_path: /home/reilly/Documents/code/minimodel/notebooks/checkpoints/FX8_051623_2layer_16_320_clamp_norm_depthsep_pool.pt
   use_teacher_diagnostics: true
   teacher_device: cpu
-
 inputs:
-  - name: image
-    description: Natural image stimulus cropped to the FX8 visual field.
-
-
-# ========================
-# Experiment Runtime
-# ========================
-
-experiment_params:
+- name: image
+  description: Natural image stimulus cropped to the FX8 visual field.
+evolution:
   n_iterations: 3
   time_limit: 45
   n_islands: 4
   batch_size: 4
-  max_iter: 100
-  learning_rate: 0.03
+scoring:
   trial_batch_size: 128
-  param_estimator_refinement_rounds: 0
+  parameter_estimation:
+    param_estimator_refinement_rounds: 0
+  gradient_descent:
+    max_iter: 100
+    learning_rate: 0.03
+diagnostics:
   eval_image_count: 64
   eval_image_source: train_anchor
-
-
-# ========================
-# Prompt Defaults
-# ========================
-
 prompts:
-  program_prompt:
-    base: |
-      You are an AI scientist building compact analytic image-response models for mouse V1 neurons.
-      The parent models below are shared-family single-neuron models trained on the FX8 natural-image dataset.
-      Your task is to create a new model, {model_name}_v{next_version}, that lowers Poisson loss.
-
-      The model must remain end-to-end from image to response, but it must stay inside this structural prior:
-      fixed Gabor / quadrature features -> localized spatial readout -> compact nonlinear channel combination -> positive firing-rate output.
-
-    explore: |
-      Be creative inside the primitive library rather than inventing new large learned feature extractors.
-      Good directions include:
-      - different combinations of pooled and unpooled quadrature-energy channels
-      - low-dimensional pairwise interactions between orientation channels
-      - divisive or saturating normalization
-      - different ways to weight scales and orientations after the local spatial readout
-
-    exploit: |
-      Stay close to the strongest parent model and simplify where possible.
-      Prefer clearer nonlinear combinations of the existing primitive features over adding parameters.
-      Improve the middle block, not the fixed first-layer filter bank.
-
-    image_analysis: |
-      **Image Analysis Instructions:**
-
-      Each row is one anchor neuron.
-      The first two columns are static diagnostics: top natural stimuli, decorrelated STA/STC, Gaussian readout summary, and optional teacher-CNN diagnostics.
-      The remaining columns are current candidate models.
-
-      For each model column:
-      - the top strip shows the evaluation images predicted to be most excitatory
-      - the lower plot shows observed vs predicted responses after sorting trials by observed response
-      - the text box reports Poisson loss and, when repeated test responses are available, FEVE
-
-      Look for repeated failures across neurons:
-      - wrong preferred textures or edge configurations in the top predicted images
-      - underestimation of strong responses in the sorted-response plot
-      - excessive flattening from over-normalization
-      - missing interactions between orientations or scales suggested by STA/STC structure
-
-      Use the diagnostics to propose a lower-loss model while keeping the same primitive library.
-
-    code_guidelines: |
-      **Code Generation Guidelines:**
-      * Import only lightweight modules.
-      * Do not include any text other than code.
-      * Model signature must be `def model(data, params):`.
-      * The image input is `data["image"]` with shape `(H, W, n_trials)`.
-      * You may read `data["response"]` in docstrings only, not inside the forward model.
-      * You must build the model out of these primitives imported from `projects.minimodel_discovery.primitives`:
-        `gabor_bank16`, `quadrature_energy`, `local_gaussian_readout`, `pairwise_orientation_terms`, `divisive_normalization`, `positive_rate`.
-      * Do not introduce learned convolution kernels, FFT filter banks, CNN layers, or hundreds of free parameters.
-      * Keep the parameterization compact: scalar readout parameters plus low-dimensional channel weights.
-      * Clip all biologically meaningful parameters to sensible ranges.
-      * Your response must be under {max_lines} lines.
-
-    docstring_guidelines: |
-      **Docstring Guidelines:**
-      * Name the parent models by mechanism, not by version number.
-      * State the equation in terms of the primitive features and the final positive-rate nonlinearity.
-      * Explain exactly which diagnostics motivated each change.
-      * Keep the explanation technical and concise.
-
-    per_model_detail: |
-      loss of model {model_idx}: {train_loss}
-      optimization_time: {optimization_time_s}
-      {program_code_string}
-
-      ----------------------------
-
   parameter_estimator:
-    generation_base: |
-      You are creating a compact parameter estimator for {model_name}_v{next_version}.
+    generation_base: 'You are creating a compact parameter estimator for {model_name}_v{next_version}.
+
       The estimator should infer a localized readout and low-dimensional channel weights directly from image-response statistics.
 
-    base: |
-      Improve the existing parameter estimator for the current analytic minimodel.
+      '
+    base: 'Improve the existing parameter estimator for the current analytic minimodel.
+
       Use only direct response statistics and primitive-feature projections.
 
-    refinement_image_instructions: |
-      - The image compares predicted and observed responses for several anchor neurons.
+      '
+    refinement_image_instructions: '- The image compares predicted and observed responses for several anchor neurons.
+
       - Focus on persistent failures in response amplitude, spatial localization, and preferred image structure.
+
       - Adjust initialization heuristics for readout location, width, channel weights, pooling mix, and normalization strength.
+
       - Use repeated patterns across neurons rather than single outliers.
 
-    code_guidelines: |
-      **Code Generation Guidelines:**
+      '
+    code_guidelines: '**Code Generation Guidelines:**
+
       * Import only lightweight modules.
+
       * Return a parameter dict with the same keys expected by the model.
+
       * The estimator signature must be `def parameter_estimator(data):`.
+
       * Use direct statistics such as STA moments, masked projections onto the fixed Gabor bank, pooled feature covariances, and simple eigendecompositions.
+
       * Do not run optimization, least squares solvers, or curve fitting.
+
       * Keep the code under {max_lines} lines.
 
-    docstring_guidelines: |
-      **Docstring Guidelines:**
+      '
+    docstring_guidelines: '**Docstring Guidelines:**
+
       * Describe the estimator in terms of readout localization and primitive-feature statistics.
+
       * Mention which image diagnostics it is intended to fix.
 
-    per_model_detail: |
-      loss of model {model_idx}: {train_loss}
+      '
+    parent_detail_template: 'loss of model {model_idx}: {train_loss}
+
       optimization_time: {optimization_time_s}
+
       {program_code_string}
+
 
       {parameter_estimator_code_string}
 
+
       ----------------------------
+
+      '
+  model:
+    base: 'You are an AI scientist building compact analytic image-response models for mouse V1 neurons.
+
+      The parent models below are shared-family single-neuron models trained on the FX8 natural-image dataset.
+
+      Your task is to create a new model, {model_name}_v{next_version}, that lowers Poisson loss.
+
+
+      The model must remain end-to-end from image to response, but it must stay inside this structural prior:
+
+      fixed Gabor / quadrature features -> localized spatial readout -> compact nonlinear channel combination -> positive firing-rate output.
+
+      '
+    explore: 'Be creative inside the primitive library rather than inventing new large learned feature extractors.
+
+      Good directions include:
+
+      - different combinations of pooled and unpooled quadrature-energy channels
+
+      - low-dimensional pairwise interactions between orientation channels
+
+      - divisive or saturating normalization
+
+      - different ways to weight scales and orientations after the local spatial readout
+
+      '
+    exploit: 'Stay close to the strongest parent model and simplify where possible.
+
+      Prefer clearer nonlinear combinations of the existing primitive features over adding parameters.
+
+      Improve the middle block, not the fixed first-layer filter bank.
+
+      '
+    code_guidelines: "**Code Generation Guidelines:**\n* Import only lightweight modules.\n* Do not include any text other than code.\n* Model signature must be `def model(data, params):`.\n* The image input is `data[\"image\"]` with shape `(H, W, n_trials)`.\n* You may read `data[\"response\"]` in docstrings only, not inside the forward model.\n* You must build the model out of these primitives imported from `projects.minimodel_discovery.primitives`:\n  `gabor_bank16`, `quadrature_energy`, `local_gaussian_readout`, `pairwise_orientation_terms`, `divisive_normalization`, `positive_rate`.\n* Do not introduce learned convolution kernels, FFT filter banks, CNN layers, or hundreds of free parameters.\n* Keep the parameterization compact: scalar readout parameters plus low-dimensional channel weights.\n* Clip all biologically meaningful parameters to sensible ranges.\n* Your response must be under {max_lines} lines.\n"
+    docstring_guidelines: '**Docstring Guidelines:**
+
+      * Name the parent models by mechanism, not by version number.
+
+      * State the equation in terms of the primitive features and the final positive-rate nonlinearity.
+
+      * Explain exactly which diagnostics motivated each change.
+
+      * Keep the explanation technical and concise.
+
+      '
+    image_analysis_instructions: '**Image Analysis Instructions:**
+
+
+      Each row is one anchor neuron.
+
+      The first two columns are static diagnostics: top natural stimuli, decorrelated STA/STC, Gaussian readout summary, and optional teacher-CNN diagnostics.
+
+      The remaining columns are current candidate models.
+
+
+      For each model column:
+
+      - the top strip shows the evaluation images predicted to be most excitatory
+
+      - the lower plot shows observed vs predicted responses after sorting trials by observed response
+
+      - the text box reports Poisson loss and, when repeated test responses are available, FEVE
+
+
+      Look for repeated failures across neurons:
+
+      - wrong preferred textures or edge configurations in the top predicted images
+
+      - underestimation of strong responses in the sorted-response plot
+
+      - excessive flattening from over-normalization
+
+      - missing interactions between orientations or scales suggested by STA/STC structure
+
+
+      Use the diagnostics to propose a lower-loss model while keeping the same primitive library.
+
+      '
+    parent_detail_template: 'loss of model {model_idx}: {train_loss}
+
+      optimization_time: {optimization_time_s}
+
+      {program_code_string}
+
+
+      ----------------------------
+
+      '

@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import jax.numpy as jnp
 import pytest
-from src.genetic_helpers_v2 import (
+from evolution.genetic_helpers import (
     compare_programs, compute_intersection, perform_island_deduplication,
     perform_population_pruning, perform_probabilistic_migration, remove_duplicates,
     Program, Island, Archipelago, MigrationTopology, EvolutionConfig, ProgramRegistry
@@ -405,5 +405,4 @@ class TestEdgeCases:
         # Programs should be preserved, and migrants added
         assert len(result[0]) >= 1  # At least original
         assert len(result[1]) >= 1  # At least original
-
 

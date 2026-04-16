@@ -1,5 +1,5 @@
 """
-genetic_helpers_v2.py
+genetic_helpers.py
 
 Refactored genetic algorithm helpers using proper class abstractions.
 Provides Program dataclass, Island class, and ProgramRegistry for efficient operations.
@@ -16,7 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import yaml
-from . import utils
+from .. import utils
 
 
 # Default values for EvolutionConfig

@@ -31,12 +31,6 @@ llms:
   # Number of parent programs in each prompt
   k_max: 2
 
-  # If true, use persistent per-island chat sessions.
-  use_chat_mode: false
-
-  # Token budget per chat before summarize/reset (0 = unlimited).
-  chat_token_limit: 50000
-
   # LLMs for different tasks. Each can be a string or a list.
   # If a list is provided, it is traversed in order by iteration (with cycling)
   model_llm: [gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash]
@@ -64,7 +58,7 @@ scoring:
     max_iter: 1000
 
     # Parameter optimizer learning rate.
-    learning_rate: 3e-3
+    learning_rate: 0.003
 
     # Per-sample timeout (seconds) for gradient descent optimization. Set to null to disable timeouts.
     timeout_s: 60.0
