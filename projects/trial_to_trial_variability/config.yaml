@@ -2,7 +2,7 @@ task: trial_to_trial_variability
 model_name: model 
 
 data_processing_params:
-  data_path: /home/dabin/code/EDGAR-gamma/projects/trial_to_trial_variability/data_train_trials.npy # cheat to save time
+  data_path: /home/dabin/data/trial_to_trial_variability/data.npy # cheat to save time
   # data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
   # # data_path: /home/dabin/data/jacob_gratings_202507/parsed/
   # conc_threshold: 0.55

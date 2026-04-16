@@ -432,8 +432,7 @@ def fit_tuning_parameters_jax(stims, spike_counts):
     return params
 
 def load_and_process_data(data_path : str, *args, **kwargs) -> list:
-    base_dir = "/home/dabin/code/EDGAR-gamma/projects/trial_to_trial_variability/"
-    X = np.load(f"{base_dir}data_train_trials.npy", allow_pickle=True)
+    X = np.load(data_path, allow_pickle=True)
     return X.tolist()
 
 def load_and_process_data_true(
