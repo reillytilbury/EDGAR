@@ -567,7 +567,6 @@ def model_v1(data, params):
         data (dict) : Dictionary with keys 
             - 'stimulus' : shape (n_time,)
             - 'source' : shape (n_source_cells, n_time)
-            - 'target' : shape (n_target_cells, n_time)
             - 'source_tuning_params' : shape (n_source_cells, n_params)
             - 'target_tuning_params' : shape (n_target_cells, n_params)
             - 'source_mean_pred' : shape (n_source_cells, n_time)
@@ -658,7 +657,13 @@ def model_v2(data, params):
     where g(theta(t); cell_params) is some tuning function, source_cell_response(t) is the response of the source cell at time t (shape n_source,) and the coupling weight is the coupling factor for each target cell (shape n_source,).
 
     Args : 
-        data (dict) : Inputs object with keys 'stimulus', neural responses with shape (n_source_cells + 1 , n_time). You can get the neural responses only by removing the 'stimulus' feature from X. 
+        data (dict) : Dictionary with keys 
+            - 'stimulus' : shape (n_time,)
+            - 'source' : shape (n_source_cells, n_time)
+            - 'source_tuning_params' : shape (n_source_cells, n_params)
+            - 'target_tuning_params' : shape (n_target_cells, n_params)
+            - 'source_mean_pred' : shape (n_source_cells, n_time)
+            - 'target_mean_pred' : shape (n_target_cells, n_time)
         params (dict) : Parameter dictionary with keys: 
             - coupling_factor : coupling_factor (shape (n_target_cells, n_source_cells)) 
 

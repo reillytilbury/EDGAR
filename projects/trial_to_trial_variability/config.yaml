@@ -12,21 +12,22 @@ data_processing_params:
 #     description: "Input variable"
 
 experiment_params:
-  n_iterations: 6
+  n_iterations: 12
   batch_size: 4
-  n_islands: 6
+  n_islands: 8
   param_penalty_weight: 0.0
-  exploration_topology: [1, 2, 3, 4, 5, 0]
-  exploitation_topology: [1, 2, 3, 4, 5, 0]
+  exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
+  exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
   param_estimator_refinement_rounds: 0
   open_family_tree: true
-  fit_params: false
-  model_llm: [gemini-2.5-pro, gemini-2.0-flash]
-  swear_words: [sklearn, PLSRegression, scipy.optimize, optimize.minimize, curve_fit, cvxpy, torch, tensorflow]
+  fit_params: true
+  model_llm: [gemini-3.1-flash-lite-preview, gemini-2.5-flash]
+  # swear_words: [sklearn, PLSRegression, scipy.optimize, optimize.minimize, curve_fit, cvxpy, torch, tensorflow]
   eval_keys: ['stimulus', 'source', 'target', 'source_tuning_params', 'target_tuning_params', 'source_mean_pred', 'target_mean_pred']
   x_min: 0
   x_max: 6.28318530718
   n_bins: 60
+  time_limit: 200
 
 # ========================
 # Prompt Defaults
