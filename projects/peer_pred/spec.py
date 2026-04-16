@@ -117,11 +117,6 @@ def load_and_process_data(
     data_test_train = utils.slice_data(data, test_samples, train_trials)
     data_test_test = utils.slice_data(data, test_samples, test_trials)
 
-    data_train_train = utils.zscore_data(data_train_train)
-    data_train_test = utils.zscore_data(data_train_test)
-    data_test_train = utils.zscore_data(data_test_train)
-    data_test_test = utils.zscore_data(data_test_test)
-
     return [[data_train_train, data_train_test], [data_test_train, data_test_test]]
 
 

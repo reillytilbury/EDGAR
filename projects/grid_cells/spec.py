@@ -213,12 +213,6 @@ def load_and_process_data(
     data_test_train = utils.slice_data(data, test_samples, train_trials)
     data_test_test = utils.slice_data(data, test_samples, test_trials)
 
-    skip_keys = ["pos_x", "pos_y"]
-    data_train_train = utils.zscore_data(data_train_train, skip_keys=skip_keys)
-    data_train_test = utils.zscore_data(data_train_test, skip_keys=skip_keys)
-    data_test_train = utils.zscore_data(data_test_train, skip_keys=skip_keys)
-    data_test_test = utils.zscore_data(data_test_test, skip_keys=skip_keys)
-
     return [[data_train_train, data_train_test], [data_test_train, data_test_test]]
 
 

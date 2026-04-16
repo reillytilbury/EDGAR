@@ -74,21 +74,6 @@ def data_as_numpy(X: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     return {k: np.asarray(v) for k, v in X.items()}
 
 
-def zscore_data(X: Dict[str, np.ndarray], skip_keys: list | None = None, eps: float = 1e-12) -> Dict[str, np.ndarray]:
-    """Z-score each array in the data dict across the last dimension (trials)."""
-    skip = set(skip_keys or [])
-    result = {}
-    for key, arr in X.items():
-        arr_np = np.asarray(arr)
-        if key in skip:
-            result[key] = arr_np
-            continue
-        mu = arr_np.mean(axis=-1, keepdims=True)
-        sd = arr_np.std(axis=-1, keepdims=True)
-        result[key] = (arr_np - mu) / (sd + eps)
-    return result
-
-
 def format_function_source(func: Callable, new_name: str, import_statement: str = "") -> str:
     """
     Format a function's source code with a new name and import statement.
