@@ -15,7 +15,7 @@ Loss:
 - loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(data, programs_list, data_eval, save_path, labels)
+- plot_model_fits(data, programs_list, eval_grid, save_path, labels)
 """
 
 import time
@@ -35,6 +35,7 @@ from src import utils
 def load_and_process_data(
     data_path: str,
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
+    random_seed: int = 42,
     time_start: Optional[float] = None,
     time_end: Optional[float] = None,
     time_bin_ms: int = 20,
@@ -43,7 +44,7 @@ def load_and_process_data(
     speed_threshold: float = 2.5,
     max_trials: Optional[int] = 8000,
     zscore_response: bool = True,
-) -> Dict[str, np.ndarray]:
+) -> list[list[dict[str, np.ndarray]]]:
     """
     Load and preprocess place-cell data and return a dict of arrays.
 
@@ -76,9 +77,8 @@ def load_and_process_data(
 
     Returns
     -------
-    data : dict[str, np.ndarray]
-        Dictionary with keys 'pos_x', 'pos_y', 'response'. Each value has
-        shape (n_samples, n_trials) where n_samples is the number of cells.
+    2 x 2 list of dicts
+        ``[[data_train_train, data_train_test], [data_test_train, data_test_test]]``.
     """
     # Hardcoded defaults for simplified API.
     spatial_bin_cm = 3.0
@@ -264,7 +264,17 @@ def load_and_process_data(
         "pos_y": np.tile(features["y"], (n_cells, 1)),   # (n_cells, n_trials)
         "response": response,                              # (n_cells, n_trials)
     }
-    return data
+
+    train_samples, train_trials = train_test_split(data, random_seed=random_seed)
+    test_samples = np.setdiff1d(np.arange(n_cells, dtype=np.int64), train_samples, assume_unique=False)
+    test_trials = np.setdiff1d(np.arange(n_time_bins, dtype=np.int64), train_trials, assume_unique=False)
+
+    data_train_train = utils.slice_data(data, train_samples, train_trials)
+    data_train_test = utils.slice_data(data, train_samples, test_trials)
+    data_test_train = utils.slice_data(data, test_samples, train_trials)
+    data_test_test = utils.slice_data(data, test_samples, test_trials)
+
+    return [[data_train_train, data_train_test], [data_test_train, data_test_test]]
 
 
 def train_test_split(
@@ -537,7 +547,7 @@ def loss_fn(model_output, data):
 def plot_model_fits(
     data,
     programs_list,
-    data_eval,
+    eval_grid,
     save_path="",
     labels=("model_v1", "model_v2"),
     # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
@@ -555,9 +565,9 @@ def plot_model_fits(
         - 'model': callable model function with signature model(data, params),
         - 'params': batched parameter pytree,
         - optionally 'losses': per-sample losses.
-    data_eval : dict[str, np.ndarray]
+    eval_grid : dict[str, np.ndarray]
         Evaluation grid dict with keys 'pos_x', 'pos_y'.
-        Each value has shape (n_samples, n_eval_trials).
+        Each value has shape (n_eval_points,).
     save_path : str
         Output path for the saved figure.
     labels : tuple[str, ...]
@@ -578,9 +588,8 @@ def plot_model_fits(
     x_arr = np.stack([pos_x, pos_y], axis=1)  # (n_samples, 2, n_trials)
     y_arr = response[:, np.newaxis, :]          # (n_samples, 1, n_trials)
 
-    pos_x_eval = np.asarray(data_eval["pos_x"])
-    pos_y_eval = np.asarray(data_eval["pos_y"])
-    x_eval_arr = np.stack([pos_x_eval, pos_y_eval], axis=1)  # (n_samples, 2, n_eval)
+    pos_x_eval = np.asarray(eval_grid["pos_x"]).reshape(-1)
+    pos_y_eval = np.asarray(eval_grid["pos_y"]).reshape(-1)
 
     if x_arr.shape[1] < 2:
         raise ValueError("Place-cell diagnostics require at least 2 input features: x and y")
@@ -604,9 +613,9 @@ def plot_model_fits(
         x = x_arr[sample_idx, 0]
         y = x_arr[sample_idx, 1]
         y_obs = y_arr[sample_idx, 0]
-        n_bins = int(x_eval_arr.shape[2])
-        x_domain = (float(np.min(x_eval_arr[sample_idx, 0])), float(np.max(x_eval_arr[sample_idx, 0])))
-        y_domain = (float(np.min(x_eval_arr[sample_idx, 1])), float(np.max(x_eval_arr[sample_idx, 1])))
+        n_bins = len(pos_x_eval)
+        x_domain = (float(np.min(pos_x_eval)), float(np.max(pos_x_eval)))
+        y_domain = (float(np.min(pos_y_eval)), float(np.max(pos_y_eval)))
 
         rm_obs = _bin_to_rate_map(
             x, y, y_obs, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain

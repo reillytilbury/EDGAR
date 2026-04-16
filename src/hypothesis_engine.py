@@ -249,8 +249,7 @@ def compute_initial_params(
             ``param_estimator(data_i) -> params_i`` for a single sample.
         model (callable): Model function used only for fallback default parameter
             inference when estimation fails.
-        data (dict[str, np.ndarray]): Data dict where all arrays have shape
-            ``(n_samples, ..., n_trials)``.
+        data (dict[str, np.ndarray]): Data dict
         timeout_s (float | None): Per-sample timeout in seconds. If ``None`` or
             non-positive, no explicit per-sample timeout is applied.
         deadline_s (float | None): Absolute wall-clock deadline expressed in
@@ -503,11 +502,112 @@ def validate_model_execution(
         return False, f"Model failed to run or is incompatible with JAX tracing: {e}"
 
 
+def optimize_params_fn(flat_params, unflatten, check_timeout,
+                     fit_params, initial_params, learning_rate, max_iter,
+                     loss_total, data_train, grad_descent_batch_size=None):
+    """Run Adam optimization on flattened parameters.
+
+    This is a standalone function extracted from ``objective`` so it can be
+    reused independently.
+
+    Args:
+        flat_params: 1-D array of ravelled initial parameters.
+        unflatten: Callable(flat_params) -> params pytree.
+        check_timeout: Callable(stage_str) that raises on timeout.
+        fit_params: If False, return *initial_params* immediately.
+        initial_params: The original (un-optimized) parameter pytree, returned
+            on early-exit paths.
+        learning_rate: Adam learning rate.
+        max_iter: Maximum number of gradient-descent steps.
+        loss_total: JIT-compiled batch loss function.
+            Signature: loss_total(params_tree, data_batch, use_nansum) -> scalar.
+        data_train: Training data dict (JAX arrays).
+
+    Returns:
+        (params_pytree, failed: bool)
+    """
+    if not fit_params:
+        return initial_params, False
+
+    n_train_samples = utils.data_n_samples(data_train)
+    n_train_trials = utils.data_n_trials(data_train)
+    effective_grad_descent_batch_size = n_train_trials if grad_descent_batch_size is None else int(grad_descent_batch_size)
+
+    # -- loss / gradient pipeline (only used during optimization) -----------
+    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(
+        lambda p, d: loss_total(p, d, False)
+    ))
+
+    def loss_and_grad_batched(flat_params):
+        """Compute loss and gradient by accumulating over trial batches."""
+        params_tree = unflatten(flat_params)
+        total_loss = 0.0
+        total_grad = jnp.zeros_like(flat_params)
+
+        for start_idx in range(0, n_train_trials, effective_grad_descent_batch_size):
+            check_timeout("loss/grad computation")
+            end_idx = min(start_idx + effective_grad_descent_batch_size, n_train_trials)
+            batch_weight = (end_idx - start_idx) / n_train_trials
+            data_batch = utils.slice_data_trials(data_train, slice(start_idx, end_idx))
+
+            batch_loss, batch_grad_tree = loss_and_grad_single_batch(params_tree, data_batch)
+            batch_grad_flat, _ = ravel_pytree(batch_grad_tree)
+
+            total_loss += batch_loss * batch_weight
+            total_grad += batch_grad_flat * batch_weight
+
+        return total_loss / n_train_samples, total_grad / n_train_samples
+    # ----------------------------------------------------------------------
+
+    learning_rate_local = float(learning_rate)
+    opt = optax.adam(learning_rate_local, b1=0.9, b2=0.999, eps=1e-8)
+    opt_state = opt.init(flat_params)
+
+    def train_step(params, opt_state):
+        loss, grad = loss_and_grad_batched(params)
+        updates, new_opt_state = opt.update(grad, opt_state, params)
+        new_params = optax.apply_updates(params, updates)
+        return new_params, new_opt_state, loss
+
+    print_every = 50
+    params = flat_params
+    initial_loss, _ = loss_and_grad_batched(params)
+
+    CATASTROPHIC_LOSS_THRESHOLD = 1e6
+    if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
+        print(f"Initial loss {initial_loss:.2e} exceeds threshold. Skipping optimization.")
+        logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
+        return initial_params, True
+
+    best_loss, best_params = initial_loss.copy(), params.copy()
+    for step in range(1, max_iter + 1):
+        check_timeout("optimization")
+        params, opt_state, loss_val = train_step(params, opt_state)
+        check_timeout("optimization")
+        if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
+            logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
+            print(f"Final loss: {loss_val:.4f} at step {step}")
+            break
+        if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
+            logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
+            print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
+            return initial_params, True
+        if loss_val < best_loss:
+            best_loss = loss_val.copy()
+            best_params = params.copy()
+        if step % print_every == 0:
+            print(f"step {step:4d}  loss {loss_val:.4f}")
+    params = unflatten(best_params)
+    print(f"params optimized. Loss: {best_loss:.4f}")
+    return params, False
+
+
 def objective(model, param_estimator, data,
-              loss_fn=None, param_penalty_weight=0.1, penalty_denominator=1,
+              loss_fn=None, optimize_params_fn=optimize_params_fn,
+              param_penalty_weight=0.1, penalty_denominator=1,
               fit_params=True,
               FAILED_PROGRAM_COST=jnp.inf, max_iter=1_000, learning_rate=3e-3,
-              use_param_estimator=True, trial_batch_size=None,
+              use_param_estimator=True, grad_descent_batch_size=None,
               timeout_s: float | None = 5.0,
               objective_timeout_s: float | None = None) -> tuple[float, jnp.ndarray, float, jnp.ndarray]:
     """
@@ -533,7 +633,7 @@ def objective(model, param_estimator, data,
         FAILED_PROGRAM_COST (float): Cost assigned to failed models. Default is np.inf.
         max_iter (int): Maximum number of iterations for optimization. Default is 1_000.
         use_param_estimator (bool): Whether to use the parameter estimator to compute initial parameters. Default is True.
-        trial_batch_size (int | None): Ignored. Trial batching is disabled.
+        grad_descent_batch_size (int | None): Batch size for gradient descent. Default is None.
         timeout_s (float | None): Per-sample timeout (seconds) for
             ``param_estimator`` calls during initialization.
             Set ``None`` or ``<=0`` to disable per-sample estimator timeout.
@@ -564,11 +664,13 @@ def objective(model, param_estimator, data,
     if not (isinstance(data, (list, tuple, np.ndarray)) and len(data) == 2):
         raise ValueError("objective expects data as length-2 container: [data_train, data_test].")
 
+    # 1. Convert data to JAX arrays
     data_train = utils.data_as_jax(data[0])
     data_test = utils.data_as_jax(data[1])
 
-    n_samples = utils.data_n_samples(data_train)
+    n_train_samples = utils.data_n_samples(data_train)
 
+    # 2. Parameter initialization with robust timeouts and fallbacks
     try:
         _check_timeout("parameter initialization")
         # Compute initial parameters
@@ -599,9 +701,10 @@ def objective(model, param_estimator, data,
         empty_params = {}
         return FAILED_PROGRAM_COST, empty_params, FAILED_PROGRAM_COST, empty_params
 
-    initial_params = utils.broadcast_params(initial_params, n_samples)
+    initial_params = utils.broadcast_params(initial_params, n_train_samples)
 
-    n_params_raw = utils.params_numel_per_sample(initial_params, n_samples=n_samples)
+    # 3a. Validate parameters - enforce memory guard  
+    n_params_raw = utils.params_numel_per_sample(initial_params, n_samples=n_train_samples)
     n_params = n_params_raw / max(1, penalty_denominator)
     # Memory guard: reject candidates with very large per-sample parameter payloads.
     try:
@@ -625,7 +728,7 @@ def objective(model, param_estimator, data,
         # Keep objective robust even if size introspection fails.
         pass
 
-    # Fail immediately if fit_params is True and non-numeric params
+    # 3b. Validate parameters - fail immediately if fit_params is True and non-numeric params
     if not utils.params_all_finite(initial_params):
         logging.info("Error: Parameters contain non-numeric or non-finite values.")
         print("Program failed: parameters contain non-numeric or non-finite values.")
@@ -633,15 +736,15 @@ def objective(model, param_estimator, data,
     if fit_params and not utils.params_all_inexact(initial_params):
         logging.info(
             "Error: Parameters contain int/bool leaves; rejecting before GD.\n%s",
-            utils.params_tree_summary(initial_params, n_samples=n_samples),
+            utils.params_tree_summary(initial_params, n_samples=n_train_samples),
         )
         print("Program failed: parameters must be floating-point for GD (found int/bool dtype).")
         return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
     _check_timeout("model validation")
     
-    # Validate model execution and output shape
+    # 3c. Validate model execution and output shape
     is_valid, error_msg = validate_model_execution(
-        model, data_train, initial_params, n_samples,
+        model, data_train, initial_params, n_train_samples,
         n_validation_samples=10
     )
     if not is_valid:
@@ -656,6 +759,7 @@ def objective(model, param_estimator, data,
 
     flat_init, unflatten = ravel_pytree(initial_params)
 
+    # 4. Parameter optimisation loop based on per-sample loss
     # Per-sample loss function: model receives per-sample data dict, loss_fn receives model output + data
     def loss_single_sample(params, data_i):
         model_output = model(data_i, params)
@@ -666,112 +770,46 @@ def objective(model, param_estimator, data,
 
     # Vectorize over samples. Dict is a native JAX pytree, so in_axes=0
     # maps over axis 0 of every leaf array.
-    loss_total = jax.vmap(loss_single_sample, in_axes=(0, 0), out_axes=0)
-
     n_train_trials = utils.data_n_trials(data_train)
-    effective_trial_batch_size = n_train_trials if trial_batch_size is None else int(trial_batch_size)
 
-    @jax.jit
-    def loss_single_batch(params_tree, data_batch):
-        """Compute sum of losses for one batch (JIT-compiled)."""
-        batch_losses = loss_total(params_tree, data_batch)  # (n_samples,)
-        return jnp.sum(batch_losses)
+    def loss_total(params_tree, data, use_nansum=False):
+        """Compute sum of losses."""
+        losses = jax.vmap(loss_single_sample, in_axes=(0, 0), out_axes=0)(params_tree, data)
+        return jnp.nansum(losses) if use_nansum else jnp.sum(losses)
+    # static_argnums=(2,) tells JAX to treat use_nansum as a compile-time
+    # constant, so it traces a separate compiled version for True vs False
+    # rather than trying to trace through the Python if/else.
+    loss_total = jax.jit(loss_total, static_argnums=(2,))
 
-    loss_and_grad_single_batch = jax.jit(jax.value_and_grad(loss_single_batch))
-
-    @jax.jit
-    def eval_single_batch(params_tree, data_batch):
-        """Compute nansum of losses for one batch (JIT-compiled, no grad)."""
-        batch_losses = loss_total(params_tree, data_batch)
-        return jnp.nansum(batch_losses)
-
-    def loss_and_grad_batched(flat_params):
-        """Compute loss and gradient by accumulating over trial batches."""
-        params_tree = unflatten(flat_params)
-        total_loss = 0.0
-        total_grad = jnp.zeros_like(flat_params)
-
-        for start_idx in range(0, n_train_trials, effective_trial_batch_size):
-            _check_timeout("loss/grad computation")
-            end_idx = min(start_idx + effective_trial_batch_size, n_train_trials)
-            batch_weight = (end_idx - start_idx) / n_train_trials
-            data_batch = utils.slice_data_trials(data_train, slice(start_idx, end_idx))
-
-            batch_loss, batch_grad_tree = loss_and_grad_single_batch(params_tree, data_batch)
-            batch_grad_flat, _ = ravel_pytree(batch_grad_tree)
-
-            total_loss += batch_loss * batch_weight
-            total_grad += batch_grad_flat * batch_weight
-
-        return total_loss / n_samples, total_grad / n_samples
-
-    def _optimize_params(flat_params):
-        if not fit_params:
-            return initial_params, False
-
-        learning_rate_local = float(learning_rate)
-        opt = optax.adam(learning_rate_local, b1=0.9, b2=0.999, eps=1e-8)
-        opt_state = opt.init(flat_params)
-
-        def train_step(params, opt_state):
-            loss, grad = loss_and_grad_batched(params)
-            updates, new_opt_state = opt.update(grad, opt_state, params)
-            new_params = optax.apply_updates(params, updates)
-            return new_params, new_opt_state, loss
-
-        print_every = 50
-        params = flat_params
-        initial_loss, _ = loss_and_grad_batched(params)
-
-        CATASTROPHIC_LOSS_THRESHOLD = 1e6
-        if initial_loss > CATASTROPHIC_LOSS_THRESHOLD:
-            print(f"Initial loss {initial_loss:.2e} exceeds threshold. Skipping optimization.")
-            logging.info(f"Skipping optimization: initial loss {initial_loss:.2e} > {CATASTROPHIC_LOSS_THRESHOLD:.0e}")
-            return initial_params, True
-
-        best_loss, best_params = initial_loss.copy(), params.copy()
-        for step in range(1, max_iter + 1):
-            _check_timeout("optimization")
-            params, opt_state, loss_val = train_step(params, opt_state)
-            _check_timeout("optimization")
-            if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
-                logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
-                print(f"Final loss: {loss_val:.4f} at step {step}")
-                break
-            if loss_val > CATASTROPHIC_LOSS_THRESHOLD:
-                logging.info(f"Loss exploded to {loss_val:.2e} at step {step}. Stopping optimization.")
-                print(f"Loss exploded to {loss_val:.2e}. Stopping optimization.")
-                return initial_params, True
-            if loss_val < best_loss:
-                best_loss = loss_val.copy()
-                best_params = params.copy()
-            if step % print_every == 0:
-                print(f"step {step:4d}  loss {loss_val:.4f}")
-        params = unflatten(best_params)
-        print(f"params optimized. Loss: {best_loss:.4f}")
-        return params, False
-
-    # Compute final loss on test set
-    def eval_loss_batched(params_tree, data_eval):
+    def eval_loss_batched(params_tree, data_eval, grad_descent_batch_size=None):
         """Compute loss by iterating over trial batches."""
-        n_eval_trials = utils.data_n_trials(data_eval)
+        n_samples = utils.data_n_samples(data_eval)
+        n_trials = utils.data_n_trials(data_eval)
+        effective_grad_descent_batch_size = n_trials if grad_descent_batch_size is None else int(grad_descent_batch_size)
         weighted_sum = 0.0
-        for start_idx in range(0, n_eval_trials, effective_trial_batch_size):
+        for start_idx in range(0, n_trials, effective_grad_descent_batch_size):
             _check_timeout("final loss evaluation")
-            end_idx = min(start_idx + effective_trial_batch_size, n_eval_trials)
+            end_idx = min(start_idx + effective_grad_descent_batch_size, n_trials)
             batch_size = end_idx - start_idx
             data_batch = utils.slice_data_trials(data_eval, slice(start_idx, end_idx))
-            weighted_sum += eval_single_batch(params_tree, data_batch) * (batch_size / n_eval_trials)
+            # Use argument True in loss_total because we don't need to calculate gradients during evaluation
+            weighted_sum += loss_total(params_tree, data_batch, True) * (batch_size / n_trials)
         return weighted_sum / n_samples
 
+    # 5. Run parameter optimisation on data_train and calculate final loss on data_test 
     try:
-        params, failed_opt = _optimize_params(flat_init)
+        params, failed_opt = optimize_params_fn(
+            flat_init, unflatten, _check_timeout,
+            fit_params, initial_params, learning_rate, max_iter,
+            loss_total, data_train, grad_descent_batch_size,
+        )
         if failed_opt:
             return FAILED_PROGRAM_COST, initial_params, FAILED_PROGRAM_COST, initial_params
 
+        # Compute final loss on test set
         def _eval_loss(params_tree, data_eval, label: str):
             _check_timeout(f"{label} loss evaluation")
-            loss_val = eval_loss_batched(params_tree, data_eval)
+            loss_val = eval_loss_batched(params_tree, data_eval, grad_descent_batch_size)
             # loss_val = loss_val + param_penalty_weight * n_params
             n_nans = jnp.sum(jnp.isnan(loss_val))
             if n_nans > 0:
@@ -914,25 +952,6 @@ def _programs_df_to_programs_list(programs_df: pd.DataFrame,
     return programs_list
 
 
-def _align_eval_grid(X_eval, n_samples: int) -> dict:
-    """Align evaluation grid sample dimension to *n_samples* by tiling if needed.
-
-    Args:
-        X_eval (dict[str, np.ndarray]): Evaluation data dict with sample axis
-            at dim 0.
-        n_samples (int): Desired number of samples.
-
-    Returns:
-        dict[str, np.ndarray]: Eval data dict with first dim equal to *n_samples*.
-    """
-    current_n = utils.data_n_samples(X_eval)
-    if current_n == n_samples:
-        return X_eval
-    if current_n == 1:
-        return {k: np.broadcast_to(v, (n_samples,) + v.shape[1:]) for k, v in X_eval.items()}
-    idx = np.arange(n_samples, dtype=np.int64) % current_n
-    return utils.slice_data_samples(X_eval, idx)
-
 
 async def generate_new_model(current_island, llm_name, client,
                             data, x_eval, prompt_manager,
@@ -1013,7 +1032,7 @@ async def generate_new_model(current_island, llm_name, client,
             plot_model_fits(
                 data=data,
                 programs_list=programs_list,
-                X_eval=x_eval,
+                eval_grid=x_eval,
                 save_path=img_dir,
                 labels=[f"v_{i+1}" for i in range(len(random_programs))],
             )
@@ -1239,7 +1258,7 @@ async def generate_new_parameter_estimator(current_island,
                         "losses": np.full(utils.data_n_samples(data[0]), float(current_loss)),
                     }
                 ],
-                X_eval=x_eval,
+                eval_grid=x_eval,
                 save_path=img_path,
                 labels=['PE'],
             )
@@ -1648,14 +1667,15 @@ async def hypothesis_engine(
         max_iter = 1_000, learning_rate = 3e-3,
         penalty_denominator = 1,
         numpy_programs = None, param_estimators = None,
-        X = None, X_eval = None,
+        X = None, eval_grid = None,
         plot_model_fits = None, loss_fn = None,
-        prompt_manager = None, trial_batch_size = None, swear_words = None,
+        prompt_manager = None, grad_descent_batch_size = None, swear_words = None,
         open_family_tree = False,
         use_simple_objective: bool = False,
         log_prompts: bool = False,
         log_jax_translations: bool = False,
         random_seed = 42, # consider setting up a seed_manager to make behaviours more robustly reproducible.
+        full_dir_tuple = None,
         ):
     """
     Run the full island-based hypothesis search loop.
@@ -1700,22 +1720,25 @@ async def hypothesis_engine(
         param_estimators (list[callable]): Seed parameter estimators.
         X: Split data container with shape ``(2, 2)`` where each cell is a
             data dict. ``X[0,*]`` is train-sample split, ``X[1,*]`` is test-sample split.
-        X_eval (np.ndarray): Evaluation grid used for diagnostics/comparison.
+        eval_grid (dict[str, np.ndarray]): Linearly spaced evaluation grid used
+            for visualising and sanity-checking model predictions.
         plot_model_fits (callable | None): Optional plotting callback.
         loss_fn (callable | None): Objective loss function override.
         prompt_manager: PromptManager for all prompt construction.
-        trial_batch_size (int | None): Trial batching size used by ``objective``.
+        grad_descent_batch_size (int | None): Batch size for gradient descent. Default is None.
         swear_words (list[str] | None): Blacklist for generated estimator code.
         open_family_tree (bool): Open the combined family tree HTML at the end of the run.
         use_simple_objective (bool): Use the minimal objective implementation everywhere.
         log_prompts (bool): If True, include prompt/response text in logs and generation records.
         log_jax_translations (bool): If True, include JAX translator prompt/response/code in logs.
         random_seed (int): Run seed for deterministic split-dependent operations.
-
-    Returns:
-        str: Path to the run output directory containing logs, plots, and program DBs.
+        full_dir_tuple (tuple): Directory path components for saving outputs. Must be specified.
     """
     has_spec_plotter = plot_model_fits is not None
+    if full_dir_tuple is None:
+        raise ValueError("full_dir_tuple must be specified to save outputs.")
+    base_dir, date_stamp, time_stamp = full_dir_tuple
+    full_dir = os.path.join(*full_dir_tuple)
 
     def _normalize_llm_sequence(value, label: str):
         if value is None:
@@ -1779,9 +1802,6 @@ async def hypothesis_engine(
     n_training_trials = utils.data_n_trials(X[0, 0])
     n_test_samples = utils.data_n_samples(X[1, 1])
     n_test_trials = utils.data_n_trials(X[1, 1])
-    X_eval_train = _align_eval_grid(X_eval, n_samples=n_training_samples)
-    X_eval_test = _align_eval_grid(X_eval, n_samples=n_test_samples)
-
     print(f"Using {n_training_trials} training trials and {n_test_trials} test trials.")
     print(f"Using {n_training_samples} samples for training and {n_test_samples} samples for testing.")
 
@@ -1814,7 +1834,7 @@ async def hypothesis_engine(
             jax_func=jax_func,
             param_estimator=param_estimators[i],
             data_train_trials=X[0, 0],
-            x_eval=X_eval_train,
+            x_eval=eval_grid,
         )
         jax_programs.append(jax_func)
         jax_code_strings.append(jax_code_string)
@@ -1827,15 +1847,6 @@ async def hypothesis_engine(
                                              'initial_loss', 'initial_params', 'llm_name', 'parent1_id', 'parent2_id', 'evaluation_matrix']))
     initial_programs = pd.DataFrame([])
 
-    # wherever you run “python script.py” from…
-    base_dir = os.path.join(os.getcwd(), 'program_databases')
-    print("Base directory:", base_dir)
-    os.makedirs(base_dir, exist_ok=True)
-    date_stamp = pd.Timestamp.now().strftime("%m-%d")
-    time_stamp = pd.Timestamp.now().strftime("%H-%M-%S")
-    full_dir = os.path.join(base_dir, date_stamp, time_stamp)
-    os.makedirs(full_dir, exist_ok=True)
-    print("Created folder:", full_dir)
     # create a directory for image diagnostics
     image_feedback_dir = os.path.join(full_dir, 'image_feedback')
     os.makedirs(image_feedback_dir, exist_ok=True)
@@ -1885,7 +1896,7 @@ async def hypothesis_engine(
             learning_rate=learning_rate,
             use_param_estimator=use_param_estimator,
             max_iter=max_iter,
-            trial_batch_size=trial_batch_size,
+            grad_descent_batch_size=grad_descent_batch_size,
             timeout_s=param_estimator_timeout_s,
             # Keep seed scoring unconstrained by objective timeout so good seeds
             # are not discarded due strict per-candidate runtime caps.
@@ -1908,7 +1919,7 @@ async def hypothesis_engine(
         y_eval = utils.compute_evaluation_matrix(
             program_jax,
             params,
-            eval_points=X_eval_train,
+            eval_points=eval_grid,
         )
 
         new_program_df = pd.DataFrame({'program_code_string': program_code_string,
@@ -1996,7 +2007,7 @@ async def hypothesis_engine(
         plot_model_fits(
             data=X[0, 0],
             programs_list=seed_programs_list,
-            X_eval=X_eval_train,
+            eval_grid=eval_grid,
             save_path=os.path.join(image_prompts_dir, 'initial_programs.png'),
             labels=['seed_1', 'seed_2'],
         )
@@ -2029,7 +2040,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[0, 0],
                     programs_list=seed_train_programs_list,
-                    X_eval=X_eval_train,
+                    eval_grid=eval_grid,
                     save_path=seed_train_path,
                     labels=[seed_label],
                     title_prefix=f"Train fits ({seed_label})",
@@ -2056,7 +2067,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[0, 1],
                     programs_list=seed_test_programs_list,
-                    X_eval=X_eval_test,
+                    eval_grid=eval_grid,
                     save_path=seed_test_path,
                     labels=[seed_label],
                     title_prefix=f"Test fits ({seed_label})",
@@ -2143,7 +2154,7 @@ async def hypothesis_engine(
                                                     k_max=k_max, 
                                                     temp=temperature,
                                                     data=X[0, 0],
-                                                    x_eval=X_eval_train,
+                                                    x_eval=eval_grid,
                                                     prompt_manager=prompt_manager,
                                                     img_dir=model_image_dirs[island_idx, j],
                                                     plot_model_fits=plot_model_fits,
@@ -2286,7 +2297,7 @@ async def hypothesis_engine(
                 iteration=i,
                 use_simple_objective=use_simple_objective,
                 plot_model_fits=plot_model_fits,
-                x_eval=X_eval_train,
+                x_eval=eval_grid,
                 image_refinement_dir=image_param_est_refine_dir,
                 param_estimator_timeout_s=param_estimator_timeout_s,
                 objective_timeout_s=objective_timeout_s,
@@ -2523,7 +2534,7 @@ async def hypothesis_engine(
                     jax_func=model_new,
                     param_estimator=param_est_new,
                     data_train_trials=X[0, 0],
-                    x_eval=X_eval_train,
+                    x_eval=eval_grid,
                 )
             except Exception as e:
                 evaluation_log_updates[candidate_key] = {
@@ -2546,7 +2557,7 @@ async def hypothesis_engine(
                 fit_params=fit_params,
                 use_param_estimator=use_param_estimator,
                 max_iter=max_iter,
-                trial_batch_size=trial_batch_size,
+                grad_descent_batch_size=grad_descent_batch_size,
                 timeout_s=param_estimator_timeout_s,
                 objective_timeout_s=objective_timeout_s,
             )
@@ -2567,7 +2578,7 @@ async def hypothesis_engine(
             y_eval = utils.compute_evaluation_matrix(
                 model_new,
                 optimized_params,
-                eval_points=X_eval_train,
+                eval_points=eval_grid,
             )
             _set_score(loss)
             _flush_log()
@@ -2610,7 +2621,7 @@ async def hypothesis_engine(
                             "losses": np.full(utils.data_n_samples(X[0, 0]), float(loss)),
                         },
                     ],
-                    X_eval=X_eval_train,
+                    eval_grid=eval_grid,
                     save_path=os.path.join(image_param_est_vs_gd_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est_vs_gd.png'),
                     labels=['PE', 'GD'],
                 )
@@ -2635,7 +2646,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[0, 0],
                     programs_list=train_programs_list,
-                    X_eval=X_eval_train,
+                    eval_grid=eval_grid,
                     save_path=train_fit_path,
                     labels=['PE', 'GD'],
                     title_prefix="Train fits",
@@ -2660,7 +2671,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[0, 1],
                     programs_list=test_programs_list,
-                    X_eval=X_eval_train,
+                    eval_grid=eval_grid,
                     save_path=test_fit_path,
                     labels=['PE', 'GD'],
                     title_prefix="Test fits",
@@ -2706,7 +2717,7 @@ async def hypothesis_engine(
             
             islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
 
-            n_params = int(optimized_params.shape[1])
+            n_params = utils.params_numel_per_sample(optimized_params)
             complexity_penalty = float(param_penalty_weight * n_params)
             evaluation_log_updates[candidate_key] = {
                 "train_loss": float(loss),
@@ -2815,7 +2826,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[0, 0],
                     programs_list=top_programs_list,
-                    X_eval=X_eval_train,
+                    eval_grid=eval_grid,
                     save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
                 )
         
@@ -2832,7 +2843,7 @@ async def hypothesis_engine(
             plot_model_fits(
                 data=X[0, 0],
                 programs_list=top_programs_list,
-                X_eval=X_eval_train,
+                eval_grid=eval_grid,
                 save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
             )
         
@@ -2876,7 +2887,7 @@ async def hypothesis_engine(
                     max_iter=max_iter,
                     param_penalty_weight=param_penalty_weight,
                     use_param_estimator=use_param_estimator,
-                    trial_batch_size=trial_batch_size,
+                    grad_descent_batch_size=grad_descent_batch_size,
                     timeout_s=param_estimator_timeout_s,
                     objective_timeout_s=objective_timeout_s,
                 )
@@ -2962,7 +2973,7 @@ async def hypothesis_engine(
                 plot_model_fits(
                     data=X[1, 1],
                     programs_list=programs_list,
-                    X_eval=X_eval_test,
+                    eval_grid=eval_grid,
                     save_path=os.path.join(df_dirs[i], 'top_model_fits.png'),
                 )
                 # Plot top models separately using the same plot_model_fits pathway.
@@ -2976,7 +2987,7 @@ async def hypothesis_engine(
                             data=X[1, 1],
                             complexity_penalty=param_penalty_weight,
                         ),
-                        X_eval=X_eval_test,
+                        eval_grid=eval_grid,
                         save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png'),
                         labels=['model'],
                     )
@@ -3000,4 +3011,4 @@ async def hypothesis_engine(
     if island_chat_manager is not None:
         island_chat_manager.log_final_summary()
 
-    return full_dir
+    print("Run complete. Outputs saved to:", full_dir, flush=True)

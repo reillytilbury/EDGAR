@@ -17,7 +17,7 @@ Loss:
 OPTIONAL COMPONENTS (for enhanced diagnostics and visualization):
 
 Plotting:
-- plot_model_fits(data, programs_list, X_eval, save_path, labels)
+- plot_model_fits(data, programs_list, eval_grid, save_path, labels)
 """
 
 import numpy as np
@@ -35,10 +35,11 @@ def load_and_process_data(
     data_path: str = "",
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
     SEED: int = 42,
+    random_seed: int = 42,
     n_samples: int = 1000,
     n_trials: int = 2000,
     noise_std: float = 0.1,
-) -> Dict[str, np.ndarray]:
+) -> list[list[dict[str, np.ndarray]]]:
     """
     Simulate synthetic single-input regression data.
 
@@ -61,10 +62,9 @@ def load_and_process_data(
 
     Returns
     -------
-    dict[str, np.ndarray]
-        Data dict with keys:
-        - 'x': shape (n_samples, n_trials), input values
-        - 'y': shape (n_samples, n_trials), noisy output values
+    2 x 2 list of dicts
+        ``[[data_train_train, data_train_test], [data_test_train, data_test_test]]``
+        with the same split semantics as the legacy runner-managed split.
     """
     rng = np.random.default_rng(SEED)
 
@@ -83,7 +83,18 @@ def load_and_process_data(
 
     x_tiled = np.tile(x, (n_samples, 1))
 
-    return {'x': x_tiled, 'y': y}
+    data = {'x': x_tiled, 'y': y}
+
+    train_samples, train_trials = train_test_split(data, random_seed=random_seed)
+    test_samples = np.setdiff1d(np.arange(n_samples, dtype=np.int64), train_samples, assume_unique=False)
+    test_trials = np.setdiff1d(np.arange(n_trials, dtype=np.int64), train_trials, assume_unique=False)
+
+    data_train_train = utils.slice_data(data, train_samples, train_trials)
+    data_train_test = utils.slice_data(data, train_samples, test_trials)
+    data_test_train = utils.slice_data(data, test_samples, train_trials)
+    data_test_test = utils.slice_data(data, test_samples, test_trials)
+
+    return [[data_train_train, data_train_test], [data_test_train, data_test_test]]
 
 
 def train_test_split(
@@ -163,8 +174,6 @@ def param_est_v1(data):
     best_loss = float("inf")
     best_params = (1.0, 0.0)
 
-    x = np.asarray(X[0] if np.asarray(X).ndim > 1 else X)
-
     for a in a_values:
         for b in b_values:
             y_pred = model_v1(data, {"a": a, "b": b})
@@ -243,7 +252,7 @@ def loss_fn(model_output, data):
 def plot_model_fits(
     data,
     programs_list,
-    X_eval,
+    eval_grid,
     save_path="",
     labels=("model_v1", "model_v2"),
 ):
@@ -259,8 +268,8 @@ def plot_model_fits(
         - 'model': callable model(data, params)
         - 'params': batched parameter pytree
         - 'losses': array of shape (n_samples,)
-    X_eval : dict[str, np.ndarray]
-        Evaluation grid dict with key 'x', shape (n_samples, n_eval_trials).
+    eval_grid : dict[str, np.ndarray]
+        Evaluation grid dict with key 'x', shape (n_eval_points,).
     save_path : str
         Output path. If empty, raises an error.
     """
@@ -269,7 +278,7 @@ def plot_model_fits(
 
     x_arr = data['x']
     y_arr = data['y']
-    x_eval_arr = X_eval['x']
+    x_eval = np.asarray(eval_grid['x']).reshape(-1)
     n_samples = x_arr.shape[0]
     # diff colours depending on how many models we have
     if len(programs_list) == 1:
@@ -301,7 +310,6 @@ def plot_model_fits(
         s = idx[i]
         x = x_arr[s]
         y_obs = y_arr[s]
-        x_eval = np.asarray(x_eval_arr[s]).reshape(-1)
 
         y_mean = compute_binned_means_on_eval(x, y_obs, x_eval)
         ax.scatter(x, y_obs, s=10, c="black", alpha=0.15, label="Observed")
@@ -310,8 +318,7 @@ def plot_model_fits(
         for j, program in enumerate(programs_list):
             model = program["model"]
             params = utils.slice_params(params_by_model[j], s)
-            sample_eval_data = {'x': x_eval}
-            y_pred = utils.call_model(model, sample_eval_data, params)
+            y_pred = utils.call_model(model, eval_grid, params)
 
             label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
             if "losses" in program:

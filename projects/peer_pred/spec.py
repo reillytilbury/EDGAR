@@ -15,11 +15,11 @@ LOSS FUNCTION:
 - loss_fn(Y_pred, Y_true) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(data, programs_list, data_eval, save_path, labels)
+- plot_model_fits(data, programs_list, eval_grid, save_path, labels)
 """
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Tuple
+from typing import Dict, Tuple
 from scipy.io import loadmat
 from src import utils
 from scipy.signal import medfilt, butter, filtfilt
@@ -37,18 +37,15 @@ def load_and_process_data(
     n_cells: int = 4_000,
     downsample_factor: int = 4,
     var_thresh: float = 1e-4,
+    block_size: int = 180,
+    mode: str = "interleave",
     zscore: bool = True,
-) -> dict[str, np.ndarray]:
+) -> list[list[dict[str, np.ndarray]]]:
     """
     Load and preprocess data and return a dict of arrays.
 
-    Returns a dictionary with keys:
-    - 'source': source population activity of shape (2, n_source_cells, n_time).
-      Sample 0 is the training population, sample 1 is held-out for testing.
-    - 'target': target population activity of shape (2, n_target_cells, n_time).
-      Sample 0 is the training target population, sample 1 is held-out for testing.
-
-    All arrays share the same last dimension (n_time).
+    Returns a 2x2 split container:
+    ``[[data_train_train, data_train_test], [data_test_train, data_test_test]]``.
     """
     random_seed = int(random_seed)
     n_cells = int(n_cells)
@@ -101,9 +98,26 @@ def load_and_process_data(
         Y_train = zscore_rows(Y_train)
         Y_test = zscore_rows(Y_test)
 
-    source = np.stack([X_train, X_test], axis=0)  # (2, n_source, T)
-    target = np.stack([Y_train, Y_test], axis=0)  # (2, n_target, T)
-    return {"source": source, "target": target}
+    data = {
+        "source": np.stack([X_train, X_test], axis=0),  # (2, n_source, T)
+        "target": np.stack([Y_train, Y_test], axis=0),  # (2, n_target, T)
+    }
+
+    train_samples, train_trials = train_test_split(
+        data,
+        random_seed=random_seed,
+        block_size=block_size,
+        mode=mode,
+    )
+    _, test_trials = make_time_split(utils.data_n_trials(data), block_size=block_size, mode=mode)
+    test_samples = np.setdiff1d(np.arange(utils.data_n_samples(data), dtype=np.int64), train_samples, assume_unique=False)
+
+    data_train_train = utils.slice_data(data, train_samples, train_trials)
+    data_train_test = utils.slice_data(data, train_samples, test_trials)
+    data_test_train = utils.slice_data(data, test_samples, train_trials)
+    data_test_test = utils.slice_data(data, test_samples, test_trials)
+
+    return [[data_train_train, data_train_test], [data_test_train, data_test_test]]
 
 
 def train_test_split(
@@ -310,7 +324,7 @@ def loss_fn(Y_pred, Y_true):
 def plot_model_fits(
     data,
     programs_list,
-    data_eval,
+    eval_grid,
     save_path="",
     labels=None,
     title_prefix: str | None = None,

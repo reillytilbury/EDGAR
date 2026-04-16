@@ -47,7 +47,7 @@ experiment_params:
   n_iterations: 5
   max_iter: 100
   learning_rate: 1e-3
-  trial_batch_size: 5000
+  grad_descent_batch_size: 5000
   fit_params: False
   eval_keys: ['pos_x', 'pos_y']
   x_min: [-1.0, -1.0]

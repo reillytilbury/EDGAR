@@ -15,7 +15,7 @@ Loss:
 - loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(data, programs_list, X_eval, save_path, labels)
+- plot_model_fits(data, programs_list, eval_grid, save_path, labels)
 """
 import numpy as np
 import jax
@@ -29,70 +29,6 @@ from src import utils
 # ========================
 # 1. DATA
 # ========================
-
-def load_and_process_data(
-    data_path: str,
-    # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
-    activity_threshold: float = 0.1,
-    conc_threshold: float = 0.1,
-) -> Dict[str, np.ndarray]:
-    """
-    Load and preprocess neural data and return data as a dictionary
-    mapping descriptive key names to numpy arrays.
-
-    All arrays have shape (n_samples, ..., n_trials) with n_trials as the
-    last dimension.
-
-    Parameters
-    ----------
-    data_path : str
-        Path to the .npy file containing neural data.
-    activity_threshold : float
-        Threshold for activity to select good cells.
-    conc_threshold : float
-        Threshold for concentration to select good cells.
-
-    Returns
-    -------
-    data : dict[str, np.ndarray]
-        Dictionary with keys:
-        - 'stimulus': np.ndarray of shape (n_samples, n_trials), stimulus angles.
-        - 'response': np.ndarray of shape (n_samples, n_trials), neural responses.
-    """
-    # load and preprocess data
-    neural_data = np.load(data_path, allow_pickle=True)
-    neural_data = neural_data.item()
-    # Use passed data extraction function or fall back to default
-    response = extract_stimulus_related_response(neural_data, n_pcs=0)
-
-    angles = neural_data['istim']
-    n_trials = response.shape[1]
-    n_trials_small = int(n_trials * activity_threshold)
-
-    # filter
-    active = (response > 0).astype(np.float32)
-    firing_probs = np.mean(active, axis=1)
-    conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
-    good_cells = np.where((firing_probs > activity_threshold) & (conc > conc_threshold))[0]
-    n_good_cells = len(good_cells)
-
-    # update angles and response to be (n_cells_small, n_trials_small)
-    response_cropped, angles_cropped = np.zeros((n_good_cells, n_trials_small)), np.zeros((n_good_cells, n_trials_small))
-    for i, cell in enumerate(good_cells):
-        active_trials = response[cell] > 0
-        active_trials_idx = np.where(active_trials)[0][:n_trials_small]
-        response_cropped[i] = response[cell, active_trials_idx]
-        angles_cropped[i] = angles[active_trials_idx]
-
-    response_cropped = normalize_response(response_cropped)
-
-    # Return dict with shape (n_samples, n_trials) arrays
-    data = {
-        'stimulus': angles_cropped,   # shape (n_samples, n_trials)
-        'response': response_cropped,  # shape (n_samples, n_trials)
-    }
-
-    return data
 
 def train_test_split(
         X: Dict[str, np.ndarray],
@@ -134,6 +70,80 @@ def train_test_split(
     train_trials = np.asarray(shuffled_trials[: n_trials // 2], dtype=np.int64)
 
     return train_samples, train_trials
+
+def load_and_process_data(
+    data_path: str,
+    # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
+    random_seed: int = 42,
+    activity_threshold: float = 0.1,
+    conc_threshold: float = 0.1,
+) ->  list[list[dict[str, np.ndarray]]]:
+    """
+    Load and preprocess neural data and return data as a dictionary
+    mapping descriptive key names to numpy arrays.
+
+    All arrays have shape (n_samples, ..., n_trials) with n_trials as the
+    last dimension.
+
+    Parameters
+    ----------
+    data_path : str
+        Path to the .npy file containing neural data.
+    activity_threshold : float
+        Threshold for activity to select good cells.
+    conc_threshold : float
+        Threshold for concentration to select good cells.
+
+    Returns
+    -------
+    2 x 2 list of dicts: [[data_train_train, data_train_test], [data_test_train, data_test_test]]
+        Each dict contains preprocessed data arrays for the corresponding sample and trial splits.
+    """
+    # load and preprocess data
+    neural_data = np.load(data_path, allow_pickle=True)
+    neural_data = neural_data.item()
+    # Use passed data extraction function or fall back to default
+    response = extract_stimulus_related_response(neural_data, n_pcs=0)
+
+    angles = neural_data['istim']
+    n_trials = response.shape[1]
+    n_trials_small = int(n_trials * activity_threshold)
+
+    # filter
+    active = (response > 0).astype(np.float32)
+    firing_probs = np.mean(active, axis=1)
+    conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
+    good_cells = np.where((firing_probs > activity_threshold) & (conc > conc_threshold))[0]
+    n_good_cells = len(good_cells)
+
+    # update angles and response to be (n_cells_small, n_trials_small)
+    response_cropped, angles_cropped = np.zeros((n_good_cells, n_trials_small)), np.zeros((n_good_cells, n_trials_small))
+    for i, cell in enumerate(good_cells):
+        active_trials = response[cell] > 0
+        active_trials_idx = np.where(active_trials)[0][:n_trials_small]
+        response_cropped[i] = response[cell, active_trials_idx]
+        angles_cropped[i] = angles[active_trials_idx]
+
+    response_cropped = normalize_response(response_cropped)
+
+    # Return dict with shape (n_samples, n_trials) arrays
+    data = {
+        'stimulus': angles_cropped,   # shape (n_samples, n_trials)
+        'response': response_cropped,  # shape (n_samples, n_trials)
+    }
+    
+    train_samples, train_trials = train_test_split(data, random_seed=random_seed)
+    test_samples = np.setdiff1d(np.arange(response_cropped.shape[0], dtype=np.int64), train_samples, assume_unique=False)
+    test_trials = np.setdiff1d(np.arange(response_cropped.shape[1], dtype=np.int64), train_trials, assume_unique=False)
+    
+    data_train_train = utils.slice_data(data, train_samples, train_trials)
+    data_train_test = utils.slice_data(data, train_samples, test_trials)
+    data_test_train = utils.slice_data(data, test_samples, train_trials)
+    data_test_test = utils.slice_data(data, test_samples, test_trials)
+
+    # no z-scoring to stay consistent to our initial approach
+    return [[data_train_train, data_train_test], [data_test_train, data_test_test]]
+
 
 # ========================
 # 2. SEED MODELS
@@ -324,7 +334,7 @@ def loss_fn(model_output, data):
 def plot_model_fits(
     data,
     programs_list,
-    X_eval,
+    eval_grid,
     save_path="",
     labels=("model_v1", "model_v2"),
 ):
@@ -341,9 +351,8 @@ def plot_model_fits(
         - 'model': callable model(data_one, params)
         - 'params': batched parameter pytree
         - 'losses': array of shape (n_samples,)
-    X_eval : dict[str, np.ndarray]
-        Evaluation grid dictionary with key 'stimulus' of shape
-        (n_samples, n_eval_trials).
+    eval_grid : dict[str, np.ndarray]
+        Evaluation grid dictionary with key 'stimulus' of shape (n_eval_points,).
     save_path : str
         Output path. If empty, raises an error.
     """
@@ -383,8 +392,7 @@ def plot_model_fits(
         s = idx[i]
         x = stimulus[s]
         y_obs = response[s]
-        eval_data = utils.get_data_sample(X_eval, s)
-        x_eval = np.asarray(eval_data['stimulus']).reshape(-1)
+        x_eval = np.asarray(eval_grid['stimulus']).reshape(-1)
 
         y_mean = compute_binned_means_on_eval(x, y_obs, x_eval)
         ax.scatter(x, y_obs, s=10, c="black", alpha=0.2, label="Observed")
@@ -394,7 +402,7 @@ def plot_model_fits(
             model = program["model"]
             params = utils.slice_params(params_by_model[j], s)
             loss = program["losses"][s]
-            y_pred = utils.call_model(model, eval_data, params)
+            y_pred = utils.call_model(model, eval_grid, params)
 
             label = labels[j] + f" (loss={loss:.2f})"
             ax.plot(

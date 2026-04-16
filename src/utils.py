@@ -22,43 +22,14 @@ logging.getLogger("google.genai").setLevel(logging.ERROR)
 # ---------------------------------------------------------------------------
 
 def validate_data(X: Dict[str, np.ndarray]) -> None:
-    """Validate that X is a dict of arrays sharing the same first and last dimensions.
-
-    All arrays must have at least 2 dimensions (n_samples, ..., n_trials), share
-    the same leading n_samples axis, and share the same trailing n_trials axis.
-
+    """Validate that X is a dictionary of arrays. # Update this further if necessary! 
+    
     Raises ValueError with a clear message if validation fails.
     """
     if not isinstance(X, dict):
         raise ValueError(f"Data must be a dict, got {type(X).__name__}.")
     if len(X) == 0:
         raise ValueError("Data dict must not be empty.")
-    n_samples = None
-    n_trials = None
-    for key, arr in X.items():
-        if not isinstance(arr, (np.ndarray, jnp.ndarray)):
-            raise ValueError(
-                f"Data['{key}'] must be a numpy or JAX array, got {type(arr).__name__}."
-            )
-        if arr.ndim < 2:
-            raise ValueError(
-                f"Data['{key}'] has {arr.ndim} dimension(s); all arrays must have at least "
-                f"2 dimensions (n_samples, ..., n_trials)."
-            )
-        if n_samples is None:
-            n_samples = arr.shape[0]
-        elif arr.shape[0] != n_samples:
-            raise ValueError(
-                f"All arrays must share the same first dimension (n_samples). "
-                f"First key has n_samples={n_samples}, but '{key}' has n_samples={arr.shape[0]}."
-            )
-        if n_trials is None:
-            n_trials = arr.shape[-1]
-        elif arr.shape[-1] != n_trials:
-            raise ValueError(
-                f"All arrays must share the same last dimension (n_trials). "
-                f"First key has n_trials={n_trials}, but '{key}' has n_trials={arr.shape[-1]}."
-            )
 
 
 def data_n_trials(X: Dict[str, np.ndarray]) -> int:
@@ -81,6 +52,11 @@ def slice_data_samples(X: Dict[str, np.ndarray], indices) -> Dict[str, np.ndarra
 def slice_data_trials(X: Dict[str, np.ndarray], indices) -> Dict[str, np.ndarray]:
     """Slice the trial axis (last dim) of every array in the data dict."""
     return {k: v[..., indices] for k, v in X.items()}
+
+
+def slice_data(X: Dict[str, np.ndarray], sample_indices, trial_indices) -> Dict[str, np.ndarray]:
+    """Slice both sample and trial axes of every array in the data dict."""
+    return slice_data_trials(slice_data_samples(X, sample_indices), trial_indices)
 
 
 def get_data_sample(X: Dict[str, np.ndarray], idx: int) -> Dict[str, np.ndarray]:
@@ -447,12 +423,12 @@ def check_jax_translation(
 def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins=100):
     """Build evaluation grid as a data dict.
 
-    Creates a linspace grid for each specified key, broadcast to n_samples and
-    any intermediate dimensions present in the original key.
+    Creates a linspace grid for each specified key. The returned arrays have no
+    sample axis — they represent a single shared evaluation grid.
 
     Args:
         data (dict[str, np.ndarray]): Data dict with sample axis at dim 0,
-            used to infer n_samples and default min/max bounds.
+            used to infer default min/max bounds and intermediate dimensions.
         eval_keys (list[str] | None): Keys to create eval grids for. If None,
             uses all keys in the data dict.
         x_min: Scalar (applied to all keys), list (one per eval key), or None
@@ -461,12 +437,11 @@ def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins
         n_bins (int): Number of evaluation points per key.
 
     Returns:
-        dict[str, np.ndarray]: Eval data dict where each key has shape
-            ``(n_samples, *mid_dims, n_bins)``, where ``mid_dims`` are the
-            intermediate dimensions of the original key between the sample and
-            trial axes (empty for 2D keys, giving shape ``(n_samples, n_bins)``).
+        dict[str, np.ndarray]: Eval grid dict where each key has shape
+            ``(*mid_dims, n_bins)``, where ``mid_dims`` are the intermediate
+            dimensions of the original key between the sample and trial axes
+            (empty for 2D keys, giving shape ``(n_bins,)``).
     """
-    n_samples = data_n_samples(data)
     if eval_keys is None:
         eval_keys = list(data.keys())
     n_keys = len(eval_keys)
@@ -504,10 +479,8 @@ def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins
         # mid_dims are intermediate dims between sample and trial axes.
         # For 2D arrays (n_samples, n_trials) this is an empty tuple.
         mid_dims = data[key].shape[1:-1]
-        out_shape = (n_samples,) + mid_dims + (n_bins,)
-        # grid_reshape is (1, 1, ..., 1, n_bins) — one leading 1 per mid dim —
-        # so that np.broadcast_to spreads the linspace across all intermediate dims.
-        grid_reshape = (1,) + (1,) * len(mid_dims) + (n_bins,)
+        out_shape = mid_dims + (n_bins,)
+        grid_reshape = (1,) * len(mid_dims) + (n_bins,)
         result[key] = np.broadcast_to(grid.reshape(grid_reshape), out_shape)
     return result
 
@@ -518,19 +491,26 @@ def compute_evaluation_matrix(program, params, eval_points):
     Args:
         program: Model function with signature ``model(data_i, params)``.
         params: Batched parameter pytree with leading sample axis.
-        eval_points (dict[str, np.ndarray]): Evaluation data dict with sample
-            axis at dim 0, as returned by ``build_evaluation_points``.
+        eval_points (dict[str, np.ndarray]): Evaluation grid without a sample
+            axis, as returned by ``build_evaluation_points``.
 
     Returns:
-        jnp.ndarray: Model output evaluated on the grid.
+        jnp.ndarray: Model output evaluated on the grid, shape
+            ``(n_samples, *eval_shape)``.
     """
     if eval_points is None:
         raise ValueError("eval_points must be provided.")
 
     params_arr = tree_to_jax(params)
-    eval_data = data_as_jax(eval_points)
-    n_samples = data_n_samples(eval_data)
+    first_leaf = jax.tree_util.tree_leaves(params_arr)[0]
+    n_samples = first_leaf.shape[0]
     params_arr = broadcast_params(params_arr, n_samples)
+
+    # Broadcast eval grid to (n_samples, ...) so vmap can map over dim 0.
+    eval_data = {
+        k: jnp.broadcast_to(jnp.asarray(v), (n_samples,) + v.shape)
+        for k, v in eval_points.items()
+    }
 
     program_vmap = vmap_over_samples(program)
     return program_vmap(eval_data, params_arr)

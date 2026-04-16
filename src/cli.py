@@ -46,7 +46,7 @@ SPEC_TEMPLATE = dedent(
     - loss_fn(model_output, data) -> loss values
 
     OPTIONAL COMPONENTS:
-    - plot_model_fits(data, programs_list, X_eval, save_path, labels)
+    - plot_model_fits(data, programs_list, eval_grid, save_path, labels)
     """
     import numpy as np
     from typing import Tuple, Dict
@@ -111,7 +111,7 @@ SPEC_TEMPLATE = dedent(
     # 4. DIAGNOSTICS
     # ========================
 
-    def plot_model_fits(data, programs_list, X_eval, save_path="", labels=None):
+    def plot_model_fits(data, programs_list, eval_grid, save_path="", labels=None):
         raise NotImplementedError
 
 

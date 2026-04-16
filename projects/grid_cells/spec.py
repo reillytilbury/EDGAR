@@ -15,7 +15,7 @@ Loss:
 - loss_fn(model_output, data) -> loss values
 
 OPTIONAL COMPONENTS:
-- plot_model_fits(data, programs_list, data_eval, save_path, labels)
+- plot_model_fits(data, programs_list, eval_grid, save_path, labels)
 """
 
 import numpy as np
@@ -33,6 +33,7 @@ from src import utils
 def load_and_process_data(
     data_path: str,
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
+    random_seed: int = 42,
     time_start: float = 27826,
     time_end: float = 31223,
     time_bin_ms: int = 100,
@@ -45,7 +46,7 @@ def load_and_process_data(
     normalize_per_sample: bool = True,
     target_l2_norm: float = 1.0,
     min_l2_norm: float = 1e-6,
-) -> Dict[str, np.ndarray]:
+) -> list[list[dict[str, np.ndarray]]]:
     """
     Load and preprocess grid-cell data, returning a dict of arrays.
 
@@ -77,11 +78,8 @@ def load_and_process_data(
 
     Returns
     -------
-    X : dict[str, np.ndarray]
-        Dictionary with keys:
-        - 'pos_x': shape (n_samples, n_trials) -- x positions tiled per neuron.
-        - 'pos_y': shape (n_samples, n_trials) -- y positions tiled per neuron.
-        - 'response': shape (n_samples, n_trials) -- firing rates per neuron.
+    2 x 2 list of dicts
+        ``[[data_train_train, data_train_test], [data_test_train, data_test_test]]``.
     """
     spatial_bin_cm = 3.0
     smoothing_sigma = 1.5
@@ -199,12 +197,23 @@ def load_and_process_data(
     n_spatial_bins = int(np.ceil((2 * wall_val * 100) / spatial_bin_cm))
     _ = _compute_rate_maps(features["x"], features["y"], firing_rates, n_spatial_bins, smoothing_sigma)
 
-    X = {
+    data = {
         'pos_x': np.tile(features["x"], (n_cells, 1)),   # (n_samples, n_trials)
         'pos_y': np.tile(features["y"], (n_cells, 1)),   # (n_samples, n_trials)
         'response': firing_rates,                          # (n_samples, n_trials)
     }
-    return X
+
+    train_samples, train_trials = train_test_split(data, random_seed=random_seed)
+    n_trials_final = utils.data_n_trials(data)
+    test_samples = np.setdiff1d(np.arange(n_cells, dtype=np.int64), train_samples, assume_unique=False)
+    test_trials = np.setdiff1d(np.arange(n_trials_final, dtype=np.int64), train_trials, assume_unique=False)
+
+    data_train_train = utils.slice_data(data, train_samples, train_trials)
+    data_train_test = utils.slice_data(data, train_samples, test_trials)
+    data_test_train = utils.slice_data(data, test_samples, train_trials)
+    data_test_test = utils.slice_data(data, test_samples, test_trials)
+
+    return [[data_train_train, data_train_test], [data_test_train, data_test_test]]
 
 
 def train_test_split(
@@ -837,7 +846,7 @@ def loss_fn(model_output, data):
 def plot_model_fits(
     data,
     programs_list,
-    data_eval,
+    eval_grid,
     save_path="",
     labels=("model_v1", "model_v2"),
     n_bins: int = 40,
@@ -859,9 +868,9 @@ def plot_model_fits(
         - `'model'`: callable model function
         - `'params'`: batched parameter pytree
         - optionally `'losses'`: per-sample losses
-    data_eval : dict[str, np.ndarray]
+    eval_grid : dict[str, np.ndarray]
         Evaluation grid dictionary with keys 'pos_x', 'pos_y'.
-        Each array has shape (n_samples, n_eval_trials).
+        Each array has shape (n_eval_points,).
     save_path : str
         Output figure path.
     labels : tuple of str
@@ -873,8 +882,8 @@ def plot_model_fits(
     pos_x = np.asarray(data['pos_x'])
     pos_y = np.asarray(data['pos_y'])
     response = np.asarray(data['response'])
-    eval_pos_x = np.asarray(data_eval['pos_x'])
-    eval_pos_y = np.asarray(data_eval['pos_y'])
+    eval_pos_x = np.asarray(eval_grid['pos_x']).reshape(-1)
+    eval_pos_y = np.asarray(eval_grid['pos_y']).reshape(-1)
 
     n_samples = pos_x.shape[0]
     n_show = min(max_show, n_samples)
@@ -895,8 +904,8 @@ def plot_model_fits(
         x = pos_x[s]
         y = pos_y[s]
         y_obs = response[s]
-        x_domain = (float(np.min(eval_pos_x[s])), float(np.max(eval_pos_x[s])))
-        y_domain = (float(np.min(eval_pos_y[s])), float(np.max(eval_pos_y[s])))
+        x_domain = (float(np.min(eval_pos_x)), float(np.max(eval_pos_x)))
+        y_domain = (float(np.min(eval_pos_y)), float(np.max(eval_pos_y)))
 
         rm_obs = _bin_to_rate_map(
             x, y, y_obs, n_bins=n_bins, x_domain=x_domain, y_domain=y_domain,
