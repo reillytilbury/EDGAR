@@ -1,10 +1,7 @@
 import asyncio
-import io
 import logging
 import os
 import re
-import textwrap
-import tokenize
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -13,98 +10,8 @@ import pandas as pd
 
 from .. import utils
 from ..engine.diagnostics import _programs_df_to_programs_list
-from ..llm import prompts as prompt_tools
 from ..llm.code_loading import load_function_from_source
-from ..llm.generation import (
-    request_jax_translation,
-    request_model_module,
-    request_parameter_estimator_module,
-)
 from ..scoring.jax_objective import _call_objective, compute_initial_params
-
-
-def _normalize_generated_model_code(
-    code_string: str | None,
-    model_name: str,
-    expected_version: int | None = None,
-) -> str | None:
-    """
-    Accept common generated model function names and normalize to ``def {model_name}(...):``.
-
-    Accepted top-level names:
-    - ``{model_name}_v{expected_version}``
-    - ``{model_name}_v<number>``
-    - ``{model_name}``
-    - ``model_v<number>``
-    - ``model``
-    """
-    if code_string is None:
-        return None
-    code = textwrap.dedent(str(code_string)).strip()
-    if not code:
-        return code
-
-    patterns = []
-    if expected_version is not None:
-        patterns.append(rf"^\s*def\s+{re.escape(model_name)}_v{int(expected_version)}\s*\(")
-    patterns.extend(
-        [
-            rf"^\s*def\s+{re.escape(model_name)}_v\d+\s*\(",
-            rf"^\s*def\s+{re.escape(model_name)}\s*\(",
-            r"^\s*def\s+model_v\d+\s*\(",
-            r"^\s*def\s+model\s*\(",
-        ]
-    )
-
-    for pat in patterns:
-        if re.search(pat, code, flags=re.MULTILINE):
-            return re.sub(pat, f"def {model_name}(", code, count=1, flags=re.MULTILINE)
-    return code
-
-
-def _strip_strings_and_comments(code_string: str) -> str:
-    """
-    Remove Python string literals and comments for safer token scanning.
-    """
-    if not isinstance(code_string, str) or not code_string:
-        return ""
-    try:
-        tokens = []
-        reader = io.StringIO(code_string).readline
-        for tok_type, tok_str, *_ in tokenize.generate_tokens(reader):
-            if tok_type in (tokenize.STRING, tokenize.COMMENT):
-                continue
-            tokens.append(tok_str)
-        return " ".join(tokens)
-    except Exception:
-        # Best effort: if tokenization fails, fall back to raw text.
-        return code_string
-
-
-def _find_banned_token(code_string: str, swear_words) -> str | None:
-    """
-    Return the first banned token found in executable code, or None.
-    """
-    if not swear_words:
-        return None
-    scan_text = _strip_strings_and_comments(code_string)
-    for raw_word in swear_words:
-        if not isinstance(raw_word, str) or not raw_word.strip():
-            continue
-        word = raw_word.strip()
-        if "." in word and re.fullmatch(r"[A-Za-z0-9_.]+", word):
-            # Match dotted paths with optional whitespace around dots.
-            parts = [re.escape(p) for p in word.split(".") if p]
-            if not parts:
-                continue
-            pattern = r"\b" + r"\s*\.\s*".join(parts) + r"\b"
-        elif re.fullmatch(r"[A-Za-z0-9_]+", word):
-            pattern = rf"\b{re.escape(word)}\b"
-        else:
-            pattern = re.escape(word)
-        if re.search(pattern, scan_text, flags=re.IGNORECASE):
-            return raw_word
-    return None
 
 
 async def generate_new_model(current_island, llm_name, client,

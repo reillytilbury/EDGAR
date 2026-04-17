@@ -48,35 +48,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 async def hypothesis_engine(
         n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6, 
         critical_population_size=12, min_wise_population_size=0, n_migrants=2, 
