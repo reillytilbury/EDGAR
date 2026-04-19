@@ -265,37 +265,50 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     if not task_name:
         raise ValueError("Config must specify `task` so the reader can load projects.<task>.spec")
 
-    # Auto-load experiment spec module by fixed naming convention.
-    spec_module_path = f"projects.{task_name}.spec"
-    try:
-        spec_module = importlib.import_module(spec_module_path)
-    except ModuleNotFoundError as e:
+    # Auto-load experiment modules from folder-based project structure.
+    def _import(module_path: str, label: str):
+        try:
+            return importlib.import_module(module_path)
+        except ModuleNotFoundError as e:
+            raise ValueError(
+                f"Could not import {module_path}. Expected projects/{task_name}/ folder structure."
+            ) from e
+
+    model1_mod = _import(f"projects.{task_name}.seed_programs.model1", "model1")
+    model2_mod = _import(f"projects.{task_name}.seed_programs.model2", "model2")
+    param_est1_mod = _import(f"projects.{task_name}.seed_programs.param_est1", "param_est1")
+    param_est2_mod = _import(f"projects.{task_name}.seed_programs.param_est2", "param_est2")
+    data_loader_mod = _import(f"projects.{task_name}.data_loader.load_data", "data_loader")
+
+    models = [model1_mod.model, model2_mod.model]
+    param_estimators = [param_est1_mod.parameter_estimator, param_est2_mod.parameter_estimator]
+
+    # Data extraction/splits: required in data_loader.
+    spec_load_and_process_data_fn = data_loader_mod.load_and_process_data
+    spec_train_test_split_fn = getattr(data_loader_mod, 'train_test_split', None)
+    if not callable(spec_train_test_split_fn):
         raise ValueError(
-            f"Could not import {spec_module_path}. Expected file projects/{task_name}/spec.py with required functions."
-        ) from e
-
-    models = [getattr(spec_module, 'model_v1'), getattr(spec_module, 'model_v2')]
-    param_estimators = [getattr(spec_module, 'param_est_v1'), getattr(spec_module, 'param_est_v2')]
-
-    # assert that we have exactly 2 of each
-    if len(models) != 2:
-        raise ValueError("There must be exactly 2 model seeds.")
-    if len(param_estimators) != 2:
-        raise ValueError("There must be exactly 2 parameter estimator seeds.")
-
-    # Data extraction/splits: require unified split API from spec.
-    spec_load_and_process_data_fn = getattr(spec_module, 'load_and_process_data')
+            f"projects.{task_name}.data_loader.load_data must define callable train_test_split(X, random_seed)."
+        )
     load_and_process_data_fn = _build_load_and_process_data_fn(spec_load_and_process_data_fn)
 
-    # Loss function: required in spec
-    spec_loss_fn = getattr(spec_module, "loss_fn", None)
+    # Loss function: required in data_loader.
+    spec_loss_fn = getattr(data_loader_mod, "loss_fn", None)
     if spec_loss_fn is None or not callable(spec_loss_fn):
-        raise ValueError(f"{spec_module_path} must define callable loss_fn(Y_pred, Y_true).")
+        raise ValueError(
+            f"projects.{task_name}.data_loader.load_data must define callable loss_fn(Y_pred, Y_true)."
+        )
 
-    # Image diagnostics are enabled automatically if spec defines plot_model_fits.
-    spec_plot_fn = getattr(spec_module, "plot_model_fits", None)
+    # Image diagnostics: optional image_feedback/plot.py module.
+    try:
+        plot_mod = importlib.import_module(f"projects.{task_name}.image_feedback.plot")
+        spec_plot_fn = getattr(plot_mod, "plot_model_fits", None)
+    except ModuleNotFoundError:
+        spec_plot_fn = None
     plot_model_fits_fn = _build_plot_model_fits_fn(spec_plot_fn) if callable(spec_plot_fn) else None
-    spec_build_eval_points_fn = getattr(spec_module, "build_evaluation_points", None)
+
+    # build_evaluation_points: optional, lives in data_loader.
+    spec_build_eval_points_fn = getattr(data_loader_mod, "build_evaluation_points", None)
 
     raw_loss_fn = spec_loss_fn
     loss_fn = _build_loss_fn(raw_loss_fn)
@@ -402,7 +415,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             )
             if not isinstance(X_eval, dict):
                 raise ValueError(
-                    f"{spec_module_path}.build_evaluation_points must return dict[str, np.ndarray]."
+                    f"projects.{task_name}.data_loader.load_data.build_evaluation_points must return dict[str, np.ndarray]."
                 )
             utils.validate_data(X_eval)
         else:

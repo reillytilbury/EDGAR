@@ -1,16 +1,10 @@
-"""
-FX8 natural-image discovery task with compact analytic minimodel seeds.
-"""
-
 from __future__ import annotations
 
 import importlib
 import math
 import os
 import sys
-from pathlib import Path
 
-import jax.numpy as jnp
 import matplotlib
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -19,52 +13,27 @@ from scipy.io import loadmat
 
 from src import utils
 from projects.minimodel_discovery.primitives import (
-    divisive_normalization,
     gabor_bank16,
     local_gaussian_readout,
     make_gabor_kernels,
     pairwise_orientation_terms,
-    positive_rate,
     quadrature_energy,
+)
+from projects.minimodel_discovery.data_loader.load_data import (
+    _DATASET_CONTEXT,
+    _DIAGNOSTIC_CACHE,
+)
+from projects.minimodel_discovery.seed_programs.param_est1 import (
+    parameter_estimator as _param_est1,
+    _normalized_to_pixel,
+    _extract_patch,
+    _compute_sta,
+    _fit_gaussian_from_sta,
+    _masked_sta_channel_weights,
 )
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
-
-_DATASET_CONTEXT: dict[str, object] = {}
-_DIAGNOSTIC_CACHE: dict[tuple, dict[str, object]] = {}
-
-
-def _select_evenly_spaced_indices(n_total: int, n_keep: int) -> np.ndarray:
-    if n_total <= 0 or n_keep <= 0:
-        return np.zeros((0,), dtype=np.int64)
-    if n_keep >= n_total:
-        return np.arange(n_total, dtype=np.int64)
-    return np.unique(np.linspace(0, n_total - 1, n_keep).round().astype(np.int64))
-
-
-def _normalize_responses(
-    train_response: np.ndarray,
-    test_repeats: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    scale = np.std(train_response, axis=1, keepdims=True)
-    scale = np.maximum(scale, 1e-2)
-    train_norm = train_response / scale
-    test_repeats_norm = test_repeats / scale[:, None, :]
-    test_mean_norm = np.nanmean(test_repeats_norm, axis=1)
-    return train_norm.astype(np.float32), test_mean_norm.astype(np.float32), test_repeats_norm.astype(np.float32)
-
-
-def _compute_fev_from_repeats(repeats: np.ndarray) -> np.ndarray:
-    fev = np.zeros((repeats.shape[0],), dtype=np.float32)
-    for idx in range(repeats.shape[0]):
-        cell_repeats = repeats[idx]
-        total_var = float(np.nanvar(cell_repeats.reshape(-1), ddof=1))
-        noise_var = float(np.nanmean(np.nanvar(cell_repeats, axis=0, ddof=1)))
-        denom = max(total_var, 1e-6)
-        fev[idx] = np.float32((total_var - noise_var) / denom)
-    return fev
 
 
 def _gaussian_mask_np(
@@ -85,92 +54,6 @@ def _gaussian_mask_np(
     mask = np.exp(-0.5 * (((xx - x0) / sigma_x) ** 2 + ((yy - y0) / sigma_y) ** 2))
     mask /= np.sum(mask) + 1e-8
     return mask.astype(np.float32)
-
-
-def _compute_sta(image: np.ndarray, response: np.ndarray) -> np.ndarray:
-    weights = np.clip(np.asarray(response, dtype=np.float32), a_min=0.0, a_max=None)
-    if float(np.sum(weights)) <= 0.0:
-        weights = np.ones_like(weights, dtype=np.float32)
-    sta = np.tensordot(image, weights, axes=([2], [0])) / (np.sum(weights) + 1e-6)
-    return np.asarray(sta, dtype=np.float32)
-
-
-def _fit_gaussian_from_sta(sta: np.ndarray) -> tuple[float, float, float, float]:
-    weight = np.abs(np.asarray(sta, dtype=np.float32))
-    if float(np.sum(weight)) <= 0.0:
-        return 0.0, 0.0, 0.25, 0.25
-
-    height, width = weight.shape
-    y = np.linspace(-1.0, 1.0, height, dtype=np.float32)
-    x = np.linspace(-1.0, 1.0, width, dtype=np.float32)
-    yy, xx = np.meshgrid(y, x, indexing="ij")
-    total = np.sum(weight) + 1e-6
-
-    x0 = float(np.sum(weight * xx) / total)
-    y0 = float(np.sum(weight * yy) / total)
-    sigma_x = float(np.sqrt(np.sum(weight * (xx - x0) ** 2) / total))
-    sigma_y = float(np.sqrt(np.sum(weight * (yy - y0) ** 2) / total))
-    return x0, y0, max(sigma_x, 0.08), max(sigma_y, 0.08)
-
-
-def _normalized_to_pixel(
-    value: float,
-    size: int,
-) -> int:
-    return int(np.clip(round((float(value) + 1.0) * 0.5 * (size - 1)), 0, size - 1))
-
-
-def _extract_patch(image_2d: np.ndarray, center_y: int, center_x: int, patch_size: int) -> np.ndarray:
-    radius = patch_size // 2
-    padded = np.pad(image_2d, ((radius, radius), (radius, radius)), mode="reflect")
-    y0 = center_y + radius
-    x0 = center_x + radius
-    patch = padded[y0 - radius:y0 + radius + 1, x0 - radius:x0 + radius + 1]
-    return np.asarray(patch, dtype=np.float32)
-
-
-def _masked_sta_channel_weights(
-    sta: np.ndarray,
-    x0: float,
-    y0: float,
-    sigma_x: float,
-    sigma_y: float,
-) -> np.ndarray:
-    height, width = sta.shape
-    center_y = _normalized_to_pixel(y0, height)
-    center_x = _normalized_to_pixel(x0, width)
-    patch = _extract_patch(sta, center_y, center_x, patch_size=25)
-    kernels = np.asarray(make_gabor_kernels(), dtype=np.float32)[:, 0]
-    simple_scores = np.tensordot(kernels, patch, axes=([1, 2], [0, 1]))
-    pair_scores = []
-    for idx in range(0, simple_scores.shape[0], 2):
-        pair_scores.append(np.sqrt(simple_scores[idx] ** 2 + simple_scores[idx + 1] ** 2))
-    weights = np.asarray(pair_scores, dtype=np.float32)
-    weights = np.maximum(weights, 0.0)
-    if float(np.sum(weights)) <= 0.0:
-        weights = np.ones_like(weights, dtype=np.float32)
-    return (weights / (np.sum(weights) + 1e-6)).astype(np.float32)
-
-
-def _pooled_energy_features(
-    image: np.ndarray,
-    x0: float,
-    y0: float,
-    sigma_x: float,
-    sigma_y: float,
-    *,
-    pool: bool,
-) -> np.ndarray:
-    simple_maps = gabor_bank16(jnp.asarray(image, dtype=jnp.float32))
-    energy_maps = quadrature_energy(simple_maps, pool=pool)
-    pooled = local_gaussian_readout(
-        energy_maps,
-        x0=x0,
-        y0=y0,
-        sigma_x=sigma_x,
-        sigma_y=sigma_y,
-    )
-    return np.asarray(pooled, dtype=np.float32)
 
 
 def _whitened_stc_components(
@@ -233,34 +116,6 @@ def _whitened_stc_components(
     pos_canvas[y_start:y_stop, x_start:x_stop] = pos_patch[patch_y_start:patch_y_stop, patch_x_start:patch_x_stop]
     neg_canvas[y_start:y_stop, x_start:x_stop] = neg_patch[patch_y_start:patch_y_stop, patch_x_start:patch_x_stop]
     return pos_canvas, neg_canvas, strength
-
-
-def _match_vector_length(values: jnp.ndarray, length: int) -> jnp.ndarray:
-    arr = jnp.asarray(values, dtype=jnp.float32).reshape(-1)
-    if int(arr.shape[0]) == length:
-        return arr
-    if int(arr.shape[0]) > length:
-        return arr[:length]
-    pad = jnp.zeros((length - int(arr.shape[0]),), dtype=jnp.float32)
-    return jnp.concatenate([arr, pad], axis=0)
-
-
-def _positive_correlation_weights(features: np.ndarray, response: np.ndarray) -> np.ndarray:
-    features = np.asarray(features, dtype=np.float32)
-    response = np.asarray(response, dtype=np.float32)
-    response_centered = response - np.mean(response)
-    feats_centered = features - np.mean(features, axis=1, keepdims=True)
-    weights = feats_centered @ response_centered
-    weights = np.maximum(weights, 0.0)
-    if float(np.sum(weights)) <= 0.0:
-        weights = np.ones_like(weights, dtype=np.float32)
-    return (weights / (np.sum(weights) + 1e-6)).astype(np.float32)
-
-
-def _response_summary_stats(response: np.ndarray) -> tuple[float, float]:
-    baseline = float(np.percentile(response, 15))
-    amplitude = float(np.percentile(response, 95) - baseline)
-    return baseline, max(amplitude, 1e-3)
 
 
 def _feve_for_sample(repeats: np.ndarray, pred: np.ndarray) -> tuple[float, float]:
@@ -352,9 +207,8 @@ def _get_teacher_state() -> dict[str, object]:
     if _DATASET_CONTEXT.get("teacher_state") is not None:
         return _DATASET_CONTEXT["teacher_state"]  # type: ignore[index]
 
-    teacher_state: dict[str, object]
     if not _DATASET_CONTEXT.get("use_teacher_diagnostics", False):
-        teacher_state = {"available": False, "reason": "disabled in config"}
+        teacher_state: dict[str, object] = {"available": False, "reason": "disabled in config"}
         _DATASET_CONTEXT["teacher_state"] = teacher_state
         return teacher_state
 
@@ -535,6 +389,14 @@ def _get_anchor_indices(data: dict[str, np.ndarray], n_anchor: int) -> np.ndarra
     return order[take]
 
 
+def _select_evenly_spaced_indices(n_total: int, n_keep: int) -> np.ndarray:
+    if n_total <= 0 or n_keep <= 0:
+        return np.zeros((0,), dtype=np.int64)
+    if n_keep >= n_total:
+        return np.arange(n_total, dtype=np.int64)
+    return np.unique(np.linspace(0, n_total - 1, n_keep).round().astype(np.int64))
+
+
 def _build_anchor_cache(data: dict[str, np.ndarray]) -> dict[str, object]:
     cell_ids = tuple(np.asarray(data["cell_index"][:, 0], dtype=np.int64).tolist())
     cache_key = (
@@ -555,7 +417,7 @@ def _build_anchor_cache(data: dict[str, np.ndarray]) -> dict[str, object]:
         sample = utils.get_data_sample(data, int(sample_idx))
         cell_id = int(np.asarray(sample["cell_index"]).reshape(-1)[0])
         fev = float(fev_lookup.get(cell_id, float("nan")))
-        params = param_est_v1(sample)
+        params = _param_est1(sample)
         sta = _compute_sta(np.asarray(sample["image"]), np.asarray(sample["response"]))
         stc_pos, stc_neg, _ = _whitened_stc_components(
             np.asarray(sample["image"]),
@@ -624,296 +486,6 @@ def _top_eval_strip(images: np.ndarray, scores: np.ndarray, k: int = 3) -> np.nd
             strips.append(separator)
     return np.concatenate(strips, axis=1)
 
-
-# ========================
-# 1. DATA
-# ========================
-
-def load_and_process_data(
-    data_path: str,
-    image_path: str,
-    mouse_id: int = 4,
-    min_fev: float = 0.15,
-    max_cells: int = 64,
-    max_train_images: int = 1024,
-    anchor_cell_count: int = 8,
-    minimodel_repo_path: str = "",
-    teacher_checkpoint_path: str = "",
-    use_teacher_diagnostics: bool = True,
-    teacher_device: str = "cpu",
-):
-    raw = np.load(data_path, allow_pickle=True)
-    stimulus_mat = loadmat(image_path, squeeze_me=True)
-    images = np.transpose(stimulus_mat["img"], (2, 0, 1)).astype(np.float32)
-
-    if int(mouse_id) == 5:
-        images = images[:, :, 46:176]
-    else:
-        images = images[:, :, :130]
-    images = (images - np.mean(images)) / (np.std(images) + 1e-6)
-
-    train_response_all = np.asarray(raw["sp"], dtype=np.float32)
-    train_stim_ids_all = np.asarray(raw["istim_sp"], dtype=np.int64)
-    test_stim_ids = np.asarray(raw["istim_ss"], dtype=np.int64)
-    test_repeats_all = np.asarray(raw["ss_all"], dtype=np.float32).transpose(2, 1, 0)
-
-    fev_all = _compute_fev_from_repeats(test_repeats_all)
-    valid = np.where(fev_all >= float(min_fev))[0]
-    if valid.size == 0:
-        valid = np.arange(train_response_all.shape[0], dtype=np.int64)
-    order = valid[np.argsort(fev_all[valid])[::-1]]
-    if max_cells is not None:
-        order = order[: int(max_cells)]
-
-    if max_train_images is not None and int(max_train_images) < train_stim_ids_all.size:
-        train_keep = _select_evenly_spaced_indices(train_stim_ids_all.size, int(max_train_images))
-    else:
-        train_keep = np.arange(train_stim_ids_all.size, dtype=np.int64)
-
-    train_response = train_response_all[order][:, train_keep]
-    test_repeats = test_repeats_all[order]
-    train_response, test_response, test_repeats = _normalize_responses(train_response, test_repeats)
-
-    train_images = images[train_stim_ids_all[train_keep]]
-    test_images = images[test_stim_ids]
-    all_images = np.concatenate([train_images, test_images], axis=0)
-
-    all_response = np.concatenate([train_response, test_response], axis=1)
-    n_cells = all_response.shape[0]
-    n_train = train_response.shape[1]
-    n_test = test_response.shape[1]
-    n_trials = n_train + n_test
-
-    response_repeats = np.full((n_cells, test_repeats.shape[1], n_trials), np.nan, dtype=np.float32)
-    response_repeats[:, :, n_train:] = test_repeats
-
-    image_tensor = np.transpose(all_images, (1, 2, 0))[None, ...]
-    image_tensor = np.broadcast_to(image_tensor, (n_cells,) + image_tensor.shape[1:])
-    stimulus_id = np.broadcast_to(
-        np.concatenate([train_stim_ids_all[train_keep], test_stim_ids])[None, :],
-        (n_cells, n_trials),
-    ).astype(np.int32)
-    cell_index = np.broadcast_to(order[:, None], (n_cells, n_trials)).astype(np.int32)
-
-    _DATASET_CONTEXT.clear()
-    _DATASET_CONTEXT.update(
-        {
-            "selected_cell_ids": order.astype(np.int64),
-            "fev_lookup": {int(cell_id): float(fev_all[cell_id]) for cell_id in range(fev_all.shape[0])},
-            "n_train_trials": int(n_train),
-            "n_test_trials": int(n_test),
-            "anchor_cell_count": int(anchor_cell_count),
-            "minimodel_repo_path": minimodel_repo_path,
-            "teacher_checkpoint_path": teacher_checkpoint_path,
-            "use_teacher_diagnostics": bool(use_teacher_diagnostics),
-            "teacher_device": teacher_device,
-            "teacher_total_neurons": int(train_response_all.shape[0]),
-            "teacher_state": None,
-        }
-    )
-    _DIAGNOSTIC_CACHE.clear()
-
-    return {
-        "image": image_tensor,
-        "response": all_response.astype(np.float32),
-        "response_repeats": response_repeats,
-        "stimulus_id": stimulus_id,
-        "cell_index": cell_index,
-    }
-
-
-def train_test_split(
-    X,
-    random_seed: int,
-):
-    n_samples = utils.data_n_samples(X)
-    rng = np.random.default_rng(random_seed)
-    train_samples = np.sort(rng.choice(np.arange(n_samples), n_samples // 2, replace=False))
-    train_trials = np.arange(int(_DATASET_CONTEXT["n_train_trials"]), dtype=np.int64)
-    return train_samples, train_trials
-
-
-def build_evaluation_points(
-    data,
-    random_seed: int = 0,
-    n_eval_images: int = 256,
-    source: str = "train_anchor",
-):
-    if source != "train_anchor":
-        raise ValueError(f"Unsupported evaluation point source: {source}")
-
-    n_trials = utils.data_n_trials(data)
-    if n_trials == 0:
-        raise ValueError("Cannot build evaluation points from empty trial set.")
-    n_keep = min(int(n_eval_images), int(n_trials))
-    rng = np.random.default_rng(random_seed)
-    trial_idx = np.sort(rng.choice(np.arange(n_trials), size=n_keep, replace=False))
-    return utils.slice_data_trials(data, trial_idx)
-
-
-# ========================
-# 2. SEED MODELS
-# ========================
-
-def model_v1(data, params):
-    image = jnp.asarray(data["image"], dtype=jnp.float32)
-    x0 = jnp.clip(jnp.asarray(params["x0"], dtype=jnp.float32), -1.0, 1.0)
-    y0 = jnp.clip(jnp.asarray(params["y0"], dtype=jnp.float32), -1.0, 1.0)
-    sigma_x = jnp.clip(jnp.asarray(params["sigma_x"], dtype=jnp.float32), 0.03, 1.0)
-    sigma_y = jnp.clip(jnp.asarray(params["sigma_y"], dtype=jnp.float32), 0.03, 1.0)
-    baseline = jnp.asarray(params["baseline"], dtype=jnp.float32)
-    gain = jnp.clip(jnp.asarray(params["gain"], dtype=jnp.float32), 0.0, 10.0)
-    channel_weights = jnp.clip(_match_vector_length(params["channel_weights"], 8), 0.0, 5.0)
-
-    simple_maps = gabor_bank16(image)
-    energy_maps = quadrature_energy(simple_maps, pool=False)
-    pooled = local_gaussian_readout(energy_maps, x0=x0, y0=y0, sigma_x=sigma_x, sigma_y=sigma_y)
-    drive = gain * jnp.einsum("c,ct->t", channel_weights, pooled)
-    return positive_rate(baseline + drive)
-
-
-model_v1.DEFAULT_PARAMS = {
-    "x0": 0.0,
-    "y0": 0.0,
-    "sigma_x": 0.25,
-    "sigma_y": 0.25,
-    "baseline": 0.1,
-    "gain": 1.0,
-    "channel_weights": np.full((8,), 1.0 / 8.0, dtype=np.float32),
-}
-
-
-def param_est_v1(data):
-    image = np.asarray(data["image"], dtype=np.float32)
-    response = np.asarray(data["response"], dtype=np.float32)
-
-    sta = _compute_sta(image, response)
-    x0, y0, sigma_x, sigma_y = _fit_gaussian_from_sta(sta)
-    channel_weights = _masked_sta_channel_weights(sta, x0, y0, sigma_x, sigma_y)
-    energy_features = _pooled_energy_features(image, x0, y0, sigma_x, sigma_y, pool=False)
-    channel_weights = 0.5 * channel_weights + 0.5 * _positive_correlation_weights(energy_features, response)
-    channel_weights = channel_weights / (np.sum(channel_weights) + 1e-6)
-
-    baseline, amplitude = _response_summary_stats(response)
-    drive = np.sum(channel_weights[:, None] * energy_features, axis=0)
-    gain = amplitude / (np.std(drive) + 1e-3)
-    return {
-        "x0": float(x0),
-        "y0": float(y0),
-        "sigma_x": float(sigma_x),
-        "sigma_y": float(sigma_y),
-        "baseline": float(baseline),
-        "gain": float(np.clip(gain, 0.05, 10.0)),
-        "channel_weights": channel_weights.astype(np.float32),
-    }
-
-
-def model_v2(data, params):
-    image = jnp.asarray(data["image"], dtype=jnp.float32)
-    x0 = jnp.clip(jnp.asarray(params["x0"], dtype=jnp.float32), -1.0, 1.0)
-    y0 = jnp.clip(jnp.asarray(params["y0"], dtype=jnp.float32), -1.0, 1.0)
-    sigma_x = jnp.clip(jnp.asarray(params["sigma_x"], dtype=jnp.float32), 0.03, 1.0)
-    sigma_y = jnp.clip(jnp.asarray(params["sigma_y"], dtype=jnp.float32), 0.03, 1.0)
-    baseline = jnp.asarray(params["baseline"], dtype=jnp.float32)
-    gain = jnp.clip(jnp.asarray(params["gain"], dtype=jnp.float32), 0.0, 10.0)
-    pool_mix = jnp.clip(jnp.asarray(params["pool_mix"], dtype=jnp.float32), 0.0, 1.0)
-    norm_strength = jnp.clip(jnp.asarray(params["norm_strength"], dtype=jnp.float32), 0.0, 4.0)
-    norm_bias = jnp.clip(jnp.asarray(params["norm_bias"], dtype=jnp.float32), 1e-3, 5.0)
-    channel_weights = jnp.clip(_match_vector_length(params["channel_weights"], 8), 0.0, 5.0)
-
-    simple_maps = gabor_bank16(image)
-    energy_no_pool = quadrature_energy(simple_maps, pool=False)
-    energy_pool = quadrature_energy(simple_maps, pool=True)
-    readout_no_pool = local_gaussian_readout(energy_no_pool, x0=x0, y0=y0, sigma_x=sigma_x, sigma_y=sigma_y)
-    readout_pool = local_gaussian_readout(energy_pool, x0=x0, y0=y0, sigma_x=sigma_x, sigma_y=sigma_y)
-    base_features = (1.0 - pool_mix) * readout_no_pool + pool_mix * readout_pool
-
-    pairwise = pairwise_orientation_terms(base_features)
-    pairwise_weights = jnp.clip(_match_vector_length(params["pairwise_weights"], int(pairwise.shape[0])), -2.0, 2.0)
-    weighted_base = channel_weights[:, None] * base_features
-    weighted_pairwise = pairwise_weights[:, None] * pairwise
-    feature_stack = jnp.concatenate([weighted_base, weighted_pairwise], axis=0)
-    normalized = divisive_normalization(feature_stack, strength=norm_strength, bias=norm_bias)
-    drive = gain * jnp.sum(normalized, axis=0)
-    return positive_rate(baseline + drive)
-
-
-model_v2.DEFAULT_PARAMS = {
-    "x0": 0.0,
-    "y0": 0.0,
-    "sigma_x": 0.25,
-    "sigma_y": 0.25,
-    "baseline": 0.1,
-    "gain": 1.0,
-    "pool_mix": 0.5,
-    "norm_strength": 0.5,
-    "norm_bias": 0.5,
-    "channel_weights": np.full((8,), 1.0 / 8.0, dtype=np.float32),
-    "pairwise_weights": np.zeros((12,), dtype=np.float32),
-}
-
-
-def param_est_v2(data):
-    image = np.asarray(data["image"], dtype=np.float32)
-    response = np.asarray(data["response"], dtype=np.float32)
-
-    base_params = param_est_v1(data)
-    x0 = base_params["x0"]
-    y0 = base_params["y0"]
-    sigma_x = base_params["sigma_x"]
-    sigma_y = base_params["sigma_y"]
-
-    features_no_pool = _pooled_energy_features(image, x0, y0, sigma_x, sigma_y, pool=False)
-    features_pool = _pooled_energy_features(image, x0, y0, sigma_x, sigma_y, pool=True)
-    pairwise = np.asarray(pairwise_orientation_terms(jnp.asarray(features_no_pool)), dtype=np.float32)
-    pairwise_centered = pairwise - np.mean(pairwise, axis=1, keepdims=True)
-    response_centered = response - np.mean(response)
-    pairwise_weights = (pairwise_centered @ response_centered) / (pairwise.shape[1] + 1e-6)
-    if np.max(np.abs(pairwise_weights)) > 0:
-        pairwise_weights = pairwise_weights / (np.max(np.abs(pairwise_weights)) + 1e-6)
-
-    _, _, stc_strength = _whitened_stc_components(image, response, x0, y0)
-    channel_weights = _positive_correlation_weights(0.5 * (features_no_pool + features_pool), response)
-    baseline, amplitude = _response_summary_stats(response)
-
-    mixed_features = 0.5 * (features_no_pool + features_pool)
-    drive = np.sum(channel_weights[:, None] * mixed_features, axis=0)
-    gain = amplitude / (np.std(drive) + 1e-3)
-
-    pool_var = np.std(features_pool)
-    no_pool_var = np.std(features_no_pool) + 1e-6
-    pool_mix = float(np.clip(pool_var / (pool_var + no_pool_var), 0.05, 0.95))
-    norm_strength = float(np.clip(0.25 + stc_strength, 0.05, 3.0))
-    norm_bias = float(np.clip(np.mean(np.abs(mixed_features)), 0.1, 5.0))
-
-    return {
-        "x0": float(x0),
-        "y0": float(y0),
-        "sigma_x": float(sigma_x),
-        "sigma_y": float(sigma_y),
-        "baseline": float(baseline),
-        "gain": float(np.clip(gain, 0.05, 10.0)),
-        "pool_mix": pool_mix,
-        "norm_strength": norm_strength,
-        "norm_bias": norm_bias,
-        "channel_weights": channel_weights.astype(np.float32),
-        "pairwise_weights": pairwise_weights.astype(np.float32),
-    }
-
-
-# ========================
-# 3. LOSS
-# ========================
-
-def loss_fn(model_output, data):
-    y_true = jnp.asarray(data["response"], dtype=jnp.float32)
-    y_pred = jnp.clip(jnp.asarray(model_output, dtype=jnp.float32), 1e-4, 1e6)
-    return y_pred - y_true * jnp.log(y_pred)
-
-
-# ========================
-# 4. DIAGNOSTICS
-# ========================
 
 def plot_model_fits(
     data,

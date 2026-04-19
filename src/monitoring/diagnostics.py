@@ -63,7 +63,6 @@ def _programs_df_to_programs_list(programs_df: pd.DataFrame,
         n_free_params_raw = utils.params_numel_per_sample(params_tree, n_samples=n_samples)
         n_free_params = n_free_params_raw / max(1, penalty_denominator)
 
-        # Compute per-sample losses by vmapping the loss function
         def _sample_loss(params_i, data_i):
             model_output = model(data_i, params_i)
             raw = jnp.asarray(loss_func(model_output, data_i))
@@ -118,5 +117,3 @@ def _align_eval_grid(X_eval, n_samples: int) -> dict:
         return {k: np.broadcast_to(v, (n_samples,) + v.shape[1:]) for k, v in X_eval.items()}
     idx = np.arange(n_samples, dtype=np.int64) % current_n
     return utils.slice_data_samples(X_eval, idx)
-
-

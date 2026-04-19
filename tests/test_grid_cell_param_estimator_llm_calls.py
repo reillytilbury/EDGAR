@@ -7,9 +7,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from projects.grid_cells import spec
+from projects.grid_cells.seed_programs import model1 as _model1_mod, model2 as _model2_mod
+from projects.grid_cells.seed_programs import param_est1 as _param_est1_mod, param_est2 as _param_est2_mod
 from src.hypothesis_engine import compute_initial_params
 from src import utils
+
+model_v1 = _model1_mod.model
+model_v2 = _model2_mod.model
+param_est_v1 = _param_est1_mod.parameter_estimator
+param_est_v2 = _param_est2_mod.parameter_estimator
 
 
 def _make_grid_cell_batch(n_samples: int = 3, n_trials: int = 144) -> dict[str, np.ndarray]:
@@ -32,7 +38,7 @@ def _make_grid_cell_batch(n_samples: int = 3, n_trials: int = 144) -> dict[str, 
 
     response = np.stack(
         [
-            spec.model_v1({"pos_x": pos_x[i], "pos_y": pos_y[i]}, params_per_sample[i])
+            model_v1({"pos_x": pos_x[i], "pos_y": pos_y[i]}, params_per_sample[i])
             for i in range(n_samples)
         ],
         axis=0,
@@ -51,13 +57,13 @@ def test_grid_cell_param_estimators_accept_single_sample_dict_data():
     data = _make_grid_cell_batch(n_samples=1, n_trials=196)
     sample = utils.get_data_sample(data, 0)
 
-    for estimator, expected_keys in (
-        (spec.param_est_v1, set(spec.model_v1.DEFAULT_PARAMS)),
-        (spec.param_est_v2, set(spec.model_v2.DEFAULT_PARAMS)),
+    for estimator, model_fn in (
+        (param_est_v1, model_v1),
+        (param_est_v2, model_v2),
     ):
         params = estimator(sample)
 
-        assert set(params) == expected_keys
+        assert set(params) == set(model_fn.DEFAULT_PARAMS)
         for key, value in params.items():
             arr = np.asarray(value)
             assert arr.shape == ()
@@ -67,10 +73,10 @@ def test_grid_cell_param_estimators_accept_single_sample_dict_data():
 def test_compute_initial_params_batches_grid_cell_param_dicts():
     data = _make_grid_cell_batch(n_samples=4, n_trials=169)
 
-    params = compute_initial_params(spec.param_est_v1, spec.model_v1, data)
+    params = compute_initial_params(param_est_v1, model_v1, data)
 
-    assert set(params) == set(spec.model_v1.DEFAULT_PARAMS)
-    for key in spec.model_v1.DEFAULT_PARAMS:
+    assert set(params) == set(model_v1.DEFAULT_PARAMS)
+    for key in model_v1.DEFAULT_PARAMS:
         values = np.asarray(params[key])
         assert values.shape == (4,)
         assert np.isfinite(values).all(), key
@@ -82,9 +88,9 @@ def test_compute_initial_params_fallback_uses_model_default_params():
     def failing_estimator(_data):
         raise RuntimeError("estimator failure")
 
-    params = compute_initial_params(failing_estimator, spec.model_v1, data)
+    params = compute_initial_params(failing_estimator, model_v1, data)
 
-    for key, default_value in spec.model_v1.DEFAULT_PARAMS.items():
+    for key, default_value in model_v1.DEFAULT_PARAMS.items():
         values = np.asarray(params[key])
         assert values.shape == (2,)
         assert np.allclose(values, default_value)

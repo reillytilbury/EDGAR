@@ -8,9 +8,9 @@ import pandas as pd
 
 from ..evolution import genetic_helpers
 from ..monitoring import create_dynamic_progress_update, create_family_tree
-from ..scoring.jax_objective import _call_objective, _clear_jax_runtime_cache
-from .diagnostics import _programs_df_to_programs_list
-from .generation_log import _update_generation_log_test_losses_and_mark_winner
+from ..monitoring.diagnostics import _programs_df_to_programs_list
+from ..monitoring.log import _update_generation_log_test_losses_and_mark_winner
+from .jax_objective import _call_objective, _clear_jax_runtime_cache
 
 
 def finalize_run(
