@@ -109,8 +109,6 @@ def _apply_removal_reasons_to_log(filepath, removal_events):
             "details": details,
         }
 
-    # Non-atomic read/overwrite. If log corruption is observed, switch to
-    # temp file + os.replace() for atomic writes.
     with open(filepath, 'r') as f:
         lines = f.readlines()
     with open(filepath, 'w') as f:
@@ -143,7 +141,7 @@ def _update_generation_log_test_losses_and_mark_winner(filepath, islands):
             if tl is not None and not (isinstance(tl, float) and np.isinf(tl)):
                 test_loss_lookup[key] = float(tl)
 
-    # from test_loss_lookup, find the best test loss (i.e. smallest) and corresponding key 
+    # Find the best test loss (smallest) and corresponding key
     best_test_loss = float('inf')
     best_key = None
     for key, tl in test_loss_lookup.items():
@@ -152,10 +150,8 @@ def _update_generation_log_test_losses_and_mark_winner(filepath, islands):
             best_key = key
     logging.info(f"Best test loss found: {best_test_loss:.6g} for program {best_key}.")
 
-    # compare best_key to winner_id if provided
-    winner_id = best_key    
+    winner_id = best_key
 
-    # Read, update, rewrite
     with open(filepath, 'r') as f:
         lines = f.readlines()
     with open(filepath, 'w') as f:
@@ -167,8 +163,5 @@ def _update_generation_log_test_losses_and_mark_winner(filepath, islands):
             key = (rec['iteration_number'], rec['birth_island'], rec['batch_index'])
             if key in test_loss_lookup:
                 rec['test_loss'] = test_loss_lookup[key]
-            # Mark the winner
             rec['is_winner'] = (winner_id is not None and key == winner_id)
             f.write(json.dumps(rec, default=str) + '\n')
-
-

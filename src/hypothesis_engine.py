@@ -10,22 +10,22 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 
 from . import utils
-from .engine.diagnostics import _align_eval_grid, _programs_df_to_programs_list
-from .engine.generation_log import (
+from .monitoring.diagnostics import _align_eval_grid, _programs_df_to_programs_list
+from .monitoring.log import (
     _append_generation_record,
     _apply_removal_reasons_to_log,
     _drop_nonfinite_train_loss_from_islands,
     _drop_nonfinite_train_loss_rows,
     _update_generation_log_records,
 )
-from .engine.finalize import finalize_run
-from .engine.evaluation import evaluate_candidate_batch
-from .engine.paths import configure_file_logging, create_run_paths
-from .engine.results import (
+from .paths import configure_file_logging, create_run_paths
+from .scoring.evaluation import (
     CandidateGenerationResult,
     ModelGenerationResult,
     ParamEstimatorGenerationResult,
+    evaluate_candidate_batch,
 )
+from .scoring.finalize import finalize_run
 from .evolution import genetic_helpers
 from .llm import prompts as prompt_tools
 from .llm.candidates import (

@@ -2,6 +2,8 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -10,9 +12,41 @@ from jax.flatten_util import ravel_pytree
 from .. import utils
 from ..llm.candidates import _run_translation_check_on_eval
 from ..llm.code_loading import load_function_from_source
-from ..scoring.jax_objective import _call_objective, _clear_jax_runtime_cache
-from .diagnostics import _programs_df_to_programs_list
+from ..monitoring.diagnostics import _programs_df_to_programs_list
+from .jax_objective import _call_objective, _clear_jax_runtime_cache
 
+
+# ---------------------------------------------------------------------------
+# Result containers for a single generation step
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ModelGenerationResult:
+    numpy_code: str | None
+    prompt: str | None
+    llm_response: str | None
+    jax_code: str | None = None
+    jax_callable: Callable | None = None
+    jax_prompt: str | None = None
+    jax_raw_response: str | None = None
+
+
+@dataclass
+class ParamEstimatorGenerationResult:
+    code: str | None
+    callable_obj: Callable | None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CandidateGenerationResult:
+    model: ModelGenerationResult
+    param_estimator: ParamEstimatorGenerationResult
+
+
+# ---------------------------------------------------------------------------
+# Batch evaluation
+# ---------------------------------------------------------------------------
 
 def evaluate_candidate_batch(
     *,
@@ -47,7 +81,6 @@ def evaluate_candidate_batch(
     i = iteration
     n_islands = len(islands)
     batch_size = len(island_results[0]) if n_islands else 0
-    # now loop through the results and compute losses
     success_rate = 0.0
     evaluation_log_updates = {}
     for island_idx, j in np.ndindex(n_islands, batch_size):
@@ -146,7 +179,6 @@ def evaluate_candidate_batch(
                 log_lines[score_line_idx] = "score=<unknown>"
 
         if model_new is None or param_est_new is None:
-            # Provide extraction debug details when parsing fails.
             if model_code_string is None or param_est_code_string is None:
                 debug_blocks = utils.extract_code_blocks(model_llm_response)
                 debug_text = "\n\n".join(debug_blocks).strip() if debug_blocks else (model_llm_response or "").strip()
@@ -179,7 +211,6 @@ def evaluate_candidate_batch(
                 log_lines.append("[Extracted parameter_estimator block]")
                 log_lines.append((debug_param or "<none>") if log_prompts else ("present" if debug_param else "missing"))
 
-            # update log for family tree generation
             if model_code_string is None:
                 evaluation_log_updates[candidate_key] = {
                     "status": "model_generation_failed",
@@ -230,7 +261,7 @@ def evaluate_candidate_batch(
             _set_score(np.inf)
             _flush_log(f"JAX translation check failed: {e}")
             continue
-        
+
         opt_start = time.time()
         initial_loss, initial_params, loss, optimized_params = _call_objective(
             use_simple_objective,
@@ -273,7 +304,6 @@ def evaluate_candidate_batch(
         test_fit_path = None
         train_fit_losses = []
         test_fit_losses = []
-        # plot the fits of the neuron model and parameter estimator if using image feedback
         if has_spec_plotter:
             initial_params_plot = initial_params
             optimized_params_plot = optimized_params
@@ -310,7 +340,6 @@ def evaluate_candidate_batch(
                 save_path=os.path.join(image_param_est_vs_gd_dir, f'iter_{i}_island_{island_idx}_batch_{j}_param_est_vs_gd.png'),
                 labels=['PE', 'GD'],
             )
-            # Per-program train/test fit images for family tree sidebar
             train_fit_path = os.path.join(image_family_tree_fits_dir, f'iter_{i}_island_{island_idx}_batch_{j}_train_fit.png')
             train_programs_df = pd.DataFrame({
                 "program": [model_new, model_new],
@@ -361,7 +390,6 @@ def evaluate_candidate_batch(
                 labels=['PE', 'GD'],
                 title_prefix="Test fits",
             )
-        # Default if plots are disabled or failed.
         if not has_spec_plotter:
             train_fit_losses = []
             test_fit_losses = []
@@ -389,7 +417,7 @@ def evaluate_candidate_batch(
                                     'birth_island': island_idx,
                                     'batch_index': j,
                                     'train_loss': loss,
-                                    'test_loss': None,  # will be filled later
+                                    'test_loss': None,
                                     'optimization_time_s': optimization_time_s,
                                     'llm_name': llm_name,
                                     'params': [optimized_params],
@@ -399,7 +427,7 @@ def evaluate_candidate_batch(
                                     'parent2_id': [parent2_id],
                                     'evaluation_matrix': [y_eval]
                                     })
-        
+
         islands[island_idx] = pd.concat([islands[island_idx], new_program_df], ignore_index=True)
 
         n_params = utils.params_numel_per_sample(
