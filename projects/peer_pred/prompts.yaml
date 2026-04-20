@@ -1,0 +1,111 @@
+model:
+  base: 'You are an AI scientist, with the goal of finding a model that predicts the activity of one neuronal population from another.
+
+    The parent models are listed in order of increasing performance, with the best parent last.
+
+    Your goal is to generate a new model that outperforms all previous models.
+
+    Analyze the progression of the parent models, generalize what improves loss, and create a better model.
+
+    '
+  explore: "Use the parent models as inspiration, but be creative and invent something new.\nIdentify model features associated with lower loss, combine strong ideas, and test novel variants.\n\nA good model will capture meaningful structure in the data by constructing encoders, applying a transformation to predict the encoding of the target population, and then decoding back to the original space.\n\nLook for ways to improve each step.\n"
+  exploit: 'Use the parent models as a template to create a better model.
+
+    Extrapolate features associated with lower loss and remove weak or redundant structure.
+
+    You will be penalized for complexity, so keep the model as simple as possible while improving performance.
+
+    '
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Return one Python module exposing `def model(data, params):`.
+
+    * Keep the model code compact.
+
+    * Use only lightweight numerical code (NumPy/JAX-friendly math).
+
+    * Do not include any text other than the code.
+
+    * Model signature must be `def model(data, params):` where `data` is a dict with keys ''source'' and ''target''.
+
+    * Ensure all free parameters are numeric, not strings.
+
+    * Keep operations simple and JAX-translatable.
+
+    * Target activity is z-scored and signed; final outputs must allow negative and positive values.
+
+    * Do not force positivity at the final output layer.
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Begin by listing the parent models and give them descriptive names.
+
+    * Never refer to the models as version numbers. Instead, refer to them as descriptive names.
+
+    * Do not refer to the current model as a version number. Instead, refer to it as "this model".
+
+    * Provide a simple equation for the model, including all free parameters.
+
+    * Include a brief description of how the model improves upon the previous models.
+
+    '
+  image_analysis_instructions: null
+  parent_detail_template: '**Parent {model_idx}**
+
+    {program_code_string}
+
+    '
+  global_vars: []
+  parent_vars:
+  - model_idx
+  - program_code_string
+parameter_estimator:
+  base: 'You are an AI scientist. Your task is to create a parameter estimator to estimate the free parameters of the latest model.
+
+    Estimate free parameters directly from the input/output structure using statistical principles.
+
+    Analyze the parent estimators, generalize what improves loss, and create a better estimator.
+
+    '
+  explore: null
+  exploit: null
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Use only lightweight NumPy operations.
+
+    * Do not import heavy ML/stat libraries.
+
+    * Do not include any text other than the code.
+
+    * Function signature must be `def parameter_estimator(data):`.
+
+    * Return a parameter dict with keys that match the model parameters.
+
+    * Every value in the returned parameter dict must be floating-point.
+
+    * Do not call the model function in your estimator code.
+
+    * The estimator should be fast: prefer closed-form linear algebra.
+
+    * Keep the code under {max_lines} lines.
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Summarize parent estimators by descriptive names, not version tags.
+
+    * Briefly explain how this estimator improves stability and fit quality.
+
+    '
+  image_analysis_instructions: null
+  parent_detail_template: '**Parent {model_idx}**
+
+    {parameter_estimator_code_string}
+
+    '
+  global_vars:
+  - max_lines
+  parent_vars:
+  - model_idx
+  - parameter_estimator_code_string

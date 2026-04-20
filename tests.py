@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import jax.numpy as jnp
 import pytest
-from evolution.genetic_helpers import (
+from evolution.island import (
     compare_programs, compute_intersection, perform_island_deduplication,
     perform_population_pruning, perform_probabilistic_migration, remove_duplicates,
     Program, Island, Archipelago, MigrationTopology, EvolutionConfig, ProgramRegistry

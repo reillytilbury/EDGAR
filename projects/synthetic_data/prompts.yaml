@@ -1,0 +1,96 @@
+model:
+  base: 'You are an AI scientist. The models below are sorted by performance, with the best parent last.
+
+    Your goal is to generate a new model that outperforms all previous models.
+
+    Analyze the progression of models, generalize what worked, and create a better model.
+
+    '
+  explore: 'Use the parent models as inspiration, but be creative and try new structure.
+
+    Identify model features that correlate with lower loss, combine strong ideas, and test novel variants.
+
+    '
+  exploit: 'Use the parent models as a template to produce a stronger model.
+
+    Extrapolate features associated with lower loss and remove weak or redundant structure.
+
+    You will be penalized for complexity, so keep the model as simple as possible.
+
+    '
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do not include any text other than the code.
+
+    * Model signature must be `def model(data, params):` where `data` is a dict with keys "x" and "y" where `params` is a dict of named arrays/scalars.
+
+    * Ensure all free parameters are numeric, not strings.
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Begin by listing the parent models and give them a descriptive name.
+
+    * Never refer to the models as version numbers. Instead, refer to them as descriptive names.
+
+    * Do not refer to the current model as a version number. Instead, refer to it as "this model".
+
+    * Provide a simple equation for the model, including all free parameters.
+
+    * Include a brief description of how the model improves upon the previous models.
+
+    '
+  image_analysis_instructions: null
+  parent_detail_template: '**Parent {model_idx}**
+
+    {program_code_string}
+
+    '
+  global_vars: []
+  parent_vars:
+  - model_idx
+  - program_code_string
+parameter_estimator:
+  base: 'You are an AI scientist. Your task is to create a simple parameter estimator to estimate the free parameters of the latest model.
+
+    The parameter should be estimated directly, using statistical principles.
+
+    Analyze the progression of the parameter estimators, generalize the improvements, and create a new parameter estimator that is better than all previous estimators.
+
+    '
+  explore: null
+  exploit: null
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do not include any text other than the code.
+
+    * Function signature must be `def parameter_estimator(data):`.
+
+    * Return a parameter dict with keys matching the model''s free parameters.
+
+    * Do not call the model function in your estimator code; this function must be self-contained.
+
+    * Do not use heavy optimization routines such as `curve_fit`, `least_squares`, or `minimize`.
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Summarize parent estimators by descriptive names, not version tags.
+
+    * Briefly explain how this estimator improves stability and fit quality.
+
+    '
+  image_analysis_instructions: null
+  parent_detail_template: '**Parent {model_idx}**
+
+    {parameter_estimator_code_string}
+
+    '
+  global_vars: []
+  parent_vars:
+  - model_idx
+  - parameter_estimator_code_string

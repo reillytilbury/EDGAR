@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..evolution import genetic_helpers
+from ..evolution import island
 from ..monitoring import create_dynamic_progress_update, create_family_tree
 from ..monitoring.diagnostics import _programs_df_to_programs_list
 from ..monitoring.log import _update_generation_log_test_losses_and_mark_winner
@@ -74,7 +74,7 @@ def finalize_run(
         combined_dir = os.path.join(paths.base_dir, paths.date_stamp, paths.time_stamp, "combined")
         os.makedirs(combined_dir, exist_ok=True)
         combined_programs_dataframe = pd.concat(islands, ignore_index=True)
-        combined_programs_dataframe, _ = genetic_helpers.remove_duplicates(
+        combined_programs_dataframe, _ = island.remove_duplicates(
             combined_programs_dataframe,
             mode="complicated",
             loss_tol=0.025,

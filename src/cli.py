@@ -4,131 +4,103 @@ from pathlib import Path
 from textwrap import dedent
 import sys
 
-# TODO: Make logging choices part of the command 
-
-# Don't need these all, since the spc.py will have different pythong functions now
-REQUIRED_SPEC_FUNCTIONS = [
-    "load_and_process_data",
-    "train_test_split",
-    "model_v1",
-    "param_est_v1",
-    "model_v2",
-    "param_est_v2",
-    "loss_fn",
-]
-
-FORBIDDEN_CONFIG_KEYS = {
-    "load_and_process_data_fn",
-    "create_train_test_sample_split_fn",
-    "create_train_test_trial_split_fn",
-    "seed_programs",
-    "use_image_feedback",
-    "loss_fn",
-}
-
-
-SPEC_TEMPLATE = dedent(
+SPEC_TEMPLATE_DATA_LOADER = dedent(
     '''\
-    """
-    Welcome to the Model Discovery Engine! Fill in the components below to start building your model.
-
-    NECESSARY COMPONENTS:
-
-    Loading:
-    - load_and_process_data(data_path, *preprocess_params) -> dict[str, np.ndarray]
-    - train_test_split(X) -> [train_samples, train_trials]
-
-    Seed Programs:
-    - model_v1(data, params) and param_est_v1(data)
-    - model_v2(data, params) and param_est_v2(data)
-    - data is a dict of named arrays (e.g. data['stimulus'], data['response'])
-    - params is a dict of named arrays/scalars
-
-    LOSS FUNCTION:
-    - loss_fn(model_output, data) -> loss values
-
-OPTIONAL COMPONENTS:
-- plot_model_fits(data, programs_list, X_eval, save_path, labels)
-- build_evaluation_points(data, random_seed=0, n_eval_images=256, source="train_anchor")
-"""
     import numpy as np
-    from typing import Tuple, Dict
-
-
-    # ========================
-    # 1. DATA
-    # ========================
+    from typing import Dict, Tuple
 
     def load_and_process_data(
         data_path: str,
-        # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
-        random_seed: int = 42,
+        **kwargs  # Additional params specified in config.yaml
     ) -> Dict[str, np.ndarray]:
         """
-        Load and preprocess data. Return a dict of arrays sharing the same
-        last dimension (n_trials).
+        Load and preprocess data. Return a dict of arrays.
+        All values must share the same last dimension (n_trials).
+
+        Example:
+            return {
+                'stimulus': np.array(...),  # shape (n_samples, ..., n_trials)
+                'response': np.array(...),  # shape (n_samples, ..., n_trials)
+            }
         """
         raise NotImplementedError
-
 
     def train_test_split(
-        X: Dict[str, np.ndarray],
-        # -- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ---
-        random_seed: int,
+        data: Dict[str, np.ndarray],
+        **kwargs  # Additional params specified in config.yaml
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Return train sample indices and train trial indices.
+        Return (train_sample_indices, train_trial_indices).
+        These define which samples/trials form the training set;
+        the remainder form the test set.
         """
         raise NotImplementedError
 
-
-    # ========================
-    # 2. SEED MODELS
-    # ========================
-
-    def model_v1(data, params):
+    def loss_fn(y_pred: np.ndarray, y_true: np.ndarray, params=None) -> float:
+        """
+        Compute loss. y_true is typically data['response'].
+        Return scalar loss (per-sample losses will be aggregated).
+        """
         raise NotImplementedError
-
-
-    def param_est_v1(data):
-        raise NotImplementedError
-
-
-    def model_v2(data, params):
-        raise NotImplementedError
-
-
-    def param_est_v2(data):
-        raise NotImplementedError
-
-
-    # ========================
-    # 3. LOSS
-    # ========================
-
-    def loss_fn(model_output, data):
-        raise NotImplementedError
-
-
-    # ========================
-    # 4. DIAGNOSTICS
-    # ========================
-
-    def plot_model_fits(data, programs_list, eval_grid, save_path="", labels=None):
-        raise NotImplementedError
-
-
-    # ========================
-    # 5. OPTIONAL PROJECT-SPECIFIC HELPERS
-    # ========================
 
     def build_evaluation_points(
-        data,
-        random_seed: int = 0,
-        n_eval_images: int = 256,
-        source: str = "train_anchor",
-    ):
+        data: Dict[str, np.ndarray],
+        **kwargs
+    ) -> Dict[str, np.ndarray]:
+        """
+        Optional. Return a dict of arrays for model evaluation/plotting.
+        Default: return data unchanged.
+        """
         return data
+    '''
+)
+
+SPEC_TEMPLATE_MODEL = dedent(
+    '''\
+    import numpy as np
+
+    def model(data: dict, params: dict) -> np.ndarray:
+        """
+        Model function. Receives data dict and params dict.
+        data: dict of named arrays, e.g. data['stimulus'], data['response']
+        params: dict of named parameters matching DEFAULT_PARAMS keys
+        Returns: model predictions (same shape as data['response'] or similar)
+        """
+        raise NotImplementedError
+
+    model.DEFAULT_PARAMS = {
+        # "param_name": initial_value,
+    }
+    '''
+)
+
+SPEC_TEMPLATE_PARAM_EST = dedent(
+    '''\
+    import numpy as np
+
+    def parameter_estimator(data: dict) -> dict:
+        """
+        Parameter estimator. Receives single-sample data (no sample axis).
+        Returns: dict matching model.DEFAULT_PARAMS keys
+        """
+        raise NotImplementedError
+    '''
+)
+
+SPEC_TEMPLATE_PLOT = dedent(
+    '''\
+    import numpy as np
+
+    def plot_model_fits(data, programs_list, X_eval, save_path="", labels=None):
+        """
+        Optional. Plot model predictions vs data.
+        data: original data dict
+        programs_list: list of Program objects with compiled model/estimator
+        X_eval: evaluation points dict (from build_evaluation_points)
+        save_path: directory to save plots
+        labels: optional display labels for programs
+        """
+        pass
     '''
 )
 
@@ -153,57 +125,110 @@ def _task_dir(task: str) -> Path:
     return collection / task
 
 
-def init_experiment(task: str, force: bool = False) -> int:
+def init_project(task: str, force: bool = False) -> int:
     task_path = _task_dir(task)
     task_path.mkdir(parents=True, exist_ok=True)
 
-    spec_path = task_path / "spec.py"
+    # Create subdirectories
+    seed_programs_dir = task_path / "seed_programs"
+    data_loader_dir = task_path / "data_loader"
+    image_feedback_dir = task_path / "image_feedback"
+
+    seed_programs_dir.mkdir(exist_ok=True)
+    data_loader_dir.mkdir(exist_ok=True)
+    image_feedback_dir.mkdir(exist_ok=True)
+
+    # Seed program files
+    model1_path = seed_programs_dir / "model1.py"
+    model2_path = seed_programs_dir / "model2.py"
+    param_est1_path = seed_programs_dir / "param_est1.py"
+    param_est2_path = seed_programs_dir / "param_est2.py"
+
+    # Data loader files
+    load_data_path = data_loader_dir / "load_data.py"
+
+    # Image feedback files
+    plot_path = image_feedback_dir / "plot.py"
+
+    # Config file
     config_path = task_path / "config.yaml"
 
-    if spec_path.exists() and not force:
-        print(f"Error: {spec_path} already exists. Use --force to overwrite.")
-        return 1
-    if config_path.exists() and not force:
-        print(f"Error: {config_path} already exists. Use --force to overwrite.")
+    # Check if files exist
+    files_to_create = [model1_path, model2_path, param_est1_path, param_est2_path, load_data_path, plot_path, config_path]
+    existing = [f for f in files_to_create if f.exists()]
+    if existing and not force:
+        print(f"Error: Files already exist. Use --force to overwrite:")
+        for f in existing:
+            print(f"  - {f}")
         return 1
 
-    spec_path.write_text(SPEC_TEMPLATE, encoding="utf-8")
+    # Write seed program files
+    model1_path.write_text(SPEC_TEMPLATE_MODEL, encoding="utf-8")
+    model2_path.write_text(SPEC_TEMPLATE_MODEL, encoding="utf-8")
+    param_est1_path.write_text(SPEC_TEMPLATE_PARAM_EST, encoding="utf-8")
+    param_est2_path.write_text(SPEC_TEMPLATE_PARAM_EST, encoding="utf-8")
 
+    # Write data loader file
+    load_data_path.write_text(SPEC_TEMPLATE_DATA_LOADER, encoding="utf-8")
+
+    # Write image feedback file
+    plot_path.write_text(SPEC_TEMPLATE_PLOT, encoding="utf-8")
+
+    # Write config
     config_text = dedent(
         f"""\
-        task: {task}
-
-        data_processing_params:
+        task:
+          name: {task}
           data_path: /path/to/data.npy
 
-        inputs:
-          - name: x
-            description: "Input variable"
+        evolution:
+          n_iterations: 12
+          n_islands: 8
+          batch_size: 6
+          critical_population_size: 12
+          n_migrants: 2
 
-        experiment_params:
-          use_param_estimator: true
+        llms:
+          k_max: 2
+          model_llm: gemini-2.5-flash
+          param_est_llm: gemini-2.0-flash
+          jax_translator_llm: gemini-2.0-flash-lite
+
+        scoring:
+          param_penalty_weight: 0.01
         """
     )
     config_path.write_text(config_text, encoding="utf-8")
 
-    print(f"Created {spec_path}")
-    print(f"Created {config_path}")
-    print(f"Next: fill in required functions in {spec_path}")
+    print(f"Created project structure for '{task}':")
+    print(f"  seed_programs/: model1.py, model2.py, param_est1.py, param_est2.py")
+    print(f"  data_loader/: load_data.py")
+    print(f"  image_feedback/: plot.py")
+    print(f"  config.yaml")
+    print(f"\nNext: fill in the functions in each file")
     return 0
 
 
-def validate_experiment(task: str) -> int:
+def validate_project(task: str) -> int:
     task_path = _task_dir(task)
-    spec_path = task_path / "spec.py"
     config_path = task_path / "config.yaml"
-    errors = []
+    required_files = [
+        task_path / "seed_programs" / "model1.py",
+        task_path / "seed_programs" / "model2.py",
+        task_path / "seed_programs" / "param_est1.py",
+        task_path / "seed_programs" / "param_est2.py",
+        task_path / "data_loader" / "load_data.py",
+        task_path / "image_feedback" / "plot.py",
+        config_path,
+    ]
 
+    errors = []
     if not task_path.exists():
         errors.append(f"Task directory not found: {task_path}")
-    if not spec_path.exists():
-        errors.append(f"Missing spec file: {spec_path}")
-    if not config_path.exists():
-        errors.append(f"Missing config file: {config_path}")
+
+    for f in required_files:
+        if not f.exists():
+            errors.append(f"Missing: {f}")
 
     if errors:
         print("Validation failed:")
@@ -211,52 +236,19 @@ def validate_experiment(task: str) -> int:
             print(f"- {err}")
         return 1
 
-    # Validate required functions in spec.py (syntax + contract)
-    try:
-        tree = ast.parse(spec_path.read_text(encoding="utf-8"), filename=str(spec_path))
-    except SyntaxError as e:
+    # Validate config has task name
+    config_text = config_path.read_text(encoding="utf-8")
+    if f"name: {task}" not in config_text:
         print("Validation failed:")
-        print(f"- spec.py has syntax error: {e}")
+        print(f"- config.yaml must have 'name: {task}' under 'task:'")
         return 1
 
-    func_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
-    missing = [name for name in REQUIRED_SPEC_FUNCTIONS if name not in func_names]
-    if missing:
-        print("Validation failed:")
-        print("- spec.py is missing required functions:")
-        for name in missing:
-            print(f"  - {name}")
-        return 1
-
-    # Validate config task name
-    task_in_config = None
-    forbidden_found = []
-    for line in config_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if ":" in stripped and not stripped.startswith("#"):
-            key = stripped.split(":", 1)[0].strip()
-            if key in FORBIDDEN_CONFIG_KEYS:
-                forbidden_found.append(key)
-        if stripped.startswith("task:"):
-            value = stripped.split(":", 1)[1].strip()
-            if "#" in value:
-                value = value.split("#", 1)[0].strip()
-            task_in_config = value
-    if forbidden_found:
-        print("Validation failed:")
-        print("- config.yaml contains deprecated wiring keys. Remove these and use fixed spec naming:")
-        for key in sorted(set(forbidden_found)):
-            print(f"  - {key}")
-        return 1
-
-    if task_in_config != task:
-        print("Validation failed:")
-        print(f"- config.yaml task mismatch: expected '{task}', found '{task_in_config}'")
-        return 1
-
-    print(f"Validation passed for task '{task}'.")
-    print(f"- spec: {spec_path}")
-    print(f"- config: {config_path}")
+    print(f"Validation passed for project '{task}'.")
+    print(f"  ✓ seed_programs/model1.py, model2.py")
+    print(f"  ✓ seed_programs/param_est1.py, param_est2.py")
+    print(f"  ✓ data_loader/load_data.py")
+    print(f"  ✓ image_feedback/plot.py")
+    print(f"  ✓ config.yaml")
     return 0
 
 
@@ -264,12 +256,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="EDGAR project scaffold and validation CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init-project", help="Create a new task scaffold with spec.py + config.yaml")
-    p_init.add_argument("task", type=str, help="Task name (folder under projects/ or experiments/)")
-    p_init.add_argument("--force", action="store_true", help="Overwrite spec.py/config.yaml if they exist")
+    p_init = sub.add_parser("init-project", help="Create a new project with seed programs, data loader, and config")
+    p_init.add_argument("task", type=str, help="Project name (folder under projects/)")
+    p_init.add_argument("--force", action="store_true", help="Overwrite files if they exist")
 
-    p_validate = sub.add_parser("validate", help="Validate task contract in spec.py + config.yaml")
-    p_validate.add_argument("task", type=str, help="Task name (folder under projects/ or experiments/)")
+    p_validate = sub.add_parser("validate", help="Validate project structure and required files")
+    p_validate.add_argument("task", type=str, help="Project name (folder under projects/)")
     return parser
 
 
@@ -278,9 +270,9 @@ def run_cli(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "init-project":
-        return init_experiment(args.task, force=args.force)
+        return init_project(args.task, force=args.force)
     if args.command == "validate":
-        return validate_experiment(args.task)
+        return validate_project(args.task)
     parser.error("Unknown command")
     return 2
 
