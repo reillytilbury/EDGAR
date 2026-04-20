@@ -409,15 +409,6 @@ def check_jax_translation(
             raise ValueError(f"sample index {sample_idx} out of range for n_samples={n_samples}.")
         data_i = slice_data_samples(data, sample_idx)
         n_trials = data_n_trials(data)
-        if max_eval_trials is not None and n_trials > max_eval_trials:
-            keep_idx = np.linspace(0, n_trials - 1, num=max_eval_trials, dtype=int)
-            # data_i = slice_data_trials(data_i, keep_idx)
-            # # Only slice arrays whose last dim matches n_trials; arrays like
-            # # tuning_params have a different last dim and must not be trial-sliced.
-            data_i = {
-                k: (v[..., keep_idx] if v.ndim > 0 and v.shape[-1] == n_trials else v)
-                for k, v in data_i.items()
-            }
 
         sample_params = slice_params(params_arr, sample_idx)
         np_pred = np.asarray(np_func(data_i, sample_params))
