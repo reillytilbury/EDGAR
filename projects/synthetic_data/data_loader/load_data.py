@@ -3,13 +3,19 @@ from typing import Dict, Tuple
 
 from src import utils
 
+# Configuration constants from project config
+SEED = 42
+N_SAMPLES = 1000
+N_TRIALS = 2000
+NOISE_STD = 0.1
+
 
 def load_and_process_data(
     data_path: str = "",
-    SEED: int = 42,
-    n_samples: int = 1000,
-    n_trials: int = 2000,
-    noise_std: float = 0.1,
+    SEED: int = SEED,
+    n_samples: int = N_SAMPLES,
+    n_trials: int = N_TRIALS,
+    noise_std: float = NOISE_STD,
 ) -> Dict[str, np.ndarray]:
     """
     Simulate synthetic single-input regression data.

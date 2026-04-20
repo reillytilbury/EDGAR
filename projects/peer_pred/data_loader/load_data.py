@@ -5,14 +5,21 @@ from typing import Tuple
 
 from src import utils
 
+# Configuration constants from project config
+RANDOM_SEED = 42
+N_CELLS = 4000
+DOWNSAMPLE_FACTOR = 4
+VAR_THRESH = 0.0001
+ZSCORE = True
+
 
 def load_and_process_data(
     data_path: str = "",
-    random_seed: int = 42,
-    n_cells: int = 4_000,
-    downsample_factor: int = 4,
-    var_thresh: float = 1e-4,
-    zscore: bool = True,
+    random_seed: int = RANDOM_SEED,
+    n_cells: int = N_CELLS,
+    downsample_factor: int = DOWNSAMPLE_FACTOR,
+    var_thresh: float = VAR_THRESH,
+    zscore: bool = ZSCORE,
 ) -> dict:
     """
     Load spontaneous activity data and split into source/target populations.

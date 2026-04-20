@@ -1,13 +1,5 @@
 task:
-  name: peer_pred
   data_path: /home/reilly/datasets/spontaneous_data/spont_M161025_MP030_20161120.mat
-model_name: population_predictor
-data_processing_params:
-  random_seed: 42
-  n_cells: 4000
-  downsample_factor: 4
-  var_thresh: 0.0001
-  zscore: true
 evolution:
   n_iterations: 3
   batch_size: 3
@@ -27,7 +19,6 @@ llms:
   - tensorflow
 scoring:
   param_penalty_weight: 0.0
-  fit_params: true
   parameter_estimation:
     param_estimator_refinement_rounds: 0
     timeout_s: 5.0
@@ -35,12 +26,3 @@ scoring:
     max_iter: 200
     learning_rate: 0.01
     timeout_s: 30.0
-diagnostics:
-  open_family_tree: true
-  log_prompts: false
-  log_jax_translations: false
-  eval_keys:
-  - source
-  x_min: -1.0
-  x_max: 1.0
-  n_bins: 100

@@ -1,39 +1,13 @@
 task:
-  name: minimodel_discovery
   data_path: /home/reilly/datasets/image_responses/FX8_nat60k_2023_05_16.npz
-model_name: analytic_minimodel
-zscore_skip_keys:
-- image
-- response
-- response_repeats
-- stimulus_id
-- cell_index
-data_processing_params:
-  image_path: /home/reilly/datasets/image_responses/nat60k_text16.mat
-  mouse_id: 4
-  min_fev: 0.15
-  max_cells: 64
-  max_train_images: 1024
-  anchor_cell_count: 8
-  minimodel_repo_path: /home/reilly/Documents/code/minimodel
-  teacher_checkpoint_path: /home/reilly/Documents/code/minimodel/notebooks/checkpoints/FX8_051623_2layer_16_320_clamp_norm_depthsep_pool.pt
-  use_teacher_diagnostics: true
-  teacher_device: cpu
-inputs:
-- name: image
-  description: Natural image stimulus cropped to the FX8 visual field.
 evolution:
   n_iterations: 3
   time_limit: 45
   n_islands: 4
   batch_size: 4
 scoring:
-  trial_batch_size: 128
   parameter_estimation:
     param_estimator_refinement_rounds: 0
   gradient_descent:
     max_iter: 100
     learning_rate: 0.03
-diagnostics:
-  eval_image_count: 64
-  eval_image_source: train_anchor

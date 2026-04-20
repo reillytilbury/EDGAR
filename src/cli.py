@@ -1,3 +1,35 @@
+"""
+CLI for EDGAR project scaffolding and validation.
+
+Example usage:
+
+    # Create a new project scaffold
+    edgar init-project my_task
+
+    This creates:
+    - projects/my_task/config.yaml (configuration file)
+    - projects/my_task/seed_programs/model1.py (first seed model)
+    - projects/my_task/seed_programs/model2.py (second seed model)
+    - projects/my_task/seed_programs/param_est1.py (first parameter estimator)
+    - projects/my_task/seed_programs/param_est2.py (second parameter estimator)
+    - projects/my_task/data_loader/load_data.py (data loading functions)
+    - projects/my_task/image_feedback/plot.py (plotting function)
+
+    Each file contains stub functions with docstrings. Fill in the implementations.
+
+    # Validate an existing project
+    edgar validate my_task
+
+    Checks that all required files exist and config.yaml has the correct task name.
+
+    # Overwrite existing project (use with caution)
+    edgar init-project my_task --force
+
+    # Enable verbose logging (DEBUG level)
+    edgar --verbose init-project my_task
+    edgar --verbose validate my_task
+"""
+
 import argparse
 import ast
 from pathlib import Path
@@ -254,6 +286,7 @@ def validate_project(task: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="EDGAR project scaffold and validation CLI")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level instead of INFO)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init-project", help="Create a new project with seed programs, data loader, and config")

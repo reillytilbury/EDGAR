@@ -1,25 +1,9 @@
 task:
-  name: synthetic_data
-model_name: model
-data_processing_params:
-  SEED: 42
-  n_samples: 1000
-  n_trials: 2000
-  noise_std: 0.1
+  data_path: /path/to/data.npy
 evolution:
   n_iterations: 2
   batch_size: 3
   n_islands: 4
-  exploration_topology:
-  - 1
-  - 2
-  - 3
-  - 0
-  exploitation_topology:
-  - 1
-  - 2
-  - 3
-  - 0
 llms:
   model_llm:
   - gemini-2.5-flash
@@ -31,10 +15,3 @@ scoring:
     param_estimator_refinement_rounds: 0
   gradient_descent:
     timeout_s: 5.0
-diagnostics:
-  open_family_tree: true
-  eval_keys:
-  - x
-  x_min: -1.0
-  x_max: 1.0
-  n_bins: 100

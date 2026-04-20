@@ -6,6 +6,17 @@ from scipy.io import loadmat
 
 from src import utils
 
+# Configuration constants from project config
+MOUSE_ID = 4
+MIN_FEV = 0.15
+MAX_CELLS = 64
+MAX_TRAIN_IMAGES = 1024
+ANCHOR_CELL_COUNT = 8
+MINIMODEL_REPO_PATH = "/home/reilly/Documents/code/minimodel"
+TEACHER_CHECKPOINT_PATH = "/home/reilly/Documents/code/minimodel/notebooks/checkpoints/FX8_051623_2layer_16_320_clamp_norm_depthsep_pool.pt"
+USE_TEACHER_DIAGNOSTICS = True
+TEACHER_DEVICE = "cpu"
+
 
 _DATASET_CONTEXT: dict[str, object] = {}
 _DIAGNOSTIC_CACHE: dict[tuple, dict[str, object]] = {}
@@ -45,15 +56,15 @@ def _compute_fev_from_repeats(repeats: np.ndarray) -> np.ndarray:
 def load_and_process_data(
     data_path: str,
     image_path: str,
-    mouse_id: int = 4,
-    min_fev: float = 0.15,
-    max_cells: int = 64,
-    max_train_images: int = 1024,
-    anchor_cell_count: int = 8,
-    minimodel_repo_path: str = "",
-    teacher_checkpoint_path: str = "",
-    use_teacher_diagnostics: bool = True,
-    teacher_device: str = "cpu",
+    mouse_id: int = MOUSE_ID,
+    min_fev: float = MIN_FEV,
+    max_cells: int = MAX_CELLS,
+    max_train_images: int = MAX_TRAIN_IMAGES,
+    anchor_cell_count: int = ANCHOR_CELL_COUNT,
+    minimodel_repo_path: str = MINIMODEL_REPO_PATH,
+    teacher_checkpoint_path: str = TEACHER_CHECKPOINT_PATH,
+    use_teacher_diagnostics: bool = USE_TEACHER_DIAGNOSTICS,
+    teacher_device: str = TEACHER_DEVICE,
 ):
     raw = np.load(data_path, allow_pickle=True)
     stimulus_mat = loadmat(image_path, squeeze_me=True)
