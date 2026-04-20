@@ -26,7 +26,7 @@ from .scoring.evaluation import (
     evaluate_candidate_batch,
 )
 from .scoring.finalize import finalize_run
-from .evolution import genetic_helpers
+from .evolution import island
 from .llm import prompts as prompt_tools
 from .llm.candidates import (
     _run_translation_check_on_eval,
@@ -777,19 +777,19 @@ async def hypothesis_engine(
         logging.info('-' * 50)
         # migrate and prune programs (better here for temperature to be in [0, 1] range)
         try:
-            islands, dedup_events = genetic_helpers.perform_island_deduplication(
+            islands, dedup_events = island.perform_island_deduplication(
                 islands,
                 overlap_threshold=int(0.75 * critical_population_size),
                 iteration=i,
             )
-            islands, prune_events = genetic_helpers.perform_population_pruning(
+            islands, prune_events = island.perform_population_pruning(
                 islands,
                 critical_population_size=critical_population_size - n_migrants,
                 min_wise_population_size=min_wise_population_size,
                 iteration=i,
             )
             _apply_removal_reasons_to_log(generation_log_path, dedup_events + prune_events)
-            islands = genetic_helpers.perform_probabilistic_migration(
+            islands = island.perform_probabilistic_migration(
                 islands,
                 n_migrants=n_migrants,
                 destination_islands=exploration_topology if mode == 'explore' else exploitation_topology,
