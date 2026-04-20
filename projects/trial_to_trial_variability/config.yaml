@@ -23,10 +23,10 @@ experiment_params:
   fit_params: true
   model_llm: [gemini-3.1-flash-lite-preview, gemini-2.5-flash]
   # swear_words: [sklearn, PLSRegression, scipy.optimize, optimize.minimize, curve_fit, cvxpy, torch, tensorflow]
-  eval_keys: ['stimulus', 'source', 'target', 'source_tuning_params', 'target_tuning_params', 'source_mean_pred', 'target_mean_pred']
-  x_min: 0
-  x_max: 6.28318530718
-  n_bins: 60
+  # No linspace evaluation: the model depends on multiple real data keys
+  # (source responses, per-cell tuning params, etc.) that cannot be replaced
+  # with a 1-D grid. Use the real training data as the behavioral fingerprint.
+  eval_keys: []
   time_limit: 200
 
 # ========================
@@ -51,14 +51,14 @@ prompts:
     code_guidelines: '**Code Generation Guidelines:**
       * Import any packages you use.
       * Do NOT include any text other than the code.
-      * Model signature must be `def model(data, params):` where `data` is a dict that contains exactly 7 keys : 
+      * Model signature must be `def model(data, params):` where `data` is a dict that contains exactly 7 keys :
         1. "stimulus" (shape (n_time,))
-        2. "source" (shape (n_source_cells, n_time))
-        3. "target" (shape (n_target_cells, n_time))
+        2. "source" (shape (n_time, n_source_cells))
+        3. "target" (shape (n_time, n_target_cells))
         4. "source_tuning_params" (shape (n_source_cells, 11))
         5. "target_tuning_params" (shape (n_target_cells, 11))
-        6. "source_mean_pred" (shape (n_source_cells, n_times)) # prediction of mean spike rate of source cells according to the double peaked generalised Gaussian orientation tuning function given the stimulus and the tuning parameters
-        7. "target_mean_pred" (shape (n_target_cells, n_times)) # prediction of mean spike rate of target cells according to the double peaked generalised Gaussian orientation tuning function given the stimulus and the tuning parameters
+        6. "source_mean_pred" (shape (n_time, n_source_cells)) # prediction of mean spike rate of source cells according to the double peaked generalised Gaussian orientation tuning function given the stimulus and the tuning parameters
+        7. "target_mean_pred" (shape (n_time, n_target_cells)) # prediction of mean spike rate of target cells according to the double peaked generalised Gaussian orientation tuning function given the stimulus and the tuning parameters
       and `params` is a dict of named arrays/scalars.
       * The 11 tuning parameters are arguments to a double peaked generalised Gaussian orientation tuning function which take the form : 
 

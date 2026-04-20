@@ -438,25 +438,41 @@ def load_and_process_data(data_path : str, *args, **kwargs) -> list:
 def load_and_process_data_true(
     data_path: str,
     # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
-    random_seed: int = 42,
-    train_to_test_split_ratio: float = 0.5,
+    train_cells_random_seed: int = 42,
+    test_cells_random_seed: int = 0,
+    source_to_target_split_ratio: float = 0.5,
     conc_threshold: float = 0.55,
 ) -> list[list[Dict[str, np.ndarray]]]:
     """
-    Load and preprocess neural data, split into train/test samples and trials,
+    Load and preprocess neural data, split into train/test times and cells,
     and return a 2x2 container of data dicts.
 
-    The sample split divides cells into two independent halves (for
-    source and target separately). The trial split randomly assigns half
-    the trials for training and half for testing.
+    The sample split divides time into two independent halves : S1 and S2.
+    Within each half we split cells into 4 groups using a random seed:
+    source1, target1, source2, target2.
+
+    For S1 (using train_cells_random_seed):
+        X00 contains S1 stim responses of source1 and target1.
+        X01 contains S1 stim responses of source2 and target2.
+
+    For S2 (using test_cells_random_seed):
+        X10 contains S2 stim responses of source1' and target1'.
+        X11 contains S2 stim responses of source2' and target2'.
+
+    If train_cells_random_seed == test_cells_random_seed, the cell split
+    is the same across the two stimuli sets.
+
+    Ensure that the number of cells in source1 and source2 are the same - and similarly for target1 and target2.
 
     Parameters
     ----------
     data_path : str
         Path to the .npy file containing neural data.
-    random_seed : int
-        Random seed for reproducibility of cell and trial splits.
-    train_to_test_split_ratio : float
+    train_cells_random_seed : int
+        Random seed for reproducibility of cell splits for X00 and X01.
+    test_cells_random_seed : int
+        Random seed for reproducibility of cell splits for X10 and X11.
+    source_to_target_split_ratio : float
         Fraction of cells assigned to source vs target (e.g. 0.5 means
         equal source and target populations).
     conc_threshold : float
@@ -465,90 +481,111 @@ def load_and_process_data_true(
     Returns
     -------
     2x2 list of dicts:
-        [[data_train_train, data_train_test],
-         [data_test_train, data_test_test]]
-        Each dict has keys 'stimulus', 'source', 'target'.
-        'stimulus' has shape (n_trials,), 'source' has shape
-        (n_source_cells, n_trials), 'target' has shape
-        (n_target_cells, n_trials).
+        [[X00, X01],
+         [X10, X11]]
+        Each dict has keys 'stimulus', 'source', 'target',
+        'source_tuning_params', 'target_tuning_params',
+        'source_mean_pred', 'target_mean_pred'.
+        'stimulus' has shape (n_time,), 'source' has shape
+        (n_time, n_source_cells), 'target' has shape
+        (n_time, n_target_cells).
     """
     neural_data = np.load(data_path, allow_pickle=True)
     neural_data = neural_data.item()
-    response = np.asarray(neural_data['sresp'])
+    response = np.asarray(neural_data['sresp'])  # (n_cells, n_trials)
 
     angles = neural_data['istim']
     assert max(angles) <= 2 * np.pi, "Expected angles to be in radians and between 0 and 2pi"
-    n_trials = response.shape[1]
+    n_cells_total, n_trials = response.shape
 
     if conc_threshold is not None:
         conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
         good_cells = np.where(conc > conc_threshold)[0]
-        print(f"Filtering for orientation selectivity. Kept {len(good_cells)} out of {response.shape[0]} cells.")
+        print(f"Filtering for orientation selectivity. Kept {len(good_cells)} out of {n_cells_total} cells.")
         response = response[good_cells]
 
-    rng = np.random.default_rng(random_seed)
-
-    # --- Cell split: source vs target ---
-    cell_idx = rng.permutation(response.shape[0])
-    n_source_cells = int(train_to_test_split_ratio * response.shape[0])
-    source_cells = cell_idx[:n_source_cells]
-    target_cells = cell_idx[n_source_cells:]
-
-    if source_cells.size == 0 or target_cells.size == 0:
-        raise ValueError("Train to test split ratio results in empty source or target cell population. Please adjust the ratio.")
-
-    # --- Sample split: each population halved into train/test samples ---
-    half_source = source_cells.size // 2
-    half_target = target_cells.size // 2
-    train_source = source_cells[:half_source]
-    test_source = source_cells[-half_source:]
-    train_target = target_cells[:half_target]
-    test_target = target_cells[-half_target:]
-
-    # --- Trial split: random half for training, rest for testing ---
-    train_trials = np.sort(rng.choice(n_trials, size=n_trials // 2, replace=False))
-    test_trials = np.setdiff1d(np.arange(n_trials), train_trials)
-
-    # Normalise per cell (divide by std)
+    # Normalise per cell (divide by std across all trials)
     eps = 1e-12
-    source_train = response[train_source]
-    source_test = response[test_source]
-    target_train = response[train_target]
-    target_test = response[test_target]
-    source_train = source_train / (source_train.std(axis=1, keepdims=True) + eps)
-    source_test = source_test / (source_test.std(axis=1, keepdims=True) + eps)
-    target_train = target_train / (target_train.std(axis=1, keepdims=True) + eps)
-    target_test = target_test / (target_test.std(axis=1, keepdims=True) + eps)
+    response = response / (response.std(axis=1, keepdims=True) + eps)
 
-    def _make_data_dict(source, target, trial_idx):
-        # Calculate the tuning parameters from the responses directly
-        stimulus = angles[trial_idx]
-        source_tuning_params = fit_tuning_parameters_jax(stimulus, source[:, trial_idx])
-        target_tuning_params = fit_tuning_parameters_jax(stimulus, target[:, trial_idx])
+    # --- Time split: first half S1, second half S2 ---
+    half_trials = n_trials // 2
+    S1_trials = np.arange(half_trials)
+    S2_trials = np.arange(half_trials, n_trials)
 
-        stimuli_tiled = jnp.tile(stimulus[None, :], (source_tuning_params.shape[0], 1)) # shape (n_source, n_time)
-        source_pred = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(stimuli_tiled, source_tuning_params) # shape (n_source, n_time)
-        target_pred = jax.vmap(lambda stim, params: single_cell_tuning_function(stim, *params), in_axes=(0, 0))(stimuli_tiled, target_tuning_params) # shape (n_source, n_time)
+    def _split_cells(seed):
+        """Split cells into source1, target1, source2, target2 using given seed."""
+        rng = np.random.default_rng(seed)
+        n_cells = response.shape[0]
         
+        # Ensure that the number of cells in source1 and source2 are the same - and similarly for target1 and target2.
+        cell_idx = rng.permutation(n_cells)
+        n_source = int(np.ceil(source_to_target_split_ratio * n_cells))
+        source_cells = cell_idx[:n_source]
+        target_cells = cell_idx[n_source:]
+
+        if source_cells.size == 0 or target_cells.size == 0:
+            raise ValueError(
+                "source_to_target_split_ratio results in empty source or "
+                "target cell population. Please adjust the ratio."
+            )
+        half_source = source_cells.size // 2
+        half_target = target_cells.size // 2
+        source1 = source_cells[:half_source]
+        source2 = source_cells[half_source:][:half_source] # ensure source2 has the same number of cells as source1
+        target1 = target_cells[:half_target]
+        target2 = target_cells[half_target:][:half_target] # ensure target2 has the same number of cells as target1
+        return source1, target1, source2, target2
+
+    # Train cell split (for S1)
+    source1, target1, source2, target2 = _split_cells(train_cells_random_seed)
+    # Test cell split (for S2, potentially different)
+    source1p, target1p, source2p, target2p = _split_cells(test_cells_random_seed)
+
+    def _make_data_dict(source_cells, target_cells, trial_idx):
+        """Build a data dict with shapes (1, n_time, n_cells) for source/target."""
+        stimulus = angles[trial_idx]
+        source_resp = response[source_cells][:, trial_idx]  # (n_source, n_time)
+        target_resp = response[target_cells][:, trial_idx]  # (n_target, n_time)
+
+        # Fit tuning parameters (per-cell, shape (n_cells, 11))
+        source_tuning_params = fit_tuning_parameters_jax(stimulus, source_resp)
+        target_tuning_params = fit_tuning_parameters_jax(stimulus, target_resp)
+
+        # Compute mean predictions: (n_cells, n_time)
+        stimuli_tiled_s = jnp.tile(stimulus[None, :], (source_tuning_params.shape[0], 1))
+        source_pred = jax.vmap(
+            lambda stim, params: single_cell_tuning_function(stim, *params),
+            in_axes=(0, 0),
+        )(stimuli_tiled_s, source_tuning_params)  # (n_source, n_time)
+
+        stimuli_tiled_t = jnp.tile(stimulus[None, :], (target_tuning_params.shape[0], 1))
+        target_pred = jax.vmap(
+            lambda stim, params: single_cell_tuning_function(stim, *params),
+            in_axes=(0, 0),
+        )(stimuli_tiled_t, target_tuning_params)  # (n_target, n_time)
+
         # Add a leading size-1 sample axis so data_n_samples returns 1 and
-        # slice_data_samples(data, 0) cleanly removes it, restoring the original
-        # 2D/3D shapes that model_v1 and param_est_v1 expect.
+        # slice_data_samples(data, 0) cleanly removes it, restoring the
+        # 2D shapes that model_v1 and param_est_v1 expect.
+        # Transpose responses and predictions: (n_cells, n_time) -> (n_time, n_cells)
         return {
-            # convert to numpy arrays to save memory since we won't be doing any jax operations on these in the model
-            'stimulus': np.array(stimulus)[np.newaxis],
-            'source': np.array(source[:, trial_idx])[np.newaxis],
-            'target': np.array(target[:, trial_idx])[np.newaxis],
-            'source_tuning_params': np.array(source_tuning_params)[np.newaxis],
-            'target_tuning_params': np.array(target_tuning_params)[np.newaxis],
-            'source_mean_pred' : np.array(source_pred)[np.newaxis],
-            'target_mean_pred' : np.array(target_pred)[np.newaxis],
+            'stimulus': np.array(stimulus)[np.newaxis],                          # (1, n_time)
+            'source': np.array(source_resp.T)[np.newaxis],                       # (1, n_time, n_source)
+            'target': np.array(target_resp.T)[np.newaxis],                       # (1, n_time, n_target)
+            'source_tuning_params': np.array(source_tuning_params)[np.newaxis],  # (1, n_source, 11)
+            'target_tuning_params': np.array(target_tuning_params)[np.newaxis],  # (1, n_target, 11)
+            'source_mean_pred': np.array(source_pred.T)[np.newaxis],             # (1, n_time, n_source)
+            'target_mean_pred': np.array(target_pred.T)[np.newaxis],             # (1, n_time, n_target)
         }
 
+    # X00 and X01 share trials (S1), differ in cells
+    # X10 and X11 share trials (S2), differ in cells (different random seed)
     return [
-        [_make_data_dict(source_train, target_train, train_trials),
-         _make_data_dict(source_train, target_train, test_trials)],
-        [_make_data_dict(source_test, target_test, train_trials),
-         _make_data_dict(source_test, target_test, test_trials)],
+        [_make_data_dict(source1, target1, S1_trials),    # X00
+         _make_data_dict(source2, target2, S1_trials)],   # X01
+        [_make_data_dict(source1p, target1p, S2_trials),  # X10
+         _make_data_dict(source2p, target2p, S2_trials)], # X11
     ]
 
 # ========================
@@ -556,169 +593,152 @@ def load_and_process_data_true(
 # ========================
 
 def model_v1(data, params):
-    """ Gain Modulation + per cell modulation
+    """ Gain Modulation + Additive Offset
 
-    Equation : For each target cell c at timepoint t with stimulus angle theta, 
-        f(theta, t; cell_params) = multiplicative_gain(t) * g(theta(t) ; cell_params) + additive_offset(t) * coupling_factor
-    where g(theta(t); cell_params) is some tuning function. 
+    Equation : For each target cell c at timepoint t with stimulus angle theta,
+        f(theta, t; cell_params) = multiplicative_gain(t) * g(theta(t) ; cell_params) + additive_offset(t)
+    where g(theta(t); cell_params) is the tuning function prediction for each target cell.
 
-    Args : 
-        data (dict) : Dictionary with keys 
+    Args :
+        data (dict) : Dictionary with keys
             - 'stimulus' : shape (n_time,)
-            - 'source' : shape (n_source_cells, n_time)
+            - 'source' : shape (n_time, n_source_cells)
             - 'source_tuning_params' : shape (n_source_cells, n_params)
             - 'target_tuning_params' : shape (n_target_cells, n_params)
-            - 'source_mean_pred' : shape (n_source_cells, n_time)
-            - 'target_mean_pred' : shape (n_target_cells, n_time)
-        params (dict) : Parameter dictionary with keys: 
-            - source_coupling_factor : coupling_factor (shape (n_source_cells,)) 
-            - target_coupling_factor : coupling_factor (shape (n_target_cells,)) 
+            - 'source_mean_pred' : shape (n_time, n_source_cells)
+            - 'target_mean_pred' : shape (n_time, n_target_cells)
+        params (dict) : Parameter dictionary with keys:
+            - multiplicative_gain : shape (n_time,)
+            - additive_offset : shape (n_time,)
 
-    Returns : 
-        jnp.ndarray : Predicted responses for the target cells with shape (n_target_cells, n_time)
+    Returns :
+        jnp.ndarray : Predicted responses for the target cells with shape (n_time, n_target_cells)
     """
-    stimuli = data['stimulus'] # shape (n_time)
-    source_response = data['source'] # shape (n_source, n_time)
-    g_source = data['source_mean_pred'] # shape (n_source, n_time)
-    g_target = data['target_mean_pred'] # shape (n_target, n_time)
+    g_target = data['target_mean_pred']  # shape (n_time, n_target)
 
-    source_coupling_factor = params['source_coupling_factor'] # shape (n_source,)
-    target_coupling_factor = params['target_coupling_factor'] # shape (n_target,)    
+    multiplicative_gain = params['multiplicative_gain']  # shape (n_time,)
+    additive_offset = params['additive_offset']          # shape (n_time,)
 
-    eps = 1e-8
-    multiplicative_gain = jnp.sum(g_source * source_response, axis=0) / (jnp.sum(g_source**2, axis=0) + eps) # shape (n_time,)
-
-    source_residual = source_response - (g_source * multiplicative_gain) # shape (n_source, n_time)
-    # we already know the source_coupling_factor
-    additive_offset = jnp.sum(source_coupling_factor[:, None] * source_residual, axis=0) / (jnp.sum(source_coupling_factor**2) + eps) # shape (n_time,)
-
-    pred = g_target * multiplicative_gain + target_coupling_factor[:, None] * additive_offset # shape (n_target, n_time)
+    pred = multiplicative_gain[:, None] * g_target + additive_offset[:, None]  # shape (n_time, n_target)
     # clip to non-negative firing rates
     pred = jnp.clip(pred, a_min=0.0)
     return pred
 
 
 def param_est_v1(data):
-    """ Parameter estimator for model_v1. This function estimates params and from the data.
-    Tuning_params : contain per cell level parameters for both source and target cells that are independent of trials
+    """ Parameter estimator for model_v1. Estimates time-specific multiplicative
+    gain and additive offset from the source cell responses.
 
     Args :
         data (dict) : Dictionary containing input and output arrays. Keys:
             - 'stimulus' : shape (n_time,)
-            - 'source' : shape (n_source_cells, n_time)
-            - 'target' : shape (n_target_cells, n_time)
+            - 'source' : shape (n_time, n_source_cells)
+            - 'target' : shape (n_time, n_target_cells)
             - 'source_tuning_params' : shape (n_source_cells, n_params)
             - 'target_tuning_params' : shape (n_target_cells, n_params)
-            - 'source_mean_pred' : shape (n_source_cells, n_time)
-            - 'target_mean_pred' : shape (n_target_cells, n_time)
-    
+            - 'source_mean_pred' : shape (n_time, n_source_cells)
+            - 'target_mean_pred' : shape (n_time, n_target_cells)
+
     Returns :
-        params (dict) : Estimated tuning parameters for target cells. Keys:
-            - source_cell_coupling_factor : shape (n_source_cells,)
-            - target_cell_coupling_factor : shape (n_target_cells,)
+        params (dict) : Estimated parameters. Keys:
+            - multiplicative_gain : shape (n_time,)
+            - additive_offset : shape (n_time,)
     """
-    # first sort the response of x and y by the stimulus angles 
-    stims = data['stimulus'] # shape (n_time,)
-    x = jnp.array(data['source']) # shape (n_source, n_time)
-    y = jnp.array(data['target']) # shape (n_target, n_time)
-    g_source = data['source_mean_pred'] # shape (n_source, n_time)
-    n_source, n_t = g_source.shape
+    x = jnp.array(data['source'])           # shape (n_time, n_source)
+    g_source = jnp.array(data['source_mean_pred'])  # shape (n_time, n_source)
 
-    # Step 1 : Fit the gain factor using leastsq 
     eps = 1e-8
-    multiplicative_gain = jnp.sum(g_source * x, axis=0) / (jnp.sum(g_source**2, axis=0) + eps)
+    # Step 1 : Fit multiplicative gain per timepoint using least squares
+    # For each t: multiplicative_gain[t] = dot(g_source[t,:], x[t,:]) / dot(g_source[t,:], g_source[t,:])
+    multiplicative_gain = jnp.sum(g_source * x, axis=1) / (jnp.sum(g_source**2, axis=1) + eps)  # shape (n_time,)
 
-    # Step 2 : Fit a rank 1 model to the residual using SVD 
-    residual = x.T - (multiplicative_gain[:, None] * g_source.T) # has shape (n_time, n_source)
-    U, S, Vh = jnp.linalg.svd(residual, full_matrices=False)
-    source_coupling_factor = Vh[0, :] # shape (n_source,)
-    additive_offset = U[:, 0] * S[0] # shape (n_time,)
-
-    g_target = data['target_mean_pred']
-    n_target = g_target.shape[0]
-
-    # Step 3 : Fit the target cell coupling factor using the multiplicative_gain and additive offset
-    multiplicative_only_pred = multiplicative_gain[:, None] * g_target.T # shape (n_time, n_target)
-    residual_target = y.T - multiplicative_only_pred # shape (n_time, n_target)
-    target_coupling_factor = (residual_target.T @ additive_offset) / (additive_offset @ additive_offset) # shape (n_target,)
+    # Step 2 : Estimate additive offset from the mean residual across source cells
+    residual = x - multiplicative_gain[:, None] * g_source  # shape (n_time, n_source)
+    additive_offset = jnp.mean(residual, axis=1)  # shape (n_time,)
 
     params = {
-        'source_coupling_factor' : source_coupling_factor,
-        'target_coupling_factor' : target_coupling_factor
+        'multiplicative_gain': multiplicative_gain,
+        'additive_offset': additive_offset,
     }
     return params
 
 def model_v2(data, params):
-    """ Gain Modulation + source to target coupling 
+    """ Gain Modulation + source to target coupling
 
-    Equation : For each target cell c at timepoint t with stimulus angle theta, 
-        f(theta, t; cell_params) = multiplicative_gain(t) * g(theta(t) ; cell_params) + source_cell_response(t) * coupling_weight
-    where g(theta(t); cell_params) is some tuning function, source_cell_response(t) is the response of the source cell at time t (shape n_source,) and the coupling weight is the coupling factor for each target cell (shape n_source,).
+    Equation : For each target cell c at timepoint t with stimulus angle theta,
+        f(theta, t; cell_params) = multiplicative_gain(t) * g(theta(t) ; cell_params) + source_response(t) @ coupling_weight(c)
+    where g(theta(t); cell_params) is the tuning function prediction,
+    source_response(t) is the source cell responses at time t (shape n_source,),
+    and coupling_weight(c) is the coupling from source cells to target cell c.
 
-    Args : 
-        data (dict) : Dictionary with keys 
+    Args :
+        data (dict) : Dictionary with keys
             - 'stimulus' : shape (n_time,)
-            - 'source' : shape (n_source_cells, n_time)
+            - 'source' : shape (n_time, n_source_cells)
             - 'source_tuning_params' : shape (n_source_cells, n_params)
             - 'target_tuning_params' : shape (n_target_cells, n_params)
-            - 'source_mean_pred' : shape (n_source_cells, n_time)
-            - 'target_mean_pred' : shape (n_target_cells, n_time)
-        params (dict) : Parameter dictionary with keys: 
-            - coupling_factor : coupling_factor (shape (n_target_cells, n_source_cells)) 
+            - 'source_mean_pred' : shape (n_time, n_source_cells)
+            - 'target_mean_pred' : shape (n_time, n_target_cells)
+        params (dict) : Parameter dictionary with keys:
+            - multiplicative_gain : shape (n_time,)
+            - coupling_factor : shape (n_target_cells, n_source_cells)
 
-    Returns : 
-        jnp.ndarray : Predicted responses for the target cells with shape (n_target_cells, n_time)
+    Returns :
+        jnp.ndarray : Predicted responses for the target cells with shape (n_time, n_target_cells)
     """
-    stimuli = jnp.array(data['stimulus']) # shape (n_time)
-    source_response = jnp.array(data['source']) # shape (n_source, n_time)
-    g_source = jnp.array(data['source_mean_pred']) # shape (n_source, n_time)
-    g_target = jnp.array(data['target_mean_pred']) # shape (n_target, n_time)
+    source_response = jnp.array(data['source'])       # shape (n_time, n_source)
+    g_target = jnp.array(data['target_mean_pred'])     # shape (n_time, n_target)
 
-    coupling_factor = params['coupling_factor'] # shape (n_target_cells, n_source_cells)    
-    eps = 1e-8
-    multiplicative_gain = jnp.sum(g_source * source_response, axis=0) / (jnp.sum(g_source**2, axis=0) + eps) # shape (n_time,)
+    multiplicative_gain = params['multiplicative_gain']  # shape (n_time,)
+    coupling_factor = params['coupling_factor']          # shape (n_target, n_source)
 
-    pred = g_target * multiplicative_gain + (coupling_factor @ source_response) # shape (n_target, n_time)
+    # source_response @ coupling_factor.T: (n_time, n_source) @ (n_source, n_target) = (n_time, n_target)
+    pred = multiplicative_gain[:, None] * g_target + source_response @ coupling_factor.T  # shape (n_time, n_target)
 
     # clip to non-negative firing rates
     pred = jnp.clip(pred, a_min=0.0)
     return pred
 
 def param_est_v2(data):
-    """ 
+    """Parameter estimator for model_v2. Estimates multiplicative gain from
+    source responses and coupling factor by regressing target residuals
+    against source responses.
+
     Args :
         data (dict) : Dictionary containing input and output arrays. Keys:
             - 'stimulus' : shape (n_time,)
-            - 'source' : shape (n_source_cells, n_time)
-            - 'target' : shape (n_target_cells, n_time)
+            - 'source' : shape (n_time, n_source_cells)
+            - 'target' : shape (n_time, n_target_cells)
             - 'source_tuning_params' : shape (n_source_cells, n_params)
             - 'target_tuning_params' : shape (n_target_cells, n_params)
-            - 'source_mean_pred' : shape (n_source_cells, n_time)
-            - 'target_mean_pred' : shape (n_target_cells, n_time)
-    
+            - 'source_mean_pred' : shape (n_time, n_source_cells)
+            - 'target_mean_pred' : shape (n_time, n_target_cells)
+
     Returns :
-        params (dict) : Estimated tuning parameters for target cells. Keys:
+        params (dict) : Estimated parameters. Keys:
+            - multiplicative_gain : shape (n_time,)
             - coupling_factor : shape (n_target_cells, n_source_cells)
     """
-    # first sort the response of x and y by the stimulus angles 
-    x = jnp.array(data['source']) # shape (n_source, n_time)
-    y = jnp.array(data['target']) # shape (n_target, n_time)
-    g_source = jnp.array(data['source_mean_pred']) # shape (n_source, n_time)
-    g_target = jnp.array(data['target_mean_pred']) # shape (n_target, n_time)
+    x = jnp.array(data['source'])                # shape (n_time, n_source)
+    y = jnp.array(data['target'])                # shape (n_time, n_target)
+    g_source = jnp.array(data['source_mean_pred'])  # shape (n_time, n_source)
+    g_target = jnp.array(data['target_mean_pred'])  # shape (n_time, n_target)
 
-    # Step 2 : Fit the gain factor using leastsq 
+    # Step 1 : Fit multiplicative gain per timepoint using least squares
     eps = 1e-8
-    multiplicative_gain = jnp.sum(g_source * x, axis=0) / (jnp.sum(g_source**2, axis=0) + eps) # shape (n_time,)
+    multiplicative_gain = jnp.sum(g_source * x, axis=1) / (jnp.sum(g_source**2, axis=1) + eps)  # shape (n_time,)
 
-    # Step 3 : Fit the coupling factor by regressing the residual against the source cell responses
+    # Step 2 : Fit coupling factor by regressing target residuals against source responses
+    # residual = y - gain-only prediction, shape (n_time, n_target)
+    residual = y - multiplicative_gain[:, None] * g_target
 
-    residual = y - (g_target * multiplicative_gain[None, :]) # has shape (n_target, n_time)
-    # x has shape (n_source, n_time) and residual has shape (n_target, n_time), we want to regress residual against x to get coupling_factor with shape (n_target, n_source)
-    XtX = x @ x.T + eps * jnp.eye(x.shape[0])
-    coupling_factor = jnp.linalg.solve(XtX, x @ residual.T).T
+    # x.T @ residual: (n_source, n_time) @ (n_time, n_target) = (n_source, n_target)
+    XtX = x.T @ x + eps * jnp.eye(x.shape[1])  # Add ridge regularization for stability
+    coupling_factor = jnp.linalg.solve(XtX, x.T @ residual).T  # (n_target, n_source)
 
     params = {
-        'coupling_factor' : coupling_factor # shape (n_target, n_source)
+        'multiplicative_gain': multiplicative_gain,
+        'coupling_factor': coupling_factor,
     }
     return params
 
@@ -733,7 +753,7 @@ def loss_fn(model_output, data):
     Parameters
     ----------
     model_output : jnp.ndarray
-        Predicted target-cell responses, shape (n_target_cells, n_trials).
+        Predicted target-cell responses, shape (n_time, n_target_cells).
     data : dict
         Data dictionary; the comparison target is data['target'].
     """
@@ -760,7 +780,7 @@ def plot_model_fits(
     data : dict[str, np.ndarray]
         Expected keys:
         - 'stimulus': array of shape (n_stims,)
-        - 'target': array of shape (n_target_cells, n_stims)
+        - 'target': array of shape (n_stims, n_target_cells)
         - 'target_tuning_params': array of shape (n_target_cells, n_params),
           where column 0 contains preferred angles
     programs_list : list[dict]
@@ -797,7 +817,7 @@ def plot_model_fits(
     preferred_angles_sorted_indices = np.argsort(preferred_angles)
     preferred_angles = preferred_angles[preferred_angles_sorted_indices]
 
-    actual_response = target[preferred_angles_sorted_indices]
+    actual_response = target[:, preferred_angles_sorted_indices]
 
     # Compute predictions for each model on the full dataset
     predictions = []
@@ -821,17 +841,19 @@ def plot_model_fits(
         )
 
         y_pred = model(plot_data, plot_params)
-        y_pred = np.asarray(y_pred)[preferred_angles_sorted_indices]
+        y_pred = np.asarray(y_pred)[:, preferred_angles_sorted_indices]
         predictions.append(y_pred)
 
-        resid = y_pred - actual_response
+        resid = y_pred - actual_response  # (n_time, n_target_cells)
         squared_loss = resid ** 2
 
-        binned_mse_loss = np.zeros((n_bins, squared_loss.shape[1]))
+        # x-axis is the preferred angle of each cell. For a given time, bin cells by preferred
+        # angle and average their squared residuals within each bin. Output shape (n_bins, n_time).
+        binned_mse_loss = np.zeros((n_bins, squared_loss.shape[0]))  # (n_bins, n_time)
         for i in range(n_bins):
-            mask = bin_indices == i
+            mask = bin_indices == i  # mask over cells (axis 1 of squared_loss)
             if np.any(mask):
-                binned_mse_loss[i] = np.mean(squared_loss[mask], axis=0)
+                binned_mse_loss[i] = np.mean(squared_loss[:, mask], axis=1)
             else:
                 binned_mse_loss[i] = 0.0
 
@@ -868,7 +890,7 @@ def plot_model_fits(
         # Top plot: actual vs two model predictions
         ax1.scatter(
             preferred_angles,
-            actual_response[:, angle_idx],
+            actual_response[angle_idx, :],
             color=actual_colour,
             label="Actual Response",
             alpha=0.4,
@@ -880,7 +902,7 @@ def plot_model_fits(
 
             ax1.plot(
                 preferred_angles,
-                y_pred[:, angle_idx],
+                y_pred[angle_idx, :],
                 color=colours[j],
                 label=label,
                 alpha=0.4,

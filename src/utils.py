@@ -438,24 +438,29 @@ def check_jax_translation(
 def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins=100):
     """Build evaluation grid as a data dict.
 
-    Creates a linspace grid for each specified key. The returned arrays have no
-    sample axis — they represent a single shared evaluation grid.
+    Keys listed in ``eval_keys`` are replaced with a ``n_bins``-point linspace
+    along the last axis. Keys NOT listed in ``eval_keys`` are passed through
+    from sample 0 of ``data`` unchanged, so models that depend on multiple data
+    keys (not just a single free variable) still see consistent inputs. All
+    returned arrays have no sample axis — they represent a single shared
+    evaluation input, which ``compute_evaluation_matrix`` broadcasts across
+    samples.
 
     Args:
-        data (dict[str, np.ndarray]): Data dict with sample axis at dim 0,
-            used to infer default min/max bounds and intermediate dimensions.
-        eval_keys (list[str] | None): Keys to create eval grids for. If None,
-            uses all keys in the data dict.
-        x_min: Scalar (applied to all keys), list (one per eval key), or None
-            (derived from data per key).
+        data (dict[str, np.ndarray]): Data dict with sample axis at dim 0.
+        eval_keys (list[str] | None): Keys to create linspace grids for. If
+            None, defaults to all keys in ``data`` (every input becomes a
+            linspace grid). Pass an empty list to disable linspacing entirely
+            and use the real training data as the evaluation input.
+        x_min: Scalar (applied to all eval keys), list (one per eval key), or
+            None (derived from data per key).
         x_max: Same format as x_min.
-        n_bins (int): Number of evaluation points per key.
+        n_bins (int): Number of evaluation points per eval key.
 
     Returns:
-        dict[str, np.ndarray]: Eval grid dict where each key has shape
-            ``(*mid_dims, n_bins)``, where ``mid_dims`` are the intermediate
-            dimensions of the original key between the sample and trial axes
-            (empty for 2D keys, giving shape ``(n_bins,)``).
+        dict[str, np.ndarray]: Evaluation inputs (no sample axis). Linspaced
+            keys have shape ``(*mid_dims, n_bins)``; pass-through keys have
+            shape ``data[key].shape[1:]``.
     """
     if eval_keys is None:
         eval_keys = list(data.keys())
@@ -468,25 +473,29 @@ def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins
             f"Available keys: {list(data.keys())}."
         )
 
-    # Resolve per-key bounds
-    if x_min is None:
-        x_min_vec = [float(np.min(data[k])) for k in eval_keys]
-    elif np.isscalar(x_min):
-        x_min_vec = [float(x_min)] * n_keys
-    else:
-        x_min_vec = [float(v) for v in x_min]
-    if x_max is None:
-        x_max_vec = [float(np.max(data[k])) for k in eval_keys]
-    elif np.isscalar(x_max):
-        x_max_vec = [float(x_max)] * n_keys
-    else:
-        x_max_vec = [float(v) for v in x_max]
+    # Resolve per-key bounds only when there are linspace keys to bound.
+    # Empty eval_keys => everything passes through from data; no bounds needed.
+    x_min_vec: list[float] = []
+    x_max_vec: list[float] = []
+    if n_keys > 0:
+        if x_min is None:
+            x_min_vec = [float(np.min(data[k])) for k in eval_keys]
+        elif np.isscalar(x_min):
+            x_min_vec = [float(x_min)] * n_keys
+        else:
+            x_min_vec = [float(v) for v in x_min]
+        if x_max is None:
+            x_max_vec = [float(np.max(data[k])) for k in eval_keys]
+        elif np.isscalar(x_max):
+            x_max_vec = [float(x_max)] * n_keys
+        else:
+            x_max_vec = [float(v) for v in x_max]
 
-    if len(x_min_vec) != n_keys or len(x_max_vec) != n_keys:
-        raise ValueError(
-            f"x_min/x_max length ({len(x_min_vec)}/{len(x_max_vec)}) "
-            f"must match eval_keys length ({n_keys})."
-        )
+        if len(x_min_vec) != n_keys or len(x_max_vec) != n_keys:
+            raise ValueError(
+                f"x_min/x_max length ({len(x_min_vec)}/{len(x_max_vec)}) "
+                f"must match eval_keys length ({n_keys})."
+            )
 
     result = {}
     for i, key in enumerate(eval_keys):
@@ -497,6 +506,13 @@ def build_evaluation_points(data, eval_keys=None, x_min=None, x_max=None, n_bins
         out_shape = mid_dims + (n_bins,)
         grid_reshape = (1,) * len(mid_dims) + (n_bins,)
         result[key] = np.broadcast_to(grid.reshape(grid_reshape), out_shape)
+
+    # Pass-through keys not in eval_keys: strip the sample axis so every value
+    # in ``result`` shares the "no sample axis" invariant.
+    for key, value in data.items():
+        if key in result:
+            continue
+        result[key] = np.asarray(value)[0]
     return result
 
 
