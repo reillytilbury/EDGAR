@@ -6,15 +6,27 @@ from scipy.ndimage import gaussian_filter
 
 from src import utils
 
+# Configuration constants from project config
+SPATIAL_BIN_CM = 3.0
+TIME_BIN_MS = 20
+SPEED_THRESHOLD = 2.5
+MIN_SPIKES = 50
+SMOOTHING_SIGMA = 1.5
+WALL_VAL = 0.75
+FILTER_PLACE_CELLS = True
+MIN_SPATIAL_INFO = 0.3
+MIN_PEAK_RATE = 1.0
+MIN_MEAN_RATE = 0.05
+
 
 def load_and_process_data(
     data_path: str,
     time_start: Optional[float] = None,
     time_end: Optional[float] = None,
-    time_bin_ms: int = 20,
+    time_bin_ms: int = TIME_BIN_MS,
     input_names: Optional[List[str]] = None,
-    min_spikes: int = 50,
-    speed_threshold: float = 2.5,
+    min_spikes: int = MIN_SPIKES,
+    speed_threshold: float = SPEED_THRESHOLD,
     max_trials: Optional[int] = 8000,
     zscore_response: bool = True,
 ) -> Dict[str, np.ndarray]:
@@ -23,9 +35,9 @@ def load_and_process_data(
 
     Returns dict with keys 'pos_x', 'pos_y', 'response' — shape (n_cells, n_trials).
     """
-    spatial_bin_cm = 3.0
-    smoothing_sigma = 1.5
-    wall_val = 0.75
+    spatial_bin_cm = SPATIAL_BIN_CM
+    smoothing_sigma = SMOOTHING_SIGMA
+    wall_val = WALL_VAL
 
     if input_names is None:
         input_names = ["x", "y"]
@@ -136,7 +148,7 @@ def load_and_process_data(
     # Place-cell filter
     keep_idx, _ = _place_cell_filter_indices(
         response=firing_rates, rate_maps=rate_maps, x=x, y=y,
-        min_spatial_info=0.3, min_peak_rate=1.0, min_mean_rate=0.05, verbose=True,
+        min_spatial_info=MIN_SPATIAL_INFO, min_peak_rate=MIN_PEAK_RATE, min_mean_rate=MIN_MEAN_RATE, verbose=True,
     )
     if len(keep_idx) > 0:
         firing_rates = firing_rates[keep_idx]

@@ -4,21 +4,35 @@ from typing import Dict, Tuple
 
 from src import utils
 
+# Configuration constants from project config
+TIME_START = 27826
+TIME_END = 31223
+TIME_BIN_MS = 100
+MIN_SPIKES = 200
+SPEED_THRESHOLD = 2.5
+MAX_TRIALS = 20000
+MIN_ACTIVE_FRAC = 0.02
+MIN_MODULATION = 1.0
+MIN_SPATIAL_RELIABILITY = 0.5
+NORMALIZE_PER_SAMPLE = True
+TARGET_L2_NORM = 100.0
+MIN_L2_NORM = 1.0e-06
+
 
 def load_and_process_data(
     data_path: str,
-    time_start: float = 27826,
-    time_end: float = 31223,
-    time_bin_ms: int = 100,
-    min_spikes: int = 200,
-    speed_threshold: float = 2.5,
-    max_trials: int = 5000,
-    min_active_frac: float = 0.02,
-    min_modulation: float = 1.0,
-    min_spatial_reliability: float = 0.2,
-    normalize_per_sample: bool = True,
-    target_l2_norm: float = 1.0,
-    min_l2_norm: float = 1e-6,
+    time_start: float = TIME_START,
+    time_end: float = TIME_END,
+    time_bin_ms: int = TIME_BIN_MS,
+    min_spikes: int = MIN_SPIKES,
+    speed_threshold: float = SPEED_THRESHOLD,
+    max_trials: int = MAX_TRIALS,
+    min_active_frac: float = MIN_ACTIVE_FRAC,
+    min_modulation: float = MIN_MODULATION,
+    min_spatial_reliability: float = MIN_SPATIAL_RELIABILITY,
+    normalize_per_sample: bool = NORMALIZE_PER_SAMPLE,
+    target_l2_norm: float = TARGET_L2_NORM,
+    min_l2_norm: float = MIN_L2_NORM,
 ) -> Dict[str, np.ndarray]:
     """
     Load and preprocess grid-cell data.

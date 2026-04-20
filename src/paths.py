@@ -64,8 +64,9 @@ def create_run_paths() -> RunPaths:
     )
 
 
-def configure_file_logging(full_dir: str) -> None:
+def configure_file_logging(full_dir: str, verbose: bool = False) -> None:
     log_file = os.path.join(full_dir, "hypothesis_engine.log")
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-    logging.basicConfig(filename=log_file, level=logging.INFO, format="%(message)s")
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(filename=log_file, level=level, format="%(message)s")

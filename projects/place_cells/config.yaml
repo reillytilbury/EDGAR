@@ -1,36 +1,4 @@
 task:
-  name: place_cells
   data_path: /home/reilly/Desktop/place_cell_data/hippocampus_place_cells.npz
-model_name: place_model
-data_processing_params:
-  spatial_bin_cm: 3.0
-  time_bin_ms: 20
-  speed_threshold: 2.5
-  min_spikes: 50
-  smoothing_sigma: 1.5
-  wall_val: 0.75
-  positions_normalized: true
-  position_unit: normalized
-  filter_place_cells: true
-  place_filter_kwargs:
-    min_spatial_info: 0.3
-    min_peak_rate: 1.0
-    min_mean_rate: 0.05
-inputs:
-- name: x
-  description: Normalized x position in arena [-1, 1]
-- name: y
-  description: Normalized y position in arena [-1, 1]
 evolution:
   n_iterations: 3
-diagnostics:
-  eval_keys:
-  - pos_x
-  - pos_y
-  x_min:
-  - -1.0
-  - -1.0
-  x_max:
-  - 1.0
-  - 1.0
-  n_bins: 100

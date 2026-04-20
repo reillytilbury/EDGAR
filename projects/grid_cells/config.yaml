@@ -1,41 +1,8 @@
 task:
-  name: grid_cells
   data_path: /Users/reillytilbury/Desktop/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
-model_name: grid_model
-data_processing_params:
-  time_start: 27826
-  time_end: 31223
-  time_bin_ms: 100
-  speed_threshold: 2.5
-  max_trials: 20000
-  min_spikes: 200
-  min_active_frac: 0.02
-  min_modulation: 1.0
-  min_spatial_reliability: 0.5
-  normalize_per_sample: true
-  target_l2_norm: 100.0
-  min_l2_norm: 1.0e-06
-inputs:
-- name: x
-  description: Normalized x position in arena [-1, 1]
-- name: y
-  description: Normalized y position in arena [-1, 1]
 evolution:
   n_iterations: 5
 scoring:
-  trial_batch_size: 5000
-  fit_params: false
   gradient_descent:
     max_iter: 100
     learning_rate: 0.001
-diagnostics:
-  eval_keys:
-  - pos_x
-  - pos_y
-  x_min:
-  - -1.0
-  - -1.0
-  x_max:
-  - 1.0
-  - 1.0
-  n_bins: 100
