@@ -205,8 +205,6 @@ def model_v1(data, params):
             - 'source' : shape (n_time, n_source_cells)
             - 'source_tuning_params' : shape (n_source_cells, n_params)
             - 'target_tuning_params' : shape (n_target_cells, n_params)
-            - 'source_mean_pred' : shape (n_time, n_source_cells)
-            - 'target_mean_pred' : shape (n_time, n_target_cells)
         params (dict) : Parameter dictionary with keys:
             - multiplicative_gain : shape (n_time,)
             - additive_offset : shape (n_time,)
@@ -214,7 +212,49 @@ def model_v1(data, params):
     Returns :
         jnp.ndarray : Predicted responses for the target cells with shape (n_time, n_target_cells)
     """
-    g_target = data['target_mean_pred']  # shape (n_time, n_target)
+    def single_cell_tuning_function(theta,
+                    theta_pref_1=0.0,
+                    baseline=0.0,
+                    amplitude_1=1.0,
+                    width_ccw_1=1.0,
+                    width_cw_1=1.0,
+                    exponent_1=2.0,
+                    theta_pref_2=jnp.pi,
+                    amplitude_2=0.0,
+                    width_ccw_2=1.0,
+                    width_cw_2=1.0,
+                    exponent_2=2.0):
+
+        min_width = 5e-2
+        eps = 1e-12
+        min_exponent, max_exponent = 0.1, 5.0
+        width_ccw_1, width_cw_1 = jnp.clip(width_ccw_1, min_width, None), jnp.clip(width_cw_1, min_width, None)
+        width_ccw_2, width_cw_2 = jnp.clip(width_ccw_2, min_width, None), jnp.clip(width_cw_2, min_width, None)
+        exponent_1, exponent_2 = jnp.clip(exponent_1, min_exponent, max_exponent), jnp.clip(exponent_2, min_exponent, max_exponent)
+        baseline = jnp.clip(baseline, 0.0, None)
+        amplitude_1, amplitude_2 = jnp.clip(amplitude_1, 0.0, None), jnp.clip(amplitude_2, 0.0, None)
+
+        def _signed_circ_diff_rad(angle_radians, preferred_angle_radians):
+            delta = angle_radians - preferred_angle_radians
+            return jnp.arctan2(jnp.sin(delta), jnp.cos(delta))
+            
+        signed_diff_1 = _signed_circ_diff_rad(theta, theta_pref_1) + eps  # Add small epsilon to avoid log(0) issues
+        width_1_effective = jnp.where(signed_diff_1 < 0, width_ccw_1, width_cw_1)
+        width_1_effective = jnp.maximum(width_1_effective, 1e-6)
+        peak1_component = amplitude_1 * jnp.exp(-0.5 * (jnp.abs(signed_diff_1) / width_1_effective) ** exponent_1)
+
+        signed_diff_2 = _signed_circ_diff_rad(theta, theta_pref_2) + eps  # Add small epsilon to avoid log(0) issues
+        width_2_effective = jnp.where(signed_diff_2 < 0, width_ccw_2, width_cw_2)
+        width_2_effective = jnp.maximum(width_2_effective, 1e-6)
+        peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
+        return baseline + peak1_component + peak2_component
+
+    stims = data['stimulus'] # shape (n_time,)
+    target_tuning_params = data['target_tuning_params']  # shape (n_target, n_params)
+    print(f"DEBUG PRINT stims shape : {stims.shape}, target_tuning_params shape: {target_tuning_params.shape}")
+    g_target = np.array([single_cell_tuning_function(stims, *params) for params in target_tuning_params]) # (n_target, n_time)
+    g_target = g_target.T  # shape (n_time, n_target)
+    print(f"DEBUG PRINT g_target shape: {g_target.shape}")
 
     multiplicative_gain = params['multiplicative_gain']  # shape (n_time,)
     additive_offset = params['additive_offset']          # shape (n_time,)
@@ -236,16 +276,55 @@ def param_est_v1(data):
             - 'target' : shape (n_time, n_target_cells)
             - 'source_tuning_params' : shape (n_source_cells, n_params)
             - 'target_tuning_params' : shape (n_target_cells, n_params)
-            - 'source_mean_pred' : shape (n_time, n_source_cells)
-            - 'target_mean_pred' : shape (n_time, n_target_cells)
 
     Returns :
         params (dict) : Estimated parameters. Keys:
             - multiplicative_gain : shape (n_time,)
             - additive_offset : shape (n_time,)
     """
+    def single_cell_tuning_function(theta,
+                    theta_pref_1=0.0,
+                    baseline=0.0,
+                    amplitude_1=1.0,
+                    width_ccw_1=1.0,
+                    width_cw_1=1.0,
+                    exponent_1=2.0,
+                    theta_pref_2=jnp.pi,
+                    amplitude_2=0.0,
+                    width_ccw_2=1.0,
+                    width_cw_2=1.0,
+                    exponent_2=2.0):
+
+        min_width = 5e-2
+        eps = 1e-12
+        min_exponent, max_exponent = 0.1, 5.0
+        width_ccw_1, width_cw_1 = jnp.clip(width_ccw_1, min_width, None), jnp.clip(width_cw_1, min_width, None)
+        width_ccw_2, width_cw_2 = jnp.clip(width_ccw_2, min_width, None), jnp.clip(width_cw_2, min_width, None)
+        exponent_1, exponent_2 = jnp.clip(exponent_1, min_exponent, max_exponent), jnp.clip(exponent_2, min_exponent, max_exponent)
+        baseline = jnp.clip(baseline, 0.0, None)
+        amplitude_1, amplitude_2 = jnp.clip(amplitude_1, 0.0, None), jnp.clip(amplitude_2, 0.0, None)
+
+        def _signed_circ_diff_rad(angle_radians, preferred_angle_radians):
+            delta = angle_radians - preferred_angle_radians
+            return jnp.arctan2(jnp.sin(delta), jnp.cos(delta))
+            
+        signed_diff_1 = _signed_circ_diff_rad(theta, theta_pref_1) + eps  # Add small epsilon to avoid log(0) issues
+        width_1_effective = jnp.where(signed_diff_1 < 0, width_ccw_1, width_cw_1)
+        width_1_effective = jnp.maximum(width_1_effective, 1e-6)
+        peak1_component = amplitude_1 * jnp.exp(-0.5 * (jnp.abs(signed_diff_1) / width_1_effective) ** exponent_1)
+
+        signed_diff_2 = _signed_circ_diff_rad(theta, theta_pref_2) + eps  # Add small epsilon to avoid log(0) issues
+        width_2_effective = jnp.where(signed_diff_2 < 0, width_ccw_2, width_cw_2)
+        width_2_effective = jnp.maximum(width_2_effective, 1e-6)
+        peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
+        return baseline + peak1_component + peak2_component
+
+    stims = jnp.array(data['stimulus']) # shape (n_time,)
+    source_tuning_params = jnp.array(data['source_tuning_params'])  # shape (n_source, n_params)
+    g_source = jax.vmap(lambda params: single_cell_tuning_function(stims, *params), in_axes=(0), )(source_tuning_params) # (n_source, n_time)
+    g_source = g_source.T  # shape (n_time, n_source)
+
     x = jnp.array(data['source'])           # shape (n_time, n_source)
-    g_source = jnp.array(data['source_mean_pred'])  # shape (n_time, n_source)
 
     eps = 1e-8
     # Step 1 : Fit multiplicative gain per timepoint using least squares
@@ -277,8 +356,6 @@ def model_v2(data, params):
             - 'source' : shape (n_time, n_source_cells)
             - 'source_tuning_params' : shape (n_source_cells, n_params)
             - 'target_tuning_params' : shape (n_target_cells, n_params)
-            - 'source_mean_pred' : shape (n_time, n_source_cells)
-            - 'target_mean_pred' : shape (n_time, n_target_cells)
         params (dict) : Parameter dictionary with keys:
             - multiplicative_gain : shape (n_time,)
             - coupling_factor : shape (n_target_cells, n_source_cells)
@@ -286,8 +363,51 @@ def model_v2(data, params):
     Returns :
         jnp.ndarray : Predicted responses for the target cells with shape (n_time, n_target_cells)
     """
+    def single_cell_tuning_function(theta,
+                    theta_pref_1=0.0,
+                    baseline=0.0,
+                    amplitude_1=1.0,
+                    width_ccw_1=1.0,
+                    width_cw_1=1.0,
+                    exponent_1=2.0,
+                    theta_pref_2=jnp.pi,
+                    amplitude_2=0.0,
+                    width_ccw_2=1.0,
+                    width_cw_2=1.0,
+                    exponent_2=2.0):
+
+        min_width = 5e-2
+        eps = 1e-12
+        min_exponent, max_exponent = 0.1, 5.0
+        width_ccw_1, width_cw_1 = jnp.clip(width_ccw_1, min_width, None), jnp.clip(width_cw_1, min_width, None)
+        width_ccw_2, width_cw_2 = jnp.clip(width_ccw_2, min_width, None), jnp.clip(width_cw_2, min_width, None)
+        exponent_1, exponent_2 = jnp.clip(exponent_1, min_exponent, max_exponent), jnp.clip(exponent_2, min_exponent, max_exponent)
+        baseline = jnp.clip(baseline, 0.0, None)
+        amplitude_1, amplitude_2 = jnp.clip(amplitude_1, 0.0, None), jnp.clip(amplitude_2, 0.0, None)
+
+        def _signed_circ_diff_rad(angle_radians, preferred_angle_radians):
+            delta = angle_radians - preferred_angle_radians
+            return jnp.arctan2(jnp.sin(delta), jnp.cos(delta))
+            
+        signed_diff_1 = _signed_circ_diff_rad(theta, theta_pref_1) + eps  # Add small epsilon to avoid log(0) issues
+        width_1_effective = jnp.where(signed_diff_1 < 0, width_ccw_1, width_cw_1)
+        width_1_effective = jnp.maximum(width_1_effective, 1e-6)
+        peak1_component = amplitude_1 * jnp.exp(-0.5 * (jnp.abs(signed_diff_1) / width_1_effective) ** exponent_1)
+
+        signed_diff_2 = _signed_circ_diff_rad(theta, theta_pref_2) + eps  # Add small epsilon to avoid log(0) issues
+        width_2_effective = jnp.where(signed_diff_2 < 0, width_ccw_2, width_cw_2)
+        width_2_effective = jnp.maximum(width_2_effective, 1e-6)
+        peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
+        return baseline + peak1_component + peak2_component
+
+    stims = data['stimulus'] # shape (n_time,)
+    target_tuning_params = data['target_tuning_params']  # shape (n_target, n_params)
+    print(f"DEBUG PRINT stims shape : {stims.shape}, target_tuning_params shape: {target_tuning_params.shape}")
+    g_target = np.array([single_cell_tuning_function(stims, *params) for params in target_tuning_params]) # (n_target, n_time)
+    g_target = g_target.T  # shape (n_time, n_target)
+    print(f"DEBUG PRINT g_target shape: {g_target.shape}")
+
     source_response = jnp.array(data['source'])       # shape (n_time, n_source)
-    g_target = jnp.array(data['target_mean_pred'])     # shape (n_time, n_target)
 
     multiplicative_gain = params['multiplicative_gain']  # shape (n_time,)
     coupling_factor = params['coupling_factor']          # shape (n_target, n_source)
@@ -311,18 +431,60 @@ def param_est_v2(data):
             - 'target' : shape (n_time, n_target_cells)
             - 'source_tuning_params' : shape (n_source_cells, n_params)
             - 'target_tuning_params' : shape (n_target_cells, n_params)
-            - 'source_mean_pred' : shape (n_time, n_source_cells)
-            - 'target_mean_pred' : shape (n_time, n_target_cells)
 
     Returns :
         params (dict) : Estimated parameters. Keys:
             - multiplicative_gain : shape (n_time,)
             - coupling_factor : shape (n_target_cells, n_source_cells)
     """
+    def single_cell_tuning_function(theta,
+                    theta_pref_1=0.0,
+                    baseline=0.0,
+                    amplitude_1=1.0,
+                    width_ccw_1=1.0,
+                    width_cw_1=1.0,
+                    exponent_1=2.0,
+                    theta_pref_2=jnp.pi,
+                    amplitude_2=0.0,
+                    width_ccw_2=1.0,
+                    width_cw_2=1.0,
+                    exponent_2=2.0):
+
+        min_width = 5e-2
+        eps = 1e-12
+        min_exponent, max_exponent = 0.1, 5.0
+        width_ccw_1, width_cw_1 = jnp.clip(width_ccw_1, min_width, None), jnp.clip(width_cw_1, min_width, None)
+        width_ccw_2, width_cw_2 = jnp.clip(width_ccw_2, min_width, None), jnp.clip(width_cw_2, min_width, None)
+        exponent_1, exponent_2 = jnp.clip(exponent_1, min_exponent, max_exponent), jnp.clip(exponent_2, min_exponent, max_exponent)
+        baseline = jnp.clip(baseline, 0.0, None)
+        amplitude_1, amplitude_2 = jnp.clip(amplitude_1, 0.0, None), jnp.clip(amplitude_2, 0.0, None)
+
+        def _signed_circ_diff_rad(angle_radians, preferred_angle_radians):
+            delta = angle_radians - preferred_angle_radians
+            return jnp.arctan2(jnp.sin(delta), jnp.cos(delta))
+            
+        signed_diff_1 = _signed_circ_diff_rad(theta, theta_pref_1) + eps  # Add small epsilon to avoid log(0) issues
+        width_1_effective = jnp.where(signed_diff_1 < 0, width_ccw_1, width_cw_1)
+        width_1_effective = jnp.maximum(width_1_effective, 1e-6)
+        peak1_component = amplitude_1 * jnp.exp(-0.5 * (jnp.abs(signed_diff_1) / width_1_effective) ** exponent_1)
+
+        signed_diff_2 = _signed_circ_diff_rad(theta, theta_pref_2) + eps  # Add small epsilon to avoid log(0) issues
+        width_2_effective = jnp.where(signed_diff_2 < 0, width_ccw_2, width_cw_2)
+        width_2_effective = jnp.maximum(width_2_effective, 1e-6)
+        peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
+        return baseline + peak1_component + peak2_component
+
+    stims = jnp.array(data['stimulus']) # shape (n_time,)
+    source_tuning_params = jnp.array(data['source_tuning_params'])  # shape (n_source, n_params)
+    target_tuning_params = jnp.array(data['target_tuning_params'])  # shape (n_target, n_params)
+    g_source = jax.vmap(lambda params: single_cell_tuning_function(stims, *params), in_axes=(0), )(source_tuning_params) # (n_source, n_time)
+    g_source = g_source.T  # shape (n_time, n_source)
+    g_target = jax.vmap(lambda params: single_cell_tuning_function(stims, *params), in_axes=(0), )(target_tuning_params) # (n_target, n_time)
+    g_target = g_target.T  # shape (n_time, n_target)
+
+    # real response
     x = jnp.array(data['source'])                # shape (n_time, n_source)
     y = jnp.array(data['target'])                # shape (n_time, n_target)
-    g_source = jnp.array(data['source_mean_pred'])  # shape (n_time, n_source)
-    g_target = jnp.array(data['target_mean_pred'])  # shape (n_time, n_target)
 
     # Step 1 : Fit multiplicative gain per timepoint using least squares
     eps = 1e-8
