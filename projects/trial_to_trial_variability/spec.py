@@ -31,406 +31,6 @@ import src.utils as utils
 # 1. DATA
 # ========================
 
-def zscore_rows(X: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    """
-    z-score each row of a 2D array
-    """
-    mean = X.mean(axis=1, keepdims=True)
-    std = X.std(axis=1, keepdims=True)    
-    return (X - mean) / (std + eps)
-
-def load_and_process_data_jacob(
-    data_path: str, 
-    # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
-    random_seed: int = 42,
-    train_to_test_split_ratio: float = 0.5,
-    conc_threshold: float = 0.55,
-) -> Dict[str, np.ndarray]:
-    """
-    Load and preprocess neural data and return data in the form of 
-    
-    Parameters
-    ----------
-    data_path : str
-        Path to the .npy file containing neural data.
-    random_seed : int
-        Random seed for reproducibility of source / target cell split 
-    train_to_test_split_ratio : float
-        Ratio of source cells to target cells (e.g. 0.7 means 70% of cells are in the training pouplation)     
-
-    Returns
-    -------
-    data dict with keys 'stimulus', 'source', and 'target'.
-    'stimulus' is a 1D array of angles (n_trials,)
-    'source' is a 3D array of shape (2, n_source_cells, n_trials) where sample 0 is a training population and sample 1 is the held-out population for testing 
-    'target' is a 3D array of shape (2, n_target_cells, n_trials) where sample 0 is a training population and sample 1 is the held-out population for testing
-    """
-    # data_path = "/home/dabin/data/jacob_gratings_202507/parsed/"
-    # mouse = 'BZ015'
-    # date = '2025-07-03'
-    mouse = 'BZ016'
-    date = '2025-06-24'
-    exp_nums = [2, 3, 5] if mouse == 'BZ015' else [1]
-
-    dataset_name = f'jacob_{mouse}_{date}'
-
-    data_dirs = []
-    metadata_dirs = []
-
-    for n_exp in exp_nums:
-        spks_path = f"{data_path}/{mouse}_{date}_{n_exp}"
-        stims_path = f"{data_path}/{mouse}_{date}_{n_exp}"
-        spks_file = f"{spks_path}/{mouse}_{date}_{n_exp}_dspikes.npy"
-        stims_file = f"{stims_path}/{date}_{n_exp}_{mouse}_Block.mat"
-
-        data_dirs.append(spks_file)
-        metadata_dirs.append(stims_file)
-
-    data_dirs, metadata_dirs = data_dirs, metadata_dirs
-    responses = []
-    for data_dir in data_dirs:
-        response = np.load(data_dir).T
-        responses.append(response)
-    angles = []
-    for metadata_dir in metadata_dirs:
-        mat_data = scipy.io.loadmat(metadata_dir, simplify_cells=True)
-        # in the single block case the first and last angles should be removed
-        if 'BZ016' in metadata_dir:
-            angles.append(np.array([entry['gratingOrient'] for entry in mat_data['block']['paramsValues']])[1:-1])
-        else: 
-            angles.append(np.array([entry['gratingOrient'] for entry in mat_data['block']['paramsValues']]))
-
-    # remove responses where angle = 0
-    for i in range(len(responses)):
-        responses[i] = responses[i][:, angles[i] != 0]
-        angles[i] = angles[i][angles[i] != 0]
-        angles[i] = np.deg2rad(angles[i])
-
-    # # for each repeat, reorder angles and responses
-    # for i in range(len(responses)):
-    #     responses[i] = responses[i][:, np.argsort(angles[i])]
-    #     angles[i] = np.sort(angles[i])
-
-    # now turn responses into an array and replace angles with any of its entries
-    response = np.array(responses) # shape (n_blocks, n_cells, n_trials)
-    n_blocks = response.shape[0] # n_repeats for BZ015 Which had 3 blocks, whereas BZ016 had 1 block but every trial was still repeated 3 times randomly. 
-    angles = angles[0]
-
-    response_flat = np.transpose(response, (1, 2, 0))  # n_cells x n_trials x n_blocks
-    response_flat = response_flat.reshape(response_flat.shape[0], -1)  # n_cells x (n_trials*n_blocks)
-    angles_flat = np.repeat(angles, n_blocks)  # now angles is (n_trials*n_blocks)
-    response, angles = response_flat, angles_flat
-
-    n_trials = response.shape[1]
-
-    if conc_threshold is not None:
-        conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
-        good_cells = np.where(conc > conc_threshold)[0]
-
-        print(f"Filtering for orientation selectivity. Kept {len(good_cells)} out of {response.shape[0]} cells.")
-        response = response[good_cells]
-
-    rng = np.random.default_rng(random_seed)
-
-    # Source/Target split for trial to trial variability 
-    cell_idx = rng.permutation(response.shape[0])
-    n_source_cells = int(train_to_test_split_ratio * response.shape[0])
-    source_cells = cell_idx[:n_source_cells]
-    target_cells = cell_idx[n_source_cells:]
-
-    if source_cells.size == 0 or target_cells.size == 0:
-        raise ValueError("Train to test split ratio results in empty source or target cell population. Please adjust the ratio.")    
-
-    half_source = source_cells.size // 2 
-    half_target = target_cells.size // 2 
-    train_source = source_cells[:half_source]
-    # make sure we handle odd number of cells by putting the extra cell in the training set
-    test_source = source_cells[-half_source:]
-    train_target = target_cells[:half_target]
-    test_target = target_cells[-half_target:]
-
-    # TODO : think about whether z_scoring should happen after the cell and trial split or before? Currently it's after 
-    X_train = response[train_source]
-    X_test = response[test_source]
-    Y_train = response[train_target]
-    Y_test = response[test_target]
-
-    # rather than zscore, just divide by the std 
-    eps = 1e-12
-    X_train = X_train / (X_train.std(axis=1, keepdims=True) + eps)
-    X_test = X_test / (X_test.std(axis=1, keepdims=True) + eps)
-    Y_train = Y_train / (Y_train.std(axis=1, keepdims=True) + eps)
-    Y_test = Y_test / (Y_test.std(axis=1, keepdims=True) + eps)
-
-    source = np.stack([X_train, X_test], axis=0)  # (2, n_source, T)
-    target = np.stack([Y_train, Y_test], axis=0)  # (2, n_target, T)
-    return {"stimulus" : angles, "source": source, "target": target}
-
-def single_cell_tuning_function(theta,
-                theta_pref_1=0.0,
-                baseline=0.0,
-                amplitude_1=1.0,
-                width_ccw_1=1.0,
-                width_cw_1=1.0,
-                exponent_1=2.0,
-                theta_pref_2=jnp.pi,
-                amplitude_2=0.0,
-                width_ccw_2=1.0,
-                width_cw_2=1.0,
-                exponent_2=2.0):
-
-    min_width = 5e-2
-    eps = 1e-12
-    min_exponent, max_exponent = 0.1, 5.0
-    width_ccw_1, width_cw_1 = jnp.clip(width_ccw_1, min_width, None), jnp.clip(width_cw_1, min_width, None)
-    width_ccw_2, width_cw_2 = jnp.clip(width_ccw_2, min_width, None), jnp.clip(width_cw_2, min_width, None)
-    exponent_1, exponent_2 = jnp.clip(exponent_1, min_exponent, max_exponent), jnp.clip(exponent_2, min_exponent, max_exponent)
-    baseline = jnp.clip(baseline, 0.0, None)
-    amplitude_1, amplitude_2 = jnp.clip(amplitude_1, 0.0, None), jnp.clip(amplitude_2, 0.0, None)
-
-    def _signed_circ_diff_rad(angle_radians, preferred_angle_radians):
-        delta = angle_radians - preferred_angle_radians
-        return jnp.arctan2(jnp.sin(delta), jnp.cos(delta))
-        
-    signed_diff_1 = _signed_circ_diff_rad(theta, theta_pref_1) + eps  # Add small epsilon to avoid log(0) issues
-    width_1_effective = jnp.where(signed_diff_1 < 0, width_ccw_1, width_cw_1)
-    width_1_effective = jnp.maximum(width_1_effective, 1e-6)
-    peak1_component = amplitude_1 * jnp.exp(-0.5 * (jnp.abs(signed_diff_1) / width_1_effective) ** exponent_1)
-
-    signed_diff_2 = _signed_circ_diff_rad(theta, theta_pref_2) + eps  # Add small epsilon to avoid log(0) issues
-    width_2_effective = jnp.where(signed_diff_2 < 0, width_ccw_2, width_cw_2)
-    width_2_effective = jnp.maximum(width_2_effective, 1e-6)
-    peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
-    return baseline + peak1_component + peak2_component
-
-
-def fit_tuning_parameters_jax(stims, spike_counts):
-    """ Fit tuning parameters for a single cell using JAX. This is a helper function for load_and_process_data 
-    and we will store the tuning parameters as part of the params dict that gets passed to the model."""
-
-    def tuning_parameter_estimator_jax(stimuli, spike_counts):
-        """JAX-compatible equivalent of parameter_estimator for jnp.array inputs."""
-        n_bins = 256
-        kernel_sigma = 2.5
-        min_peak_amplitude = 0.5
-        min_model_width = 1e-6
-        default_width_value = 1.0
-        min_exponent = 0.1
-        max_exponent = 5.0
-        default_exponent_value = 2.0
-        min_second_peak_ratio = 0.1
-        min_second_peak_separation = jnp.pi / 4
-
-        stimuli = jnp.asarray(stimuli)
-        spike_counts = jnp.asarray(spike_counts)
-
-        bin_idx = ((stimuli * n_bins) / (2 * jnp.pi)).astype(jnp.int32)
-        bin_idx = jnp.clip(bin_idx, 0, n_bins - 1)
-
-        sums = jnp.zeros(n_bins, dtype=spike_counts.dtype).at[bin_idx].add(spike_counts)
-        counts = jnp.zeros(n_bins, dtype=spike_counts.dtype).at[bin_idx].add(1.0)
-
-        kernel_radius = int(3 * kernel_sigma)
-        x_kernel = jnp.arange(-kernel_radius, kernel_radius + 1)
-        kernel = jnp.exp(-0.5 * (x_kernel / kernel_sigma) ** 2)
-        kernel = kernel / (jnp.sum(kernel) + 1e-8)
-
-        pad = kernel.shape[0] // 2
-        sums_padded = jnp.concatenate([sums[-pad:], sums, sums[:pad]])
-        counts_padded = jnp.concatenate([counts[-pad:], counts, counts[:pad]])
-
-        num_conv = jnp.convolve(sums_padded, kernel, mode='valid')
-        den_conv = jnp.convolve(counts_padded, kernel, mode='valid')
-        tuning_curve = jnp.where(den_conv > 1e-8, num_conv / jnp.maximum(den_conv, 1e-8), 0.0)
-
-        angle_step = 2 * jnp.pi / n_bins
-        baseline_est = jnp.maximum(0.0, jnp.min(tuning_curve))
-
-        def _get_peak_params_simple_jax(peak_idx_val, peak_idx, bsl, tc, n_bns, ang_step,
-                                        min_w, def_w, min_exp, max_exp, def_exp, min_amp_thresh):
-            amp = peak_idx_val - bsl
-            search_offsets = jnp.arange(1, n_bns // 2 + 1)
-            sentinel = n_bns + 1
-
-            target_half_val = bsl + amp / 2.0
-            ccw_half_vals = tc[(peak_idx - search_offsets + n_bns) % n_bns]
-            cw_half_vals = tc[(peak_idx + search_offsets) % n_bns]
-            half_ccw_bins = jnp.min(jnp.where(ccw_half_vals <= target_half_val, search_offsets, sentinel))
-            half_cw_bins = jnp.min(jnp.where(cw_half_vals <= target_half_val, search_offsets, sentinel))
-            half_ccw_bins = jnp.where(half_ccw_bins == sentinel, 0, half_ccw_bins)
-            half_cw_bins = jnp.where(half_cw_bins == sentinel, 0, half_cw_bins)
-
-            sqrt_2_log_2 = jnp.sqrt(2.0 * jnp.log(2.0))
-            width_ccw = jnp.where(half_ccw_bins > 0,
-                                (half_ccw_bins.astype(tc.dtype) * ang_step) / sqrt_2_log_2,
-                                def_w)
-            width_cw = jnp.where(half_cw_bins > 0,
-                                (half_cw_bins.astype(tc.dtype) * ang_step) / sqrt_2_log_2,
-                                def_w)
-            width_ccw = jnp.clip(width_ccw, min_w, jnp.pi)
-            width_cw = jnp.clip(width_cw, min_w, jnp.pi)
-
-            target_qtr_val = bsl + amp / 4.0
-            ccw_qtr_vals = tc[(peak_idx - search_offsets + n_bns) % n_bns]
-            cw_qtr_vals = tc[(peak_idx + search_offsets) % n_bns]
-            qtr_ccw_bins = jnp.min(jnp.where(ccw_qtr_vals <= target_qtr_val, search_offsets, sentinel))
-            qtr_cw_bins = jnp.min(jnp.where(cw_qtr_vals <= target_qtr_val, search_offsets, sentinel))
-            qtr_ccw_bins = jnp.where(qtr_ccw_bins == sentinel, 0, qtr_ccw_bins)
-            qtr_cw_bins = jnp.where(qtr_cw_bins == sentinel, 0, qtr_cw_bins)
-
-            valid_ccw = (half_ccw_bins > 0) & (qtr_ccw_bins > half_ccw_bins)
-            valid_cw = (half_cw_bins > 0) & (qtr_cw_bins > half_cw_bins)
-            ratio_ccw = jnp.where(valid_ccw,
-                                qtr_ccw_bins.astype(tc.dtype) / half_ccw_bins.astype(tc.dtype),
-                                2.0)
-            ratio_cw = jnp.where(valid_cw,
-                                qtr_cw_bins.astype(tc.dtype) / half_cw_bins.astype(tc.dtype),
-                                2.0)
-            exponent_ccw = jnp.log(2.0) / jnp.log(ratio_ccw)
-            exponent_cw = jnp.log(2.0) / jnp.log(ratio_cw)
-            exponent_sum = jnp.where(valid_ccw, exponent_ccw, 0.0) + jnp.where(valid_cw, exponent_cw, 0.0)
-            exponent_count = valid_ccw.astype(tc.dtype) + valid_cw.astype(tc.dtype)
-            exponent = jnp.where(exponent_count > 0, exponent_sum / exponent_count, def_exp)
-            exponent = jnp.clip(exponent, min_exp, max_exp)
-
-            use_default_shape = amp < min_amp_thresh
-            width_ccw = jnp.where(use_default_shape, def_w, width_ccw)
-            width_cw = jnp.where(use_default_shape, def_w, width_cw)
-            exponent = jnp.where(use_default_shape, def_exp, exponent)
-            return amp, width_ccw, width_cw, exponent
-
-        prev_vals = jnp.roll(tuning_curve, 1)
-        next_vals = jnp.roll(tuning_curve, -1)
-        is_local_max = (tuning_curve >= prev_vals) & (tuning_curve >= next_vals)
-        local_maxima_vals = jnp.where(is_local_max, tuning_curve, -jnp.inf)
-        sorted_indices = jnp.argsort(local_maxima_vals)[::-1]
-        sorted_values = local_maxima_vals[sorted_indices]
-        has_primary = jnp.any(is_local_max)
-
-        default_theta_pref_1 = jnp.asarray(0.0, dtype=tuning_curve.dtype)
-        default_amplitude_1 = jnp.asarray(default_width_value, dtype=tuning_curve.dtype)
-        default_theta_pref_2 = jnp.asarray(jnp.pi, dtype=tuning_curve.dtype)
-        default_amplitude_2 = jnp.asarray(0.0, dtype=tuning_curve.dtype)
-        default_width = jnp.asarray(default_width_value, dtype=tuning_curve.dtype)
-        default_exponent = jnp.asarray(default_exponent_value, dtype=tuning_curve.dtype)
-
-        peak_1_idx = sorted_indices[0]
-        peak_1_val = sorted_values[0]
-        amplitude_1_calc, width_ccw_1_calc, width_cw_1_calc, exponent_1_calc = _get_peak_params_simple_jax(
-            peak_1_val, peak_1_idx, baseline_est, tuning_curve, n_bins, angle_step,
-            min_model_width, default_width_value, min_exponent, max_exponent,
-            default_exponent_value, min_peak_amplitude,
-        )
-        theta_pref_1_calc = peak_1_idx.astype(tuning_curve.dtype) * angle_step
-
-        theta_pref_1 = jnp.where(has_primary, theta_pref_1_calc, default_theta_pref_1)
-        amplitude_1 = jnp.where(has_primary, amplitude_1_calc, default_amplitude_1)
-        width_ccw_1 = jnp.where(has_primary, width_ccw_1_calc, default_width)
-        width_cw_1 = jnp.where(has_primary, width_cw_1_calc, default_width)
-        exponent_1 = jnp.where(has_primary, exponent_1_calc, default_exponent)
-
-        secondary_indices = sorted_indices[1:]
-        secondary_values = sorted_values[1:]
-        secondary_amplitudes = secondary_values - baseline_est
-        secondary_thetas = secondary_indices.astype(tuning_curve.dtype) * angle_step
-        secondary_separation = jnp.abs(jnp.arctan2(jnp.sin(theta_pref_1 - secondary_thetas),
-                                                jnp.cos(theta_pref_1 - secondary_thetas)))
-        valid_secondary = (
-            jnp.isfinite(secondary_values)
-            & (secondary_amplitudes >= (amplitude_1 * min_second_peak_ratio))
-            & (secondary_separation >= min_second_peak_separation)
-        )
-        has_secondary = has_primary & jnp.any(valid_secondary)
-        first_secondary_pos = jnp.argmax(valid_secondary.astype(jnp.int32))
-        peak_2_idx = secondary_indices[first_secondary_pos]
-        peak_2_val = secondary_values[first_secondary_pos]
-
-        amplitude_2_calc, width_ccw_2_calc, width_cw_2_calc, exponent_2_calc = _get_peak_params_simple_jax(
-            peak_2_val, peak_2_idx, baseline_est, tuning_curve, n_bins, angle_step,
-            min_model_width, default_width_value, min_exponent, max_exponent,
-            default_exponent_value, min_peak_amplitude,
-        )
-        theta_pref_2_calc = peak_2_idx.astype(tuning_curve.dtype) * angle_step
-
-        theta_pref_2 = jnp.where(has_secondary, theta_pref_2_calc, default_theta_pref_2)
-        amplitude_2 = jnp.where(has_secondary, amplitude_2_calc, default_amplitude_2)
-        width_ccw_2 = jnp.where(has_secondary, width_ccw_2_calc, default_width)
-        width_cw_2 = jnp.where(has_secondary, width_cw_2_calc, default_width)
-        exponent_2 = jnp.where(has_secondary, exponent_2_calc, default_exponent)
-
-        return jnp.array([theta_pref_1, baseline_est, amplitude_1, width_ccw_1, width_cw_1,
-                        exponent_1, theta_pref_2, amplitude_2, width_ccw_2, width_cw_2, exponent_2])
-
-    def loss_fn(Y_pred, Y_true):
-        """
-        Elementwise squared-error loss.
-        """
-        return (Y_true - Y_pred) ** 2
-
-    # Per-sample loss function
-    def loss_single_sample(params, x_i, y_i):
-        y_pred = single_cell_tuning_function(x_i, *params)
-        if y_i.ndim == 1:
-            y_i = y_i[None, :]
-        if y_pred.ndim == 1:
-            y_pred = y_pred[None, :]
-        sample_loss = jnp.asarray(loss_fn(y_pred, y_i))
-        if sample_loss.ndim == 0:
-            return sample_loss
-        return jnp.mean(sample_loss)
-
-    # TODO : remember to revert this max_iter to 2000
-    def _optimize_params(params, x, y, learning_rate=1e-3, max_iter=100):
-        learning_rate_local = float(learning_rate)
-        opt = optax.adam(learning_rate_local, b1=0.9, b2=0.999, eps=1e-8)
-        # flat_params, unflatten = ravel_pytree(params)
-        opt_state = opt.init(params)
-
-        # Vectorize over samples
-        # params: pytree (batched), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
-        # Output: (n_samples,)
-        loss_total = jax.vmap(loss_single_sample, in_axes=(0, 0, 0), out_axes=0)
-
-        # if x.size != y.size & x.shape[0] == y.shape[1]:
-        #     # tile x to match y's shape - y has shpae (n_features, n_trials) whereas x has shape (n_trials,) so we need to tile x by n_features times
-        x = jnp.tile(x, (y.shape[0], 1))
-        loss_param = lambda params: jnp.mean(loss_total(params, x, y))
-        loss_param_and_grad = jax.value_and_grad(loss_param)
-
-        @jax.jit
-        def train_step(params, opt_state):
-            loss, grad = loss_param_and_grad(params)
-            updates, opt_state = opt.update(grad, opt_state, params)
-            params = optax.apply_updates(params, updates)
-            return params, opt_state, loss
-
-        print_every = 200
-        initial_loss = loss_param(params)
-
-        best_loss, best_params = initial_loss.copy(), params.copy()
-        for step in range(1, max_iter + 1):
-            # _check_timeout()
-            params, opt_state, loss_val = train_step(params, opt_state)
-            # _check_timeout()
-            if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
-                logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
-                print(f"Final loss: {loss_val:.4f} at step {step}")
-                break
-            if loss_val < best_loss:
-                best_loss = loss_val.copy()
-                best_params = params.copy()
-            if step % print_every == 0:
-                print(f"step {step:4d}  loss {loss_val:.4f}")
-        # params = unflatten(best_params)
-        print(f"params optimized. Loss: {best_loss:.4f}")
-        return best_params
-
-    # Step 1 : For every source cell, fit a peaky tuning curve 
-    params_init = jax.vmap(tuning_parameter_estimator_jax, in_axes=(None, 0))(stims, spike_counts) # shape (n_source, n_params)
-    params = _optimize_params(params_init, stims, spike_counts)
-
-    return params
-
 def load_and_process_data(data_path : str, *args, **kwargs) -> list:
     X = np.load(data_path, allow_pickle=True)
     return X.tolist()
@@ -962,3 +562,396 @@ def plot_model_fits(
 # ========================
 # 4. OPTIONAL PROJECT-SPECIFIC HELPERS
 # ========================
+
+def single_cell_tuning_function(theta,
+                theta_pref_1=0.0,
+                baseline=0.0,
+                amplitude_1=1.0,
+                width_ccw_1=1.0,
+                width_cw_1=1.0,
+                exponent_1=2.0,
+                theta_pref_2=jnp.pi,
+                amplitude_2=0.0,
+                width_ccw_2=1.0,
+                width_cw_2=1.0,
+                exponent_2=2.0):
+
+    min_width = 5e-2
+    eps = 1e-12
+    min_exponent, max_exponent = 0.1, 5.0
+    width_ccw_1, width_cw_1 = jnp.clip(width_ccw_1, min_width, None), jnp.clip(width_cw_1, min_width, None)
+    width_ccw_2, width_cw_2 = jnp.clip(width_ccw_2, min_width, None), jnp.clip(width_cw_2, min_width, None)
+    exponent_1, exponent_2 = jnp.clip(exponent_1, min_exponent, max_exponent), jnp.clip(exponent_2, min_exponent, max_exponent)
+    baseline = jnp.clip(baseline, 0.0, None)
+    amplitude_1, amplitude_2 = jnp.clip(amplitude_1, 0.0, None), jnp.clip(amplitude_2, 0.0, None)
+
+    def _signed_circ_diff_rad(angle_radians, preferred_angle_radians):
+        delta = angle_radians - preferred_angle_radians
+        return jnp.arctan2(jnp.sin(delta), jnp.cos(delta))
+        
+    signed_diff_1 = _signed_circ_diff_rad(theta, theta_pref_1) + eps  # Add small epsilon to avoid log(0) issues
+    width_1_effective = jnp.where(signed_diff_1 < 0, width_ccw_1, width_cw_1)
+    width_1_effective = jnp.maximum(width_1_effective, 1e-6)
+    peak1_component = amplitude_1 * jnp.exp(-0.5 * (jnp.abs(signed_diff_1) / width_1_effective) ** exponent_1)
+
+    signed_diff_2 = _signed_circ_diff_rad(theta, theta_pref_2) + eps  # Add small epsilon to avoid log(0) issues
+    width_2_effective = jnp.where(signed_diff_2 < 0, width_ccw_2, width_cw_2)
+    width_2_effective = jnp.maximum(width_2_effective, 1e-6)
+    peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
+    return baseline + peak1_component + peak2_component
+
+
+def fit_tuning_parameters_jax(stims, spike_counts):
+    """ Fit tuning parameters for a single cell using JAX. This is a helper function for load_and_process_data 
+    and we will store the tuning parameters as part of the params dict that gets passed to the model."""
+
+    def tuning_parameter_estimator_jax(stimuli, spike_counts):
+        """JAX-compatible equivalent of parameter_estimator for jnp.array inputs."""
+        n_bins = 256
+        kernel_sigma = 2.5
+        min_peak_amplitude = 0.5
+        min_model_width = 1e-6
+        default_width_value = 1.0
+        min_exponent = 0.1
+        max_exponent = 5.0
+        default_exponent_value = 2.0
+        min_second_peak_ratio = 0.1
+        min_second_peak_separation = jnp.pi / 4
+
+        stimuli = jnp.asarray(stimuli)
+        spike_counts = jnp.asarray(spike_counts)
+
+        bin_idx = ((stimuli * n_bins) / (2 * jnp.pi)).astype(jnp.int32)
+        bin_idx = jnp.clip(bin_idx, 0, n_bins - 1)
+
+        sums = jnp.zeros(n_bins, dtype=spike_counts.dtype).at[bin_idx].add(spike_counts)
+        counts = jnp.zeros(n_bins, dtype=spike_counts.dtype).at[bin_idx].add(1.0)
+
+        kernel_radius = int(3 * kernel_sigma)
+        x_kernel = jnp.arange(-kernel_radius, kernel_radius + 1)
+        kernel = jnp.exp(-0.5 * (x_kernel / kernel_sigma) ** 2)
+        kernel = kernel / (jnp.sum(kernel) + 1e-8)
+
+        pad = kernel.shape[0] // 2
+        sums_padded = jnp.concatenate([sums[-pad:], sums, sums[:pad]])
+        counts_padded = jnp.concatenate([counts[-pad:], counts, counts[:pad]])
+
+        num_conv = jnp.convolve(sums_padded, kernel, mode='valid')
+        den_conv = jnp.convolve(counts_padded, kernel, mode='valid')
+        tuning_curve = jnp.where(den_conv > 1e-8, num_conv / jnp.maximum(den_conv, 1e-8), 0.0)
+
+        angle_step = 2 * jnp.pi / n_bins
+        baseline_est = jnp.maximum(0.0, jnp.min(tuning_curve))
+
+        def _get_peak_params_simple_jax(peak_idx_val, peak_idx, bsl, tc, n_bns, ang_step,
+                                        min_w, def_w, min_exp, max_exp, def_exp, min_amp_thresh):
+            amp = peak_idx_val - bsl
+            search_offsets = jnp.arange(1, n_bns // 2 + 1)
+            sentinel = n_bns + 1
+
+            target_half_val = bsl + amp / 2.0
+            ccw_half_vals = tc[(peak_idx - search_offsets + n_bns) % n_bns]
+            cw_half_vals = tc[(peak_idx + search_offsets) % n_bns]
+            half_ccw_bins = jnp.min(jnp.where(ccw_half_vals <= target_half_val, search_offsets, sentinel))
+            half_cw_bins = jnp.min(jnp.where(cw_half_vals <= target_half_val, search_offsets, sentinel))
+            half_ccw_bins = jnp.where(half_ccw_bins == sentinel, 0, half_ccw_bins)
+            half_cw_bins = jnp.where(half_cw_bins == sentinel, 0, half_cw_bins)
+
+            sqrt_2_log_2 = jnp.sqrt(2.0 * jnp.log(2.0))
+            width_ccw = jnp.where(half_ccw_bins > 0,
+                                (half_ccw_bins.astype(tc.dtype) * ang_step) / sqrt_2_log_2,
+                                def_w)
+            width_cw = jnp.where(half_cw_bins > 0,
+                                (half_cw_bins.astype(tc.dtype) * ang_step) / sqrt_2_log_2,
+                                def_w)
+            width_ccw = jnp.clip(width_ccw, min_w, jnp.pi)
+            width_cw = jnp.clip(width_cw, min_w, jnp.pi)
+
+            target_qtr_val = bsl + amp / 4.0
+            ccw_qtr_vals = tc[(peak_idx - search_offsets + n_bns) % n_bns]
+            cw_qtr_vals = tc[(peak_idx + search_offsets) % n_bns]
+            qtr_ccw_bins = jnp.min(jnp.where(ccw_qtr_vals <= target_qtr_val, search_offsets, sentinel))
+            qtr_cw_bins = jnp.min(jnp.where(cw_qtr_vals <= target_qtr_val, search_offsets, sentinel))
+            qtr_ccw_bins = jnp.where(qtr_ccw_bins == sentinel, 0, qtr_ccw_bins)
+            qtr_cw_bins = jnp.where(qtr_cw_bins == sentinel, 0, qtr_cw_bins)
+
+            valid_ccw = (half_ccw_bins > 0) & (qtr_ccw_bins > half_ccw_bins)
+            valid_cw = (half_cw_bins > 0) & (qtr_cw_bins > half_cw_bins)
+            ratio_ccw = jnp.where(valid_ccw,
+                                qtr_ccw_bins.astype(tc.dtype) / half_ccw_bins.astype(tc.dtype),
+                                2.0)
+            ratio_cw = jnp.where(valid_cw,
+                                qtr_cw_bins.astype(tc.dtype) / half_cw_bins.astype(tc.dtype),
+                                2.0)
+            exponent_ccw = jnp.log(2.0) / jnp.log(ratio_ccw)
+            exponent_cw = jnp.log(2.0) / jnp.log(ratio_cw)
+            exponent_sum = jnp.where(valid_ccw, exponent_ccw, 0.0) + jnp.where(valid_cw, exponent_cw, 0.0)
+            exponent_count = valid_ccw.astype(tc.dtype) + valid_cw.astype(tc.dtype)
+            exponent = jnp.where(exponent_count > 0, exponent_sum / exponent_count, def_exp)
+            exponent = jnp.clip(exponent, min_exp, max_exp)
+
+            use_default_shape = amp < min_amp_thresh
+            width_ccw = jnp.where(use_default_shape, def_w, width_ccw)
+            width_cw = jnp.where(use_default_shape, def_w, width_cw)
+            exponent = jnp.where(use_default_shape, def_exp, exponent)
+            return amp, width_ccw, width_cw, exponent
+
+        prev_vals = jnp.roll(tuning_curve, 1)
+        next_vals = jnp.roll(tuning_curve, -1)
+        is_local_max = (tuning_curve >= prev_vals) & (tuning_curve >= next_vals)
+        local_maxima_vals = jnp.where(is_local_max, tuning_curve, -jnp.inf)
+        sorted_indices = jnp.argsort(local_maxima_vals)[::-1]
+        sorted_values = local_maxima_vals[sorted_indices]
+        has_primary = jnp.any(is_local_max)
+
+        default_theta_pref_1 = jnp.asarray(0.0, dtype=tuning_curve.dtype)
+        default_amplitude_1 = jnp.asarray(default_width_value, dtype=tuning_curve.dtype)
+        default_theta_pref_2 = jnp.asarray(jnp.pi, dtype=tuning_curve.dtype)
+        default_amplitude_2 = jnp.asarray(0.0, dtype=tuning_curve.dtype)
+        default_width = jnp.asarray(default_width_value, dtype=tuning_curve.dtype)
+        default_exponent = jnp.asarray(default_exponent_value, dtype=tuning_curve.dtype)
+
+        peak_1_idx = sorted_indices[0]
+        peak_1_val = sorted_values[0]
+        amplitude_1_calc, width_ccw_1_calc, width_cw_1_calc, exponent_1_calc = _get_peak_params_simple_jax(
+            peak_1_val, peak_1_idx, baseline_est, tuning_curve, n_bins, angle_step,
+            min_model_width, default_width_value, min_exponent, max_exponent,
+            default_exponent_value, min_peak_amplitude,
+        )
+        theta_pref_1_calc = peak_1_idx.astype(tuning_curve.dtype) * angle_step
+
+        theta_pref_1 = jnp.where(has_primary, theta_pref_1_calc, default_theta_pref_1)
+        amplitude_1 = jnp.where(has_primary, amplitude_1_calc, default_amplitude_1)
+        width_ccw_1 = jnp.where(has_primary, width_ccw_1_calc, default_width)
+        width_cw_1 = jnp.where(has_primary, width_cw_1_calc, default_width)
+        exponent_1 = jnp.where(has_primary, exponent_1_calc, default_exponent)
+
+        secondary_indices = sorted_indices[1:]
+        secondary_values = sorted_values[1:]
+        secondary_amplitudes = secondary_values - baseline_est
+        secondary_thetas = secondary_indices.astype(tuning_curve.dtype) * angle_step
+        secondary_separation = jnp.abs(jnp.arctan2(jnp.sin(theta_pref_1 - secondary_thetas),
+                                                jnp.cos(theta_pref_1 - secondary_thetas)))
+        valid_secondary = (
+            jnp.isfinite(secondary_values)
+            & (secondary_amplitudes >= (amplitude_1 * min_second_peak_ratio))
+            & (secondary_separation >= min_second_peak_separation)
+        )
+        has_secondary = has_primary & jnp.any(valid_secondary)
+        first_secondary_pos = jnp.argmax(valid_secondary.astype(jnp.int32))
+        peak_2_idx = secondary_indices[first_secondary_pos]
+        peak_2_val = secondary_values[first_secondary_pos]
+
+        amplitude_2_calc, width_ccw_2_calc, width_cw_2_calc, exponent_2_calc = _get_peak_params_simple_jax(
+            peak_2_val, peak_2_idx, baseline_est, tuning_curve, n_bins, angle_step,
+            min_model_width, default_width_value, min_exponent, max_exponent,
+            default_exponent_value, min_peak_amplitude,
+        )
+        theta_pref_2_calc = peak_2_idx.astype(tuning_curve.dtype) * angle_step
+
+        theta_pref_2 = jnp.where(has_secondary, theta_pref_2_calc, default_theta_pref_2)
+        amplitude_2 = jnp.where(has_secondary, amplitude_2_calc, default_amplitude_2)
+        width_ccw_2 = jnp.where(has_secondary, width_ccw_2_calc, default_width)
+        width_cw_2 = jnp.where(has_secondary, width_cw_2_calc, default_width)
+        exponent_2 = jnp.where(has_secondary, exponent_2_calc, default_exponent)
+
+        return jnp.array([theta_pref_1, baseline_est, amplitude_1, width_ccw_1, width_cw_1,
+                        exponent_1, theta_pref_2, amplitude_2, width_ccw_2, width_cw_2, exponent_2])
+
+    def loss_fn(Y_pred, Y_true):
+        """
+        Elementwise squared-error loss.
+        """
+        return (Y_true - Y_pred) ** 2
+
+    # Per-sample loss function
+    def loss_single_sample(params, x_i, y_i):
+        y_pred = single_cell_tuning_function(x_i, *params)
+        if y_i.ndim == 1:
+            y_i = y_i[None, :]
+        if y_pred.ndim == 1:
+            y_pred = y_pred[None, :]
+        sample_loss = jnp.asarray(loss_fn(y_pred, y_i))
+        if sample_loss.ndim == 0:
+            return sample_loss
+        return jnp.mean(sample_loss)
+
+    # TODO : remember to revert this max_iter to 2000
+    def _optimize_params(params, x, y, learning_rate=1e-3, max_iter=100):
+        learning_rate_local = float(learning_rate)
+        opt = optax.adam(learning_rate_local, b1=0.9, b2=0.999, eps=1e-8)
+        # flat_params, unflatten = ravel_pytree(params)
+        opt_state = opt.init(params)
+
+        # Vectorize over samples
+        # params: pytree (batched), x: (n_samples, n_features, n_trials_x), y: (n_samples, n_targets, n_trials_y)
+        # Output: (n_samples,)
+        loss_total = jax.vmap(loss_single_sample, in_axes=(0, 0, 0), out_axes=0)
+
+        # if x.size != y.size & x.shape[0] == y.shape[1]:
+        #     # tile x to match y's shape - y has shpae (n_features, n_trials) whereas x has shape (n_trials,) so we need to tile x by n_features times
+        x = jnp.tile(x, (y.shape[0], 1))
+        loss_param = lambda params: jnp.mean(loss_total(params, x, y))
+        loss_param_and_grad = jax.value_and_grad(loss_param)
+
+        @jax.jit
+        def train_step(params, opt_state):
+            loss, grad = loss_param_and_grad(params)
+            updates, opt_state = opt.update(grad, opt_state, params)
+            params = optax.apply_updates(params, updates)
+            return params, opt_state, loss
+
+        print_every = 200
+        initial_loss = loss_param(params)
+
+        best_loss, best_params = initial_loss.copy(), params.copy()
+        for step in range(1, max_iter + 1):
+            # _check_timeout()
+            params, opt_state, loss_val = train_step(params, opt_state)
+            # _check_timeout()
+            if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
+                logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
+                print(f"Final loss: {loss_val:.4f} at step {step}")
+                break
+            if loss_val < best_loss:
+                best_loss = loss_val.copy()
+                best_params = params.copy()
+            if step % print_every == 0:
+                print(f"step {step:4d}  loss {loss_val:.4f}")
+        # params = unflatten(best_params)
+        print(f"params optimized. Loss: {best_loss:.4f}")
+        return best_params
+
+    # Step 1 : For every source cell, fit a peaky tuning curve 
+    params_init = jax.vmap(tuning_parameter_estimator_jax, in_axes=(None, 0))(stims, spike_counts) # shape (n_source, n_params)
+    params = _optimize_params(params_init, stims, spike_counts)
+
+    return params
+
+
+def load_and_process_data_jacob(
+    data_path: str, 
+    # ---- ALL SUBSEQUENT PARAMS MUST BE SPECIFIED IN THE CONFIG FILE ----
+    random_seed: int = 42,
+    train_to_test_split_ratio: float = 0.5,
+    conc_threshold: float = 0.55,
+) -> Dict[str, np.ndarray]:
+    """
+    Load and preprocess neural data and return data in the form of 
+    
+    Parameters
+    ----------
+    data_path : str
+        Path to the .npy file containing neural data.
+    random_seed : int
+        Random seed for reproducibility of source / target cell split 
+    train_to_test_split_ratio : float
+        Ratio of source cells to target cells (e.g. 0.7 means 70% of cells are in the training pouplation)     
+
+    Returns
+    -------
+    data dict with keys 'stimulus', 'source', and 'target'.
+    'stimulus' is a 1D array of angles (n_trials,)
+    'source' is a 3D array of shape (2, n_source_cells, n_trials) where sample 0 is a training population and sample 1 is the held-out population for testing 
+    'target' is a 3D array of shape (2, n_target_cells, n_trials) where sample 0 is a training population and sample 1 is the held-out population for testing
+    """
+    # data_path = "/home/dabin/data/jacob_gratings_202507/parsed/"
+    # mouse = 'BZ015'
+    # date = '2025-07-03'
+    mouse = 'BZ016'
+    date = '2025-06-24'
+    exp_nums = [2, 3, 5] if mouse == 'BZ015' else [1]
+
+    dataset_name = f'jacob_{mouse}_{date}'
+
+    data_dirs = []
+    metadata_dirs = []
+
+    for n_exp in exp_nums:
+        spks_path = f"{data_path}/{mouse}_{date}_{n_exp}"
+        stims_path = f"{data_path}/{mouse}_{date}_{n_exp}"
+        spks_file = f"{spks_path}/{mouse}_{date}_{n_exp}_dspikes.npy"
+        stims_file = f"{stims_path}/{date}_{n_exp}_{mouse}_Block.mat"
+
+        data_dirs.append(spks_file)
+        metadata_dirs.append(stims_file)
+
+    data_dirs, metadata_dirs = data_dirs, metadata_dirs
+    responses = []
+    for data_dir in data_dirs:
+        response = np.load(data_dir).T
+        responses.append(response)
+    angles = []
+    for metadata_dir in metadata_dirs:
+        mat_data = scipy.io.loadmat(metadata_dir, simplify_cells=True)
+        # in the single block case the first and last angles should be removed
+        if 'BZ016' in metadata_dir:
+            angles.append(np.array([entry['gratingOrient'] for entry in mat_data['block']['paramsValues']])[1:-1])
+        else: 
+            angles.append(np.array([entry['gratingOrient'] for entry in mat_data['block']['paramsValues']]))
+
+    # remove responses where angle = 0
+    for i in range(len(responses)):
+        responses[i] = responses[i][:, angles[i] != 0]
+        angles[i] = angles[i][angles[i] != 0]
+        angles[i] = np.deg2rad(angles[i])
+
+    # # for each repeat, reorder angles and responses
+    # for i in range(len(responses)):
+    #     responses[i] = responses[i][:, np.argsort(angles[i])]
+    #     angles[i] = np.sort(angles[i])
+
+    # now turn responses into an array and replace angles with any of its entries
+    response = np.array(responses) # shape (n_blocks, n_cells, n_trials)
+    n_blocks = response.shape[0] # n_repeats for BZ015 Which had 3 blocks, whereas BZ016 had 1 block but every trial was still repeated 3 times randomly. 
+    angles = angles[0]
+
+    response_flat = np.transpose(response, (1, 2, 0))  # n_cells x n_trials x n_blocks
+    response_flat = response_flat.reshape(response_flat.shape[0], -1)  # n_cells x (n_trials*n_blocks)
+    angles_flat = np.repeat(angles, n_blocks)  # now angles is (n_trials*n_blocks)
+    response, angles = response_flat, angles_flat
+
+    n_trials = response.shape[1]
+
+    if conc_threshold is not None:
+        conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
+        good_cells = np.where(conc > conc_threshold)[0]
+
+        print(f"Filtering for orientation selectivity. Kept {len(good_cells)} out of {response.shape[0]} cells.")
+        response = response[good_cells]
+
+    rng = np.random.default_rng(random_seed)
+
+    # Source/Target split for trial to trial variability 
+    cell_idx = rng.permutation(response.shape[0])
+    n_source_cells = int(train_to_test_split_ratio * response.shape[0])
+    source_cells = cell_idx[:n_source_cells]
+    target_cells = cell_idx[n_source_cells:]
+
+    if source_cells.size == 0 or target_cells.size == 0:
+        raise ValueError("Train to test split ratio results in empty source or target cell population. Please adjust the ratio.")    
+
+    half_source = source_cells.size // 2 
+    half_target = target_cells.size // 2 
+    train_source = source_cells[:half_source]
+    # make sure we handle odd number of cells by putting the extra cell in the training set
+    test_source = source_cells[-half_source:]
+    train_target = target_cells[:half_target]
+    test_target = target_cells[-half_target:]
+
+    # TODO : think about whether z_scoring should happen after the cell and trial split or before? Currently it's after 
+    X_train = response[train_source]
+    X_test = response[test_source]
+    Y_train = response[train_target]
+    Y_test = response[test_target]
+
+    # rather than zscore, just divide by the std 
+    eps = 1e-12
+    X_train = X_train / (X_train.std(axis=1, keepdims=True) + eps)
+    X_test = X_test / (X_test.std(axis=1, keepdims=True) + eps)
+    Y_train = Y_train / (Y_train.std(axis=1, keepdims=True) + eps)
+    Y_test = Y_test / (Y_test.std(axis=1, keepdims=True) + eps)
+
+    source = np.stack([X_train, X_test], axis=0)  # (2, n_source, T)
+    target = np.stack([Y_train, Y_test], axis=0)  # (2, n_target, T)
+    return {"stimulus" : angles, "source": source, "target": target}
