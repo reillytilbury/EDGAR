@@ -106,7 +106,7 @@ prompts:
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
-      * Function signature must be `def parameter_estimator(X, y):`.
+      * Function signature must be `def parameter_estimator(data):` where `data` is a dict with keys 'x' and 'y'.
       * Return a parameter dict with keys matching the model's free parameters.
       * Do not call the model function in your estimator code; this function must be self-contained.
       * Do not use heavy optimization routines such as `curve_fit`, `least_squares`, or `minimize`.
