@@ -39,7 +39,7 @@ experiment_params:
   x_max: 1.0
   n_bins: 100
   objective_timeout_s: 5.0
-  model_llm: [gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash]
+  model_llm: [gemini-2.5-flash, gemini-2.5-flash, gemini-2.5-flash]
   swear_words: []
  
 

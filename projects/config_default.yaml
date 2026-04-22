@@ -134,9 +134,9 @@ experiment_params:
 
   # LLMs for different tasks. Each can be a string or a list.
   # If a list is provided, it is traversed in order by iteration.
-  model_llm: [gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash]
-  param_est_llm: gemini-2.0-flash
-  jax_translator_llm: gemini-2.0-flash-lite
+  model_llm: [gemini-3.1-flash-lite-preview, gemini-2.5-flash, gemini-2.5-flash]
+  param_est_llm: gemini-2.5-flash
+  jax_translator_llm: gemini-2.5-flash
 
 
   # Banned function calls/fragments during code generation.
@@ -325,6 +325,7 @@ prompts:
 
       Treat all arrays as JAX arrays (`jnp.ndarray`). Do not mention NumPy in docstrings or type hints.
       Use `jnp` everywhere (no `np`). Inputs should be described as `jnp.ndarray`.
+      Write out the shape of each array in the docstring and in the code comments. Be very careful when broadcasting and ensure that shapes are compatible.
 
       CRITICAL JAX compatibility requirements:
       * Replace all boolean indexing (e.g., `array[condition]`) with `jnp.where(condition, true_value, false_value)`
