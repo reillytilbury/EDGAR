@@ -34,7 +34,7 @@ from .llm.candidates import (
     generate_new_parameter_estimator,
     translate_to_jax,
 )
-from .scoring.jax_objective import _call_objective
+from .scoring.objective import _call_objective
 
 warnings.filterwarnings(
     "ignore",

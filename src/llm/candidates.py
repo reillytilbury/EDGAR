@@ -11,8 +11,12 @@ import pandas as pd
 from .. import utils
 from ..engine.diagnostics import _programs_df_to_programs_list
 from ..llm.code_loading import load_function_from_source
-from ..scoring.jax_objective import _call_objective, compute_initial_params
+from ..scoring.objective import _call_objective
+from ..scoring.param_init import compute_initial_params
 
+# TODO: All this code is outdated. New prompt building functions + prompt schema mean that a single function can build all types of prompt.
+# TODO: Discover what each of these funcs is doing apart from building a prompt and requesting code from the LLM, and move that logic to more appropriate places. 
+# For example, the logic for selecting parent programs and building the model prompt should be separate from the logic for requesting code from the LLM and normalizing it.
 
 async def generate_new_model(current_island, llm_name, client,
                             data, x_eval, prompt_config,

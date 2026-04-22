@@ -1,3 +1,39 @@
+"""
+evaluation.py
+
+Batch evaluation of candidate models during evolutionary search. Validates,
+translates, and scores evolved candidates from LLM generation.
+
+Result containers track outputs at each generation stage:
+- ModelGenerationResult: NumPy and JAX code, prompts, and callables for model.
+- ParamEstimatorGenerationResult: Code, callable, and metadata for parameter estimator.
+- CandidateGenerationResult: Combined model + param estimator results for one candidate.
+
+Main function:
+- evaluate_candidate_batch: Evaluate a batch of candidates per iteration. Handles:
+  1) Model code parsing (NumPy -> JAX translation)
+  2) Parameter estimator parsing and optional refinement
+  3) Validation: translation checks, JAX tracing, finite output
+  4) Optimization: fit parameters on training data
+  5) Evaluation: compute loss on test data
+  6) Visualization: plot model fits if enabled
+  Returns success_rate and evaluation_log_updates dict.
+
+Example usage:
+--------------
+    success_rate, log_updates = evaluate_candidate_batch(
+        iteration=0,
+        islands=[island_0_df, island_1_df],
+        island_results=[[cand_0, cand_1], [cand_2, cand_3]],
+        parent_ids=[(None, None), (0, 1), (1, 2), (2, 3)],
+        X=[train_data, test_data],
+        X_eval_train=X_eval,
+        loss_fn=loss_fn,
+        ...
+    )
+    print(f"Success rate: {success_rate:.1%}")
+"""
+
 import logging
 import os
 import re
@@ -13,7 +49,7 @@ from .. import utils
 from ..llm.candidates import _run_translation_check_on_eval
 from ..llm.code_loading import load_function_from_source
 from ..monitoring.diagnostics import _programs_df_to_programs_list
-from .jax_objective import _call_objective, _clear_jax_runtime_cache
+from .objective import _call_objective, _clear_jax_runtime_cache
 
 
 # ---------------------------------------------------------------------------
