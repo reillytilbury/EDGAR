@@ -19,11 +19,18 @@ def _worker(queue, program, data, loss_fn, config):
 def score_with_timeout(program, data, loss_fn, config) -> float:
     """Run score_program in a subprocess, returning inf if it exceeds timeout.
 
+    Uses spawn (not fork) so JAX initialises cleanly in the child process.
+
     Args:
-        program: Candidate program to score.
-        data: Tuple of ``(data_train, data_test)``, each a JAX data dict.
-        loss_fn: Loss function, signature ``(output, data) -> scalar`` over the full batch.
-        config: Scoring config dict with ``timeout_s`` and ``gradient_descent`` subsections.
+        program: Candidate program to score. Must have ``n_params`` set.
+        data: Tuple of ``(data_train, data_test)``, each a JAX data dict with
+            arrays of shape ``(n_samples, ..., n_trials)``.
+        loss_fn: Loss function with signature ``(output, data) -> scalar``,
+            where output and data both have a leading sample axis. Must be a
+            module-level function so it can be pickled across the subprocess
+            boundary.
+        config: The ``scoring`` config subsection. Keys:
+            ``timeout_s``, ``param_penalty_weight``, ``gradient_descent``.
 
     Returns:
         Scalar loss as a Python float, or inf if the process timed out or failed.
@@ -44,12 +51,15 @@ def _get_params(param_est_fn, default_params, data_train):
     """Estimate initial parameters for all samples via vmapped param estimator.
 
     Args:
-        param_est_fn: JAX-compatible parameter estimator, signature ``(data_i) -> params``.
-        default_params: Single-sample fallback pytree (e.g. ``model_fn.DEFAULT_PARAMS``).
-        data_train: Training data dict with leading sample axis.
+        param_est_fn: JAX parameter estimator with signature
+            ``(data_i) -> params`` for a single sample (no batch axis).
+            Vmapped over the leading sample axis of ``data_train``.
+        default_params: Single-sample fallback pytree used when the estimator
+            fails (e.g. ``model_fn.DEFAULT_PARAMS``).
+        data_train: JAX data dict with arrays of shape ``(n_samples, ..., n_trials)``.
 
     Returns:
-        Batched parameter pytree with leading sample axis.
+        Batched parameter pytree with a leading sample axis on every leaf.
     """
     try:
         return jax.vmap(param_est_fn)(data_train)
@@ -61,15 +71,22 @@ def _get_params(param_est_fn, default_params, data_train):
 def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
     """Fit parameters on data_train using Adam, returning the best params found.
 
+    Optimises a flattened parameter vector with ``jax.value_and_grad`` and
+    tracks the best (lowest-loss) checkpoint across all steps.
+
     Args:
-        model_fn: JAX model, signature ``(data_i, params) -> output``.
-        loss_fn: Loss function, signature ``(output, data) -> scalar`` over the full batch.
-        params_init: Initial batched parameter pytree with leading sample axis.
-        data_train: Training data dict with leading sample axis.
-        gd_config: Dict with keys ``learning_rate`` and ``max_iter``.
+        model_fn: JAX model with signature ``(data_i, params) -> output``
+            for a single sample. Vmapped over the leading sample axis internally.
+        loss_fn: Loss function with signature ``(output, data) -> scalar``,
+            called on the full batch after vmapping the model.
+        params_init: Initial batched parameter pytree with a leading sample axis.
+        data_train: JAX data dict with arrays of shape ``(n_samples, ..., n_trials)``.
+        gd_config: The ``scoring.gradient_descent`` config subsection.
+            Keys: ``learning_rate`` (float), ``max_iter`` (int).
 
     Returns:
-        Optimized parameter pytree with the same structure as ``params_init``.
+        Optimized parameter pytree with the same structure as ``params_init``,
+        corresponding to the lowest loss seen during training.
     """
     flat, unflatten = ravel_pytree(params_init)
 
@@ -98,35 +115,42 @@ def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
 
 
 def _eval_loss(model_fn, loss_fn, params, data_test):
-    """Compute mean loss over all samples in data_test.
+    """Evaluate loss on data_test with fixed params (no gradient computation).
 
     Args:
-        model_fn: JAX model, signature ``(data_i, params) -> output``.
-        loss_fn: Loss function, signature ``(output, data) -> scalar`` over the full batch.
-        params: Batched parameter pytree with leading sample axis.
-        data_test: Test data dict with leading sample axis.
+        model_fn: JAX model with signature ``(data_i, params) -> output``
+            for a single sample. Vmapped over the leading sample axis internally.
+        loss_fn: Loss function with signature ``(output, data) -> scalar``,
+            called on the full batch after vmapping the model.
+        params: Batched parameter pytree with a leading sample axis.
+        data_test: JAX data dict with arrays of shape ``(n_samples, ..., n_trials)``.
 
     Returns:
-        Scalar mean loss as a Python float.
+        Scalar loss as a Python float.
     """
     output = jax.vmap(model_fn, in_axes=(0, 0))(data_test, params)
     return float(loss_fn(output, data_test))
 
 
 def score_program(program: Program, data: tuple, loss_fn, config: dict) -> float:
-    """Fit params on data[0] and return mean loss on data[1].
+    """Score a program: fit params on data_train, evaluate on data_test.
 
     Intended to be called inside a subprocess — the process timeout is the
-    caller's responsibility.
+    caller's responsibility (see ``score_with_timeout``).
 
     Args:
-        program: Candidate program to score.
-        data: Tuple of ``(data_train, data_test)``, each a JAX data dict.
-        loss_fn: Loss function, signature ``(output, data) -> scalar`` over the full batch.
-        config: Scoring config dict with ``gradient_descent`` and ``param_penalty_weight``.
+        program: Candidate program to score. Must have ``n_params`` set before
+            calling (e.g. via ``program.count_params()``).
+        data: Tuple of ``(data_train, data_test)``, each a JAX data dict with
+            arrays of shape ``(n_samples, ..., n_trials)``. data_train is used
+            for parameter estimation and optimisation; data_test for evaluation.
+        loss_fn: Loss function with signature ``(output, data) -> scalar``,
+            where output and data both have a leading sample axis.
+        config: The ``scoring`` config subsection. Keys:
+            ``param_penalty_weight`` (float) and ``gradient_descent`` (dict).
 
     Returns:
-        Scalar loss on data_test as a Python float.
+        Scalar loss on data_test plus complexity penalty, as a Python float.
     """
     data_train, data_test = data
     model_fn, param_est_fn = program.compile()
