@@ -103,7 +103,7 @@ parameter_estimator:
   - program_code_string
   - parameter_estimator_code_string
 jax_translator:
-  base: 'Convert the following function to a JAX-compatible function.
+  base: 'Convert the following code block to be JAX-compatible.
 
     Include all necessary imports (jax, jax.numpy as jnp).
 
@@ -125,13 +125,13 @@ jax_translator:
     * Never call Python `int()` / `float()` on JAX values.
 
     '
-  docstring_guidelines: 'Do not include any text other than the code. Update the function name to remove version suffixes.
+  docstring_guidelines: 'Do not include any text other than the code.
 
     '
   image_analysis_instructions: null
-  parent_detail_template: '{function_code}
+  parent_detail_template: '{code_block}
 
     '
   global_vars: []
   parent_vars:
-  - function_code
+  - code_block
