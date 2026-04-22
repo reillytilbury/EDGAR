@@ -76,7 +76,7 @@ def train_test_split(
 
 def loss_fn(model_output, data):
     """Scaled squared error loss."""
-    return 10 * (data['response'] - model_output) ** 2
+    return jnp.mean(10 * (data['response'] - model_output) ** 2)
 
 
 def _extract_stimulus_related_response(

@@ -6,8 +6,6 @@ evolution:
   n_islands: 4
   batch_size: 4
 scoring:
-  parameter_estimation:
-    param_estimator_refinement_rounds: 0
   gradient_descent:
     max_iter: 100
     learning_rate: 0.03

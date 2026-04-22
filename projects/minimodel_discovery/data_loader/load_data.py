@@ -157,7 +157,7 @@ def train_test_split(X, random_seed: int):
 def loss_fn(model_output, data):
     y_true = jnp.asarray(data["response"], dtype=jnp.float32)
     y_pred = jnp.clip(jnp.asarray(model_output, dtype=jnp.float32), 1e-4, 1e6)
-    return y_pred - y_true * jnp.log(y_pred)
+    return jnp.mean(y_pred - y_true * jnp.log(y_pred))
 
 
 def build_evaluation_points(

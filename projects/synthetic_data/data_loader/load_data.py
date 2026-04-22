@@ -66,7 +66,7 @@ def train_test_split(
 def loss_fn(model_output, data):
     """Scaled squared error loss."""
     y_true = data['y']
-    return 10 * (y_true - model_output) ** 2
+    return jnp.mean(10 * (y_true - model_output) ** 2)
 
 
 def _target_function(x, a, b, c, k, phi_0):
