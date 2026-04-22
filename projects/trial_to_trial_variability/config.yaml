@@ -12,16 +12,17 @@ data_processing_params:
 #     description: "Input variable"
 
 experiment_params:
-  n_iterations: 8
-  batch_size: 4
-  n_islands: 5
+  n_iterations: 6
+  batch_size: 3
+  n_islands: 3
   param_penalty_weight: 0.0
-  exploration_topology: [1, 2, 3, 4, 0]
-  exploitation_topology: [1, 2, 3, 4, 0]
+  exploration_topology: [1, 2, 0]
+  exploitation_topology: [1, 2, 0]
   param_estimator_refinement_rounds: 0
   open_family_tree: true
   fit_params: true
-  model_llm: [gemini-3.1-flash-lite-preview, gemini-2.5-flash]
+  # model_llm: [gemini-3.1-flash-lite-preview, gemini-2.5-flash]
+  model_llm: [gemini-2.5-flash-lite, gemini-2.5-flash-lite] # use cheap models until architectural improvements are made
   swear_words: [sklearn, PLSRegression, scipy.optimize, optimize.minimize, curve_fit, cvxpy, torch, tensorflow]
   # No linspace evaluation: the model depends on multiple real data keys
   # (source responses, per-cell tuning params, etc.) that cannot be replaced
@@ -53,16 +54,17 @@ prompts:
      **Code Generation Guidelines:**
       * Import any packages you use.
       * Do NOT include any text other than the code.
-      * Model signature must be `def model(data, params):` where `data` is a dict that contains exactly 5 keys :
+      * Model signature must be `def model(data, params):` where `data` is a dict that contains exactly 4 keys :
         1. "stimulus" (shape (n_time,))
         2. "source" (shape (n_time, n_source_cells))
-        3. "target" (shape (n_time, n_target_cells))
-        4. "source_tuning_params" (shape (n_source_cells, 11))
-        5. "target_tuning_params" (shape (n_target_cells, 11))
+        3. "source_tuning_params" (shape (n_source_cells, 11))
+        4. "target_tuning_params" (shape (n_target_cells, 11))
       and `params` is a dict of named arrays/scalars.
       * Ensure all free parameters are numeric, not strings.
-      * At the beginning of the code, clip the free parameters to a biologically plausible
-      range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
+      * At the beginning of the code, clip the free parameters to a biologically plausible range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
+      * Explicitly state matrix shapes in comments when defining parameters and intermediate variables.
+      * Output a single function and any auxiliary code used by that function should be contained within that function (i.e. no external helper functions).
+
     docstring_guidelines: |
       ** Docstring Guidelines:**
       Each function should include a short docstring. At the start of each model docstring, provide an equation or mathematical description of the model. 
@@ -92,11 +94,13 @@ prompts:
       
       Finally, implement the new model in code."
 
-parameter_estimator:
+  parameter_estimator:
     generation_base: |
-      You are an ambitious PhD student in computation neuroscience, developing a model for trial-to-trial variability for orientation selective neurons. 
+      You are an ambitious PhD student in computation neuroscience, developing a model for trial-to-trial variability for orientation selective neurons.
       Your task is to build parameter_estimator_v{next_version} for the latest model, {model_name}_v{next_version}.
-      parameter_estimator_v{next_version} should be a python function that takes in the training data dict (with keys "stimulus", "source", "target", "source_tuning_params", "target_tuning_params") and returns a named dictionary of parameter estimates necessary to fit the model. 
+      The function signature of parameter_estimator_v{next_version} must be `def parameter_estimator_v{next_version}(data : dict) -> dict:`
+      where the data dict contains only these keys ["stimulus", "source", "target", "source_tuning_params", "target_tuning_params"] and the returned dictionary contains named parameters necessary to fit the model (e.g. params["multiplicative_gain"], params["additive_offset"]).
+      Output a single function and any auxiliary code used by that function should be contained within that function (i.e. no external helper functions).
       Identify the keys of the parameter dictionary from the model code and ensure your estimator returns all necessary parameters.
       Analyze the parent estimators, generalize what improves loss, and create a better estimator.
 
@@ -127,13 +131,13 @@ parameter_estimator:
 
     refinement_image_instructions: |
       **Image Analysis Instructions:**
-      Attched is a 3x3 plot of target-cell responses given some stimulus angles. The x-axis is the preferred angle of each target-cell and 
-      the y axis is the response magnitude. Grey scatter points show the observed responses of individual cells and the orange and blue lines 
-      show the model prediction for each cell. 
+      Attched is a 3x3 plot of target-cell responses given some stimulus angles. The x-axis is the preferred angle of each target-cell and
+      the y axis is the response magnitude. Grey scatter points show the observed responses of individual cells and the orange and blue lines
+      show the model prediction for each cell.
 
-      Below each stimulus angle plot, there is also a plot of the binned mean errors of the model prediction where the error was binned by 
-      the preferred angle of the target cells. The x-axis is again the preferred angle of the target cells and the y-axis is the mean squared error 
-      of the model prediction for cells with that preferred angle. You can see the stimulus angle as the dotted grey line. 
+      Below each stimulus angle plot, there is also a plot of the binned mean errors of the model prediction where the error was binned by
+      the preferred angle of the target cells. The x-axis is again the preferred angle of the target cells and the y-axis is the mean squared error
+      of the model prediction for cells with that preferred angle. You can see the stimulus angle as the dotted grey line.
       Identify systematic estimator failures (scale bias, baseline bias, or cell-specific outliers),
       then propose concrete parameter-estimation updates that address these repeated patterns.
       Do not call the model function in your estimator code.
