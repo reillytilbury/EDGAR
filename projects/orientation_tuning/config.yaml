@@ -1,5 +1,2 @@
 task:
   data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
-scoring:
-  parameter_estimation:
-    param_estimator_refinement_rounds: 0

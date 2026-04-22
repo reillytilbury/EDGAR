@@ -11,7 +11,4 @@ llms:
   - gemini-2.0-flash
   swear_words: []
 scoring:
-  parameter_estimation:
-    param_estimator_refinement_rounds: 0
   gradient_descent:
-    timeout_s: 5.0

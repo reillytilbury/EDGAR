@@ -89,7 +89,7 @@ def train_test_split(
 
 
 def loss_fn(model_output, data):
-    return (data["target"] - model_output) ** 2
+    return jnp.mean((data["target"] - model_output) ** 2)
 
 
 def _load_mat_spont(

@@ -19,10 +19,7 @@ llms:
   - tensorflow
 scoring:
   param_penalty_weight: 0.0
-  parameter_estimation:
-    param_estimator_refinement_rounds: 0
-    timeout_s: 5.0
+  timeout_s: 60.0
   gradient_descent:
     max_iter: 200
     learning_rate: 0.01
-    timeout_s: 30.0
