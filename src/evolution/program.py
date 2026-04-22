@@ -12,6 +12,9 @@ A Program is one evolved candidate. Fields:
 - test_sample_loss: cross-validated loss on the test sample (default: inf)
 - eval_fingerprint: array of model outputs used for deduplication
 - n_params: total number of model parameters, set by calling count_params()
+- mode: LLM generation mode, e.g. "explore" or "exploit"
+- temperature: LLM sampling temperature used during generation
+- removal_reason: dict describing why this program was removed from an island (None if still active)
 
 Methods:
 - compile: parse source strings into callable (model_fn, param_est_fn)
@@ -57,6 +60,9 @@ class Program:
     test_sample_loss:  float = float("inf")
     eval_fingerprint:  np.ndarray | None = field(default=None, repr=False)
     n_params:          int | None = None
+    mode:              str | None = None
+    temperature:       float | None = None
+    removal_reason:    dict | None = None
 
     def compile(self) -> tuple[Callable, Callable]:
         model_fn     = load_function_from_source(self.model_code,     MODEL_ENTRYPOINT)

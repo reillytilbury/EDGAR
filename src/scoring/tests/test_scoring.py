@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.evolution.program import Program
-from src.scoring.objective import score_program, score_with_timeout
+from src.scoring.scoring import score_program, score_with_timeout
 
 
 # --- Shared model/estimator code ---
