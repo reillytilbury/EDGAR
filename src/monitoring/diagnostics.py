@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .. import utils
-from ..scoring.jax_objective import _clear_jax_runtime_cache
+from ..scoring.objective import _clear_jax_runtime_cache
 
 
 def _programs_df_to_programs_list(programs_df: pd.DataFrame,

@@ -1,3 +1,38 @@
+"""
+finalize.py
+
+Post-run finalization and aggregation of evolved populations across islands.
+
+Main function:
+- finalize_run: Final evaluation and output generation after evolution completes.
+  Steps:
+  1) Evaluate all evolved programs on held-out test set
+  2) Combine results across islands into a single dataframe
+  3) Deduplicate programs and sort by test loss
+  4) Export combined and per-island results as CSV
+  5) Plot top models and create visualizations
+  6) Generate dynamic progress tracker and family tree genealogy HTML
+  Returns: path to full run directory
+
+Helper functions:
+- _plot_final_top_models: Generate model fit plots for top candidates.
+
+Example usage:
+--------------
+    result_path = finalize_run(
+        islands=[island_0_df, island_1_df, ...],
+        X=[train_data, test_data],
+        X_eval_test=X_eval,
+        paths=RunPaths(...),
+        n_islands=2,
+        loss_fn=loss_fn,
+        has_spec_plotter=True,
+        plot_model_fits=plot_fn,
+        open_family_tree=True,
+    )
+    print(f"Results saved to: {result_path}")
+"""
+
 import logging
 import os
 import webbrowser
@@ -10,7 +45,7 @@ from ..evolution import island
 from ..monitoring import create_dynamic_progress_update, create_family_tree
 from ..monitoring.diagnostics import _programs_df_to_programs_list
 from ..monitoring.log import _update_generation_log_test_losses_and_mark_winner
-from .jax_objective import _call_objective, _clear_jax_runtime_cache
+from .objective import _call_objective, _clear_jax_runtime_cache
 
 
 def finalize_run(
