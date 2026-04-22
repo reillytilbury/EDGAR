@@ -19,6 +19,7 @@ experiment_params:
   exploration_topology: [1, 2, 0]
   exploitation_topology: [1, 2, 0]
   param_estimator_refinement_rounds: 0
+  param_estimator_timeout_s : 20
   open_family_tree: true
   fit_params: true
   # model_llm: [gemini-3.1-flash-lite-preview, gemini-2.5-flash]
@@ -109,7 +110,7 @@ prompts:
       * Use only lightweight NumPy operations.
       * Do not import heavy ML/stat libraries.
       * Do not include any text other than the code.
-      * Function signature must be `def parameter_estimator_v(data : dict) -> dict:`
+      * Function signature must be `def parameter_estimator_v{next_version} (data : dict) -> dict:`
       * Do NOT include external helper functions; the estimator must be self-contained in one function.
       * Return a parameter dict with keys that match the model parameters.
       * Every value in the returned parameter dict must be floating-point (`float`/`np.float32`/`np.float64` or float arrays).
