@@ -261,15 +261,9 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
             best_node = node
             break
 
-    # Dead nodes: programs explicitly removed via deduplication or pruning
-    dead_nodes = {
-        node for node in G.nodes()
-        if records_by_id.get(node, {}).get("removal_reason") is not None
-    }
-
-    # Compute loss range for coloring
-    losses = [(_display_train_loss(r)) for r in records_by_id.values()
-              if _display_train_loss(r) is not None]
+    # Compute loss range for coloring (based on test loss)
+    losses = [(_display_test_loss(r)) for r in records_by_id.values()
+              if _display_test_loss(r) is not None]
 
     min_loss = min(losses) if losses else None
     max_loss = max(losses) if losses else None
@@ -312,10 +306,10 @@ def _generate_html(G, pos, records_by_id, title, image_base_dir=None, html_outpu
             hover_parts.append(f"LLM: {llm}")
         node_hover.append("<br>".join(hover_parts))
 
-        if is_seed or node in dead_nodes:
+        if is_seed:
             node_colors.append("rgb(180,180,180)")
         else:
-            node_colors.append(_loss_to_color(loss, min_loss, max_loss))
+            node_colors.append(_loss_to_color(test_loss, min_loss, max_loss))
 
         if node == best_node:
             node_symbols.append("star")

@@ -296,7 +296,7 @@ function buildAliveCategoryColourMap(fieldName, fallbackLabel) {
   const keys = [];
   Object.keys(sidebarData).forEach(function(idx) {
     const d = sidebarData[idx];
-    if (!d || d.is_dead) return;
+    if (!d) return;
     keys.push(_categoryKey(d[fieldName], fallbackLabel));
   });
   const unique = Array.from(new Set(keys)).sort();
@@ -316,9 +316,6 @@ function getNodeColour(recIdx, colourMode) {
 
   if (colourMode === 'island') {
     return islandColourByIdx[String(d.island)] || '#444';
-  }
-  if (d.is_dead) {
-    return DEAD_COLOUR;
   }
   if (colourMode === 'dead_llm') {
     const k = _categoryKey(d.llm_name, 'Unknown LLM');
