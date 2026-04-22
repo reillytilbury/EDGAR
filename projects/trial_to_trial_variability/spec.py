@@ -195,8 +195,10 @@ def load_and_process_data_true(
 def model_v1(data, params):
     """ Gain Modulation + Additive Offset
 
-    Equation : For each target cell c at timepoint t with stimulus angle theta,
-        f(theta, t; cell_params) = multiplicative_gain(t) * g(theta(t) ; cell_params) + additive_offset(t) * coupling_factor
+    For each target cell c at timepoint t with stimulus angle theta,
+
+    Equation : f(theta, t; cell_params) = multiplicative_gain(t) * g(theta(t) ; cell_params) + additive_offset(t) * coupling_factor
+
     where g(theta(t); cell_params) is the tuning function prediction for each target cell.
 
     Args :
@@ -354,8 +356,10 @@ def param_est_v1(data : dict) -> dict:
 def model_v2(data, params):
     """ Gain Modulation + source to target coupling
 
-    Equation : For each target cell c at timepoint t with stimulus angle theta,
-        f(theta, t; cell_params) = multiplicative_gain(t) * g(theta(t) ; cell_params) + source_response(t) @ coupling_weight(c)
+    For each target cell c at timepoint t with stimulus angle theta,
+
+    Equation : f(theta, t; cell_params) = multiplicative_gain(t) * g(theta(t) ; cell_params) + source_response(t) @ coupling_weight(c)
+    
     where g(theta(t); cell_params) is the tuning function prediction,
     source_response(t) is the source cell responses at time t (shape n_source,),
     and coupling_weight(c) is the coupling from source cells to target cell c.
