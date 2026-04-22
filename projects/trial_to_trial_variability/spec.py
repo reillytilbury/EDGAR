@@ -196,7 +196,7 @@ def model_v1(data, params):
     """ Gain Modulation + Additive Offset
 
     Equation : For each target cell c at timepoint t with stimulus angle theta,
-        f(theta, t; cell_params) = multiplicative_gain(t) * g(theta(t) ; cell_params) + additive_offset(t)
+        f(theta, t; cell_params) = multiplicative_gain(t) * g(theta(t) ; cell_params) + additive_offset(t) * coupling_factor
     where g(theta(t); cell_params) is the tuning function prediction for each target cell.
 
     Args :
@@ -251,21 +251,24 @@ def model_v1(data, params):
 
     stims = data['stimulus'] # shape (n_time,)
     target_tuning_params = data['target_tuning_params']  # shape (n_target, n_params)
-    print(f"DEBUG PRINT stims shape : {stims.shape}, target_tuning_params shape: {target_tuning_params.shape}")
     g_target = np.array([single_cell_tuning_function(stims, *params) for params in target_tuning_params]) # (n_target, n_time)
     g_target = g_target.T  # shape (n_time, n_target)
-    print(f"DEBUG PRINT g_target shape: {g_target.shape}")
 
     multiplicative_gain = params['multiplicative_gain']  # shape (n_time,)
     additive_offset = params['additive_offset']          # shape (n_time,)
 
-    pred = multiplicative_gain[:, None] * g_target + additive_offset[:, None]  # shape (n_time, n_target)
+    # given the fixed additive_offset vector of length n_time, find a vector length n_target_cells minimises the difference between additive_offset * coupling_factor
+    target_response = data['target']  # shape (n_time, n_target)
+    residual = target_response - (multiplicative_gain[:, None] * g_target)  # shape (n_time, n_target)
+    coupling_factor = jnp.sum(residual * additive_offset[:, None], axis=0) / (jnp.sum(additive_offset**2) + 1e-8)  # shape (n_target,)
+
+    pred = multiplicative_gain[:, None] * g_target + additive_offset[:, None] * coupling_factor  # shape (n_time, n_target)
     # clip to non-negative firing rates
     pred = jnp.clip(pred, a_min=0.0)
     return pred
 
 
-def param_est_v1(data):
+def param_est_v1(data : dict) -> dict:
     """ Parameter estimator for model_v1. Estimates time-specific multiplicative
     gain and additive offset from the source cell responses.
 
@@ -331,10 +334,16 @@ def param_est_v1(data):
     # For each t: multiplicative_gain[t] = dot(g_source[t,:], x[t,:]) / dot(g_source[t,:], g_source[t,:])
     multiplicative_gain = jnp.sum(g_source * x, axis=1) / (jnp.sum(g_source**2, axis=1) + eps)  # shape (n_time,)
 
-    # Step 2 : Estimate additive offset from the mean residual across source cells
+    # Step 2 : Estimate additive offset from the mean residual across source cells using SVD 
     residual = x - multiplicative_gain[:, None] * g_source  # shape (n_time, n_source)
-    additive_offset = jnp.mean(residual, axis=1)  # shape (n_time,)
-
+    U, S, Vh = jnp.linalg.svd(residual, full_matrices=False)
+    offset_component = U[:, 0] * S[0]
+    
+    # Force sign consistency: if the offset is negatively correlated with the 
+    # average residual, flip it.
+    mean_res = jnp.mean(residual, axis=1)
+    sign_fix = jnp.sign(jnp.dot(offset_component, mean_res))
+    additive_offset = offset_component * sign_fix
     params = {
         'multiplicative_gain': multiplicative_gain,
         'additive_offset': additive_offset,
@@ -402,10 +411,8 @@ def model_v2(data, params):
 
     stims = data['stimulus'] # shape (n_time,)
     target_tuning_params = data['target_tuning_params']  # shape (n_target, n_params)
-    print(f"DEBUG PRINT stims shape : {stims.shape}, target_tuning_params shape: {target_tuning_params.shape}")
     g_target = np.array([single_cell_tuning_function(stims, *params) for params in target_tuning_params]) # (n_target, n_time)
     g_target = g_target.T  # shape (n_time, n_target)
-    print(f"DEBUG PRINT g_target shape: {g_target.shape}")
 
     source_response = jnp.array(data['source'])       # shape (n_time, n_source)
 

@@ -12,22 +12,22 @@ data_processing_params:
 #     description: "Input variable"
 
 experiment_params:
-  n_iterations: 12
+  n_iterations: 8
   batch_size: 4
-  n_islands: 8
+  n_islands: 5
   param_penalty_weight: 0.0
-  exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
-  exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
+  exploration_topology: [1, 2, 3, 4, 0]
+  exploitation_topology: [1, 2, 3, 4, 0]
   param_estimator_refinement_rounds: 0
   open_family_tree: true
   fit_params: true
   model_llm: [gemini-3.1-flash-lite-preview, gemini-2.5-flash]
-  # swear_words: [sklearn, PLSRegression, scipy.optimize, optimize.minimize, curve_fit, cvxpy, torch, tensorflow]
+  swear_words: [sklearn, PLSRegression, scipy.optimize, optimize.minimize, curve_fit, cvxpy, torch, tensorflow]
   # No linspace evaluation: the model depends on multiple real data keys
   # (source responses, per-cell tuning params, etc.) that cannot be replaced
   # with a 1-D grid. Use the real training data as the behavioral fingerprint.
   eval_keys: []
-  time_limit: 200
+  time_limit: 240
 
 # ========================
 # Prompt Defaults
@@ -35,10 +35,11 @@ experiment_params:
 prompts:
   program_prompt:
     base: |
-      You are an AI scientist. The programs below are biological models of neurons - given a population of orientation selective neurons, 
-      the models predict the trial-trial-variability of some target cells based on the trial-to-trial variability of source cells given some stimulus angles. 
-      Generate BOTH a new model_v{next_version} and a new parameter_estimator_v{next_version}.
-      The parents below show models and their estimators, sorted by loss.
+      You are an ambitious computational neuroscience PhD student who is looking to build a model for cell-level trial-to-trial variability in the responses of orientation selective neurons, and contribute significantly to the field.
+      Such model would predict the activity of a group of target cells based on the activity of some source cells given a stimulus angle.
+      The model should aim to capture the trial-to-trial varaibility beyond the mean response given by the tuning curves. The models below are sorted by performance, with the best parent last.
+      Your goal is to generate a new model in the form of a python function, model_v{next_version}, that outperforms all previous models.
+      Here are the ideas that you have already generated. Analyze the progression of models, generalize what worked, and create a better model. 
     explore: | 
       Use the models below as *inspiration*, but be *creative* and *invent*
       something new. Which features in the models below correlate with lower loss?
@@ -48,42 +49,24 @@ prompts:
       Use the parent models as a template to create a better model.
       Extrapolate features associated with lower loss and remove weak or redundant structure.
       You will be penalized for complexity, so keep the model as simple as possible while improving performance.
-    code_guidelines: '**Code Generation Guidelines:**
+    code_guidelines: |
+     **Code Generation Guidelines:**
       * Import any packages you use.
       * Do NOT include any text other than the code.
-      * Model signature must be `def model(data, params):` where `data` is a dict that contains exactly 7 keys :
+      * Model signature must be `def model(data, params):` where `data` is a dict that contains exactly 5 keys :
         1. "stimulus" (shape (n_time,))
         2. "source" (shape (n_time, n_source_cells))
         3. "target" (shape (n_time, n_target_cells))
         4. "source_tuning_params" (shape (n_source_cells, 11))
         5. "target_tuning_params" (shape (n_target_cells, 11))
-        6. "source_mean_pred" (shape (n_time, n_source_cells)) # prediction of mean spike rate of source cells according to the double peaked generalised Gaussian orientation tuning function given the stimulus and the tuning parameters
-        7. "target_mean_pred" (shape (n_time, n_target_cells)) # prediction of mean spike rate of target cells according to the double peaked generalised Gaussian orientation tuning function given the stimulus and the tuning parameters
       and `params` is a dict of named arrays/scalars.
-      * The 11 tuning parameters are arguments to a double peaked generalised Gaussian orientation tuning function which take the form : 
-
-          `python
-          def single_cell_tuning_function(theta, theta_pref_1=0.0, baseline=0.0, amplitude_1=1.0, width_ccw_1=1.0, width_cw_1=1.0, exponent_1=2.0, theta_pref_2=jnp.pi, amplitude_2=0.0, width_ccw_2=1.0, width_cw_2=1.0, exponent_2=2.0):
-            def _signed_circ_diff_rad(angle_radians, preferred_angle_radians):
-                delta = angle_radians - preferred_angle_radians
-                return jnp.arctan2(jnp.sin(delta), jnp.cos(delta))
-            signed_diff_1 = _signed_circ_diff_rad(theta, theta_pref_1) + eps  # Add small epsilon to avoid log(0) issues
-            width_1_effective = jnp.where(signed_diff_1 < 0, width_ccw_1, width_cw_1)
-            width_1_effective = jnp.maximum(width_1_effective, 1e-6)
-            peak1_component = amplitude_1 * jnp.exp(-0.5 * (jnp.abs(signed_diff_1) / width_1_effective) ** exponent_1)
-
-            signed_diff_2 = _signed_circ_diff_rad(theta, theta_pref_2) + eps  # Add small epsilon to avoid log(0) issues
-            width_2_effective = jnp.where(signed_diff_2 < 0, width_ccw_2, width_cw_2)
-            width_2_effective = jnp.maximum(width_2_effective, 1e-6)
-            peak2_component = amplitude_2 * jnp.exp(-0.5 * (jnp.abs(signed_diff_2) / width_2_effective) ** exponent_2)
-            return baseline + peak1_component + peak2_component
-
       * Ensure all free parameters are numeric, not strings.
       * At the beginning of the code, clip the free parameters to a biologically plausible
       range, e.g., `theta_pref = np.clip(theta_pref, 0, 2 * np.pi)`.
-      '
     docstring_guidelines: |
-      Each function should include a short docstring. At the start of each model docstring, provide an equation or mathematical description of the model. Use LaTeX formatting for equations.
+      ** Docstring Guidelines:**
+      Each function should include a short docstring. At the start of each model docstring, provide an equation or mathematical description of the model. 
+      Use LaTeX formatting for equations and make it a raw string by prefixing with r.
     per_model_detail: |
       **Parent {model_idx} (loss={train_loss})**
       Model:
@@ -111,20 +94,18 @@ prompts:
 
 parameter_estimator:
     generation_base: |
-      You are an AI scientist. Your task is to create parameter_estimator_v{next_version} for the latest model, {model_name}_v{next_version}.
-      Estimate free parameters directly from the observed source and target responses. 
+      You are an ambitious PhD student in computation neuroscience, developing a model for trial-to-trial variability for orientation selective neurons. 
+      Your task is to build parameter_estimator_v{next_version} for the latest model, {model_name}_v{next_version}.
+      parameter_estimator_v{next_version} should be a python function that takes in the training data dict (with keys "stimulus", "source", "target", "source_tuning_params", "target_tuning_params") and returns a named dictionary of parameter estimates necessary to fit the model. 
+      Identify the keys of the parameter dictionary from the model code and ensure your estimator returns all necessary parameters.
       Analyze the parent estimators, generalize what improves loss, and create a better estimator.
-
-    base: |
-      You are an AI scientist. Improve parameter_estimator_prev for the current model.
-      The model and parent estimators are provided below.
 
     code_guidelines: |
       **Code Generation Guidelines:**
       * Use only lightweight NumPy operations.
       * Do not import heavy ML/stat libraries.
       * Do not include any text other than the code.
-      * Function signature must be `def parameter_estimator_v{next_version}(X, y):`.
+      * Function signature must be `def parameter_estimator_v(data : dict) -> dict:`
       * Do NOT include external helper functions; the estimator must be self-contained in one function.
       * Return a parameter dict with keys that match the model parameters.
       * Every value in the returned parameter dict must be floating-point (`float`/`np.float32`/`np.float64` or float arrays).
@@ -133,7 +114,6 @@ parameter_estimator:
       * The estimator should be fast and "quick-and-dirty": prefer closed-form linear algebra (`np.linalg.lstsq`, regularized normal equations).
       * Avoid expensive grid searches, iterative optimizers, or nested loops over large hyperparameter grids.
       * Keep matrix dimensions explicit and valid for all matmul operations; avoid hard-coded dimensions that can mismatch source / target responses.
-      * Do not hard-code latent dimensions like 16/32/64 unless you clamp them to valid sizes from source / target responses.
       * Explicitly check and preserve matrix shapes when adding biases (e.g., use `bias[:, None]` for `(n_cells, n_time)` outputs).
       * Ensure all returned arrays are finite: use `np.nan_to_num` before returning.
       * If your main solve fails, return a robust finite fallback dict with the same keys and valid shapes.
@@ -142,7 +122,7 @@ parameter_estimator:
 
     docstring_guidelines: |
       **Docstring Guidelines:**
-      * Summarize parent estimators by descriptive names, not version tags.
+      * Explicitly list all keys of the returned parameter dict and their shapes.
       * Briefly explain how this estimator improves stability and fit quality.
 
     refinement_image_instructions: |
