@@ -43,6 +43,14 @@ class ProcessTimeoutUnavailable(RuntimeError):
     """Raised when process-based timeout backend cannot be used."""
 
 
+class ParamEstimatorFailed(Exception):
+    """Raised when the translation check cannot obtain initial parameters.
+
+    Distinguishes parameter-estimator faults from numpy/JAX model-code faults so
+    the failure logger can record the offending parameter_estimator source.
+    """
+
+
 @dataclass(slots=True)
 class ModelGenerationResult:
     numpy_code: str | None
@@ -1421,6 +1429,52 @@ async def translate_to_jax(
     return jax_code_string, func, prompt, raw_response
 
 
+JAX_TRANSLATION_FAILURE_LOG = 'jax_translation_failure.log'
+
+
+def _log_jax_translation_failure(
+    log_dir: str,
+    context: str,
+    model_name: str,
+    numpy_code: str | None,
+    jax_code: str | None,
+    jax_raw_response: str | None,
+    failure_reason: str,
+    failure_source: str,
+    param_estimator_code: str | None = None,
+) -> None:
+    """Append a failure record to ``jax_translation_failure.log``.
+
+    Args:
+        failure_source: Either ``"model"`` or ``"parameter_estimator"``. Written
+            as a first-line ``failure_source:`` field so the file can be grepped
+            to find records attributable to each component.
+        param_estimator_code: Source of the generated parameter_estimator when
+            available. Included in a dedicated section so the estimator source
+            can be inspected alongside the model code.
+    """
+    log_path = os.path.join(log_dir, JAX_TRANSLATION_FAILURE_LOG)
+    separator = "=" * 80
+    try:
+        with open(log_path, 'a') as f:
+            f.write(f"{separator}\n")
+            f.write(f"failure_source: {failure_source}\n")
+            f.write(f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] {context}\n")
+            f.write(f"model_name: {model_name}\n")
+            f.write(f"failure_reason: {failure_reason}\n")
+            f.write("--- NumPy function ---\n")
+            f.write(f"{numpy_code or '<none>'}\n")
+            f.write("--- Attempted JAX code ---\n")
+            f.write(f"{jax_code or '<none>'}\n")
+            f.write("--- Parameter estimator ---\n")
+            f.write(f"{param_estimator_code or '<none>'}\n")
+            f.write("--- Raw LLM response ---\n")
+            f.write(f"{jax_raw_response or '<none>'}\n")
+            f.write(f"{separator}\n\n")
+    except OSError as e:
+        logging.warning("Failed to write JAX translation failure log at %s: %s", log_path, e)
+
+
 def _run_translation_check_on_eval(
     np_func,
     jax_func,
@@ -1475,7 +1529,9 @@ def _run_translation_check_on_eval(
         data_subset,
     )
     if params_subset is None:
-        raise ValueError("Failed to compute parameters for translation check.")
+        raise ParamEstimatorFailed(
+            "Failed to compute parameters for translation check."
+        )
 
     utils.check_jax_translation(
         np_func=np_func,
@@ -2238,17 +2294,37 @@ async def hypothesis_engine(
             batch_idx = candidate_idx % batch_size
             key = (i, island_idx, batch_idx)
             update = {"model_code_jax": jax_code_string}
+            translation_failed = jax_func is None
+            failure_reason = None
             if jax_code_string is None:
-                update.update({
-                    "status": "jax_translation_failed",
-                    "failure_stage": "jax_translation",
-                    "failure_message": "No JAX code block generated.",
-                })
+                failure_reason = "No JAX code block generated."
             elif jax_func is None:
+                failure_reason = "Failed to parse translated JAX code into a callable."
+
+            if translation_failed :
+                _log_jax_translation_failure(
+                    log_dir=full_dir,
+                    context=f"iter={i} island={island_idx} batch={batch_idx} llm={jax_llm_name}",
+                    model_name=model_name,
+                    numpy_code=model_code_strings[candidate_idx],
+                    jax_code=jax_code_string,
+                    jax_raw_response=jax_response,
+                    failure_reason=failure_reason,
+                    failure_source="model",
+                )
                 update.update({
                     "status": "jax_translation_failed",
                     "failure_stage": "jax_translation",
-                    "failure_message": "Failed to parse translated JAX code into a callable.",
+                    "failure_message":failure_reason,
+                })
+                translation_updates[key] = update
+                continue
+
+            if translation_failed:
+                update.update({
+                    "status": "jax_translation_failed",
+                    "failure_stage": "jax_translation",
+                    "failure_message": failure_reason,
                 })
             else:
                 update.update({
@@ -2536,6 +2612,22 @@ async def hypothesis_engine(
                     x_eval=eval_grid,
                 )
             except Exception as e:
+                failure_source = (
+                    "parameter_estimator"
+                    if isinstance(e, ParamEstimatorFailed)
+                    else "model"
+                )
+                _log_jax_translation_failure(
+                    log_dir=full_dir,
+                    context=f"iter={i} island={island_idx} batch={j} llm={jax_llm_name} (translation_check)",
+                    model_name=model_name,
+                    numpy_code=model_code_string,
+                    jax_code=model_code_string_jax,
+                    jax_raw_response=jax_raw_response,
+                    failure_reason=f"translation check failed: {e}",
+                    failure_source=failure_source,
+                    param_estimator_code=param_est_code_string,
+                )
                 evaluation_log_updates[candidate_key] = {
                     "status": "translation_check_failed",
                     "failure_stage": "translation_check",
