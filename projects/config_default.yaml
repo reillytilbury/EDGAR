@@ -257,7 +257,7 @@ prompts:
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
-      * Model signature must be `def model(data, params):` where `data` is a dict of named arrays (e.g. data['stimulus'], data['response']) where `params` is a dict of named arrays/scalars.
+      * Model signature must be `def model(data, params):` where `data` is a dict of named arrays (e.g. data['stimulus'], data['response']) and `params` is a dict of named arrays/scalars.
       * Ensure all free parameters are numeric, not strings.
 
     docstring_guidelines: |
@@ -289,11 +289,11 @@ prompts:
       **Code Generation Guidelines:**
       * Import any packages you use.
       * Do not include any text other than the code.
-      * The only arguments to the function should be the inputs (X) and the spike count.
+      * The only arguments to the function should be data (dictionary).
       * Return a parameter dict with the same keys expected by the model.
       * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
       * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`.
-      * Do not call the model function in your parameter_estimator code, as you will not have access to it! Instead, use direct statistical relationships between the inputs and outputs to estimate parameters.
+      * Do not call the model function in your parameter_estimator code, as you will not have access to it! Instead, use direct statistical relationships in the data to estimate parameters.
 
     docstring_guidelines: |
       **Docstring Guidelines:**
@@ -305,7 +305,7 @@ prompts:
 
     refinement_image_instructions: |
       - An image is attached comparing data vs the current estimator's model fits.
-      - Compare predicted outputs to the data across multiple samples.
+      - Compare the model prediction to the data across multiple samples.
       - Identify systematic mismatches (bias, scale, shape, timing, or phase depending on task).
       - Propose parameter-estimation changes that address consistent failures seen across samples.
       - Base changes on repeated patterns, not single-sample outliers.
