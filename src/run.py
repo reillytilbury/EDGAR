@@ -3,11 +3,22 @@ Main runner. Translates the pseudocode directly into real code.
 """
 from __future__ import annotations
 
+# JAX/XLA runtime guards — must be set before any import that loads JAX.
+# Reduces GPU OOM during the spawn-subprocess scoring sweeps.
+import os
+
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+_xla_flags = os.environ.get("XLA_FLAGS", "")
+if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
+    os.environ["XLA_FLAGS"] = (_xla_flags + " --xla_gpu_enable_command_buffer=").strip()
+
 import asyncio
 import argparse
 from pathlib import Path
 
 from .io.task_spec import TaskSpec
+from .io.run_dir import make_run_dir
 from .evolution.population import Population
 from .evolution.island import (
     seed,
@@ -23,20 +34,17 @@ from .llm.generate import (
     translate_to_jax,
 )
 from .scoring.scoring import score
-from .paths import create_run_paths
 
 
 async def run(spec: TaskSpec) -> Path:
-    paths = create_run_paths(spec.io["save_path"])
-    spec.save_record(paths.full_dir)
+    run_dir = make_run_dir(spec.io["save_path"])
+    spec.save_record(run_dir)
 
-    X_discover, X_validate, X_eval = spec.load_data_fn(
-        data_path=spec.io["data_path"],
-        **spec.project_params,
-    )
+    X_discover, X_validate, X_eval = spec.load_data_fn(data_path=spec.io["data_path"], **spec.project_params)
     population = Population()
     islands = seed(population, spec.seed_programs, spec.evolution["n_islands"])
-    score(population, islands, X_discover, X_eval, spec.scoring)
+    await translate_to_jax(population, spec.prompt_schemas.jax, spec.llms["jax_translator_llm"])
+    score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
     census = []
 
@@ -51,19 +59,19 @@ async def run(spec: TaskSpec) -> Path:
         await generate_param_est_code(population, prompt_schemas.param_est, llms.param_est)
         await translate_to_jax(population, prompt_schemas.jax, llms.jax)
 
-        score(population, islands, X_discover, X_eval, spec.scoring)
+        score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
         islands = deduplicate(islands, population)
         islands = prune(islands, population, spec.evolution)
         islands = migrate(islands, population, spec.evolution, mode, temperature)
         census.append([set(island) for island in islands])
 
-    score(population, islands, X_validate, X_eval, spec.scoring)
+    score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
 
-    population.save(str(paths.full_dir / "population.jsonl"))
-    save_island_census(census, str(paths.full_dir / "census.json"))
+    population.save(str(run_dir / "population.jsonl"))
+    save_island_census(census, str(run_dir / "census.json"))
 
-    return paths.full_dir
+    return run_dir
 
 
 

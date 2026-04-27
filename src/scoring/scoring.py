@@ -1,3 +1,14 @@
+"""
+Scoring. Mirrors the generate pattern in src/llm/generate.py:
+
+    _score_one_model(program, ...)   # single program, timeout baked in
+    score(population, ...)           # finds programs needing scoring, fills losses
+
+Per-program work runs in a spawn subprocess so JAX initialises cleanly and
+runaway models can be killed on timeout.
+"""
+from __future__ import annotations
+
 import multiprocessing as mp
 
 import jax
@@ -6,20 +17,12 @@ import optax
 from jax.flatten_util import ravel_pytree
 
 from ..evolution.program import Program
+from ..evolution.population import Population
 
 
 # ── helpers ──
 
-def _worker(queue, program, data, loss_fn, config, X_eval):
-    try:
-        result = score_program(program, data, loss_fn, config, X_eval)
-    except Exception:
-        result = (float("inf"), float("inf"), None)
-    queue.put(result)
-
-
 def _get_params(param_est_fn, default_params, data_train):
-    """Estimate initial parameters for all samples via vmapped param estimator."""
     try:
         return jax.vmap(param_est_fn)(data_train)
     except Exception:
@@ -28,7 +31,6 @@ def _get_params(param_est_fn, default_params, data_train):
 
 
 def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
-    """Fit parameters on data_train using Adam, returning the best params found."""
     flat, unflatten = ravel_pytree(params_init)
 
     def total_loss(flat_p):
@@ -64,36 +66,43 @@ def _eval_fingerprint(model_fn, params, X_eval):
     return jax.vmap(model_fn, in_axes=(0, 0))(X_eval, params)
 
 
-# ── public API ──
+def _worker(queue, program, data, loss_fn, config, X_eval):
+    """Score one program inside a subprocess. Always puts a 3-tuple on the queue."""
+    try:
+        data_train, data_test = data
+        model_fn, param_est_fn = program.compile()
+        penalty = config["param_penalty_weight"] * program.n_params
+        params_init = _get_params(param_est_fn, model_fn.DEFAULT_PARAMS, data_train)
+        initial_loss = _eval_loss(model_fn, loss_fn, params_init, data_train) + penalty
+        params = _optimize(model_fn, loss_fn, params_init, data_train, config["gradient_descent"])
+        final_loss = _eval_loss(model_fn, loss_fn, params, data_test) + penalty
+        fingerprint = _eval_fingerprint(model_fn, params, X_eval) if X_eval is not None else None
+        result = (final_loss, initial_loss, fingerprint)
+    except Exception:
+        result = (float("inf"), float("inf"), None)
+    queue.put(result)
 
-def score_program(program: Program, data: tuple, loss_fn, config: dict, X_eval=None) -> tuple[float, float, jnp.ndarray | None]:
-    """Score a program: fit params on data_train, evaluate on data_test.
 
-    Intended to be called inside a subprocess — the process timeout is the
-    caller's responsibility (see ``score_with_timeout``).
+# ── per-program ──
 
+def _score_one_model(
+    program: Program,
+    data: tuple,
+    loss_fn,
+    config: dict,
+    X_eval=None,
+) -> tuple[float, float, jnp.ndarray | None]:
+    """Score one program in a spawn subprocess; kill on timeout.
+
+    Auto-populates program.n_params via count_params() if not set.
     Returns (final_loss, initial_loss, eval_fingerprint).
     """
-    data_train, data_test = data
-    model_fn, param_est_fn = program.compile()
+    if program.n_params is None:
+        try:
+            program.count_params()
+        except Exception:
+            return (float("inf"), float("inf"), None)
 
-    complexity_penalty = config["param_penalty_weight"] * program.n_params
-    params_init = _get_params(param_est_fn, model_fn.DEFAULT_PARAMS, data_train)
-    initial_loss = _eval_loss(model_fn, loss_fn, params_init, data_train) + complexity_penalty
-
-    params = _optimize(model_fn, loss_fn, params_init, data_train, config["gradient_descent"])
-
-    final_loss = _eval_loss(model_fn, loss_fn, params, data_test) + complexity_penalty
-    fingerprint = _eval_fingerprint(model_fn, params, X_eval) if X_eval is not None else None
-    return (final_loss, initial_loss, fingerprint)
-
-
-def score_with_timeout(program, data, loss_fn, config, X_eval=None) -> tuple[float, float, jnp.ndarray | None]:
-    """Run score_program in a spawn subprocess; kill on timeout.
-
-    Uses spawn (not fork) so JAX initialises cleanly in the child process.
-    Returns (inf, inf, None) on timeout or any failure inside the worker.
-    """
     ctx = mp.get_context("spawn")
     queue = ctx.Queue()
     proc = ctx.Process(target=_worker, args=(queue, program, data, loss_fn, config, X_eval))
@@ -105,4 +114,51 @@ def score_with_timeout(program, data, loss_fn, config, X_eval=None) -> tuple[flo
         return (float("inf"), float("inf"), None)
     return queue.get()
 
-# TODO: Need to add the score func called by run.py that doesn't yet exist.
+
+# ── population-level ──
+
+def _has_jax_code(program: Program) -> bool:
+    """Does this program have jax code that can be scored?"""
+    has_model = program.code_jax.model
+    has_param_est = program.code_jax.param_est
+    return bool(has_model and has_param_est)
+
+
+def _needs_scoring(population: Population, split: str) -> list[Program]:
+    """Programs with jax code whose `split` final loss hasn't been written yet.
+
+    A program with a finite (or even inf) loss is treated as already scored —
+    inf means scoring genuinely failed and shouldn't be retried.
+    """
+    return [
+        population[i] for i in range(len(population))
+        if _has_jax_code(population[i])
+        and getattr(population[i].losses, split).final is None
+    ]
+
+
+def score(
+    population: Population,
+    X_split: tuple,
+    X_eval,
+    config: dict,
+    loss_fn,
+    split: str,
+) -> None:
+    """Score every program needing scoring on the given split.
+
+    Mutates: program.losses.<split>.{init, final}, program.eval_fingerprint,
+    program.n_params.
+
+    Pass X_eval=None to skip fingerprint computation (e.g. on validate scoring,
+    so the discover-derived fingerprint isn't overwritten).
+    """
+    for program in _needs_scoring(population, split):
+        final_loss, initial_loss, fingerprint = _score_one_model(
+            program, X_split, loss_fn, config, X_eval
+        )
+        loss_pair = getattr(program.losses, split)
+        loss_pair.init = initial_loss
+        loss_pair.final = final_loss
+        if fingerprint is not None:
+            program.eval_fingerprint = fingerprint

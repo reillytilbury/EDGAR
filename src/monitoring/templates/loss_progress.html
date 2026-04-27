@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>__TITLE_HTML__</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+__SIDEBAR_CSS__
+</style>
+</head>
+<body>
+<div id="graph-container">
+  <div class="controls" id="controls">
+    <div class="section-title">Penalty</div>
+    <label>
+      <input type="checkbox" id="penalty-toggle" checked onchange="onPenaltyToggle()">
+      Include complexity penalty
+    </label>
+    <hr>
+    <div class="section-title">Colouring</div>
+    <label><input type="radio" name="colour-mode" value="island" onchange="onColourModeToggle()"> By island</label>
+    <label><input type="radio" name="colour-mode" value="dead_llm" checked onchange="onColourModeToggle()"> Dead vs alive (alive by LLM)</label>
+    <label><input type="radio" name="colour-mode" value="dead_mode" onchange="onColourModeToggle()"> Dead vs alive (alive by mode)</label>
+    <hr>
+    <div class="section-title">Islands</div>
+    <div id="island-checkboxes"></div>
+  </div>
+  <div id="graph" style="width:100%;height:100vh;"></div>
+</div>
+<div id="sidebar">
+  <button id="close-btn" onclick="closeSidebar()">&times;</button>
+  <div id="sidebar-content"></div>
+</div>
+
+<script>
+const sidebarData = __SIDEBAR_DATA__;
+const allTraces = __TRACES__;
+const islands = __ISLANDS__;
+const seedX = __SEED_X__;
+const seedYPenalty = __SEED_Y_PENALTY__;
+const seedYRaw = __SEED_Y_RAW__;
+const seedCustom = __SEED_CUSTOM__;
+const seedHover = __SEED_HOVER__;
+const edgeSegs = {penalty: __EDGE_SEGS_PENALTY__, raw: __EDGE_SEGS_RAW__};
+const parentMap = __PARENT_MAP__;
+const edgeMap = __EDGE_MAP__;
+
+// Trace layout:
+//   0: edges_dim  (all edges, grey, dim)
+//   1: edges_highlight  (ancestor edges, orange, on hover)
+//   2 .. 2+n-1: island scatter traces
+//   2+n: seed scatter trace
+const TRACE_OFFSET = 2;
+__COLOUR_MODE_JS__
+
+let showWithPenalty = true;
+let currentHoveredIdx = null;
+
+function buildEdgeArrays(segs) {
+  const ex = [], ey = [];
+  segs.forEach(function(s) {
+    ex.push(s.x[0], s.x[1], null);
+    ey.push(s.y[0], s.y[1], null);
+  });
+  return {x: ex, y: ey};
+}
+
+function getAncestors(rec_idx) {
+  const result = new Set();
+  const queue = [rec_idx];
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    if (result.has(cur)) continue;
+    result.add(cur);
+    const parents = parentMap[String(cur)];
+    if (parents) {
+      parents.forEach(function(p) {
+        if (p !== null && p !== undefined && !result.has(p)) {
+          queue.push(p);
+        }
+      });
+    }
+  }
+  return result;
+}
+
+function updateHighlight(rec_idx, mode) {
+  const ancestors = getAncestors(rec_idx);
+  const segs = edgeSegs[mode];
+  const ex = [], ey = [];
+  ancestors.forEach(function(a) {
+    const segList = edgeMap[String(a)];
+    if (segList) {
+      segList.forEach(function(si) {
+        const s = segs[si];
+        if (s) { ex.push(s.x[0], s.x[1], null); ey.push(s.y[0], s.y[1], null); }
+      });
+    }
+  });
+  Plotly.restyle(graphDiv, {x: [ex], y: [ey]}, [1]);
+}
+
+// Build initial Plotly traces
+function buildInitialTraces(withPenalty) {
+  const mode = withPenalty ? 'penalty' : 'raw';
+  const edgeData = buildEdgeArrays(edgeSegs[mode]);
+
+  const edgesDim = {
+    x: edgeData.x, y: edgeData.y,
+    mode: 'lines', hoverinfo: 'none', showlegend: false,
+    line: {color: 'rgba(150,150,150,0.3)', width: 1},
+    type: 'scatter'
+  };
+
+  const edgesHighlight = {
+    x: [], y: [],
+    mode: 'lines', hoverinfo: 'none', showlegend: false,
+    line: {color: 'rgba(255,140,0,0.9)', width: 2},
+    type: 'scatter'
+  };
+
+  const islandTraces = allTraces.map(function(t) {
+    return {
+      x: t.x,
+      y: withPenalty ? t.y_with_penalty : t.y_without_penalty,
+      customdata: t.custom,
+      hovertext: t.hover,
+      mode: 'markers',
+      hoverinfo: 'text',
+      name: 'Island ' + t.island_idx,
+      marker: {
+        color: t.custom.map(function(idx) { return getNodeColour(idx, currentColourMode); }),
+        size: 14,
+        line: {width: 1, color: '#333'}
+      },
+      type: 'scatter'
+    };
+  });
+
+  const seedTrace = {
+    x: seedX,
+    y: withPenalty ? seedYPenalty : seedYRaw,
+    customdata: seedCustom,
+    hovertext: seedHover,
+    mode: 'markers',
+    hoverinfo: 'text',
+    name: 'Seeds',
+    marker: {
+      symbol: 'square',
+      color: seedCustom.map(function(idx) { return getNodeColour(idx, currentColourMode); }),
+      size: 18,
+      line: {width: 1.5, color: '#fff'}
+    },
+    type: 'scatter'
+  };
+
+  return [edgesDim, edgesHighlight].concat(islandTraces).concat([seedTrace]);
+}
+
+const layout = {
+  title: __TITLE_JSON__,
+  showlegend: true,
+  hovermode: 'closest',
+  xaxis: {
+    title: 'Iteration (jittered by island)',
+    showgrid: true,
+    range: __X_RANGE__,
+    autorange: __X_RANGE__ === null
+  },
+  yaxis: {
+    title: 'Relative perplexity P(L) = exp(−(L − L₀))',
+    showgrid: true,
+    range: __Y_RANGE__,
+    autorange: __Y_RANGE__ === null
+  },
+  margin: {l: 60, r: 20, t: 60, b: 50},
+  plot_bgcolor: '#fff',
+  paper_bgcolor: '#fff'
+};
+
+const graphDiv = document.getElementById('graph');
+Plotly.newPlot(graphDiv, buildInitialTraces(true), layout, {responsive: true});
+
+// Click handler
+graphDiv.on('plotly_click', function(data) {
+  if (data.points.length > 0) {
+    const pt = data.points[data.points.length - 1];
+    if (pt.customdata !== undefined && pt.customdata !== null) {
+      showSidebar(pt.customdata);
+    }
+  }
+});
+
+// Hover / unhover for lineage highlighting
+graphDiv.on('plotly_hover', function(data) {
+  if (data.points.length > 0) {
+    const pt = data.points[data.points.length - 1];
+    if (pt.customdata !== undefined && pt.customdata !== null) {
+      currentHoveredIdx = pt.customdata;
+      updateHighlight(currentHoveredIdx, showWithPenalty ? 'penalty' : 'raw');
+    }
+  }
+});
+
+graphDiv.on('plotly_unhover', function() {
+  currentHoveredIdx = null;
+  Plotly.restyle(graphDiv, {x: [[]], y: [[]]}, [1]);
+});
+
+// Penalty toggle
+function onPenaltyToggle() {
+  showWithPenalty = document.getElementById('penalty-toggle').checked;
+  const mode = showWithPenalty ? 'penalty' : 'raw';
+
+  // Update edges_dim (trace 0)
+  const edgeData = buildEdgeArrays(edgeSegs[mode]);
+  Plotly.restyle(graphDiv, {x: [edgeData.x], y: [edgeData.y]}, [0]);
+
+  // Update island traces
+  const newY = allTraces.map(function(t) {
+    return showWithPenalty ? t.y_with_penalty : t.y_without_penalty;
+  });
+  const islandIndices = allTraces.map(function(_, i) { return i + TRACE_OFFSET; });
+  Plotly.restyle(graphDiv, {y: newY}, islandIndices);
+
+  // Update seed trace
+  const seedTraceIdx = allTraces.length + TRACE_OFFSET;
+  Plotly.restyle(graphDiv, {y: [showWithPenalty ? seedYPenalty : seedYRaw]}, [seedTraceIdx]);
+
+  // Update axis title
+  const newTitle = showWithPenalty
+    ? 'Relative perplexity P(L) = exp(−(L − L₀))'
+    : 'Relative perplexity P(L−penalty) = exp(−(L−penalty − L₀))';
+  Plotly.relayout(graphDiv, {'yaxis.title.text': newTitle});
+
+  // Re-apply highlight if hovering
+  if (currentHoveredIdx !== null) {
+    updateHighlight(currentHoveredIdx, mode);
+  }
+}
+
+// Island checkboxes
+const cbContainer = document.getElementById('island-checkboxes');
+islands.forEach(function(islandIdx) {
+  const label = document.createElement('label');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = true;
+  cb.onchange = function() {
+    const traceIdx = allTraces.findIndex(function(t) { return t.island_idx === islandIdx; });
+    if (traceIdx >= 0) {
+      Plotly.restyle(graphDiv, {visible: cb.checked ? true : 'legendonly'}, [traceIdx + TRACE_OFFSET]);
+    }
+  };
+  label.appendChild(cb);
+  label.appendChild(document.createTextNode(' Island ' + islandIdx));
+  cbContainer.appendChild(label);
+});
+
+__SIDEBAR_JS__
+</script>
+</body>
+</html>

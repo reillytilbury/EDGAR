@@ -67,6 +67,7 @@ def seed(population: Population, seed_programs: list[Program], n_islands: int) -
 def spawn(
     population: Population,
     islands: list[set[int]],
+    iteration: int,
     mode: str,
     temperature: float,
     batch_size: int,
@@ -81,11 +82,10 @@ def spawn(
 
     Mutates: population (adds shells), islands (adds new indices)
     """
-    iteration = _infer_iteration(population)
-
     for island_idx, island in enumerate(islands):
         programs = {population[i] for i in island}
-        parent_indices = list(uniform_sample(programs, k=min(k_max, len(programs))))
+        assert len(programs) >= k_max, f"Not enough programs in island {island_idx} to sample {k_max} parents"
+        parent_indices = list(uniform_sample(programs, k=k_max))
 
         for batch_idx in range(batch_size):
             child = Program(
@@ -100,24 +100,6 @@ def spawn(
             )
             population.add(child)
             island.add(child.idx)
-
-
-def _infer_iteration(population: Population) -> int:
-    """Infer current iteration from the max generation in population births."""
-    if len(population) == 0:
-        return 0
-    return max(population[i].birth.generation for i in range(len(population))) + 1
-
-
-# helper funcs
-def relative_logit_probs(losses: np.ndarray, temperature: float) -> np.ndarray:
-    relative   = losses - losses.min()
-    normalised = relative / (np.std(relative) + 1e-6)
-    logits     = -normalised / max(temperature, 1e-3)
-    logits    -= logits.max()
-    probs      = np.exp(logits)
-    probs     /= probs.sum()
-    return probs
 
 
 # island operations: prune, sample, deduplicate. Each takes a set of Programs and returns the new island (set of global indices)
@@ -157,8 +139,11 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
     programs = list(programs)
     if k > len(programs):
         raise ValueError(f"k={k} exceeds population size {len(programs)}")
-    losses     = np.array([p.losses.discover.final for p in programs], dtype=float)
-    probs      = relative_logit_probs(losses, temperature)
+    losses = np.array([p.losses.discover.final for p in programs], dtype=float)
+    logits = -(losses - losses.min()) / (np.std(losses) + 1e-6) / max(temperature, 1e-3)
+    logits -= logits.max()
+    probs = np.exp(logits)
+    probs /= probs.sum()
     chosen = np.random.choice(len(programs), size=k, replace=False, p=probs)
     return {programs[j].idx for j in chosen}
 
