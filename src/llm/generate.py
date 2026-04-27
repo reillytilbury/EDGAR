@@ -138,7 +138,7 @@ async def _translate_one_program(
     """Translate a single program's model_code and param_est_code from numpy to JAX."""
     prompt = prompt_schema.build_prompt("explore", [program])
     try:
-        result = await call_llm(prompt=prompt, llm_model=llm, output_type=TranslationSchema, temperature=0.3)
+        result = await call_llm(prompt=prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0)
         if load_function_from_source(result.model_code, "model") is not None:
             program.code_jax.model = result.model_code
         if load_function_from_source(result.param_est_code, "parameter_estimator") is not None:

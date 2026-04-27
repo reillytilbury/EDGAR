@@ -1,7 +1,5 @@
 from collections.abc import Callable
 
-# TODO: This is a very simple implementation. The best improvement is to run the code in a new process, which would allow for better timeouts.
-
 def load_function_from_source(
     source: str | None,
     entrypoint_name: str,
