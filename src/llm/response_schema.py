@@ -36,5 +36,10 @@ class ParamEstSchema(ReasonedCodeSchema):
     pass
 
 
-class TranslationSchema(CodeOnlySchema):
-    pass
+class TranslationSchema(BaseModel):
+    model_code: str = Field(
+        description="The model function translated to JAX-compatible code, including imports."
+    )
+    param_est_code: str = Field(
+        description="The parameter estimator function translated to JAX-compatible code, including imports."
+    )

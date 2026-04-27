@@ -22,10 +22,10 @@ Example usage:
     island_0 = prune(programs_0, keep_n=10)              # set[int]
 
     # sample 2 parents via Boltzmann distribution
-    parents = sample(programs_0, k=2, temperature=1.0)   # set[int]
+    parents = boltzmann_sample(programs_0, k=2, temperature=1.0)   # set[int]
 
     # migration — union with a sample from another island
-    island_1 = island_1 | sample(programs_0, k=2)
+    island_1 = island_1 | uniform_sample(programs_0, k=2)
 
     # within-island deduplication
     island_0 = deduplicate(programs_0)                   # set[int]
@@ -43,6 +43,69 @@ from __future__ import annotations
 import json
 import numpy as np
 from .program import Program
+from .population import Population
+
+
+# ---------------------------------------------------------------------------
+# Seed and spawn — creating new programs and placing them on islands
+# ---------------------------------------------------------------------------
+
+def seed(population: Population, seed_programs: list[Program], n_islands: int) -> list[set[int]]:
+    """
+    Add seed programs to population and initialize islands.
+
+    Mutates: population (adds seed programs)
+    Returns: islands — list of n_islands sets, each containing all seed indices
+    """
+    for program in seed_programs:
+        population.add(program)
+
+    seed_indices = {p.idx for p in seed_programs}
+    return [set(seed_indices) for _ in range(n_islands)]
+
+
+def spawn(
+    population: Population,
+    islands: list[set[int]],
+    mode: str,
+    temperature: float,
+    batch_size: int,
+    k_max: int,
+) -> None:
+    """
+    Sample parents from each island and create empty Program shells.
+    Adds shells to population and their birth island.
+
+    Each shell gets: uid, parent_ids, mode, temperature — but no code yet.
+
+    Mutates: population (adds shells), islands (adds new indices)
+    """
+    iteration = _infer_iteration(population)
+
+    for island_idx, island in enumerate(islands):
+        programs = {population[i] for i in island}
+        parent_indices = uniform_sample(programs, k=min(k_max, len(programs)))
+        parent_ids = [population[i].uid for i in parent_indices]
+
+        for batch_idx in range(batch_size):
+            child = Program(
+                uid=(iteration, island_idx, batch_idx),
+                model_code=None,
+                param_est_code=None,
+                parent_ids=parent_ids,
+                mode=mode,
+                temperature=temperature,
+            )
+            population.add(child)
+            island.add(child.idx)
+
+
+def _infer_iteration(population: Population) -> int:
+    """Infer current iteration from the max iteration in population uids."""
+    if len(population) == 0:
+        return 0
+    return max(population[i].uid[0] for i in range(len(population))) + 1
+
 
 # helper funcs
 def relative_logit_probs(losses: np.ndarray, temperature: float) -> np.ndarray:
@@ -58,27 +121,41 @@ def relative_logit_probs(losses: np.ndarray, temperature: float) -> np.ndarray:
 # island operations: prune, sample, deduplicate. Each takes a set of Programs and returns the new island (set of global indices)
 def prune(programs: set[Program], keep_n: int) -> set[int]:
     """
-    Return the best keep_n global indices by train_sample_loss.
+    Return the best keep_n global indices by loss_discover.
 
         programs_0 = {pop[i] for i in island_0}  # e.g. losses 0.5, 0.2, 0.9
         island_0   = prune(programs_0, keep_n=2) # {idx of 0.2, idx of 0.5}
     """
-    ranked = sorted(programs, key=lambda p: p.train_sample_loss)
+    ranked = sorted(programs, key=lambda p: p.loss_discover)
     return {p.idx for p in ranked[:keep_n]}
 
 
-def sample(programs: set[Program], k: int = 1, temperature: float = 1.0) -> set[int]:
+def uniform_sample(programs: set[Program], k: int = 1) -> set[int]:
+    """
+    Sample k global indices uniformly at random.
+
+        programs_0 = {pop[i] for i in island_0}
+        parents    = uniform_sample(programs_0, k=2)  # e.g. {0, 2}
+    """
+    programs = list(programs)
+    if k > len(programs):
+        raise ValueError(f"k={k} exceeds population size {len(programs)}")
+    chosen = np.random.choice(len(programs), size=k, replace=False)
+    return {programs[j].idx for j in chosen}
+
+
+def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.0) -> set[int]:
     """
     Sample k global indices using a Boltzmann distribution over relative,
     std-normalised losses. High temperature → uniform, low → best dominate.
 
         programs_0 = {pop[i] for i in island_0}
-        parents    = sample(programs_0, k=2, temperature=1.0)  # e.g. {0, 2}
+        parents    = boltzmann_sample(programs_0, k=2, temperature=1.0)  # e.g. {0, 2}
     """
     programs = list(programs)
     if k > len(programs):
         raise ValueError(f"k={k} exceeds population size {len(programs)}")
-    losses     = np.array([p.train_sample_loss for p in programs], dtype=float)
+    losses     = np.array([p.loss_discover for p in programs], dtype=float)
     probs      = relative_logit_probs(losses, temperature)
     chosen = np.random.choice(len(programs), size=k, replace=False, p=probs)
     return {programs[j].idx for j in chosen}
@@ -89,7 +166,7 @@ def _are_duplicates(p_i: Program, p_j: Program, loss_tol: float, cosine_tol: flo
         return False
     if p_i.eval_fingerprint is None or p_j.eval_fingerprint is None:
         return False
-    if abs(p_i.train_sample_loss - p_j.train_sample_loss) > loss_tol:
+    if abs(p_i.loss_discover - p_j.loss_discover) > loss_tol:
         return False
     y_i = p_i.eval_fingerprint.flatten()
     y_j = p_j.eval_fingerprint.flatten()
@@ -119,7 +196,7 @@ def deduplicate(programs: set[Program], loss_tol: float = 0.01, cosine_tol: floa
                 continue
             if not _are_duplicates(p_i, p_j, loss_tol, cosine_tol):
                 continue
-            loser = p_i if p_i.train_sample_loss >= p_j.train_sample_loss else p_j
+            loser = p_i if p_i.loss_discover >= p_j.loss_discover else p_j
             to_remove.add(loser.idx)
 
     return {p.idx for p in programs if p.idx not in to_remove}
@@ -150,8 +227,8 @@ def deduplicate_islands(
     if overlap < n_overlap:
         return {p.idx for p in programs_a}, {p.idx for p in programs_b}
 
-    losses_a = sorted(p.train_sample_loss for p in programs_a)
-    losses_b = sorted(p.train_sample_loss for p in programs_b)
+    losses_a = sorted(p.loss_discover for p in programs_a)
+    losses_b = sorted(p.loss_discover for p in programs_b)
 
     if losses_a <= losses_b:
         return {p.idx for p in programs_a}, {0, 1}

@@ -10,8 +10,8 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 
 from . import utils
-from .monitoring.diagnostics import _align_eval_grid, _programs_df_to_programs_list
-from .monitoring.log import (
+from .utils import _align_eval_grid, _programs_df_to_programs_list
+from .log import (
     _append_generation_record,
     _apply_removal_reasons_to_log,
     _drop_nonfinite_train_loss_from_islands,
