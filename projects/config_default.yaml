@@ -37,6 +37,9 @@ llms:
   param_est_llm: gemini-2.0-flash
   jax_translator_llm: gemini-2.0-flash-lite
 
+  # Max lines allowed in a parameter estimator response.
+  max_lines: 50
+
   # Banned function calls/fragments during code generation.
   swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
 

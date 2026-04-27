@@ -71,24 +71,27 @@ def loss_fn(output, data):
 def test_score_program_returns_finite_loss():
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    loss = score_program(program, data, loss_fn, BASE_CONFIG)
-    assert jnp.isfinite(loss)
-    assert loss >= 0.0
+    final_loss, initial_loss = score_program(program, data, loss_fn, BASE_CONFIG)
+    assert jnp.isfinite(final_loss)
+    assert jnp.isfinite(initial_loss)
+    assert final_loss >= 0.0
+    assert initial_loss >= 0.0
 
 
 def test_score_program_perfect_fit():
     """w=1.0 with y=x should give near-zero loss after optimization."""
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    loss = score_program(program, data, loss_fn, BASE_CONFIG)
-    assert loss < 1e-4
+    final_loss, initial_loss = score_program(program, data, loss_fn, BASE_CONFIG)
+    assert final_loss < 1e-4
 
 
 def test_score_with_timeout_completes():
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    loss = score_with_timeout(program, data, loss_fn, BASE_CONFIG)
-    assert jnp.isfinite(loss)
+    final_loss, initial_loss = score_with_timeout(program, data, loss_fn, BASE_CONFIG)
+    assert jnp.isfinite(final_loss)
+    assert jnp.isfinite(initial_loss)
 
 
 def test_score_with_timeout_kills_slow_model():
@@ -96,7 +99,8 @@ def test_score_with_timeout_kills_slow_model():
     data = (_make_data(), _make_data())
     config = {**BASE_CONFIG, "timeout_s": 2.0}
     t0 = time.time()
-    loss = score_with_timeout(program, data, loss_fn, config)
+    final_loss, initial_loss = score_with_timeout(program, data, loss_fn, config)
     elapsed = time.time() - t0
-    assert loss == float("inf")
+    assert final_loss == float("inf")
+    assert initial_loss == float("inf")
     assert elapsed < 10.0  # subprocess was killed, didn't wait the full 100s

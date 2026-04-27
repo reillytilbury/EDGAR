@@ -1,10 +1,41 @@
+"""
+prompt_schema.py
+
+Schema holding the component parts of a prompt.
+
+There are two kinds of template variables:
+- config_vars: come from config/spec (e.g. k, max_lines, swear_words).
+  Only source: the config file / TaskSpec.
+- parent_vars: come from Program fields (e.g. descriptive_name, loss_discover,
+  model_code). Extracted from parent Programs by the caller.
+
+Example usage:
+    schema = PromptSchema(
+        base="You are a scientist. Below are {k_max} models...",
+        explore="Be creative...",
+        code_guidelines="Function signature must be...",
+        docstring_guidelines="Include a brief description...",
+        parent_detail_template="model: {descriptive_name}\\nloss: {loss_discover}\\n{model_code}\\n",
+        config_vars=["k_max"],
+        parent_vars=["descriptive_name", "loss_discover", "model_code"],
+    )
+
+    # config: flat dict from TaskSpec.flat_config (merged evolution + llms + scoring)
+    config = {"k_max": 2, "max_lines": 50, "swear_words": "scipy.optimize, curve_fit"}
+
+    # parents: list of Program objects (parent_vars extracted via getattr)
+    prompt = schema.build_prompt("explore", parents, config)
+"""
+from __future__ import annotations
+
 from pydantic import BaseModel, Field
-from typing import Optional, Any
+from typing import Optional, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..evolution.program import Program
+
 
 class PromptSchema(BaseModel):
-    """
-    Schema holding the component parts of a prompt.
-    """
     base: str
     explore: Optional[str] = None
     exploit: Optional[str] = None
@@ -12,23 +43,21 @@ class PromptSchema(BaseModel):
     docstring_guidelines: str
     image_analysis_instructions: Optional[str] = None
     parent_detail_template: str
-    global_vars: list[str] = Field(default_factory=list)
+    config_vars: list[str] = Field(default_factory=list)
     parent_vars: list[str] = Field(default_factory=list)
 
     def build_prompt(
         self,
         mode: str,
-        global_variables: dict[str, Any] | None = None,
-        parent_variables: list[dict[str, Any]] | None = None,
+        parents: list[Program] | None = None,
+        config: dict[str, Any] | None = None,
     ) -> str:
-        """
-        Build a prompt by selecting and formatting schema sections.
-        """
+        """Build a prompt by selecting and formatting schema sections."""
         if mode not in {"explore", "exploit"}:
             raise ValueError("mode must be 'explore' or 'exploit'")
 
-        global_variables = global_variables or {}
-        parent_variables = parent_variables or []
+        parents = parents or []
+        config = config or {}
 
         sections = [
             self.base,
@@ -38,12 +67,14 @@ class PromptSchema(BaseModel):
             self.image_analysis_instructions,
         ]
 
-        prompt_parts = [s.format(**global_variables) for s in sections if s]
+        prompt_parts = [s.format(**config) for s in sections if s]
 
-        if parent_variables:
+        if parents:
             parents_text = [
-                self.parent_detail_template.format(**p)
-                for p in parent_variables
+                self.parent_detail_template.format(
+                    **{x: getattr(p, x, "") or "" for x in self.parent_vars}
+                )
+                for p in parents
             ]
             prompt_parts.append("\n".join(parents_text))
 

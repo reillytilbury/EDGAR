@@ -1,5 +1,12 @@
+# Prompt defaults for all projects.
+# Override in projects/<task>/prompts.yaml.
+#
+# Two kinds of template variables:
+#   - config_vars: come from config/spec, passed explicitly (e.g. k, max_lines, swear_words)
+#   - parent_vars: come from Program fields, extracted from parent Programs (e.g. descriptive_name, loss_discover, model_code)
+
 model:
-  base: 'You are an AI scientist. Below are {k} models describing a phenomenon, sorted from worst to best.
+  base: 'You are an AI scientist. Below are {k_max} models describing a phenomenon, sorted from worst to best.
 
     Your task is to create a new model, that is better than all the models below.
 
@@ -38,24 +45,23 @@ model:
 
     '
   image_analysis_instructions: null
-  parent_detail_template: 'model {model_idx}: {model_name}
+  parent_detail_template: 'model: {descriptive_name}
 
-    cross-validated loss: {loss}
+    loss: {loss_discover}
 
-    {model_code_string}
+    {model_code}
 
     ----------------------------
 
     '
-  global_vars:
-  - k
+  config_vars:
+  - k_max
   parent_vars:
-  - model_idx
-  - model_name
-  - loss
-  - model_code_string
+  - descriptive_name
+  - loss_discover
+  - model_code
 parameter_estimator:
-  base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest model, {model_name}.
+  base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest model (shown last below).
 
     The parameter should be estimated directly, using statistical principles.
 
@@ -74,15 +80,15 @@ parameter_estimator:
 
     '
   image_analysis_instructions: null
-  parent_detail_template: 'model {model_idx}: {model_name}
+  parent_detail_template: 'model: {descriptive_name}
 
-    cross-validated loss: {loss}
+    loss: {loss_discover}
 
-    {program_code_string}
+    {model_code}
 
     \n
 
-    {parameter_estimator_code_string}
+    {param_est_code}
 
     \n
 
@@ -91,23 +97,22 @@ parameter_estimator:
     \n
 
     '
-  global_vars:
-  - current_model_name
-  - next_version
+  config_vars:
   - max_lines
   - swear_words
   parent_vars:
-  - model_idx
-  - model_name
-  - loss
-  - program_code_string
-  - parameter_estimator_code_string
+  - descriptive_name
+  - loss_discover
+  - model_code
+  - param_est_code
 jax_translator:
-  base: 'Convert the following code block to be JAX-compatible.
+  base: 'Convert the following model and parameter estimator to be JAX-compatible.
 
     Include all necessary imports (jax, jax.numpy as jnp).
 
     Ensure compatibility with jax.jit, jax.grad, and jax.vmap.
+
+    Return the translated model code and parameter estimator code separately.
 
     '
   explore: null
@@ -129,9 +134,17 @@ jax_translator:
 
     '
   image_analysis_instructions: null
-  parent_detail_template: '{code_block}
+  parent_detail_template: 'Model code:
+
+    {model_code}
+
+
+    Parameter estimator code:
+
+    {param_est_code}
 
     '
-  global_vars: []
+  config_vars: []
   parent_vars:
-  - code_block
+  - model_code
+  - param_est_code

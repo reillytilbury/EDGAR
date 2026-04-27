@@ -8,16 +8,16 @@ from jax.flatten_util import ravel_pytree
 from ..evolution.program import Program
 
 
-def _worker(queue, program, data, loss_fn, config):
+def _worker(queue, program, data, loss_fn, config, X_eval):
     try:
-        result = score_program(program, data, loss_fn, config)
+        result = score_program(program, data, loss_fn, config, X_eval)
     except Exception:
-        result = float("inf")
+        result = (float("inf"), float("inf"), None)
     queue.put(result)
 
 
-def score_with_timeout(program, data, loss_fn, config) -> float:
-    """Run score_program in a subprocess, returning inf if it exceeds timeout.
+def score_with_timeout(program, data, loss_fn, config, X_eval=None) -> tuple[float, float, jnp.ndarray | None]:
+    """Run score_program in a subprocess, returning (final_loss, initial_loss, eval_fingerprint).
 
     Uses spawn (not fork) so JAX initialises cleanly in the child process.
 
@@ -31,19 +31,22 @@ def score_with_timeout(program, data, loss_fn, config) -> float:
             boundary.
         config: The ``scoring`` config subsection. Keys:
             ``timeout_s``, ``param_penalty_weight``, ``gradient_descent``.
+        X_eval: Optional evaluation data dict for computing the deduplication
+            fingerprint. If None, eval_fingerprint is not computed.
 
     Returns:
-        Scalar loss as a Python float, or inf if the process timed out or failed.
+        Tuple of (final_loss, initial_loss, eval_fingerprint), or
+        (inf, inf, None) if timed out or failed.
     """
     ctx = mp.get_context("spawn")
     queue = ctx.Queue()
-    proc = ctx.Process(target=_worker, args=(queue, program, data, loss_fn, config))
+    proc = ctx.Process(target=_worker, args=(queue, program, data, loss_fn, config, X_eval))
     proc.start()
     proc.join(timeout=config["timeout_s"])
     if proc.is_alive():
         proc.kill()
         proc.join()
-        return float("inf")
+        return (float("inf"), float("inf"), None)
     return queue.get()
 
 
@@ -132,7 +135,21 @@ def _eval_loss(model_fn, loss_fn, params, data_test):
     return float(loss_fn(output, data_test))
 
 
-def score_program(program: Program, data: tuple, loss_fn, config: dict) -> float:
+def _eval_fingerprint(model_fn, params, X_eval):
+    """Compute model outputs on evaluation grid using optimal params.
+
+    Args:
+        model_fn: JAX model with signature ``(data_i, params) -> output``.
+        params: Batched parameter pytree with a leading sample axis.
+        X_eval: Evaluation data dict for fingerprinting.
+
+    Returns:
+        jnp.ndarray of model outputs on the evaluation grid.
+    """
+    return jax.vmap(model_fn, in_axes=(0, 0))(X_eval, params)
+
+
+def score_program(program: Program, data: tuple, loss_fn, config: dict, X_eval=None) -> tuple[float, float, jnp.ndarray | None]:
     """Score a program: fit params on data_train, evaluate on data_test.
 
     Intended to be called inside a subprocess — the process timeout is the
@@ -148,15 +165,24 @@ def score_program(program: Program, data: tuple, loss_fn, config: dict) -> float
             where output and data both have a leading sample axis.
         config: The ``scoring`` config subsection. Keys:
             ``param_penalty_weight`` (float) and ``gradient_descent`` (dict).
+        X_eval: Optional evaluation data dict for computing the deduplication
+            fingerprint. If None, eval_fingerprint is not computed.
 
     Returns:
-        Scalar loss on data_test plus complexity penalty, as a Python float.
+        Tuple of (final_loss, initial_loss, eval_fingerprint) where:
+        - final_loss: loss on data_test after optimization plus complexity penalty
+        - initial_loss: cross-validated loss on data_train before optimization, plus complexity penalty
+        - eval_fingerprint: model outputs on X_eval with optimal params, or None
     """
     data_train, data_test = data
     model_fn, param_est_fn = program.compile()
 
-    params = _get_params(param_est_fn, model_fn.DEFAULT_PARAMS, data_train)
-    params = _optimize(model_fn, loss_fn, params, data_train, config["gradient_descent"])
-
     complexity_penalty = config["param_penalty_weight"] * program.n_params
-    return _eval_loss(model_fn, loss_fn, params, data_test) + complexity_penalty
+    params_init = _get_params(param_est_fn, model_fn.DEFAULT_PARAMS, data_train)
+    initial_loss = _eval_loss(model_fn, loss_fn, params_init, data_train) + complexity_penalty
+
+    params = _optimize(model_fn, loss_fn, params_init, data_train, config["gradient_descent"])
+
+    final_loss = _eval_loss(model_fn, loss_fn, params, data_test) + complexity_penalty
+    fingerprint = _eval_fingerprint(model_fn, params, X_eval) if X_eval is not None else None
+    return (final_loss, initial_loss, fingerprint)
