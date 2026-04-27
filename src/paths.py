@@ -19,8 +19,8 @@ class RunPaths:
     best_loss_path: str
 
 
-def create_run_paths() -> RunPaths:
-    base_dir = os.path.join(os.getcwd(), "program_databases")
+def create_run_paths(save_path: str) -> RunPaths:
+    base_dir = os.path.abspath(save_path)
     print("Base directory:", base_dir)
     os.makedirs(base_dir, exist_ok=True)
 

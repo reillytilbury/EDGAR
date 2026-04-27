@@ -1,4 +1,4 @@
-task:
+io:
   data_path: /home/reilly/datasets/spontaneous_data/spont_M161025_MP030_20161120.mat
 evolution:
   n_iterations: 3

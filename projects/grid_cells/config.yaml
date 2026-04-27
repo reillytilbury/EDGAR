@@ -1,4 +1,4 @@
-task:
+io:
   data_path: /Users/reillytilbury/Desktop/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
 evolution:
   n_iterations: 5

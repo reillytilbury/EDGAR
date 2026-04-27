@@ -1,9 +1,12 @@
 # Base defaults for all projects.
 # Override only what you need in projects/<task>/config.yaml.
 
-task:
-  # Path to task data. Override in each task config.
+io:
+  # Path to task data. Override in each project config.
   data_path: /home/USER/data.npy
+
+  # Base directory for run outputs. Each run lands in <save_path>/MM-DD/HH-MM-SS/.
+  save_path: program_databases
 
 evolution:
   # Number of generations per run.

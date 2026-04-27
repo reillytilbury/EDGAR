@@ -5,15 +5,11 @@ from typing import Dict, Tuple
 
 from src import utils
 
-# Configuration constants from project config
-ACTIVITY_THRESHOLD = 0.4
-CONC_THRESHOLD = 0.55
-
 
 def load_and_process_data(
     data_path: str,
-    activity_threshold: float = ACTIVITY_THRESHOLD,
-    conc_threshold: float = CONC_THRESHOLD,
+    activity_threshold: float,
+    conc_threshold: float,
 ) -> Dict[str, np.ndarray]:
     """
     Load and preprocess orientation-tuning neural data.

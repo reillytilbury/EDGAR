@@ -1,4 +1,4 @@
-task:
+io:
   data_path: /path/to/data.npy
 evolution:
   n_iterations: 2

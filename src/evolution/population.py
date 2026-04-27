@@ -13,8 +13,10 @@ Example usage:
     popn = Population()
 
     # add programs — idx is set automatically
-    popn.add(Program(uid=(0,0,0), model_code="...", param_est_code="..."))
-    popn.add(Program(uid=(0,0,1), model_code="...", param_est_code="..."))
+    popn.add(Program(birth=BirthCertificate(generation=0, island=0, batch_index=0),
+                     code=Code(model="...", param_est="...")))
+    popn.add(Program(birth=BirthCertificate(generation=0, island=0, batch_index=1),
+                     code=Code(model="...", param_est="...")))
     # popn[0].idx == 0, popn[1].idx == 1, etc.
 
     # look up by global index
@@ -31,8 +33,9 @@ Example usage:
 
 from __future__ import annotations
 import json
+from dataclasses import asdict
 import numpy as np
-from .program import Program
+from .program import Program, BirthCertificate, Code, LossPair, Losses
 
 class Population:
     def __init__(self) -> None:
@@ -51,11 +54,9 @@ class Population:
     def save(self, path: str) -> None:
         with open(path, "w") as f:
             for p in self._programs:
-                d = p.__dict__.copy()
-                d["uid"]        = list(d["uid"])
-                d["parent_ids"] = [list(x) for x in d["parent_ids"]]
+                d = asdict(p)
                 if d["eval_fingerprint"] is not None:
-                    d["eval_fingerprint"] = d["eval_fingerprint"].tolist()
+                    d["eval_fingerprint"] = p.eval_fingerprint.tolist()
                 f.write(json.dumps(d) + "\n")
 
     @classmethod
@@ -64,10 +65,21 @@ class Population:
         with open(path) as f:
             for line in f:
                 d = json.loads(line.strip())
-                d.pop("idx")
-                d["uid"]        = tuple(d["uid"])
-                d["parent_ids"] = [tuple(p) for p in d["parent_ids"]]
-                if d["eval_fingerprint"] is not None:
-                    d["eval_fingerprint"] = np.array(d["eval_fingerprint"])
-                pop.add(Program(**d))
+                d.pop("idx", None)
+                fingerprint = d["eval_fingerprint"]
+                if fingerprint is not None:
+                    fingerprint = np.array(fingerprint)
+                program = Program(
+                    birth=BirthCertificate(**d["birth"]),
+                    code=Code(**d["code"]),
+                    code_jax=Code(**d["code_jax"]),
+                    name=d["name"],
+                    losses=Losses(
+                        discover=LossPair(**d["losses"]["discover"]),
+                        validate=LossPair(**d["losses"]["validate"]),
+                    ),
+                    n_params=d["n_params"],
+                    eval_fingerprint=fingerprint,
+                )
+                pop.add(program)
         return pop

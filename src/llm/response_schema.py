@@ -1,25 +1,13 @@
 from pydantic import BaseModel, Field
 
 
-class CodeOnlySchema(BaseModel):
-    code: str = Field(
-        description=(
-            "The complete, self-contained Python implementation. "
-            "Must include imports, any helper functions, and the primary function definition."
-        )
-    )
-
-
-class ReasonedCodeSchema(CodeOnlySchema):
+class ModelSchema(BaseModel):
     thought_process: str = Field(
         description="Detailed mathematical or algorithmic reasoning for this code."
     )
-
-
-class ModelSchema(ReasonedCodeSchema):
     descriptive_name: str = Field(
         description=(
-            "A concise, descriptive name for the model or function being implemented "
+            "A concise, descriptive name for the model "
             "(e.g., 'Double Gaussian Model')."
         )
     )
@@ -30,10 +18,24 @@ class ModelSchema(ReasonedCodeSchema):
             "including all variables and parameters."
         )
     )
+    code: str = Field(
+        description=(
+            "The complete, self-contained Python implementation of the model. "
+            "Must include imports, any helper functions, and the model function definition."
+        )
+    )
 
 
-class ParamEstSchema(ReasonedCodeSchema):
-    pass
+class ParamEstSchema(BaseModel):
+    thought_process: str = Field(
+        description="Detailed mathematical or algorithmic reasoning for this code."
+    )
+    code: str = Field(
+        description=(
+            "The complete, self-contained Python implementation of the parameter estimator. "
+            "Must include imports, any helper functions, and the estimator function definition."
+        )
+    )
 
 
 class TranslationSchema(BaseModel):

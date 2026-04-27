@@ -42,7 +42,7 @@ Example usage:
 from __future__ import annotations
 import json
 import numpy as np
-from .program import Program
+from .program import Program, BirthCertificate
 from .population import Population
 
 
@@ -76,7 +76,8 @@ def spawn(
     Sample parents from each island and create empty Program shells.
     Adds shells to population and their birth island.
 
-    Each shell gets: uid, parent_ids, mode, temperature — but no code yet.
+    Each shell gets a BirthCertificate record (generation, island, batch_index, parents,
+    mode, temperature) but no code yet.
 
     Mutates: population (adds shells), islands (adds new indices)
     """
@@ -84,27 +85,28 @@ def spawn(
 
     for island_idx, island in enumerate(islands):
         programs = {population[i] for i in island}
-        parent_indices = uniform_sample(programs, k=min(k_max, len(programs)))
-        parent_ids = [population[i].uid for i in parent_indices]
+        parent_indices = list(uniform_sample(programs, k=min(k_max, len(programs))))
 
         for batch_idx in range(batch_size):
             child = Program(
-                uid=(iteration, island_idx, batch_idx),
-                model_code=None,
-                param_est_code=None,
-                parent_ids=parent_ids,
-                mode=mode,
-                temperature=temperature,
+                birth=BirthCertificate(
+                    generation=iteration,
+                    island=island_idx,
+                    batch_index=batch_idx,
+                    mode=mode,
+                    temperature=temperature,
+                    parent_indices=parent_indices,
+                ),
             )
             population.add(child)
             island.add(child.idx)
 
 
 def _infer_iteration(population: Population) -> int:
-    """Infer current iteration from the max iteration in population uids."""
+    """Infer current iteration from the max generation in population births."""
     if len(population) == 0:
         return 0
-    return max(population[i].uid[0] for i in range(len(population))) + 1
+    return max(population[i].birth.generation for i in range(len(population))) + 1
 
 
 # helper funcs
@@ -121,12 +123,12 @@ def relative_logit_probs(losses: np.ndarray, temperature: float) -> np.ndarray:
 # island operations: prune, sample, deduplicate. Each takes a set of Programs and returns the new island (set of global indices)
 def prune(programs: set[Program], keep_n: int) -> set[int]:
     """
-    Return the best keep_n global indices by loss_discover.
+    Return the best keep_n global indices by losses.discover.final.
 
         programs_0 = {pop[i] for i in island_0}  # e.g. losses 0.5, 0.2, 0.9
         island_0   = prune(programs_0, keep_n=2) # {idx of 0.2, idx of 0.5}
     """
-    ranked = sorted(programs, key=lambda p: p.loss_discover)
+    ranked = sorted(programs, key=lambda p: p.losses.discover.final)
     return {p.idx for p in ranked[:keep_n]}
 
 
@@ -155,7 +157,7 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
     programs = list(programs)
     if k > len(programs):
         raise ValueError(f"k={k} exceeds population size {len(programs)}")
-    losses     = np.array([p.loss_discover for p in programs], dtype=float)
+    losses     = np.array([p.losses.discover.final for p in programs], dtype=float)
     probs      = relative_logit_probs(losses, temperature)
     chosen = np.random.choice(len(programs), size=k, replace=False, p=probs)
     return {programs[j].idx for j in chosen}
@@ -166,7 +168,7 @@ def _are_duplicates(p_i: Program, p_j: Program, loss_tol: float, cosine_tol: flo
         return False
     if p_i.eval_fingerprint is None or p_j.eval_fingerprint is None:
         return False
-    if abs(p_i.loss_discover - p_j.loss_discover) > loss_tol:
+    if abs(p_i.losses.discover.final - p_j.losses.discover.final) > loss_tol:
         return False
     y_i = p_i.eval_fingerprint.flatten()
     y_j = p_j.eval_fingerprint.flatten()
@@ -196,7 +198,7 @@ def deduplicate(programs: set[Program], loss_tol: float = 0.01, cosine_tol: floa
                 continue
             if not _are_duplicates(p_i, p_j, loss_tol, cosine_tol):
                 continue
-            loser = p_i if p_i.loss_discover >= p_j.loss_discover else p_j
+            loser = p_i if p_i.losses.discover.final >= p_j.losses.discover.final else p_j
             to_remove.add(loser.idx)
 
     return {p.idx for p in programs if p.idx not in to_remove}
@@ -227,8 +229,8 @@ def deduplicate_islands(
     if overlap < n_overlap:
         return {p.idx for p in programs_a}, {p.idx for p in programs_b}
 
-    losses_a = sorted(p.loss_discover for p in programs_a)
-    losses_b = sorted(p.loss_discover for p in programs_b)
+    losses_a = sorted(p.losses.discover.final for p in programs_a)
+    losses_b = sorted(p.losses.discover.final for p in programs_b)
 
     if losses_a <= losses_b:
         return {p.idx for p in programs_a}, {0, 1}
