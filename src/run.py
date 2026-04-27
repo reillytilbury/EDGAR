@@ -27,10 +27,13 @@ from .paths import create_run_paths
 
 
 async def run(spec: TaskSpec) -> Path:
-    paths = create_run_paths()
+    paths = create_run_paths(spec.io["save_path"])
     spec.save_record(paths.full_dir)
 
-    X_discover, X_validate, X_eval = spec.load_data_fn(**spec.data_processing_params)
+    X_discover, X_validate, X_eval = spec.load_data_fn(
+        data_path=spec.io["data_path"],
+        **spec.project_params,
+    )
     population = Population()
     islands = seed(population, spec.seed_programs, spec.evolution["n_islands"])
     score(population, islands, X_discover, X_eval, spec.scoring)

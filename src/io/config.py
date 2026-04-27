@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from ..evolution.program import Program
+from ..evolution.program import Program, BirthCertificate, Code
 from ..llm.prompt_schema import PromptSchema
 from .task_spec import TaskSpec
 
@@ -102,10 +102,13 @@ def _load_seed_programs(task_name: str) -> list[Program]:
         model_code = inspect.getsource(inspect.getmodule(model_fn))
         param_est_code = inspect.getsource(inspect.getmodule(param_est_fn))
         programs.append(Program(
-            uid=(-1, -1, i - 1),
-            model_code=model_code,
-            param_est_code=param_est_code,
-            mode="seed",
+            birth=BirthCertificate(
+                generation=-1,
+                island=-1,
+                batch_index=i - 1,
+                mode="seed",
+            ),
+            code=Code(model=model_code, param_est=param_est_code),
         ))
     return programs
 
@@ -116,9 +119,7 @@ def build_task_spec_from_config(config_path: Path) -> TaskSpec:
         config_path = PROJECT_ROOT / config_path
 
     config = _load_merged_config(config_path)
-    task_name = config["task"]["data_path"]  # used to derive task name from path
-    # task_name is the folder name under projects/
-    # infer from config_path: projects/<task_name>/config.yaml
+    # task_name is the folder name: projects/<task_name>/config.yaml
     task_name = config_path.parent.name
 
     prompts = _load_merged_prompts(task_name)
@@ -127,15 +128,16 @@ def build_task_spec_from_config(config_path: Path) -> TaskSpec:
         task_name=task_name,
         git_sha=_git_sha(),
         git_dirty=_git_dirty(),
+        io=config.get("io", {}),
         evolution=config.get("evolution", {}),
         llms=config.get("llms", {}),
         scoring=config.get("scoring", {}),
+        project_params=config.get("project_params", {}),
         model_prompt_schema=_build_prompt_schema(prompts["model"]),
         param_est_prompt_schema=_build_prompt_schema(prompts["parameter_estimator"]),
         jax_prompt_schema=_build_prompt_schema(prompts["jax_translator"]),
         load_data_fn=_import_fn(f"projects.{task_name}.data_loader.load_data", "load_and_process_data"),
         loss_fn=_import_fn(f"projects.{task_name}.data_loader.load_data", "loss_fn"),
         plot_fn=_import_fn_optional(f"projects.{task_name}.image_feedback.plot", "plot_model_fits"),
-        data_processing_params=config.get("data_processing_params", {}),
         seed_programs=_load_seed_programs(task_name),
     )

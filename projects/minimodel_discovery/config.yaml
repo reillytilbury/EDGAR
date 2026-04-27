@@ -1,4 +1,4 @@
-task:
+io:
   data_path: /home/reilly/datasets/image_responses/FX8_nat60k_2023_05_16.npz
 evolution:
   n_iterations: 3

@@ -26,39 +26,30 @@ from ..llm.code_loading import load_function_from_source
 def _needs_model_code(population: Population) -> list[Program]:
     """Programs that have been spawned but don't have model code yet."""
     return [population[i] for i in range(len(population))
-            if population[i].model_code is None]
+            if population[i].code.model is None]
 
 
 def _needs_param_est_code(population: Population) -> list[Program]:
     """Programs with model code but no parameter estimator code."""
     return [population[i] for i in range(len(population))
-            if population[i].model_code is not None
-            and population[i].param_est_code is None]
+            if population[i].code.model is not None
+            and population[i].code.param_est is None]
 
 
 def _needs_jax_translation(population: Population) -> list[Program]:
     """Programs with numpy code that hasn't been translated to JAX yet."""
     return [population[i] for i in range(len(population))
-            if population[i].model_code is not None
-            and population[i].model_code_jax is None]
+            if population[i].code.model is not None
+            and population[i].code_jax.model is None]
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _find_by_uid(population: Population, uid: tuple[int, int, int]) -> Program | None:
-    """Look up a Program in the population by its uid tuple."""
-    for i in range(len(population)):
-        if population[i].uid == uid:
-            return population[i]
-    return None
-
-
 def _resolve_parents(population: Population, program: Program) -> list[Program]:
     """Return the list of parent Program objects for a given program."""
-    parents = [_find_by_uid(population, uid) for uid in program.parent_ids]
-    return [p for p in parents if p is not None]
+    return [population[i] for i in program.birth.parent_indices]
 
 
 # ---------------------------------------------------------------------------
@@ -77,9 +68,9 @@ async def _generate_one_model(
     """Call the LLM to generate numpy model code for a single program."""
     prompt = prompt_schema.build_prompt(mode, parents, config)
     result = await call_llm(prompt=prompt, llm_model=llm, output_type=ModelSchema, temperature=temperature)
-    program.model_code = result.code
-    program.descriptive_name = result.descriptive_name
-    program.llm_name = llm
+    program.code.model = result.code
+    program.name = result.descriptive_name
+    program.birth.llm_name = llm
 
 
 async def generate_model_code(
@@ -92,7 +83,7 @@ async def generate_model_code(
 ) -> None:
     """Generate numpy model code for all programs that don't have it yet.
 
-    Mutates: program.model_code, program.descriptive_name, program.llm_name
+    Mutates: program.code.model, program.name, program.birth.llm_name
     """
     programs_to_modify = _needs_model_code(population)
     await asyncio.gather(*[
@@ -115,7 +106,7 @@ async def _generate_one_param_est(
     """Call the LLM to generate a numpy parameter estimator for a single program."""
     prompt = prompt_schema.build_prompt("explore", parents, config)
     result = await call_llm(prompt=prompt, llm_model=llm, output_type=ParamEstSchema, temperature=1.0)
-    program.param_est_code = result.code
+    program.code.param_est = result.code
 
 
 async def generate_param_est_code(
@@ -126,7 +117,7 @@ async def generate_param_est_code(
 ) -> None:
     """Generate numpy parameter estimator code for programs that have model code but no estimator.
 
-    Mutates: program.param_est_code
+    Mutates: program.code.param_est
     """
     programs_to_modify = _needs_param_est_code(population)
     await asyncio.gather(*[
@@ -149,9 +140,9 @@ async def _translate_one_program(
     try:
         result = await call_llm(prompt=prompt, llm_model=llm, output_type=TranslationSchema, temperature=0.3)
         if load_function_from_source(result.model_code, "model") is not None:
-            program.model_code_jax = result.model_code
+            program.code_jax.model = result.model_code
         if load_function_from_source(result.param_est_code, "parameter_estimator") is not None:
-            program.param_est_code_jax = result.param_est_code
+            program.code_jax.param_est = result.param_est_code
     except Exception:
         pass
 
@@ -163,7 +154,7 @@ async def translate_to_jax(
 ) -> None:
     """Translate all untranslated programs from numpy to JAX.
 
-    Mutates: program.model_code_jax, program.param_est_code_jax
+    Mutates: program.code_jax.model, program.code_jax.param_est
     """
     programs_to_modify = _needs_jax_translation(population)
     await asyncio.gather(*[

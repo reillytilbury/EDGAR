@@ -30,9 +30,13 @@ class TaskSpec:
     git_dirty: bool
 
     # config subsections — plain dicts, passed through to the functions that need them
+    io: dict
     evolution: dict
     llms: dict
     scoring: dict
+
+    # project-specific knobs — kwargs unpacked into load_data_fn, also visible to other project callables
+    project_params: dict
 
     # prompt schemas — one per LLM task, built from merged prompt yamls
     model_prompt_schema: PromptSchema
@@ -43,7 +47,6 @@ class TaskSpec:
     load_data_fn: Callable
     loss_fn: Callable
     plot_fn: Callable | None
-    data_processing_params: dict
 
     # seed programs — 2 Programs with numpy model_code + param_est_code
     seed_programs: list[Program] = field(default_factory=list)

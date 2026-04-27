@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from ..evolution.program import Program
+from ..evolution.program import Program, BirthCertificate, Code
 from ..llm.prompt_schema import PromptSchema
 from .task_spec import TaskSpec
 
@@ -27,15 +27,16 @@ def save_record(spec: TaskSpec, run_dir: Path) -> Path:
         "git_sha": spec.git_sha,
         "git_dirty": spec.git_dirty,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "io": spec.io,
         "evolution": spec.evolution,
         "llms": spec.llms,
         "scoring": spec.scoring,
-        "data_processing_params": spec.data_processing_params,
+        "project_params": spec.project_params,
         "seed_programs": [
             {
-                "uid": list(p.uid),
-                "model_code": p.model_code,
-                "param_est_code": p.param_est_code,
+                "batch_index": p.birth.batch_index,
+                "model_code": p.code.model,
+                "param_est_code": p.code.param_est,
             }
             for p in spec.seed_programs
         ],
@@ -60,10 +61,13 @@ def load_record(record_path: Path) -> TaskSpec:
 
     seed_programs = [
         Program(
-            uid=tuple(s["uid"]),
-            model_code=s["model_code"],
-            param_est_code=s["param_est_code"],
-            mode="seed",
+            birth=BirthCertificate(
+                generation=-1,
+                island=-1,
+                batch_index=s["batch_index"],
+                mode="seed",
+            ),
+            code=Code(model=s["model_code"], param_est=s["param_est_code"]),
         )
         for s in record["seed_programs"]
     ]
@@ -78,15 +82,16 @@ def load_record(record_path: Path) -> TaskSpec:
         task_name=task_name,
         git_sha=record["git_sha"],
         git_dirty=record["git_dirty"],
+        io=record["io"],
         evolution=record["evolution"],
         llms=record["llms"],
         scoring=record["scoring"],
+        project_params=record["project_params"],
         model_prompt_schema=PromptSchema(**schemas["model"]),
         param_est_prompt_schema=PromptSchema(**schemas["param_est"]),
         jax_prompt_schema=PromptSchema(**schemas["jax"]),
         load_data_fn=_import_fn(f"projects.{task_name}.data_loader.load_data", "load_and_process_data"),
         loss_fn=_import_fn(f"projects.{task_name}.data_loader.load_data", "loss_fn"),
         plot_fn=_import_fn_optional(f"projects.{task_name}.image_feedback.plot", "plot_model_fits"),
-        data_processing_params=record["data_processing_params"],
         seed_programs=seed_programs,
     )

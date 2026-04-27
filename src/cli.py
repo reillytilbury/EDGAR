@@ -209,9 +209,9 @@ def init_project(task: str, force: bool = False) -> int:
     # Write config
     config_text = dedent(
         f"""\
-        task:
-          name: {task}
+        io:
           data_path: /path/to/data.npy
+          save_path: program_databases
 
         evolution:
           n_iterations: 12
@@ -266,13 +266,6 @@ def validate_project(task: str) -> int:
         print("Validation failed:")
         for err in errors:
             print(f"- {err}")
-        return 1
-
-    # Validate config has task name
-    config_text = config_path.read_text(encoding="utf-8")
-    if f"name: {task}" not in config_text:
-        print("Validation failed:")
-        print(f"- config.yaml must have 'name: {task}' under 'task:'")
         return 1
 
     print(f"Validation passed for project '{task}'.")
