@@ -47,8 +47,8 @@ class Code:
 
 @dataclass
 class LossPair:
-    init: float = float("inf")
-    final: float = float("inf")
+    init: float | None = None
+    final: float | None = None
 
 
 @dataclass
@@ -69,14 +69,9 @@ class Program:
     idx:              int | None = field(default=None, init=False)
 
     def compile(self) -> tuple[Callable, Callable]:
-        """Compile JAX source into callable (model_fn, param_est_fn).
-
-        Uses the JAX-translated code if available, falls back to numpy source.
-        """
-        model_src = self.code_jax.model or self.code.model
-        param_est_src = self.code_jax.param_est or self.code.param_est
-        model_fn = load_function_from_source(model_src, MODEL_ENTRYPOINT)
-        param_est_fn = load_function_from_source(param_est_src, PARAM_EST_ENTRYPOINT)
+        """Compile JAX source into callable (model_fn, param_est_fn)."""
+        model_fn = load_function_from_source(self.code_jax.model, MODEL_ENTRYPOINT)
+        param_est_fn = load_function_from_source(self.code_jax.param_est, PARAM_EST_ENTRYPOINT)
         if model_fn is None:
             raise ValueError(f"{self.birth}: could not load '{MODEL_ENTRYPOINT}'")
         if param_est_fn is None:
