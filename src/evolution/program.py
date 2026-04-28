@@ -54,7 +54,7 @@ class LossPair:
 @dataclass
 class Losses:
     discover: LossPair = field(default_factory=LossPair)
-    validate: LossPair = field(default_factory=LossPair)
+    validate: LossPair = field(default_factory=lambda: LossPair(init=None, final=float("inf")))
 
 
 @dataclass

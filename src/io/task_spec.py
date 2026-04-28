@@ -135,10 +135,10 @@ class TaskSpec:
 
         # Re-load project callables from the task folder.
         # This requires the project code to still be on disk.
-        project_root = Path(__file__).resolve().parent.parent.parent
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
         # Load project callables
-        data_loader_path = project_root / "projects" / task_name / "data_loader" / "load_data.py"
+        data_loader_path = Path(os.path.join(project_root, "projects", task_name, "data_loader", "load_data.py"))
         load_data_fn = load_function_from_source(data_loader_path.read_text(), "load_and_process_data")
         if load_data_fn is None:
             raise ValueError(f"{data_loader_path} must define callable load_and_process_data()")
@@ -147,7 +147,7 @@ class TaskSpec:
         if loss_fn is None:
             raise ValueError(f"{data_loader_path} must define callable loss_fn()")
 
-        plot_path = project_root / "projects" / task_name / "image_feedback" / "plot.py"
+        plot_path = Path(os.path.join(project_root, "projects", task_name, "image_feedback", "plot.py"))
         plot_fn = None
         if plot_path.exists():
             plot_fn = load_function_from_source(plot_path.read_text(), "plot_model_fits")
@@ -207,7 +207,7 @@ class TaskSpec:
             },
         }
 
-        path = Path(run_dir) / "task_spec.yaml"
+        path = Path(os.path.join(run_dir, "task_spec.yaml"))
         with open(path, "w") as f:
             yaml.dump(record, f, default_flow_style=False, sort_keys=False)
         os.chmod(path, stat.S_IREAD)

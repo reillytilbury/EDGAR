@@ -127,7 +127,13 @@ def _has_jax_code(program: Program) -> bool:
 def _needs_scoring(population: Population, split: str) -> list[Program]:
     """Programs with jax code whose `split` final loss hasn't been written yet.
 
-    A program with a finite (or even inf) loss is treated as already scored —
+    Initialization behavior:
+    - discover: initialized to None, so all programs with JAX code are scored
+    - validate: initialized to inf, only set to None for programs alive at loop end 
+      (via population.prepare_validation_scoring), allowing selective validation 
+      scoring.
+
+    A program with a scalar/inf loss is treated as already scored —
     inf means scoring genuinely failed and shouldn't be retried.
     """
     return [
