@@ -18,7 +18,7 @@ import argparse
 from pathlib import Path
 
 from .io.task_spec import TaskSpec
-from .io.run_dir import make_run_dir
+from .io.output_dirs import make_output_dir, make_run_output_dir
 from .evolution.population import Population
 from .evolution.island import (
     seed,
@@ -37,8 +37,8 @@ from .scoring.scoring import score
 
 
 async def run(spec: TaskSpec) -> Path:
-    run_dir = make_run_dir(spec.io["save_path"])
-    spec.save_record(run_dir)
+    output_dir = make_output_dir(spec.io["save_path"])
+    spec.save_task_spec(output_dir)
 
     X_discover, X_validate, X_eval = spec.load_data_fn(data_path=spec.io["data_path"], **spec.project_params)
     population = Population()
@@ -68,10 +68,10 @@ async def run(spec: TaskSpec) -> Path:
 
     score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
 
-    population.save(str(run_dir / "population.jsonl"))
-    save_island_census(census, str(run_dir / "census.json"))
+    population.save(str(output_dir / "population.jsonl"))
+    save_island_census(census, str(output_dir / "census.json"))
 
-    return run_dir
+    return output_dir
 
 
 
