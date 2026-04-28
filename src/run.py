@@ -18,7 +18,7 @@ import argparse
 from pathlib import Path
 
 from .io.task_spec import TaskSpec
-from .io.output_dirs import make_output_dir, make_run_output_dir
+from .io.output_dirs import make_output_dir
 from .evolution.population import Population
 from .evolution.island import (
     seed,
@@ -50,14 +50,13 @@ async def run(spec: TaskSpec) -> Path:
 
     for i in range(spec.evolution["n_iterations"]):
         mode, temperature, llms = spec.schedule(i)
-        prompt_schemas = spec.prompt_schemas
         spawn(population, islands, mode, temperature,
               batch_size=spec.evolution["batch_size"],
               k_max=spec.llms["k_max"])
 
-        await generate_model_code(population, prompt_schemas.model, llms.model, mode, temperature)
-        await generate_param_est_code(population, prompt_schemas.param_est, llms.param_est)
-        await translate_to_jax(population, prompt_schemas.jax, llms.jax)
+        await generate_model_code(population, spec.prompt_schemas.model, llms.model, mode, temperature)
+        await generate_param_est_code(population, spec.prompt_schemas.param_est, llms.param_est)
+        await translate_to_jax(population, spec.prompt_schemas.jax, llms.jax)
 
         score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
@@ -66,6 +65,7 @@ async def run(spec: TaskSpec) -> Path:
         islands = migrate(islands, population, spec.evolution, mode, temperature)
         census.append([set(island) for island in islands])
 
+    population.prepare_validation_scoring(islands)
     score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
 
     population.save(os.path.join(output_dir, "population.jsonl"))

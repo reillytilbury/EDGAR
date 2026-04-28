@@ -51,6 +51,23 @@ class Population:
     def __len__(self) -> int:
         return len(self._programs)
 
+    def prepare_validation_scoring(self, islands: dict | list) -> None:
+        """Set validation loss to None for programs alive at validation time.
+
+        Programs on an island are eligible for validation scoring. This resets their
+        validation.final loss from inf to None so _needs_scoring can identify them.
+
+        Args:
+            islands: dict or list of island sets containing program indices
+        """
+        alive_indices = set()
+        island_list = islands.values() if isinstance(islands, dict) else islands
+        for island in island_list:
+            alive_indices.update(island)
+
+        for i in alive_indices:
+            self[i].losses.validate.final = None
+
     def save(self, path: str) -> None:
         with open(path, "w") as f:
             for p in self._programs:
