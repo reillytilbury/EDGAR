@@ -1,10 +1,26 @@
 """
-Record saving and loading.
+Record saving and loading: serialize TaskSpec to disk and reconstruct from disk.
 
-save_record writes a yaml file capturing the fully merged config, seed source
-code, git state, and timestamp — everything needed to reconstruct a TaskSpec.
+save_record writes a yaml file capturing merged config, seed source code, git state, and timestamp.
+load_record reads that file back into a TaskSpec (requires project code to still exist on disk).
 
-load_record reads that file back into a TaskSpec.
+File location: <run_dir>/task_spec_record.yaml
+
+Contains:
+  - task_name, git_sha, git_dirty, created_at
+  - merged io, evolution, llms, scoring, project_params
+  - seed program source code
+  - prompt schemas (model, param_est, jax)
+
+Example usage:
+--------------
+    # Save after a run
+    spec = TaskSpec.from_config("projects/my_task/config.yaml")
+    spec.save_record(run_dir)
+
+    # Load for reproduction
+    spec = TaskSpec.from_record("runs/2024-03-15/10-30-45/task_spec_record.yaml")
+    # TaskSpec is now identical to original (prompts, seed code, config, etc.)
 """
 from __future__ import annotations
 
@@ -22,6 +38,16 @@ RECORD_FILENAME = "task_spec_record.yaml"
 
 
 def save_record(spec: TaskSpec, run_dir: Path) -> Path:
+    """
+    Save TaskSpec to a yaml record file for reproducibility.
+
+    Args:
+        spec: TaskSpec instance to save
+        run_dir: Directory to save record into (will create task_spec_record.yaml)
+
+    Returns:
+        Path to the saved record file
+    """
     record = {
         "task_name": spec.task_name,
         "git_sha": spec.git_sha,
@@ -54,6 +80,20 @@ def save_record(spec: TaskSpec, run_dir: Path) -> Path:
 
 
 def load_record(record_path: Path) -> TaskSpec:
+    """
+    Reconstruct TaskSpec from a saved record file.
+
+    Args:
+        record_path: Path to task_spec_record.yaml from a previous run
+
+    Returns:
+        TaskSpec with identical settings as the original run
+
+    Raises:
+        FileNotFoundError: If record file doesn't exist
+        ImportError: If project code (load_data_fn, loss_fn, etc.) can't be imported
+        ValueError: If record is malformed
+    """
     with open(record_path) as f:
         record = yaml.safe_load(f)
 

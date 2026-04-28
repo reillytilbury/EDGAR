@@ -13,26 +13,12 @@ type: project
 
 ---
 
-## Refactoring issues
+## Architecture
 
-### src/llm/candidates.py
-- Outdated: references old prompt formatting system, wrong import paths
-- Needs rewrite once prompt system is finalized
-
-### src/monitoring/
-- **family_tree.py, progress_monitor.py**: Should accept `Population` object instead of JSONL file path. Population becomes single source of truth.
-  - Eliminates separate generation JSONL
-  - Reconstructs prompts post-hoc via `build_prompt` + parent_ids + mode
-  - Sidebar shows `model_code`/`param_est_code` instead of raw LLM responses
-
-### src/hypothesis_engine.py
-- Still uses old DataFrame-based island API
-- Not migrated to new `island.py` or `Program`/`Population` abstractions
-
-### Architecture
 - Consolidate `Program` dataclass as single candidate representation (currently ~4 variants)
 - Make `Population` the persistence layer (replace JSONL)
 - Clean config routing: modules only receive their subsection (`config["scoring"]`, `config["llms"]`, etc.)
+- Create coherent program/island saving structure (currently programs_database is messy)
 
 ### Naming
 - Sample/trial split overloaded: `train_sample`/`test_sample` (discovery vs eval) conflicts with `train`/`test` (GD splits)
@@ -40,25 +26,29 @@ type: project
 
 ---
 
+## TODO
+
+- [ ] Change signature of `load_data` to output `X_discover`, `X_validate`, `X_eval`; remove `train_test_split` function
+- [ ] Ensure all data is in JAX format
+- [ ] Rethink `_eval_fingerprint` in scoring.py — current approach needs refinement
+- [ ] Ensure run code is saving in `config.io.save_dir`
+- [ ] Integrate image prompt into LLMs: add `image_dir` field to Program object, save images to disk
+- [ ] Create coherent program/island saving structure (replace messy programs_database)
+- [ ] Need README.MD up to date
+- [ ] Need integration tests and unit tests status on git
+
+---
+
 ## Outstanding Issues
 
 ### Initial config + data loading
-- Loss doesn't belong in `load_data.py`
 - Need to integrate Dabin's drop trials plan
-- Need to introduce eval points for function fingerprinting
 - **cli.py**: need better validation — look for actual functions instead of just files
 - Logging verbosity should be set as CLI command
-- **Data summary** still mentions trials even though we want to move towards data structs where concepts of trials don't exist
-- **Data summary** is very messy
-- **paths** module: not sure what it does, also quite messy, unclear if needed
 - Need a way of saving hyperparameters/config in metadata-only format + code used to load + seed islands
 
 ### Monitoring + logging
-- Monitoring needs to read from population records
-- `diagnostic.py` is dead code
-- `logging.py` is populating JSON, so also dead code?
-- `logging.py` is not actually logging, just populating json. We should actually introduce some logging code
-- Remaining code in this section: `family_tree`, `io`, `progress_monitor` (all confusing + unstructured)
+- Actual logging implementation needed (monitoring currently just computes metrics)
 
 ### LLM
 - Need test
@@ -109,4 +99,121 @@ for i in range(spec.n_iterations):
 
 score(population, islands, X_validate, X_eval, spec.scoring)
 save(population, islands)
+```
+
+## Project Output Format
+
+Each run saves a self-contained directory with three files:
+
+```
+task_spec.yaml
+population.jsonl
+island_records.json
+```
+
+- **task_spec.yaml** — Run setup, metadata, and status. Includes task name, config path, merged config sections (io, evolution, llms, scoring, project_params), prompt schemas, seed program source, git SHA + dirty flag, start/end time, run status (completed / failed / interrupted), and any error summary.
+
+- **population.jsonl** — Main scientific output. One JSON object per Program with birth metadata (generation, island, batch, mode, temperature, parent indices, LLM), numpy and JAX code for model and parameter estimator, model name, discover/validate loss (init/final), parameter count, and eval fingerprint if saved.
+
+- **island_records.json** — Island membership history. For each iteration, the set of program IDs active on each island:
+```json
+[
+  [[0, 1, 2], [0, 1, 3]],  // iteration 0
+  [[0, 4],    [1, 5]]       // iteration 1
+]
+```
+
+### Logging and image feedback output
+
+Each run should have one global log file:
+
+```text
+run.log
+```
+
+Logging is a human-readable execution trace, not algorithm state. Algorithm state remains in:
+
+```text
+task_spec.yaml
+population.jsonl
+island_records.json
+```
+
+#### CLI verbosity
+
+Logging verbosity should be controlled from the CLI, e.g.
+
+```bash
+--log-level compact
+--log-level code
+--log-level prompts
+```
+
+#### `compact`
+
+Default logging level. Log one summary per generation:
+
+- generation number
+- mode: explore/exploit
+- temperature
+- LLMs used
+- number of programs spawned
+- model generation success rate
+- parameter-estimator success rate
+- JAX translation success rate
+- scoring success rate
+- per-island size
+- per-island best program id/loss/name
+- global best discover loss
+- elapsed time
+
+#### `code`
+
+Includes everything in `compact`, plus generated code for each program:
+
+- model code
+- parameter-estimator code
+- JAX model code
+- JAX parameter-estimator code
+- parse/compile/translation failures
+
+#### `prompts`
+
+Includes everything in `code`, plus full LLM prompts:
+
+- model prompts
+- parameter-estimator prompts
+- JAX translation prompts
+- image prompt paths, if present
+
+#### Image feedback artifacts
+
+Prompt images should be saved separately from logs:
+
+```text
+image_feedback/
+  gen_000/
+    island_000/
+      batch_000/
+        prompt_image.png
+```
+
+Use zero-padded indices so file browsers sort correctly.
+
+Path should correspond to program birth metadata:
+
+```python
+program.birth.generation
+program.birth.island
+program.birth.batch_index
+```
+
+#### Design rule
+
+```text
+population.jsonl      = program state
+island_records.json   = island history
+task_spec.yaml        = run setup + metadata
+run.log               = readable execution trace
+image_feedback/       = prompt image artifacts
 ```

@@ -1,3 +1,28 @@
+"""
+TaskSpec: A frozen bundle containing all configuration and callables needed to run an EDGAR experiment.
+
+TaskSpec serves two purposes:
+1. Load and merge all configs + project code into ready-to-use fields
+2. Save a record of exact settings used so runs can be reproduced
+
+Construction:
+    from_config(config_path)  — Load config, merge defaults, import project code
+    from_record(record_path)  — Reconstruct from a past run's record
+
+Example usage:
+--------------
+    # Live run: load from config
+    spec = TaskSpec.from_config("projects/my_task/config.yaml")
+    mode, temp, llms = spec.schedule(iteration=0)
+    X_discover, X_validate, X_eval = spec.load_data_fn(data_path=spec.io["data_path"], ...)
+
+    # Re-run: reproduce from saved record
+    spec = TaskSpec.from_record("runs/2024-03-15/10-30-45/task_spec_record.yaml")
+    # same as above
+
+    # Save record for reproducibility
+    spec.save_record(run_dir)
+"""
 from __future__ import annotations
 
 from collections import namedtuple
@@ -55,20 +80,44 @@ class TaskSpec:
 
     @classmethod
     def from_config(cls, config_path: Path) -> TaskSpec:
-        """Load + merge configs, import project modules, capture git state."""
+        """
+        Load and merge configs, import project modules, capture git state.
+
+        Args:
+            config_path: Path to projects/<task_name>/config.yaml
+
+        Returns:
+            TaskSpec with all fields populated from merged config and project imports
+        """
         from .config import build_task_spec_from_config
         return build_task_spec_from_config(config_path)
 
     @classmethod
     def from_record(cls, record_path: Path) -> TaskSpec:
-        """Reconstruct a TaskSpec from a saved record."""
+        """
+        Reconstruct a TaskSpec from a saved record file.
+
+        Args:
+            record_path: Path to task_spec_record.yaml from a previous run
+
+        Returns:
+            TaskSpec with identical settings as the original run (requires project code to still exist on disk)
+        """
         from .record import load_record
         return load_record(record_path)
 
     # ── record ──
 
     def save_record(self, run_dir: Path) -> Path:
-        """Write a record that from_record can read back."""
+        """
+        Write a record that from_record can read back.
+
+        Args:
+            run_dir: Directory to save record.yaml into
+
+        Returns:
+            Path to the saved record file
+        """
         from .record import save_record
         return save_record(self, run_dir)
 
@@ -76,11 +125,16 @@ class TaskSpec:
 
     def schedule(self, iteration: int) -> tuple[str, float, LLMs]:
         """
-        Returns (mode, temperature, llms) for a given iteration.
+        Return (mode, temperature, llms) for a given iteration.
 
-        mode: "explore" for the first half, "exploit" for the second half
-        temperature: starts near 2.0 and decays toward ~1.37
-        llms: which model to use for each LLM task, cycling through sequences
+        Args:
+            iteration: Iteration number (0-indexed)
+
+        Returns:
+            tuple: (mode, temperature, llms) where:
+                - mode: "explore" for first half of iterations, "exploit" for second half
+                - temperature: decays exponentially from ~2.0 to ~1.37
+                - llms: LLMs namedtuple with model, param_est, jax (cycles through configured sequences)
         """
         import numpy as np
 
@@ -108,13 +162,24 @@ class TaskSpec:
 
     @property
     def flat_config(self) -> dict:
-        """Merge all config sections into a single dict for prompt variable lookup."""
+        """
+        Merge all config sections into a single dict for prompt variable lookup.
+
+        Returns:
+            dict combining evolution, llms, and scoring config sections
+        """
         return {**self.evolution, **self.llms, **self.scoring}
 
     # ── prompt schemas ──
 
     @property
     def prompt_schemas(self) -> PromptSchemas:
+        """
+        Get all prompt schemas as a namedtuple.
+
+        Returns:
+            PromptSchemas with model, param_est, and jax PromptSchema objects
+        """
         return PromptSchemas(
             model=self.model_prompt_schema,
             param_est=self.param_est_prompt_schema,
