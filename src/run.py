@@ -68,8 +68,8 @@ async def run(spec: TaskSpec) -> Path:
 
     score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
 
-    population.save(str(output_dir / "population.jsonl"))
-    save_island_census(census, str(output_dir / "census.json"))
+    population.save(os.path.join(output_dir, "population.jsonl"))
+    save_island_census(census, os.path.join(output_dir, "island_census.jsonl"))
 
     return output_dir
 
