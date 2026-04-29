@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 
+import numpy as np
 import jax
 import jax.numpy as jnp
 import optax
@@ -36,7 +37,7 @@ def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
     def total_loss(flat_p):
         p = unflatten(flat_p)
         output = jax.vmap(model_fn, in_axes=(0, 0))(data_train, p)
-        return loss_fn(output, data_train)
+        return jnp.mean(loss_fn(output, data_train))
 
     loss_and_grad = jax.jit(jax.value_and_grad(total_loss))
     opt = optax.adam(gd_config["learning_rate"])
@@ -59,7 +60,12 @@ def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
 
 def _eval_loss(model_fn, loss_fn, params, data_test):
     output = jax.vmap(model_fn, in_axes=(0, 0))(data_test, params)
-    return float(loss_fn(output, data_test))
+    return float(jnp.mean(loss_fn(output, data_test)))
+
+
+def _eval_sample_losses(model_fn, loss_fn, params, data_test):
+    output = jax.vmap(model_fn, in_axes=(0, 0))(data_test, params)
+    return np.asarray(loss_fn(output, data_test))
 
 
 def _eval_fingerprint(model_fn, params, X_eval):
@@ -79,9 +85,10 @@ def _worker(queue, program, data, loss_fn, config, X_eval):
         params = _optimize(model_fn, loss_fn, params_init, data_train, config["gradient_descent"])
         final_loss = _eval_loss(model_fn, loss_fn, params, data_test) + penalty
         fingerprint = _eval_fingerprint(model_fn, params, X_eval) if X_eval is not None else None
-        result = (final_loss, initial_loss, fingerprint)
+        sample_losses = _eval_sample_losses(model_fn, loss_fn, params, data_test)
+        result = (final_loss, initial_loss, fingerprint, params, sample_losses)
     except Exception:
-        result = (float("inf"), float("inf"), None)
+        result = (float("inf"), float("inf"), None, None, None)
     queue.put(result)
 
 
@@ -97,7 +104,7 @@ def _score_one_model(
     """Score one program in a spawn subprocess; kill on timeout.
 
     Auto-populates program.n_params via count_params() if not set.
-    Returns (final_loss, initial_loss, eval_fingerprint).
+    Returns (final_loss, initial_loss, eval_fingerprint, params).
     """
     if program.n_params is None:
         try:
@@ -113,7 +120,7 @@ def _score_one_model(
     if proc.is_alive():
         proc.kill()
         proc.join()
-        return (float("inf"), float("inf"), None)
+        return (float("inf"), float("inf"), None, None, None)
     return queue.get()
 
 
@@ -141,7 +148,7 @@ def _needs_scoring(population: Population, split: str) -> list[Program]:
     return [
         population[i] for i in range(len(population))
         if _has_jax_code(population[i])
-        and getattr(population[i].losses, split).final is None
+        and getattr(population[i].program_losses, split).final is None
     ]
 
 
@@ -155,18 +162,22 @@ def score(
 ) -> None:
     """Score every program needing scoring on the given split.
 
-    Mutates: program.losses.<split>.{init, final}, program.eval_fingerprint,
-    program.n_params.
+    Mutates: program.program_losses.<split>.{init, final}, program.eval_fingerprint,
+    program.sample_losses, program.n_params.
 
     Pass X_eval=None to skip fingerprint computation (e.g. on validate scoring,
     so the discover-derived fingerprint isn't overwritten).
     """
     for program in _needs_scoring(population, split):
-        final_loss, initial_loss, fingerprint = _score_one_model(
+        final_loss, initial_loss, fingerprint, params, sample_losses = _score_one_model(
             program, X_split, loss_fn, config, X_eval
         )
-        loss_pair = getattr(program.losses, split)
+        loss_pair = getattr(program.program_losses, split)
         loss_pair.init = initial_loss
         loss_pair.final = final_loss
         if fingerprint is not None:
             program.eval_fingerprint = fingerprint
+        if params is not None:
+            program.params = params
+        if sample_losses is not None and split == "discover":
+            program.sample_losses = sample_losses

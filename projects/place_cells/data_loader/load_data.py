@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import jax.numpy as jnp
 from scipy.ndimage import gaussian_filter
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 
 def load_data(
@@ -23,17 +23,26 @@ def load_data(
     time_start: Optional[float] = None,
     time_end: Optional[float] = None,
     random_seed: int = 42,
-    n_eval_trials: int = 100,
-) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
+):
     """
     Load and preprocess place-cell data.
 
     Returns
     -------
     X_discover, X_validate, X_eval
-        X_discover = (train, test) dicts split by trials for use in the LLM loop.
-        X_validate = (train, test) dicts held out for final evaluation.
-        X_eval = small fixed trial subset from X_discover for fingerprinting.
+        Samples split 50/50, trials split 50/50 within discover/validate.
+
+        X_discover = (train, test)
+            X_disc_train: (n_cells//2, n_trials//2) - used by LLM loop.
+            X_disc_test:  (n_cells//2, n_trials//2) - test within discovery phase.
+
+        X_validate = (train, test)
+            X_val_train: (n_cells//2, n_trials//2) - held out, unseen by LLM.
+            X_val_test:  (n_cells//2, n_trials//2) - held out final evaluation.
+
+        X_eval
+            Single-cell fingerprint subset from discover train trials.
+            Shape: (1, n_trials//2).
     """
     if input_names is None:
         input_names = ["x", "y"]
@@ -81,8 +90,7 @@ def load_data(
         spike_counts, _ = np.histogram(spikes_in_window, bins=bin_edges)
         firing_rates[neuron_idx] = spike_counts / time_bin_s
 
-    bin_idx = np.digitize(t_pos, bin_edges) - 1
-    bin_idx = np.clip(bin_idx, 0, n_time_bins - 1)
+    bin_idx = np.clip(np.digitize(t_pos, bin_edges) - 1, 0, n_time_bins - 1)
     counts = np.bincount(bin_idx, minlength=n_time_bins)
 
     features: Dict[str, np.ndarray] = {}
@@ -151,57 +159,44 @@ def load_data(
     if zscore_response:
         response = (response - response.mean(axis=1, keepdims=True)) / (response.std(axis=1, keepdims=True) + 1e-6)
 
-    X = {
-        "pos_x": np.tile(x, (n_cells, 1)),
-        "pos_y": np.tile(y, (n_cells, 1)),
-        "response": response,
-    }
+    pos_x = np.tile(x, (n_cells, 1))
+    pos_y = np.tile(y, (n_cells, 1))
+    n_samples, n_trials = response.shape
 
-    return _split(X, random_seed, n_eval_trials)
+    # ── split samples 50/50 into discover / validate ──
+    rng = np.random.default_rng(random_seed)
 
-
-def loss_fn(model_output, data):
-    return jnp.mean((data["response"] - model_output) ** 2)
-
-
-# ── internal helpers ──
-
-def _split(
-    X: Dict[str, np.ndarray],
-    seed: int,
-    n_eval_trials: int,
-) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
-    n_samples = next(iter(X.values())).shape[0]
-    n_trials = next(iter(X.values())).shape[-1]
-    rng = np.random.default_rng(seed)
-
-    perm_s = rng.permutation(n_samples)
+    perm_s   = rng.permutation(n_samples)
     disc_idx = np.sort(perm_s[:n_samples // 2])
-    val_idx = np.sort(perm_s[n_samples // 2:])
+    val_idx  = np.sort(perm_s[n_samples // 2:])
 
-    perm_t = rng.permutation(n_trials)
+    # ── split trials 50/50 into train / test ──
+    perm_t       = rng.permutation(n_trials)
     train_trials = np.sort(perm_t[:n_trials // 2])
-    test_trials = np.sort(perm_t[n_trials // 2:])
+    test_trials  = np.sort(perm_t[n_trials // 2:])
 
-    def _sel(sidx, tidx):
-        return {k: v[sidx][..., tidx] for k, v in X.items()}
+    X_disc_train = {'pos_x': pos_x[disc_idx][:, train_trials], 'pos_y': pos_y[disc_idx][:, train_trials], 'response': response[disc_idx][:, train_trials]}
+    X_disc_test  = {'pos_x': pos_x[disc_idx][:, test_trials],  'pos_y': pos_y[disc_idx][:, test_trials],  'response': response[disc_idx][:, test_trials]}
+    X_val_train  = {'pos_x': pos_x[val_idx][:, train_trials],  'pos_y': pos_y[val_idx][:, train_trials],  'response': response[val_idx][:, train_trials]}
+    X_val_test   = {'pos_x': pos_x[val_idx][:, test_trials],   'pos_y': pos_y[val_idx][:, test_trials],   'response': response[val_idx][:, test_trials]}
 
-    X_disc_train = _sel(disc_idx, train_trials)
-    X_disc_test = _sel(disc_idx, test_trials)
-    X_val_train = _sel(val_idx, train_trials)
-    X_val_test = _sel(val_idx, test_trials)
-
-    n_eval = min(n_eval_trials, len(train_trials))
-    eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
-    eval_samples = np.sort(rng.choice(disc_idx, 1, replace=False))
-    X_eval = _sel(eval_samples, eval_trials)
-
-    # Store which position each eval sample occupies in disc_idx for param matching in scoring
-    eval_sample_positions = np.searchsorted(disc_idx, eval_samples)
-    X_eval['_sample_indices'] = eval_sample_positions
+    # ── build X_eval: single cell from discover train for fingerprinting ──
+    eval_pos = rng.choice(len(disc_idx), 1, replace=False)
+    X_eval = {
+        'pos_x':           pos_x[disc_idx][eval_pos][:, train_trials],
+        'pos_y':           pos_y[disc_idx][eval_pos][:, train_trials],
+        'response':        response[disc_idx][eval_pos][:, train_trials],
+        '_sample_indices': eval_pos,
+    }
 
     return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
+
+def loss_fn(model_output, data):
+    return jnp.mean((data["response"] - model_output) ** 2, axis=-1)
+
+
+# ── internal helpers ──
 
 def _load_data_file(data_path: str) -> Dict[str, Any]:
     data_loaded = np.load(data_path, allow_pickle=True)
@@ -255,7 +250,7 @@ def _place_cell_filter_indices(
     min_peak_rate: float,
     min_mean_rate: float,
     verbose: bool = True,
-) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+):
     n_cells = response.shape[0]
     n_bins = rate_maps.shape[1]
 
@@ -263,8 +258,8 @@ def _place_cell_filter_indices(
     p = occupancy / (np.sum(occupancy) + 1e-6)
 
     spatial_info = np.zeros(n_cells)
-    peak_rate = np.zeros(n_cells)
-    mean_rate = response.mean(axis=1)
+    peak_rate    = np.zeros(n_cells)
+    mean_rate    = response.mean(axis=1)
 
     for c in range(n_cells):
         r = rate_maps[c]

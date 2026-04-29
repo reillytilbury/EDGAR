@@ -16,7 +16,6 @@ def load_data(
     zscore: bool = True,
     block_size: int = 180,
     time_split_mode: str = "interleave",
-    n_eval_trials: int = 100,
 ) -> Tuple[Tuple[dict, dict], Tuple[dict, dict], dict]:
     """
     Load spontaneous activity data and split into source/target populations.
@@ -75,9 +74,6 @@ def load_data(
     T = X_train.shape[1]
     train_t, test_t = _make_time_split(T, block_size, time_split_mode)
 
-    n_eval = min(n_eval_trials, len(train_t))
-    eval_t = np.sort(rng.choice(train_t, n_eval, replace=False))
-
     # Shape: (1, n_cells, T_*) — 1-dim sample axis for scoring.py vmap
     X_discover = (
         {"source": X_train[:, train_t][np.newaxis], "target": Y_train[:, train_t][np.newaxis]},
@@ -87,7 +83,7 @@ def load_data(
         {"source": X_test[:, train_t][np.newaxis], "target": Y_test[:, train_t][np.newaxis]},
         {"source": X_test[:, test_t][np.newaxis], "target": Y_test[:, test_t][np.newaxis]},
     )
-    X_eval = {"source": X_train[:, eval_t][np.newaxis], "target": Y_train[:, eval_t][np.newaxis]}
+    X_eval = {"source": X_train[:, train_t][np.newaxis], "target": Y_train[:, train_t][np.newaxis]}
 
     # Store which position each eval sample occupies for param matching in scoring (always 0 for this project)
     X_eval['_sample_indices'] = np.array([0])
@@ -96,7 +92,7 @@ def load_data(
 
 
 def loss_fn(model_output, data):
-    return jnp.mean((data["target"] - model_output) ** 2)
+    return jnp.mean((data["target"] - model_output) ** 2, axis=-1)
 
 
 # ── internal helpers ──

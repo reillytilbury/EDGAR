@@ -1,24 +1,9 @@
 from __future__ import annotations
 
-import importlib
-import math
-import os
-import sys
-
 import matplotlib
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.patches import Ellipse
-from scipy.io import loadmat
 
-from src.io import broadcast_params, call_model, data_n_samples, data_n_trials, get_data_sample, slice_params
-from projects.minimodel_discovery.primitives import (
-    gabor_bank16,
-    local_gaussian_readout,
-    make_gabor_kernels,
-    pairwise_orientation_terms,
-    quadrature_energy,
-)
 from projects.minimodel_discovery.data_loader.load_data import (
     _DATASET_CONTEXT,
     _DIAGNOSTIC_CACHE,
@@ -28,8 +13,6 @@ from projects.minimodel_discovery.seed_programs.param_est1 import (
     _normalized_to_pixel,
     _extract_patch,
     _compute_sta,
-    _fit_gaussian_from_sta,
-    _masked_sta_channel_weights,
 )
 
 matplotlib.use("Agg")
@@ -193,193 +176,6 @@ def _render_summary_panel(
     return _figure_to_rgb(fig)
 
 
-def _teacher_imports(repo_path: str):
-    if not repo_path or not os.path.isdir(repo_path):
-        raise FileNotFoundError(f"minimodel repo path not found: {repo_path}")
-    if repo_path not in sys.path:
-        sys.path.insert(0, repo_path)
-    torch = importlib.import_module("torch")
-    model_builder = importlib.import_module("minimodel.model_builder")
-    return torch, model_builder
-
-
-def _get_teacher_state() -> dict[str, object]:
-    if _DATASET_CONTEXT.get("teacher_state") is not None:
-        return _DATASET_CONTEXT["teacher_state"]  # type: ignore[index]
-
-    if not _DATASET_CONTEXT.get("use_teacher_diagnostics", False):
-        teacher_state: dict[str, object] = {"available": False, "reason": "disabled in config"}
-        _DATASET_CONTEXT["teacher_state"] = teacher_state
-        return teacher_state
-
-    repo_path = str(_DATASET_CONTEXT.get("minimodel_repo_path", ""))
-    checkpoint_path = str(_DATASET_CONTEXT.get("teacher_checkpoint_path", ""))
-    total_neurons = int(_DATASET_CONTEXT.get("teacher_total_neurons", 0))
-
-    try:
-        torch, model_builder = _teacher_imports(repo_path)
-        if not os.path.isfile(checkpoint_path):
-            raise FileNotFoundError(f"teacher checkpoint not found: {checkpoint_path}")
-
-        preferred_device = str(_DATASET_CONTEXT.get("teacher_device", "cpu")).lower()
-        if preferred_device.startswith("cuda") and torch.cuda.is_available():
-            device = torch.device(preferred_device)
-        else:
-            device = torch.device("cpu")
-
-        model, _ = model_builder.build_model(
-            NN=total_neurons,
-            n_layers=2,
-            n_conv=16,
-            n_conv_mid=320,
-        )
-        state = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(state)
-        model = model.to(device)
-        model.eval()
-        for param in model.parameters():
-            param.requires_grad_(False)
-        teacher_state = {
-            "available": True,
-            "torch": torch,
-            "model": model,
-            "device": device,
-        }
-    except Exception as exc:
-        teacher_state = {"available": False, "reason": str(exc)}
-
-    _DATASET_CONTEXT["teacher_state"] = teacher_state
-    return teacher_state
-
-
-def _make_gratings(height: int, width: int, n_thetas: int = 24) -> np.ndarray:
-    thetas = np.linspace(0.0, 2.0 * np.pi, n_thetas, endpoint=False, dtype=np.float32)
-    yy, xx = np.meshgrid(np.arange(height), np.arange(width), indexing="ij")
-    yy = yy - (height - 1) / 2.0
-    xx = xx - (width - 1) / 2.0
-    gratings = []
-    for theta in thetas:
-        carrier = (xx * np.cos(theta) + yy * np.sin(theta)) * (2.0 * np.pi / 24.0)
-        grating = np.where(np.sin(carrier) >= 0.0, 1.0, -1.0).astype(np.float32)
-        grating = grating - np.mean(grating)
-        grating = grating / (np.std(grating) + 1e-6)
-        gratings.append(grating)
-    return np.stack(gratings, axis=0)
-
-
-def _teacher_mei(teacher: dict[str, object], neuron_id: int, image_bank: np.ndarray) -> np.ndarray:
-    torch = teacher["torch"]  # type: ignore[index]
-    model = teacher["model"]  # type: ignore[index]
-    device = teacher["device"]  # type: ignore[index]
-
-    reference = torch.as_tensor(image_bank[: min(64, image_bank.shape[0])], dtype=torch.float32, device=device)
-    reference = reference.unsqueeze(1)
-    value_min = float(reference.min().item())
-    value_max = float(reference.max().item())
-    value_std = float(reference.std().item() + 1e-6)
-
-    image = torch.randn((1, 1, reference.shape[-2], reference.shape[-1]), device=device) * value_std
-    image = image.clamp_(value_min, value_max)
-    image.requires_grad_(True)
-    optimizer = torch.optim.Adam([image], lr=0.05)
-
-    best_image = image.detach().clone()
-    best_value = -float("inf")
-    for _ in range(24):
-        optimizer.zero_grad(set_to_none=True)
-        pred = model(image)[0, neuron_id]
-        tv = (image[:, :, 1:] - image[:, :, :-1]).abs().mean()
-        tv = tv + (image[:, :, :, 1:] - image[:, :, :, :-1]).abs().mean()
-        loss = -(pred - 1e-2 * tv)
-        loss.backward()
-        optimizer.step()
-        with torch.no_grad():
-            image.clamp_(value_min, value_max)
-            value = float(pred.detach().item())
-            if value > best_value:
-                best_value = value
-                best_image = image.detach().clone()
-
-    return best_image[0, 0].detach().cpu().numpy().astype(np.float32)
-
-
-def _teacher_local_gradient(teacher: dict[str, object], neuron_id: int, image_2d: np.ndarray) -> np.ndarray:
-    torch = teacher["torch"]  # type: ignore[index]
-    model = teacher["model"]  # type: ignore[index]
-    device = teacher["device"]  # type: ignore[index]
-
-    image = torch.as_tensor(image_2d[None, None], dtype=torch.float32, device=device)
-    image.requires_grad_(True)
-    pred = model(image)[0, neuron_id]
-    pred.backward()
-    grad = image.grad[0, 0].detach().cpu().numpy().astype(np.float32)
-    return grad
-
-
-def _teacher_grating_tuning(teacher: dict[str, object], neuron_id: int, shape: tuple[int, int]) -> np.ndarray:
-    torch = teacher["torch"]  # type: ignore[index]
-    model = teacher["model"]  # type: ignore[index]
-    device = teacher["device"]  # type: ignore[index]
-
-    gratings = _make_gratings(shape[0], shape[1], n_thetas=24)
-    batch = torch.as_tensor(gratings[:, None], dtype=torch.float32, device=device)
-    with torch.no_grad():
-        responses = model(batch)[:, neuron_id].detach().cpu().numpy().astype(np.float32)
-    return responses
-
-
-def _render_teacher_panel(
-    *,
-    cell_id: int,
-    teacher: dict[str, object],
-    sample_image_bank: np.ndarray,
-    top_image: np.ndarray,
-) -> np.ndarray:
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 4.8))
-    fig.suptitle(f"teacher diagnostics | cell {cell_id}", fontsize=12)
-
-    if not teacher.get("available", False):
-        for ax in axes.ravel():
-            ax.axis("off")
-        axes[0, 0].text(
-            0.5,
-            0.5,
-            f"Teacher unavailable\n{teacher.get('reason', 'unknown')}",
-            ha="center",
-            va="center",
-            fontsize=10,
-            wrap=True,
-        )
-        fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.92])
-        return _figure_to_rgb(fig)
-
-    mei = _teacher_mei(teacher, cell_id, sample_image_bank)
-    grad = _teacher_local_gradient(teacher, cell_id, top_image)
-    tuning = _teacher_grating_tuning(teacher, cell_id, top_image.shape)
-    model = teacher["model"]  # type: ignore[index]
-    wc = np.abs(model.readout.Wc[cell_id].detach().cpu().numpy().reshape(-1))
-
-    vmax_grad = max(float(np.percentile(np.abs(grad), 99)), 1e-4)
-    axes[0, 0].imshow(mei, cmap="gray")
-    axes[0, 0].set_title("MEI", fontsize=9)
-    axes[0, 1].imshow(grad, cmap="RdBu_r", vmin=-vmax_grad, vmax=vmax_grad)
-    axes[0, 1].set_title("local derivative", fontsize=9)
-    axes[1, 0].plot(np.linspace(0.0, 2.0 * np.pi, tuning.size, endpoint=False), tuning, color="black", lw=2)
-    axes[1, 0].set_title("square-grating tuning", fontsize=9)
-    axes[1, 0].set_xticks([0.0, np.pi, 2.0 * np.pi])
-    axes[1, 0].set_xticklabels(["0", "pi", "2pi"], fontsize=8)
-    top_idx = np.argsort(wc)[-20:][::-1]
-    axes[1, 1].bar(np.arange(top_idx.size), wc[top_idx], color="#4C78A8")
-    axes[1, 1].set_title("|Wc| top 20", fontsize=9)
-
-    for ax in axes.ravel():
-        if ax is not axes[1, 0]:
-            ax.set_xticks([])
-            ax.set_yticks([])
-    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.92])
-    return _figure_to_rgb(fig)
-
-
 def _get_anchor_indices(data: dict[str, np.ndarray], n_anchor: int) -> np.ndarray:
     cell_ids = np.asarray(data["cell_index"][:, 0], dtype=np.int64)
     fev_lookup = _DATASET_CONTEXT.get("fev_lookup", {})
@@ -399,22 +195,17 @@ def _select_evenly_spaced_indices(n_total: int, n_keep: int) -> np.ndarray:
 
 def _build_anchor_cache(data: dict[str, np.ndarray]) -> dict[str, object]:
     cell_ids = tuple(np.asarray(data["cell_index"][:, 0], dtype=np.int64).tolist())
-    cache_key = (
-        cell_ids,
-        data_n_trials(data),
-        bool(_DATASET_CONTEXT.get("use_teacher_diagnostics", False)),
-    )
+    cache_key = (cell_ids, next(iter(data.values())).shape[-1])
     if cache_key in _DIAGNOSTIC_CACHE:
         return _DIAGNOSTIC_CACHE[cache_key]
 
-    teacher = _get_teacher_state()
     fev_lookup = _DATASET_CONTEXT.get("fev_lookup", {})
     anchor_count = int(_DATASET_CONTEXT.get("anchor_cell_count", 8))
     anchor_indices = _get_anchor_indices(data, n_anchor=anchor_count)
     anchors = []
 
     for sample_idx in anchor_indices.tolist():
-        sample = get_data_sample(data, int(sample_idx))
+        sample = {k: v[int(sample_idx)] for k, v in data.items()}
         cell_id = int(np.asarray(sample["cell_index"]).reshape(-1)[0])
         fev = float(fev_lookup.get(cell_id, float("nan")))
         params = _param_est1(sample)
@@ -446,19 +237,12 @@ def _build_anchor_cache(data: dict[str, np.ndarray]) -> dict[str, object]:
             stc_neg=stc_neg,
             gaussian_mask=gaussian_mask,
         )
-        teacher_panel = _render_teacher_panel(
-            cell_id=cell_id,
-            teacher=teacher,
-            sample_image_bank=np.transpose(np.asarray(sample["image"]), (2, 0, 1)),
-            top_image=top_images[0],
-        )
         anchors.append(
             {
                 "sample_idx": int(sample_idx),
                 "cell_id": cell_id,
                 "fev": fev,
                 "summary_panel": summary_panel,
-                "teacher_panel": teacher_panel,
             }
         )
 
@@ -489,10 +273,8 @@ def _top_eval_strip(images: np.ndarray, scores: np.ndarray, k: int = 3) -> np.nd
 
 def plot_model_fits(
     data,
-    programs_list,
-    X_eval,
+    parent_programs,
     save_path="",
-    labels=None,
     title_prefix: str | None = None,
 ):
     if save_path == "":
@@ -503,21 +285,21 @@ def plot_model_fits(
     if len(anchors) == 0:
         raise ValueError("No anchor neurons available for plotting.")
 
-    n_models = len(programs_list)
-    fig = plt.figure(figsize=(4.2 * (2 + n_models), 3.0 * len(anchors)))
-    outer = fig.add_gridspec(len(anchors), 2 + n_models, wspace=0.25, hspace=0.35)
+    n_models = len(parent_programs)
+    model_fns = [program.compile()[0] for program in parent_programs]
+
+    fig = plt.figure(figsize=(4.2 * (1 + n_models), 3.0 * len(anchors)))
+    outer = fig.add_gridspec(len(anchors), 1 + n_models, wspace=0.25, hspace=0.35)
 
     colors = plt.get_cmap("tab10")(np.linspace(0.0, 1.0, max(n_models, 3)))
-    model_losses_text = []
 
     for row_idx, anchor in enumerate(anchors):
         sample_idx = int(anchor["sample_idx"])
         cell_id = int(anchor["cell_id"])
-        sample = get_data_sample(data, sample_idx)
-        eval_sample = get_data_sample(X_eval, sample_idx)
+        sample = {k: v[sample_idx] for k, v in data.items()}
         response = np.asarray(sample["response"], dtype=np.float32)
         repeats = np.asarray(sample["response_repeats"], dtype=np.float32)
-        eval_images = np.transpose(np.asarray(eval_sample["image"], dtype=np.float32), (2, 0, 1))
+        images = np.transpose(np.asarray(sample["image"], dtype=np.float32), (2, 0, 1))
 
         ax_summary = fig.add_subplot(outer[row_idx, 0])
         ax_summary.imshow(anchor["summary_panel"])
@@ -525,47 +307,29 @@ def plot_model_fits(
         ax_summary.set_yticks([])
         ax_summary.set_title(f"static summary | cell {cell_id}", fontsize=10)
 
-        ax_teacher = fig.add_subplot(outer[row_idx, 1])
-        ax_teacher.imshow(anchor["teacher_panel"])
-        ax_teacher.set_xticks([])
-        ax_teacher.set_yticks([])
-        ax_teacher.set_title("teacher diagnostics", fontsize=10)
-
         order = np.argsort(response)[::-1]
         sorted_response = response[order]
 
-        for model_idx, program in enumerate(programs_list):
-            label = labels[model_idx] if labels is not None and model_idx < len(labels) else f"model_{model_idx + 1}"
-            params = slice_params(broadcast_params(program["params"], data_n_samples(data)), sample_idx)
-            pred = _vectorize_prediction(call_model(program["model"], sample, params))
-            pred_eval = _vectorize_prediction(call_model(program["model"], eval_sample, params))
+        for model_idx, (program, model_fn) in enumerate(zip(parent_programs, model_fns)):
+            label = f"model_{model_idx + 1}"
+            params_s = {k: np.asarray(v[sample_idx]) for k, v in program.params.items()}
+            pred = _vectorize_prediction(np.asarray(model_fn(sample, params_s)))
             pred_sorted = pred[order]
 
-            loss_value = float("nan")
-            if "losses" in program:
-                try:
-                    loss_value = float(np.asarray(program["losses"])[sample_idx])
-                except Exception:
-                    loss_value = float(np.mean(pred - response))
+            sample_loss = program.sample_losses[sample_idx] if program.sample_losses is not None else float("nan")
             fev_value, feve_value = _feve_for_sample(repeats, pred)
 
-            if row_idx == 0:
-                if np.isfinite(feve_value):
-                    model_losses_text.append(f"{label}: loss={loss_value:.2f}, FEVE={feve_value:.2f}")
-                else:
-                    model_losses_text.append(f"{label}: loss={loss_value:.2f}, FEVE=n/a")
-
-            sub = outer[row_idx, 2 + model_idx].subgridspec(2, 1, height_ratios=[1.0, 1.35], hspace=0.08)
+            sub = outer[row_idx, 1 + model_idx].subgridspec(2, 1, height_ratios=[1.0, 1.35], hspace=0.08)
             ax_top = fig.add_subplot(sub[0, 0])
             ax_trace = fig.add_subplot(sub[1, 0])
 
-            strip = _top_eval_strip(eval_images, pred_eval, k=min(3, eval_images.shape[0]))
+            strip = _top_eval_strip(images, pred, k=min(3, images.shape[0]))
             vmax = float(np.nanpercentile(np.abs(strip), 99))
             vmax = max(vmax, 1e-4)
             ax_top.imshow(strip, cmap="gray", vmin=-vmax, vmax=vmax)
             ax_top.set_xticks([])
             ax_top.set_yticks([])
-            ax_top.set_title(f"{label} | top predicted eval images", fontsize=9)
+            ax_top.set_title(f"{label} | top predicted images", fontsize=9)
 
             ax_trace.plot(sorted_response, color="black", lw=1.6, label="observed")
             ax_trace.plot(pred_sorted, color=colors[model_idx], lw=1.6, label="predicted")
@@ -578,7 +342,7 @@ def plot_model_fits(
             if model_idx == n_models - 1:
                 ax_trace.legend(fontsize=7, frameon=False, loc="upper right")
 
-            text_lines = [f"loss={loss_value:.2f}"]
+            text_lines = [f"loss={sample_loss:.2f}" if np.isfinite(sample_loss) else "loss=n/a"]
             if np.isfinite(fev_value):
                 text_lines.append(f"FEV={fev_value:.2f}")
             if np.isfinite(feve_value):
@@ -595,9 +359,11 @@ def plot_model_fits(
             )
 
     title_parts = [title_prefix] if title_prefix else []
-    title_parts.extend(model_losses_text[:n_models])
+    for j, program in enumerate(parent_programs):
+        loss = program.program_losses.discover.final
+        title_parts.append(f"Model {j + 1}: loss={loss:.3f}" if loss is not None else f"Model {j + 1}: loss=n/a")
     if title_parts:
-        fig.suptitle(" | ".join([part for part in title_parts if part]), fontsize=13)
+        fig.suptitle(" | ".join([p for p in title_parts if p]), fontsize=13)
     fig.subplots_adjust(left=0.02, right=0.98, bottom=0.03, top=0.92, wspace=0.25, hspace=0.4)
     fig.savefig(save_path, dpi=120, bbox_inches="tight")
     plt.close(fig)

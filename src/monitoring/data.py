@@ -91,9 +91,9 @@ def build_sidebar_data(
             "parent1_id": parents[0] if len(parents) > 0 else None,
             "parent2_id": parents[1] if len(parents) > 1 else None,
             "n_params": p.n_params,
-            "initial_loss": p.losses.discover.init,
-            "train_loss": p.losses.discover.final,
-            "test_loss": p.losses.validate.final,
+            "initial_loss": p.program_losses.discover.init,
+            "train_loss": p.program_losses.discover.final,
+            "test_loss": p.program_losses.validate.final,
             "model_code": p.code.model,
             "model_code_jax": p.code_jax.model,
             "param_est_code": p.code.param_est,
@@ -110,7 +110,7 @@ def split_seeds_and_progs(population: Population) -> tuple[list[Program], list[P
 
 def reference_loss(seeds: list[Program]) -> float:
     """Reference loss for perplexity normalization: min seed train loss."""
-    losses = [s.losses.discover.final for s in seeds if s.losses.discover.final is not None]
+    losses = [s.program_losses.discover.final for s in seeds if s.program_losses.discover.final is not None]
     return min(losses) if losses else 0.0
 
 

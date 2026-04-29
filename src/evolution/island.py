@@ -118,7 +118,7 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
     keep_n = evolution["critical_population_size"]
     for i, island in enumerate(islands):
         programs = {population[idx] for idx in island}
-        ranked = sorted(programs, key=lambda p: p.losses.discover.final)
+        ranked = sorted(programs, key=lambda p: p.program_losses.discover.final)
         islands[i] = {p.idx for p in ranked[:keep_n]}
 
 
@@ -147,7 +147,7 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
     programs = list(programs)
     if k > len(programs):
         raise ValueError(f"k={k} exceeds population size {len(programs)}")
-    losses = np.array([p.losses.discover.final for p in programs], dtype=float)
+    losses = np.array([p.program_losses.discover.final for p in programs], dtype=float)
     logits = -(losses - losses.min()) / (np.std(losses) + 1e-6) / max(temperature, 1e-3)
     logits -= logits.max()
     probs = np.exp(logits)
@@ -191,7 +191,7 @@ def _are_duplicates(p_i: Program, p_j: Program, loss_tol: float, cosine_tol: flo
         return False
     if p_i.eval_fingerprint is None or p_j.eval_fingerprint is None:
         return False
-    if abs(p_i.losses.discover.final - p_j.losses.discover.final) > loss_tol:
+    if abs(p_i.program_losses.discover.final - p_j.program_losses.discover.final) > loss_tol:
         return False
     y_i = p_i.eval_fingerprint.flatten()
     y_j = p_j.eval_fingerprint.flatten()
@@ -224,7 +224,7 @@ def deduplicate_inner(islands: list[set[int]], population: Population, loss_tol:
                 continue
             if not _are_duplicates(p_j, p_k, loss_tol, cosine_tol):
                 continue
-            loser = p_j if p_j.losses.discover.final >= p_k.losses.discover.final else p_k
+            loser = p_j if p_j.program_losses.discover.final >= p_k.program_losses.discover.final else p_k
             to_remove.add(loser.idx)
 
         islands[i] = {p.idx for p in programs if p.idx not in to_remove}
@@ -256,8 +256,8 @@ def deduplicate_outer(islands: list[set[int]], population: Population, n_overlap
         if overlap < n_overlap:
             continue
 
-        losses_a = sorted(p.losses.discover.final for p in programs_a)
-        losses_b = sorted(p.losses.discover.final for p in programs_b)
+        losses_a = sorted(p.program_losses.discover.final for p in programs_a)
+        losses_b = sorted(p.program_losses.discover.final for p in programs_b)
 
         if losses_a <= losses_b:
             islands[j] = {0, 1}

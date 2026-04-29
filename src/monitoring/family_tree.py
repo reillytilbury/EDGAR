@@ -78,8 +78,8 @@ def _build_nodes(population: Population, pos: dict) -> dict:
         ids.append(str(p.idx))
         label = p.name or f"P{p.idx}"
         labels.append(label)
-        hover.append(f"{label}<br>loss: {loss_str(p.losses.discover.final)}")
-        colors.append(_node_colour(p.losses.discover.final))
+        hover.append(f"{label}<br>loss: {loss_str(p.program_losses.discover.final)}")
+        colors.append(_node_colour(p.program_losses.discover.final))
         symbols.append("square" if is_seed(p) else "circle")
         sizes.append(20 if is_seed(p) else 16)
     return {

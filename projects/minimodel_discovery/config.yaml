@@ -19,9 +19,4 @@ project_params:
   max_cells: 64
   max_train_images: 1024
   anchor_cell_count: 8
-  minimodel_repo_path: /home/reilly/Documents/code/minimodel
-  teacher_checkpoint_path: /home/reilly/Documents/code/minimodel/notebooks/checkpoints/FX8_051623_2layer_16_320_clamp_norm_depthsep_pool.pt
-  use_teacher_diagnostics: true
-  teacher_device: cpu
   random_seed: 42
-  n_eval_trials: 256

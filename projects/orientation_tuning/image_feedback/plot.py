@@ -1,113 +1,90 @@
 import numpy as np
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-from src.io import broadcast_params, call_model, get_data_sample, slice_params
 
+def plot_model_fits(data, parent_programs, save_path=""):
+    """
+    Plot observed and predicted orientation tuning curves for up to 9 random cells.
 
-def plot_model_fits(
-    data,
-    programs_list,
-    X_eval,
-    save_path="",
-    labels=("model_v1", "model_v2"),
-):
+    Args:
+        data: X_disc_train dict with keys 'stimulus', 'response' — shape (n_cells, n_trials).
+        parent_programs: list of Program objects with .params and .compile() methods.
+        save_path: file path to save the figure.
     """
-    Plot observed and predicted orientation tuning curves for up to 9 random samples.
-    """
-    if save_path == "":
+    if not save_path:
         raise ValueError("Please provide a save path for the plot")
 
-    stimulus = data['stimulus']
-    response = data['response']
-    n_samples = stimulus.shape[0]
+    stimulus = np.asarray(data['stimulus'])  # (n_cells, n_trials)
+    response = np.asarray(data['response'])  # (n_cells, n_trials)
+    n_cells  = stimulus.shape[0]
+    colours  = ["tab:red", "tab:green", "tab:orange"]
 
-    if len(programs_list) == 1:
-        colours = ["tab:red"]
-    elif len(programs_list) == 2:
-        colours = ["tab:green", "tab:red"]
-    else:
-        colours = ["tab:orange", "tab:green", "tab:red"]
-    binned_colour = "deepskyblue"
-
-    n_show = min(9, n_samples)
-    idx = np.random.default_rng().choice(n_samples, size=n_show, replace=False)
-
-    params_by_model = [
-        broadcast_params(program["params"], n_samples)
-        for program in programs_list
-    ]
+    n_show         = min(9, n_cells)
+    sample_indices = np.random.choice(n_cells, size=n_show, replace=False)
+    model_fns      = [program.compile()[0] for program in parent_programs]
 
     fig, axes = plt.subplots(3, 3, figsize=(18, 18))
-    axes = axes.reshape(3, 3)
 
-    for i in range(9):
-        ax = axes[i // 3, i % 3]
-        if i >= n_show:
-            ax.axis("off")
-            continue
+    for i, s in enumerate(sample_indices):
+        ax       = axes[i // 3, i % 3]
+        theta    = stimulus[s]
+        y_obs    = response[s]
+        x_grid   = np.linspace(theta.min(), theta.max(), 200)
 
-        s = idx[i]
-        x = stimulus[s]
-        y_obs = response[s]
-        eval_data = get_data_sample(X_eval, s)
-        x_eval = np.asarray(eval_data['stimulus']).reshape(-1)
+        ax.scatter(theta, y_obs, s=10, c="black", alpha=0.2, label="Observed")
+        ax.plot(x_grid, _binned_mean(theta, y_obs, x_grid), color="deepskyblue",
+                linewidth=4, label="Binned mean", alpha=0.8)
 
-        y_mean = _compute_binned_means_on_eval(x, y_obs, x_eval)
-        ax.scatter(x, y_obs, s=10, c="black", alpha=0.2, label="Observed")
-        ax.plot(x_eval, y_mean, color=binned_colour, linewidth=4, label="Binned mean", alpha=0.8)
+        for j, (program, model_fn) in enumerate(zip(parent_programs, model_fns)):
+            params_s = {k: np.asarray(v[s]) for k, v in program.params.items()}
+            y_pred   = np.asarray(model_fn({'stimulus': jnp.asarray(x_grid)}, params_s)).flatten()
+            sample_loss = program.sample_losses[s] if program.sample_losses is not None else None
+            label    = f"Model {j+1} (loss={sample_loss:.3f})" if sample_loss is not None else f"Model {j+1}"
+            ax.plot(x_grid, y_pred, color=colours[j % len(colours)], linewidth=3,
+                    label=label, alpha=0.8)
 
-        for j, program in enumerate(programs_list):
-            model = program["model"]
-            params = slice_params(params_by_model[j], s)
-            y_pred = call_model(model, eval_data, params)
-
-            label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
-            if "losses" in program:
-                label += f" (loss={program['losses'][s]:.2f})"
-            ax.plot(x_eval, np.asarray(y_pred).flatten(), color=colours[j % len(colours)],
-                    linewidth=3, label=label, alpha=0.8)
-
-        ax.set_xlim((float(np.min(x_eval)), float(np.max(x_eval))))
-        ax.set_ylim((0, np.max(y_mean) * 1.5))
+        ax.set_xlim(float(theta.min()), float(theta.max()))
         ax.set_title(f"Cell {s}")
         ax.set_xlabel("stimulus (rad)")
         ax.set_ylabel("response")
         ax.legend(fontsize=12)
 
-    mean_loss_parts = []
-    for j, program in enumerate(programs_list):
-        if "losses" in program and np.size(program["losses"]) > 0:
-            mean_loss_parts.append(f"Model {j+1}: {np.mean(program['losses']):.2f}")
-        else:
-            mean_loss_parts.append(f"Model {j+1}: n/a")
-    plt.suptitle(f"Model Fits\n{chr(10).join(mean_loss_parts)}", fontsize=24)
+    for i in range(n_show, 9):
+        axes[i // 3, i % 3].axis("off")
+
+    title_parts = []
+    for j, program in enumerate(parent_programs):
+        loss = program.program_losses.discover.final
+        title_parts.append(f"Model {j+1}: loss={loss:.3f}" if loss is not None else f"Model {j+1}: loss=n/a")
+    plt.suptitle("Model Fits\n" + "  |  ".join(title_parts), fontsize=24)
+
+    plt.tight_layout()
     plt.savefig(save_path, dpi=100.0, bbox_inches="tight")
     plt.close(fig)
 
 
-def _compute_binned_means_on_eval(theta, y, x_eval):
-    x_eval = np.asarray(x_eval).reshape(-1)
-    if x_eval.size == 0:
-        return x_eval
-    if x_eval.size == 1:
+def _binned_mean(x, y, x_grid):
+    """Bin y by proximity to each x_grid point and return per-bin means."""
+    if x_grid.size == 0:
+        return x_grid
+    if x_grid.size == 1:
         return np.array([float(np.mean(y))])
 
-    edges = np.empty(x_eval.size + 1, dtype=float)
-    edges[1:-1] = 0.5 * (x_eval[:-1] + x_eval[1:])
-    edges[0] = x_eval[0] - 0.5 * (x_eval[1] - x_eval[0])
-    edges[-1] = x_eval[-1] + 0.5 * (x_eval[-1] - x_eval[-2])
+    edges = np.empty(x_grid.size + 1)
+    edges[1:-1] = 0.5 * (x_grid[:-1] + x_grid[1:])
+    edges[0]    = x_grid[0] - 0.5 * (x_grid[1] - x_grid[0])
+    edges[-1]   = x_grid[-1] + 0.5 * (x_grid[-1] - x_grid[-2])
 
-    idx = np.digitize(theta, edges) - 1
-    y_mean = np.full(x_eval.size, np.nan, dtype=float)
-    for i in range(x_eval.size):
-        vals = y[idx == i]
+    bin_idx = np.digitize(x, edges) - 1
+    y_mean  = np.full(x_grid.size, np.nan)
+    for i in range(x_grid.size):
+        vals = y[bin_idx == i]
         if vals.size > 0:
             y_mean[i] = float(np.mean(vals))
 
     valid = np.isfinite(y_mean)
     if np.any(valid):
-        y_mean = np.interp(x_eval, x_eval[valid], y_mean[valid],
-                           left=float(y_mean[valid][0]), right=float(y_mean[valid][-1]))
-    else:
-        y_mean = np.zeros_like(x_eval, dtype=float)
-    return y_mean
+        return np.interp(x_grid, x_grid[valid], y_mean[valid],
+                         left=float(y_mean[valid][0]), right=float(y_mean[valid][-1]))
+    return np.zeros_like(x_grid)

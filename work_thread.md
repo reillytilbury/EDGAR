@@ -48,7 +48,7 @@ type: project
 - [ ] **cli.py**: better validation — look for actual functions instead of just files
 
 ### Utils removal
-- [ ] Remove `src/utils.py` — migrate helpers to appropriate modules (`src/io`, `src/scoring`, etc.) and update all project `load_data.py` and `image_feedback/plot.py` imports
+- [x] Remove `src/utils.py` — deleted along with `src/io/__init__.py`; all project plotters and data loaders updated to use Program API directly
 
 ### Tests
 - [ ] Tests for `src/evolution` (island operations, population, program)

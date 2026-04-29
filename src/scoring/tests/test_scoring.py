@@ -64,7 +64,7 @@ def _make_data(n_samples=3, n_trials=8):
 
 
 def loss_fn(output, data):
-    return jnp.mean((output - data["y"]) ** 2)
+    return jnp.mean((output - data["y"]) ** 2, axis=-1)
 
 
 # --- _score_one_model ---
@@ -72,7 +72,7 @@ def loss_fn(output, data):
 def test_score_one_model_returns_finite_loss():
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+    final_loss, initial_loss, *_ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
     assert jnp.isfinite(final_loss)
     assert jnp.isfinite(initial_loss)
     assert final_loss >= 0.0
@@ -99,7 +99,7 @@ def test_score_one_model_kills_slow_model():
     data = (_make_data(), _make_data())
     config = {**BASE_CONFIG, "timeout_s": 2.0}
     t0 = time.time()
-    final_loss, initial_loss, _ = _score_one_model(program, data, loss_fn, config)
+    final_loss, initial_loss, *_ = _score_one_model(program, data, loss_fn, config)
     elapsed = time.time() - t0
     assert final_loss == float("inf")
     assert initial_loss == float("inf")
@@ -117,23 +117,23 @@ def test_score_writes_back_to_population():
     score(pop, data, None, BASE_CONFIG, loss_fn, split="discover")
 
     for i in range(len(pop)):
-        assert jnp.isfinite(pop[i].losses.discover.final)
-        assert jnp.isfinite(pop[i].losses.discover.init)
-        assert pop[i].losses.discover.final < 1e-4
-        assert pop[i].losses.validate.final is None
+        assert jnp.isfinite(pop[i].program_losses.discover.final)
+        assert jnp.isfinite(pop[i].program_losses.discover.init)
+        assert pop[i].program_losses.discover.final < 1e-4
+        assert pop[i].program_losses.validate.final is None
         assert pop[i].n_params == 1
 
 
 def test_score_skips_already_scored_programs():
     pop = Population()
     pop.add(_make_program(FAST_MODEL_CODE))
-    pop[0].losses.discover.final = 0.5
-    pop[0].losses.discover.init = 0.5
+    pop[0].program_losses.discover.final = 0.5
+    pop[0].program_losses.discover.init = 0.5
 
     score(pop, (_make_data(), _make_data()), None, BASE_CONFIG, loss_fn, split="discover")
 
-    assert pop[0].losses.discover.final == 0.5
-    assert pop[0].losses.discover.init == 0.5
+    assert pop[0].program_losses.discover.final == 0.5
+    assert pop[0].program_losses.discover.init == 0.5
 
 
 def test_score_skips_programs_without_code():
@@ -142,4 +142,4 @@ def test_score_skips_programs_without_code():
 
     score(pop, (_make_data(), _make_data()), None, BASE_CONFIG, loss_fn, split="discover")
 
-    assert pop[0].losses.discover.final is None
+    assert pop[0].program_losses.discover.final is None

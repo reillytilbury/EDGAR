@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 import jax.numpy as jnp
-from typing import Dict, Tuple
 
 
 def load_data(
@@ -11,9 +10,8 @@ def load_data(
     n_samples: int = 1000,
     n_trials: int = 2000,
     noise_std: float = 0.1,
-    n_eval_trials: int = 100,
     n_eval_samples: int = 10,
-) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
+):
     """
     Simulate synthetic single-input regression data.
 
@@ -28,81 +26,68 @@ def load_data(
 
         X_discover = (train, test)
             X_disc_train: (n_samples//2, n_trials//2) - used by LLM loop.
-            X_disc_test: (n_samples//2, n_trials//2) - test within discovery phase.
+            X_disc_test:  (n_samples//2, n_trials//2) - test within discovery phase.
 
         X_validate = (train, test)
             X_val_train: (n_samples//2, n_trials//2) - held out, unseen by LLM.
-            X_val_test: (n_samples//2, n_trials//2) - held out final evaluation.
+            X_val_test:  (n_samples//2, n_trials//2) - held out final evaluation.
 
         X_eval
-            (n_samples//2, min(n_eval_trials, n_trials//2)) - small fingerprint subset
-            from discover train trials, used for deduplication.
+            Small fingerprint subset from discover train trials, used for deduplication.
+            Shape: (n_eval_samples, n_trials//2).
     """
     rng = np.random.default_rng(seed)
 
-    a = rng.uniform(-1.0, 1.0, n_samples)
-    b = rng.uniform(-1.0, 1.0, n_samples)
-    c = rng.uniform(-1.0, 1.0, n_samples)
-    k = rng.uniform(1.0, 5.0, n_samples)
+    # ── generate per-sample parameters and observations ──
+    a     = rng.uniform(-1.0, 1.0, n_samples)
+    b     = rng.uniform(-1.0, 1.0, n_samples)
+    c     = rng.uniform(-1.0, 1.0, n_samples)
+    k     = rng.uniform(1.0, 5.0, n_samples)
     phi_0 = rng.uniform(0.0, 2 * np.pi, n_samples)
 
-    x = rng.uniform(-1.0, 1.0, n_trials)
+    x     = rng.uniform(-1.0, 1.0, n_trials)
     noise = rng.normal(0.0, noise_std, (n_samples, n_trials))
+    y     = np.array([_target_function(x, a[i], b[i], c[i], k[i], phi_0[i])
+                      for i in range(n_samples)]) + noise
+    X     = {'x': np.tile(x, (n_samples, 1)), 'y': y}
 
-    y = np.array([
-        _target_function(x, a[i], b[i], c[i], k[i], phi_0[i]) for i in range(n_samples)
-    ]) + noise
+    # ── split samples 50/50 into discover / validate ──
+    # Use seed+1 to decouple splitting from data generation
+    rng = np.random.default_rng(seed + 1)
 
-    X = {'x': np.tile(x, (n_samples, 1)), 'y': y}
+    perm_s    = rng.permutation(n_samples)
+    disc_idx  = np.sort(perm_s[:n_samples // 2])
+    val_idx   = np.sort(perm_s[n_samples // 2:])
 
-    return _split(X, seed, n_eval_trials, n_eval_samples)
+    # ── split trials 50/50 into train / test ──
+    perm_t       = rng.permutation(n_trials)
+    train_trials = np.sort(perm_t[:n_trials // 2])
+    test_trials  = np.sort(perm_t[n_trials // 2:])
+
+    x_disc = X['x'][disc_idx]
+    y_disc = X['y'][disc_idx]
+    x_val  = X['x'][val_idx]
+    y_val  = X['y'][val_idx]
+
+    X_disc_train = {'x': x_disc[:, train_trials], 'y': y_disc[:, train_trials]}
+    X_disc_test  = {'x': x_disc[:, test_trials],  'y': y_disc[:, test_trials]}
+    X_val_train  = {'x': x_val[:,  train_trials],  'y': y_val[:,  train_trials]}
+    X_val_test   = {'x': x_val[:,  test_trials],   'y': y_val[:,  test_trials]}
+
+    # ── build X_eval: small subset of discover train for fingerprinting ──
+    eval_samples = np.sort(rng.choice(disc_idx, min(n_eval_samples, len(disc_idx)), replace=False))
+    eval_pos     = np.searchsorted(disc_idx, eval_samples)
+    X_eval       = {'x': x_disc[eval_pos][:, train_trials], 'y': y_disc[eval_pos][:, train_trials]}
+
+    # Position of each eval sample within disc_idx, for param matching in scoring
+    X_eval['_sample_indices'] = eval_pos
+
+    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
 
 def loss_fn(model_output, data):
     """Scaled squared error loss."""
-    y_true = data['y']
-    return jnp.mean(10 * (y_true - model_output) ** 2)
-
-
-# ── internal helpers ──
-
-def _split(
-    X: Dict[str, np.ndarray],
-    seed: int,
-    n_eval_trials: int,
-    n_eval_samples: int,
-) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
-    """Random sample split + random trial split → (X_discover, X_validate, X_eval)."""
-    n_samples = next(iter(X.values())).shape[0]
-    n_trials = next(iter(X.values())).shape[-1]
-    rng = np.random.default_rng(seed + 1)  # offset to decouple from data generation seed
-
-    perm_s = rng.permutation(n_samples)
-    disc_idx = np.sort(perm_s[:n_samples // 2])
-    val_idx = np.sort(perm_s[n_samples // 2:])
-
-    perm_t = rng.permutation(n_trials)
-    train_trials = np.sort(perm_t[:n_trials // 2])
-    test_trials = np.sort(perm_t[n_trials // 2:])
-
-    def _sel(sidx, tidx):
-        return {k: v[sidx][..., tidx] for k, v in X.items()}
-
-    X_disc_train = _sel(disc_idx, train_trials)
-    X_disc_test = _sel(disc_idx, test_trials)
-    X_val_train = _sel(val_idx, train_trials)
-    X_val_test = _sel(val_idx, test_trials)
-
-    n_eval = min(n_eval_trials, len(train_trials))
-    eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
-    eval_samples = np.sort(rng.choice(disc_idx, min(n_eval_samples, len(disc_idx)), replace=False))
-    X_eval = _sel(eval_samples, eval_trials)
-
-    # Store which position each eval sample occupies in disc_idx for param matching in scoring
-    eval_sample_positions = np.searchsorted(disc_idx, eval_samples)
-    X_eval['_sample_indices'] = eval_sample_positions
-
-    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
+    return 10 * jnp.mean((data['y'] - model_output) ** 2, axis=-1)
 
 
 def _target_function(x, a, b, c, k, phi_0):
