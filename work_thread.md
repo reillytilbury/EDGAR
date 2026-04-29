@@ -28,33 +28,40 @@ type: project
 
 ## TODO
 
-- [ ] Change signature of `load_data` to output `X_discover`, `X_validate`, `X_eval`; remove `train_test_split` function
+### Data loading
+- [ ] Change signature of all project `load_data` functions to output `X_discover`, `X_validate`, `X_eval` using shared split logic; remove per-project `train_test_split` functions
 - [ ] Ensure all data is in JAX format
+- [ ] Integrate Dabin's drop trials plan
+- [ ] Need a way of saving hyperparameters/config in metadata-only format + code used to load + seed islands
+
+### Core scoring
 - [ ] Rethink `_eval_fingerprint` in scoring.py — current approach needs refinement
-- [ ] Ensure run code is saving in `config.io.save_dir`
+
+### LLM
 - [ ] Integrate image prompt into LLMs: add `image_dir` field to Program object, save images to disk
-- [ ] Create coherent program/island saving structure (replace messy programs_database)
-- [ ] Need README.MD up to date
-- [ ] Need integration tests and unit tests status on git
+
+### CLI + logging
+- [ ] Implement actual logging (monitoring currently just computes metrics) — see spec below
+- [ ] Add CLI verbosity flag (`--log-level compact/code/prompts`) — see spec below
+- [ ] **cli.py**: better validation — look for actual functions instead of just files
+
+### Utils removal
+- [ ] Remove `src/utils.py` — migrate helpers to appropriate modules (`src/io`, `src/scoring`, etc.) and update all project `load_data.py` and `image_feedback/plot.py` imports
+
+### Tests
+- [ ] Tests for `src/evolution` (island operations, population, program)
+- [ ] Tests for `src/io` (config, task_spec, output_dirs)
+- [ ] Tests for `src/llm`
+- [ ] Integration test for `run.py` (small end-to-end run)
+- [ ] Wire tests to GitHub Actions CI with status badges in README
+
+### Documentation
+- [ ] Update README.md to reflect refactored architecture
+- [ ] Add documentation describing the refactors (what changed and why)
 
 ---
 
-## Outstanding Issues
-
-### Initial config + data loading
-- Need to integrate Dabin's drop trials plan
-- **cli.py**: need better validation — look for actual functions instead of just files
-- Logging verbosity should be set as CLI command
-- Need a way of saving hyperparameters/config in metadata-only format + code used to load + seed islands
-
-### Monitoring + logging
-- Actual logging implementation needed (monitoring currently just computes metrics)
-
-### LLM
-- Need test
-
-### Evolution
-- Need tests for island operations
+## Reference
 
 ### Data naming conventions
 - `X_discover`: Data train + test seen by the LLM model discovery loop

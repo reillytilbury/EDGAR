@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
 from typing import Tuple
 
-from src import utils
+from src.io import broadcast_params, call_model, slice_params
 
 
 def plot_model_fits(
@@ -38,7 +38,7 @@ def plot_model_fits(
     axes = np.atleast_2d(axes)
 
     params_by_model = [
-        utils.broadcast_params(program["params"], n_samples)
+        broadcast_params(program["params"], n_samples)
         for program in programs_list
     ]
 
@@ -60,9 +60,9 @@ def plot_model_fits(
 
         for m_idx, program in enumerate(programs_list):
             model = program["model"]
-            params = utils.slice_params(params_by_model[m_idx], s)
+            params = slice_params(params_by_model[m_idx], s)
             sample_data = {'pos_x': pos_x[s], 'pos_y': pos_y[s]}
-            y_pred = utils.call_model(model, sample_data, params)
+            y_pred = call_model(model, sample_data, params)
             rm_pred = _bin_to_rate_map(x, y, y_pred, n_bins=n_bins, x_domain=x_domain,
                                        y_domain=y_domain, smoothing_sigma=smoothing_sigma)
 

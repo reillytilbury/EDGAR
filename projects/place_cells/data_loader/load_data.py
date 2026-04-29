@@ -1,44 +1,40 @@
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from __future__ import annotations
 
 import numpy as np
+import jax.numpy as jnp
 from scipy.ndimage import gaussian_filter
-
-from src import utils
-
-# Configuration constants from project config
-SPATIAL_BIN_CM = 3.0
-TIME_BIN_MS = 20
-SPEED_THRESHOLD = 2.5
-MIN_SPIKES = 50
-SMOOTHING_SIGMA = 1.5
-WALL_VAL = 0.75
-FILTER_PLACE_CELLS = True
-MIN_SPATIAL_INFO = 0.3
-MIN_PEAK_RATE = 1.0
-MIN_MEAN_RATE = 0.05
+from typing import Any, Dict, List, Optional, Tuple
 
 
-def load_and_process_data(
+def load_data(
     data_path: str,
-    time_start: Optional[float] = None,
-    time_end: Optional[float] = None,
-    time_bin_ms: int = TIME_BIN_MS,
-    input_names: Optional[List[str]] = None,
-    min_spikes: int = MIN_SPIKES,
-    speed_threshold: float = SPEED_THRESHOLD,
+    time_bin_ms: int = 20,
+    speed_threshold: float = 2.5,
+    min_spikes: int = 50,
     max_trials: Optional[int] = 8000,
     zscore_response: bool = True,
-) -> Dict[str, np.ndarray]:
+    spatial_bin_cm: float = 3.0,
+    smoothing_sigma: float = 1.5,
+    wall_val: float = 0.75,
+    min_spatial_info: float = 0.3,
+    min_peak_rate: float = 1.0,
+    min_mean_rate: float = 0.05,
+    input_names: Optional[List[str]] = None,
+    time_start: Optional[float] = None,
+    time_end: Optional[float] = None,
+    random_seed: int = 42,
+    n_eval_trials: int = 100,
+) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
     """
     Load and preprocess place-cell data.
 
-    Returns dict with keys 'pos_x', 'pos_y', 'response' — shape (n_cells, n_trials).
+    Returns
+    -------
+    X_discover, X_validate, X_eval
+        X_discover = (train, test) dicts split by trials for use in the LLM loop.
+        X_validate = (train, test) dicts held out for final evaluation.
+        X_eval = small fixed trial subset from X_discover for fingerprinting.
     """
-    spatial_bin_cm = SPATIAL_BIN_CM
-    smoothing_sigma = SMOOTHING_SIGMA
-    wall_val = WALL_VAL
-
     if input_names is None:
         input_names = ["x", "y"]
 
@@ -99,7 +95,6 @@ def load_and_process_data(
         if axis in features and np.nanmax(np.abs(features[axis])) > 1.5:
             features[axis] = features[axis] / max(wall_val, 1e-6)
 
-    # Drop NaN bins
     valid = np.ones(n_time_bins, dtype=bool)
     for arr in features.values():
         valid &= ~np.isnan(arr)
@@ -109,7 +104,6 @@ def load_and_process_data(
         features = {name: arr[valid] for name, arr in features.items()}
         n_time_bins = len(bin_centers)
 
-    # Speed filter
     if "x" in features and "y" in features and speed_threshold > 0:
         arena_half_width_cm = wall_val * 100
         dx = np.diff(features["x"], prepend=features["x"][0]) * arena_half_width_cm
@@ -127,7 +121,6 @@ def load_and_process_data(
         features = {name: arr[keep_idx] for name, arr in features.items()}
         n_time_bins = max_trials
 
-    # Min-spike filter
     firing_rates = firing_rates[total_spikes >= min_spikes]
     n_cells = firing_rates.shape[0]
 
@@ -145,10 +138,10 @@ def load_and_process_data(
         spike_map_s = gaussian_filter(spike_map, sigma=smoothing_sigma)
         rate_maps[c] = spike_map_s / (occupancy_s + 1e-6)
 
-    # Place-cell filter
     keep_idx, _ = _place_cell_filter_indices(
         response=firing_rates, rate_maps=rate_maps, x=x, y=y,
-        min_spatial_info=MIN_SPATIAL_INFO, min_peak_rate=MIN_PEAK_RATE, min_mean_rate=MIN_MEAN_RATE, verbose=True,
+        min_spatial_info=min_spatial_info, min_peak_rate=min_peak_rate,
+        min_mean_rate=min_mean_rate, verbose=True,
     )
     if len(keep_idx) > 0:
         firing_rates = firing_rates[keep_idx]
@@ -158,30 +151,51 @@ def load_and_process_data(
     if zscore_response:
         response = (response - response.mean(axis=1, keepdims=True)) / (response.std(axis=1, keepdims=True) + 1e-6)
 
-    return {
+    X = {
         "pos_x": np.tile(x, (n_cells, 1)),
         "pos_y": np.tile(y, (n_cells, 1)),
         "response": response,
     }
 
-
-def train_test_split(
-    X: Dict[str, np.ndarray],
-    random_seed: int,
-) -> Tuple[np.ndarray, np.ndarray]:
-    n_samples = utils.data_n_samples(X)
-    n_trials = utils.data_n_trials(X)
-    assert n_samples >= 2
-    assert n_trials >= 2
-
-    rng = np.random.default_rng(random_seed)
-    train_samples = rng.choice(np.arange(n_samples), n_samples // 2, replace=False)
-    train_trials = rng.choice(np.arange(n_trials), n_trials // 2, replace=False)
-    return train_samples, train_trials
+    return _split(X, random_seed, n_eval_trials)
 
 
 def loss_fn(model_output, data):
     return jnp.mean((data["response"] - model_output) ** 2)
+
+
+# ── internal helpers ──
+
+def _split(
+    X: Dict[str, np.ndarray],
+    seed: int,
+    n_eval_trials: int,
+) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
+    n_samples = next(iter(X.values())).shape[0]
+    n_trials = next(iter(X.values())).shape[-1]
+    rng = np.random.default_rng(seed)
+
+    perm_s = rng.permutation(n_samples)
+    disc_idx = np.sort(perm_s[:n_samples // 2])
+    val_idx = np.sort(perm_s[n_samples // 2:])
+
+    perm_t = rng.permutation(n_trials)
+    train_trials = np.sort(perm_t[:n_trials // 2])
+    test_trials = np.sort(perm_t[n_trials // 2:])
+
+    def _sel(sidx, tidx):
+        return {k: v[sidx][..., tidx] for k, v in X.items()}
+
+    X_disc_train = _sel(disc_idx, train_trials)
+    X_disc_test = _sel(disc_idx, test_trials)
+    X_val_train = _sel(val_idx, train_trials)
+    X_val_test = _sel(val_idx, test_trials)
+
+    n_eval = min(n_eval_trials, len(train_trials))
+    eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
+    X_eval = _sel(disc_idx, eval_trials)
+
+    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
 
 def _load_data_file(data_path: str) -> Dict[str, Any]:

@@ -4,3 +4,5 @@ io:
 project_params:
   activity_threshold: 0.4
   conc_threshold: 0.55
+  random_seed: 42
+  n_eval_trials: 100

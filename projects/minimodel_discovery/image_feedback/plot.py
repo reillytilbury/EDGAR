@@ -11,7 +11,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Ellipse
 from scipy.io import loadmat
 
-from src import utils
+from src.io import broadcast_params, call_model, data_n_samples, data_n_trials, get_data_sample, slice_params
 from projects.minimodel_discovery.primitives import (
     gabor_bank16,
     local_gaussian_readout,
@@ -401,7 +401,7 @@ def _build_anchor_cache(data: dict[str, np.ndarray]) -> dict[str, object]:
     cell_ids = tuple(np.asarray(data["cell_index"][:, 0], dtype=np.int64).tolist())
     cache_key = (
         cell_ids,
-        utils.data_n_trials(data),
+        data_n_trials(data),
         bool(_DATASET_CONTEXT.get("use_teacher_diagnostics", False)),
     )
     if cache_key in _DIAGNOSTIC_CACHE:
@@ -414,7 +414,7 @@ def _build_anchor_cache(data: dict[str, np.ndarray]) -> dict[str, object]:
     anchors = []
 
     for sample_idx in anchor_indices.tolist():
-        sample = utils.get_data_sample(data, int(sample_idx))
+        sample = get_data_sample(data, int(sample_idx))
         cell_id = int(np.asarray(sample["cell_index"]).reshape(-1)[0])
         fev = float(fev_lookup.get(cell_id, float("nan")))
         params = _param_est1(sample)
@@ -513,8 +513,8 @@ def plot_model_fits(
     for row_idx, anchor in enumerate(anchors):
         sample_idx = int(anchor["sample_idx"])
         cell_id = int(anchor["cell_id"])
-        sample = utils.get_data_sample(data, sample_idx)
-        eval_sample = utils.get_data_sample(X_eval, sample_idx)
+        sample = get_data_sample(data, sample_idx)
+        eval_sample = get_data_sample(X_eval, sample_idx)
         response = np.asarray(sample["response"], dtype=np.float32)
         repeats = np.asarray(sample["response_repeats"], dtype=np.float32)
         eval_images = np.transpose(np.asarray(eval_sample["image"], dtype=np.float32), (2, 0, 1))
@@ -536,9 +536,9 @@ def plot_model_fits(
 
         for model_idx, program in enumerate(programs_list):
             label = labels[model_idx] if labels is not None and model_idx < len(labels) else f"model_{model_idx + 1}"
-            params = utils.slice_params(utils.broadcast_params(program["params"], utils.data_n_samples(data)), sample_idx)
-            pred = _vectorize_prediction(utils.call_model(program["model"], sample, params))
-            pred_eval = _vectorize_prediction(utils.call_model(program["model"], eval_sample, params))
+            params = slice_params(broadcast_params(program["params"], data_n_samples(data)), sample_idx)
+            pred = _vectorize_prediction(call_model(program["model"], sample, params))
+            pred_eval = _vectorize_prediction(call_model(program["model"], eval_sample, params))
             pred_sorted = pred[order]
 
             loss_value = float("nan")

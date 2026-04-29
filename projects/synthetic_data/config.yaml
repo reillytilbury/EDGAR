@@ -1,14 +1,24 @@
 io:
-  data_path: /path/to/data.npy
+  data_path: ""
+
 evolution:
   n_iterations: 2
   batch_size: 3
   n_islands: 4
+
 llms:
   model_llm:
-  - gemini-2.5-flash
-  - gemini-2.0-flash
-  - gemini-2.0-flash
+    - gemini-2.5-flash
+    - gemini-2.0-flash
+    - gemini-2.0-flash
   swear_words: []
+
 scoring:
   gradient_descent:
+
+project_params:
+  seed: 42
+  n_samples: 1000
+  n_trials: 2000
+  noise_std: 0.1
+  n_eval_trials: 100

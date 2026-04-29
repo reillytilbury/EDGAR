@@ -1,11 +1,27 @@
 io:
   data_path: /home/reilly/datasets/image_responses/FX8_nat60k_2023_05_16.npz
+
 evolution:
   n_iterations: 3
   time_limit: 45
   n_islands: 4
   batch_size: 4
+
 scoring:
   gradient_descent:
     max_iter: 100
     learning_rate: 0.03
+
+project_params:
+  image_path: /home/reilly/datasets/image_responses/images_natimg2800_V1.mat
+  mouse_id: 4
+  min_fev: 0.15
+  max_cells: 64
+  max_train_images: 1024
+  anchor_cell_count: 8
+  minimodel_repo_path: /home/reilly/Documents/code/minimodel
+  teacher_checkpoint_path: /home/reilly/Documents/code/minimodel/notebooks/checkpoints/FX8_051623_2layer_16_320_clamp_norm_depthsep_pool.pt
+  use_teacher_diagnostics: true
+  teacher_device: cpu
+  random_seed: 42
+  n_eval_trials: 256

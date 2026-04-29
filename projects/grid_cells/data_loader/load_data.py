@@ -1,49 +1,46 @@
+from __future__ import annotations
+
 import numpy as np
+import jax.numpy as jnp
 from scipy.ndimage import gaussian_filter
 from typing import Dict, Tuple
 
-from src import utils
 
-# Configuration constants from project config
-TIME_START = 27826
-TIME_END = 31223
-TIME_BIN_MS = 100
-MIN_SPIKES = 200
-SPEED_THRESHOLD = 2.5
-MAX_TRIALS = 20000
-MIN_ACTIVE_FRAC = 0.02
-MIN_MODULATION = 1.0
-MIN_SPATIAL_RELIABILITY = 0.5
-NORMALIZE_PER_SAMPLE = True
-TARGET_L2_NORM = 100.0
-MIN_L2_NORM = 1.0e-06
-
-
-def load_and_process_data(
+def load_data(
     data_path: str,
-    time_start: float = TIME_START,
-    time_end: float = TIME_END,
-    time_bin_ms: int = TIME_BIN_MS,
-    min_spikes: int = MIN_SPIKES,
-    speed_threshold: float = SPEED_THRESHOLD,
-    max_trials: int = MAX_TRIALS,
-    min_active_frac: float = MIN_ACTIVE_FRAC,
-    min_modulation: float = MIN_MODULATION,
-    min_spatial_reliability: float = MIN_SPATIAL_RELIABILITY,
-    normalize_per_sample: bool = NORMALIZE_PER_SAMPLE,
-    target_l2_norm: float = TARGET_L2_NORM,
-    min_l2_norm: float = MIN_L2_NORM,
-) -> Dict[str, np.ndarray]:
+    time_start: float = 27826,
+    time_end: float = 31223,
+    time_bin_ms: int = 100,
+    min_spikes: int = 200,
+    speed_threshold: float = 2.5,
+    max_trials: int = 20000,
+    min_active_frac: float = 0.02,
+    min_modulation: float = 1.0,
+    min_spatial_reliability: float = 0.5,
+    normalize_per_sample: bool = True,
+    target_l2_norm: float = 100.0,
+    min_l2_norm: float = 1.0e-06,
+    n_trial_blocks: int = 10,
+    random_seed: int = 42,
+    n_eval_trials: int = 100,
+    spatial_bin_cm: float = 3.0,
+    smoothing_sigma: float = 1.5,
+    wall_val: float = 0.75,
+    module_key: str = "spikes_mod1",
+    input_names: list | None = None,
+) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
     """
     Load and preprocess grid-cell data.
 
-    Returns dict with keys 'pos_x', 'pos_y', 'response' — shape (n_cells, n_trials).
+    Returns
+    -------
+    X_discover, X_validate, X_eval
+        X_discover = (train, test) dicts split by trial blocks for use in the LLM loop.
+        X_validate = (train, test) dicts held out for final evaluation.
+        X_eval = small fixed trial subset from X_discover for fingerprinting.
     """
-    spatial_bin_cm = 3.0
-    smoothing_sigma = 1.5
-    wall_val = 0.75
-    module_key = "spikes_mod1"
-    input_names = ["x", "y"]
+    if input_names is None:
+        input_names = ["x", "y"]
 
     data = np.load(data_path, allow_pickle=True)
     t_raw = np.asarray(data["t"], dtype=float)
@@ -79,7 +76,6 @@ def load_and_process_data(
         with np.errstate(invalid="ignore"):
             features[feat_name] = np.where(counts_per_bin > 0, sums / counts_per_bin, np.nan)
 
-    # Speed filter
     arena_half_width_cm = wall_val * 100
     dx = np.diff(features["x"], prepend=features["x"][0]) * arena_half_width_cm
     dy = np.diff(features["y"], prepend=features["y"][0]) * arena_half_width_cm
@@ -107,7 +103,6 @@ def load_and_process_data(
         firing_rates = firing_rates[:, keep_idx]
         features = {name: arr[keep_idx] for name, arr in features.items()}
 
-    # Spatial reliability filter
     if firing_rates.shape[1] >= 4:
         n_trials = firing_rates.shape[1]
         half = n_trials // 2
@@ -131,42 +126,59 @@ def load_and_process_data(
         scale = np.maximum(l2, float(min_l2_norm))
         firing_rates = firing_rates * (float(target_l2_norm) / scale)
 
-    return {
+    X = {
         'pos_x': np.tile(features["x"], (n_cells, 1)),
         'pos_y': np.tile(features["y"], (n_cells, 1)),
         'response': firing_rates,
     }
 
-
-def train_test_split(
-    X: Dict[str, np.ndarray],
-    random_seed: int,
-) -> Tuple[np.ndarray, np.ndarray]:
-    n_samples = utils.data_n_samples(X)
-    n_trials = utils.data_n_trials(X)
-    assert n_samples >= 2
-    assert n_trials >= 2
-
-    rng = np.random.default_rng(random_seed)
-    train_samples = rng.choice(np.arange(n_samples), n_samples // 2, replace=False)
-
-    n_blocks = 10
-    block_size = max(1, n_trials // n_blocks)
-    blocks = []
-    for start in range(0, n_trials, block_size):
-        blocks.append(np.arange(start, min(start + block_size, n_trials)))
-    blocks = np.array(blocks, dtype=object)
-
-    perm = rng.permutation(len(blocks))
-    n_train_blocks = len(blocks) // 2
-    train_blocks = blocks[perm[:n_train_blocks]]
-    train_trials = np.concatenate(train_blocks) if len(train_blocks) > 0 else np.array([], dtype=int)
-
-    return train_samples, train_trials
+    return _split(X, random_seed, n_trial_blocks, n_eval_trials)
 
 
 def loss_fn(model_output, data):
     return jnp.mean((data['response'] - model_output) ** 2)
+
+
+# ── internal helpers ──
+
+def _split(
+    X: Dict[str, np.ndarray],
+    seed: int,
+    n_trial_blocks: int,
+    n_eval_trials: int,
+) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
+    """Random sample split + block-based trial split → (X_discover, X_validate, X_eval)."""
+    n_samples = next(iter(X.values())).shape[0]
+    n_trials = next(iter(X.values())).shape[-1]
+    rng = np.random.default_rng(seed)
+
+    perm_s = rng.permutation(n_samples)
+    disc_idx = np.sort(perm_s[:n_samples // 2])
+    val_idx = np.sort(perm_s[n_samples // 2:])
+
+    # Block-based trial split preserves temporal structure
+    block_size = max(1, n_trials // n_trial_blocks)
+    blocks = [np.arange(start, min(start + block_size, n_trials))
+              for start in range(0, n_trials, block_size)]
+    blocks_arr = np.array(blocks, dtype=object)
+    perm_b = rng.permutation(len(blocks_arr))
+    n_train_blocks = len(blocks_arr) // 2
+    train_trials = np.sort(np.concatenate(blocks_arr[perm_b[:n_train_blocks]]).astype(int))
+    test_trials = np.sort(np.concatenate(blocks_arr[perm_b[n_train_blocks:]]).astype(int))
+
+    def _sel(sidx, tidx):
+        return {k: v[sidx][..., tidx] for k, v in X.items()}
+
+    X_disc_train = _sel(disc_idx, train_trials)
+    X_disc_test = _sel(disc_idx, test_trials)
+    X_val_train = _sel(val_idx, train_trials)
+    X_val_test = _sel(val_idx, test_trials)
+
+    n_eval = min(n_eval_trials, len(train_trials))
+    eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
+    X_eval = _sel(disc_idx, eval_trials)
+
+    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
 
 def _compute_rate_maps(

@@ -1,22 +1,18 @@
+from __future__ import annotations
+
 import numpy as np
+import jax.numpy as jnp
 from typing import Dict, Tuple
 
-from src import utils
 
-# Configuration constants from project config
-SEED = 42
-N_SAMPLES = 1000
-N_TRIALS = 2000
-NOISE_STD = 0.1
-
-
-def load_and_process_data(
+def load_data(
     data_path: str = "",
-    SEED: int = SEED,
-    n_samples: int = N_SAMPLES,
-    n_trials: int = N_TRIALS,
-    noise_std: float = NOISE_STD,
-) -> Dict[str, np.ndarray]:
+    seed: int = 42,
+    n_samples: int = 1000,
+    n_trials: int = 2000,
+    noise_std: float = 0.1,
+    n_eval_trials: int = 100,
+) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
     """
     Simulate synthetic single-input regression data.
 
@@ -26,11 +22,12 @@ def load_and_process_data(
 
     Returns
     -------
-    dict[str, np.ndarray]
-        - 'x': shape (n_samples, n_trials)
-        - 'y': shape (n_samples, n_trials)
+    X_discover, X_validate, X_eval
+        X_discover = (train, test) dicts split by trials for use in the LLM loop.
+        X_validate = (train, test) dicts held out for final evaluation.
+        X_eval = small fixed trial subset from X_discover for fingerprinting.
     """
-    rng = np.random.default_rng(SEED)
+    rng = np.random.default_rng(seed)
 
     a = rng.uniform(-1.0, 1.0, n_samples)
     b = rng.uniform(-1.0, 1.0, n_samples)
@@ -45,28 +42,50 @@ def load_and_process_data(
         _target_function(x, a[i], b[i], c[i], k[i], phi_0[i]) for i in range(n_samples)
     ]) + noise
 
-    return {'x': np.tile(x, (n_samples, 1)), 'y': y}
+    X = {'x': np.tile(x, (n_samples, 1)), 'y': y}
 
-
-def train_test_split(
-    X: Dict[str, np.ndarray],
-    random_seed: int,
-) -> Tuple[np.ndarray, np.ndarray]:
-    n_samples = utils.data_n_samples(X)
-    n_trials = utils.data_n_trials(X)
-    assert n_samples >= 2
-    assert n_trials >= 2
-
-    rng = np.random.default_rng(random_seed)
-    train_samples = rng.choice(np.arange(n_samples), n_samples // 2, replace=False)
-    train_trials = rng.choice(np.arange(n_trials), n_trials // 2, replace=False)
-    return train_samples, train_trials
+    return _split(X, seed, n_eval_trials)
 
 
 def loss_fn(model_output, data):
     """Scaled squared error loss."""
     y_true = data['y']
     return jnp.mean(10 * (y_true - model_output) ** 2)
+
+
+# ── internal helpers ──
+
+def _split(
+    X: Dict[str, np.ndarray],
+    seed: int,
+    n_eval_trials: int,
+) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
+    """Random sample split + random trial split → (X_discover, X_validate, X_eval)."""
+    n_samples = next(iter(X.values())).shape[0]
+    n_trials = next(iter(X.values())).shape[-1]
+    rng = np.random.default_rng(seed + 1)  # offset to decouple from data generation seed
+
+    perm_s = rng.permutation(n_samples)
+    disc_idx = np.sort(perm_s[:n_samples // 2])
+    val_idx = np.sort(perm_s[n_samples // 2:])
+
+    perm_t = rng.permutation(n_trials)
+    train_trials = np.sort(perm_t[:n_trials // 2])
+    test_trials = np.sort(perm_t[n_trials // 2:])
+
+    def _sel(sidx, tidx):
+        return {k: v[sidx][..., tidx] for k, v in X.items()}
+
+    X_disc_train = _sel(disc_idx, train_trials)
+    X_disc_test = _sel(disc_idx, test_trials)
+    X_val_train = _sel(val_idx, train_trials)
+    X_val_test = _sel(val_idx, test_trials)
+
+    n_eval = min(n_eval_trials, len(train_trials))
+    eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
+    X_eval = _sel(disc_idx, eval_trials)
+
+    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
 
 def _target_function(x, a, b, c, k, phi_0):

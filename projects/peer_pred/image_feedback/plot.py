@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
-from src import utils
+from src.io import broadcast_params, call_model, slice_params
 
 
 def plot_model_fits(
@@ -59,11 +59,11 @@ def plot_model_fits(
     model_losses = []
     for program in programs_list:
         model = program["model"]
-        params = utils.slice_params(
-            utils.broadcast_params(program["params"], n_samples), sample_idx
+        params = slice_params(
+            broadcast_params(program["params"], n_samples), sample_idx
         )
         sample_data = {"source": x}
-        y_pred = utils.call_model(model, sample_data, params)
+        y_pred = call_model(model, sample_data, params)
         y_pred = np.asarray(y_pred)
         if y_pred.ndim == 1:
             y_pred = y_pred[None, :]

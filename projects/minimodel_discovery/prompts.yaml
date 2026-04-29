@@ -34,7 +34,7 @@ model:
     {program_code_string}
 
     '
-  global_vars:
+  config_vars:
   - max_lines
   parent_vars:
   - model_idx
@@ -77,7 +77,7 @@ parameter_estimator:
     {parameter_estimator_code_string}
 
     '
-  global_vars:
+  config_vars:
   - max_lines
   parent_vars:
   - model_idx

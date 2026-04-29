@@ -1,4 +1,20 @@
 io:
   data_path: /home/reilly/Desktop/place_cell_data/hippocampus_place_cells.npz
+
 evolution:
   n_iterations: 3
+
+project_params:
+  time_bin_ms: 20
+  speed_threshold: 2.5
+  min_spikes: 50
+  max_trials: 8000
+  zscore_response: true
+  spatial_bin_cm: 3.0
+  smoothing_sigma: 1.5
+  wall_val: 0.75
+  min_spatial_info: 0.3
+  min_peak_rate: 1.0
+  min_mean_rate: 0.05
+  random_seed: 42
+  n_eval_trials: 100

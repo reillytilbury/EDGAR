@@ -1,31 +1,33 @@
+from __future__ import annotations
+
 import numpy as np
-import jax
 import jax.numpy as jnp
 from typing import Dict, Tuple
 
-from src import utils
 
-
-def load_and_process_data(
+def load_data(
     data_path: str,
     activity_threshold: float,
     conc_threshold: float,
-) -> Dict[str, np.ndarray]:
+    random_seed: int = 42,
+    n_eval_trials: int = 100,
+) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
     """
     Load and preprocess orientation-tuning neural data.
 
     Returns
     -------
-    dict with keys:
-        'stimulus': shape (n_samples, n_trials), stimulus angles (radians)
-        'response': shape (n_samples, n_trials), neural responses
+    X_discover, X_validate, X_eval
+        X_discover = (train, test) dicts split by trials for use in the LLM loop.
+        X_validate = (train, test) dicts held out for final evaluation.
+        X_eval = small fixed trial subset from X_discover for fingerprinting.
     """
     neural_data = np.load(data_path, allow_pickle=True).item()
     response = _extract_stimulus_related_response(neural_data, n_pcs=0)
 
     angles = neural_data['istim']
-    n_trials = response.shape[1]
-    n_trials_small = int(n_trials * activity_threshold)
+    n_trials_raw = response.shape[1]
+    n_trials_small = int(n_trials_raw * activity_threshold)
 
     active = (response > 0).astype(np.float32)
     firing_probs = np.mean(active, axis=1)
@@ -44,35 +46,52 @@ def load_and_process_data(
         angles_cropped[i] = angles[active_trials_idx]
 
     response_cropped = _normalize_response(response_cropped)
-    return {
+    X = {
         'stimulus': angles_cropped,
         'response': response_cropped,
     }
 
-
-def train_test_split(
-    X: Dict[str, np.ndarray],
-    random_seed: int,
-) -> Tuple[np.ndarray, np.ndarray]:
-    n_samples = utils.data_n_samples(X)
-    n_trials = utils.data_n_trials(X)
-    assert n_samples >= 2
-    assert n_trials >= 2
-
-    sample_key = jax.random.PRNGKey(random_seed)
-    shuffled_samples = jax.random.permutation(sample_key, jnp.arange(n_samples))
-    train_samples = np.asarray(shuffled_samples[:n_samples // 2], dtype=np.int64)
-
-    trial_key = jax.random.PRNGKey(0)
-    shuffled_trials = jax.random.permutation(trial_key, jnp.arange(n_trials))
-    train_trials = np.asarray(shuffled_trials[:n_trials // 2], dtype=np.int64)
-
-    return train_samples, train_trials
+    return _split(X, random_seed, n_eval_trials)
 
 
 def loss_fn(model_output, data):
     """Scaled squared error loss."""
     return jnp.mean(10 * (data['response'] - model_output) ** 2)
+
+
+# ── internal helpers ──
+
+def _split(
+    X: Dict[str, np.ndarray],
+    seed: int,
+    n_eval_trials: int,
+) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
+    """Random sample split + random trial split → (X_discover, X_validate, X_eval)."""
+    n_samples = next(iter(X.values())).shape[0]
+    n_trials = next(iter(X.values())).shape[-1]
+    rng = np.random.default_rng(seed)
+
+    perm_s = rng.permutation(n_samples)
+    disc_idx = np.sort(perm_s[:n_samples // 2])
+    val_idx = np.sort(perm_s[n_samples // 2:])
+
+    perm_t = rng.permutation(n_trials)
+    train_trials = np.sort(perm_t[:n_trials // 2])
+    test_trials = np.sort(perm_t[n_trials // 2:])
+
+    def _sel(sidx, tidx):
+        return {k: v[sidx][..., tidx] for k, v in X.items()}
+
+    X_disc_train = _sel(disc_idx, train_trials)
+    X_disc_test = _sel(disc_idx, test_trials)
+    X_val_train = _sel(val_idx, train_trials)
+    X_val_test = _sel(val_idx, test_trials)
+
+    n_eval = min(n_eval_trials, len(train_trials))
+    eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
+    X_eval = _sel(disc_idx, eval_trials)
+
+    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
 
 def _extract_stimulus_related_response(

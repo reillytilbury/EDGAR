@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from src import utils
+from src.io import broadcast_params, call_model, get_data_sample, slice_params
 
 
 def plot_model_fits(
@@ -33,7 +33,7 @@ def plot_model_fits(
     idx = np.random.default_rng().choice(n_samples, size=n_show, replace=False)
 
     params_by_model = [
-        utils.broadcast_params(program["params"], n_samples)
+        broadcast_params(program["params"], n_samples)
         for program in programs_list
     ]
 
@@ -49,7 +49,7 @@ def plot_model_fits(
         s = idx[i]
         x = stimulus[s]
         y_obs = response[s]
-        eval_data = utils.get_data_sample(X_eval, s)
+        eval_data = get_data_sample(X_eval, s)
         x_eval = np.asarray(eval_data['stimulus']).reshape(-1)
 
         y_mean = _compute_binned_means_on_eval(x, y_obs, x_eval)
@@ -58,8 +58,8 @@ def plot_model_fits(
 
         for j, program in enumerate(programs_list):
             model = program["model"]
-            params = utils.slice_params(params_by_model[j], s)
-            y_pred = utils.call_model(model, eval_data, params)
+            params = slice_params(params_by_model[j], s)
+            y_pred = call_model(model, eval_data, params)
 
             label = labels[j] if labels is not None and j < len(labels) else f"Model {j+1}"
             if "losses" in program:

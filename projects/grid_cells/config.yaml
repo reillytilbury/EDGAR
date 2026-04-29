@@ -1,8 +1,32 @@
 io:
   data_path: /Users/reillytilbury/Desktop/Toroidal_topology_grid_cell_data/rat_q_grid_modules_1_2.npz
+
 evolution:
   n_iterations: 5
+
 scoring:
   gradient_descent:
     max_iter: 100
     learning_rate: 0.001
+
+project_params:
+  time_start: 27826
+  time_end: 31223
+  time_bin_ms: 100
+  min_spikes: 200
+  speed_threshold: 2.5
+  max_trials: 20000
+  min_active_frac: 0.02
+  min_modulation: 1.0
+  min_spatial_reliability: 0.5
+  normalize_per_sample: true
+  target_l2_norm: 100.0
+  min_l2_norm: 1.0e-06
+  n_trial_blocks: 10
+  random_seed: 42
+  n_eval_trials: 100
+  spatial_bin_cm: 3.0
+  smoothing_sigma: 1.5
+  wall_val: 0.75
+  module_key: spikes_mod1
+  input_names: [x, y]
