@@ -265,7 +265,7 @@ def deduplicate_outer(islands: list[set[int]], population: Population, n_overlap
             islands[i] = {0, 1}
 
 
-def deduplicate(islands: list[set[int]], population: Population, evolution: dict) -> None:
+def deduplicate(islands: list[set[int]], population: Population, evolution: dict, loss_tol: float = 0.01, cosine_tol: float = 0.95) -> None:
     """Apply within-island and between-island deduplication, mutating islands in-place.
 
     First removes duplicates within each island, then checks adjacent islands for
@@ -276,10 +276,8 @@ def deduplicate(islands: list[set[int]], population: Population, evolution: dict
         population: Population object to resolve indices to Programs
         evolution: evolution config dict containing loss_tol, cosine_tol, n_overlap
     """
-    loss_tol = evolution.get("loss_tol", 0.01)
-    cosine_tol = evolution.get("cosine_tol", 0.95)
     n_critical = evolution.get("critical_population_size", 12)
-    n_overlap = evolution.get("n_overlap", n_critical // 2)
+    n_overlap = n_critical // 2  # default threshold
 
     deduplicate_inner(islands, population, loss_tol, cosine_tol)
     deduplicate_outer(islands, population, n_overlap, loss_tol, cosine_tol)
