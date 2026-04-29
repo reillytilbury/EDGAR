@@ -29,13 +29,15 @@ type: project
 ## TODO
 
 ### Data loading
-- [ ] Change signature of all project `load_data` functions to output `X_discover`, `X_validate`, `X_eval` using shared split logic; remove per-project `train_test_split` functions
+- [x] Change signature of all project `load_data` functions to output `X_discover`, `X_validate`, `X_eval` using shared split logic; remove per-project `train_test_split` functions
 - [ ] Ensure all data is in JAX format
-- [ ] Integrate Dabin's drop trials plan
-- [ ] Need a way of saving hyperparameters/config in metadata-only format + code used to load + seed islands
+- [x] Integrate Dabin's drop trials plan
+- [x] Need a way of saving hyperparameters/config in metadata-only format + code used to load + seed islands
 
 ### Core scoring
 - [ ] Rethink `_eval_fingerprint` in scoring.py — current approach needs refinement
+- [ ] Support variable-length trials per sample — currently assumes rectangular data (all samples have same n_trials); would need list/dict of variable-length arrays instead
+- [ ] Separate input/target keys in data — prevent models from cheating by accessing target values. Add `input_keys` and `target_keys` to config, split data before passing to model_fn
 
 ### LLM
 - [ ] Integrate image prompt into LLMs: add `image_dir` field to Program object, save images to disk

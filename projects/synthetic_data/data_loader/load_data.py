@@ -12,6 +12,7 @@ def load_data(
     n_trials: int = 2000,
     noise_std: float = 0.1,
     n_eval_trials: int = 100,
+    n_eval_samples: int = 10,
 ) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
     """
     Simulate synthetic single-input regression data.
@@ -23,9 +24,19 @@ def load_data(
     Returns
     -------
     X_discover, X_validate, X_eval
-        X_discover = (train, test) dicts split by trials for use in the LLM loop.
-        X_validate = (train, test) dicts held out for final evaluation.
-        X_eval = small fixed trial subset from X_discover for fingerprinting.
+        Samples split 50/50, trials split 50/50 within discover/validate.
+
+        X_discover = (train, test)
+            X_disc_train: (n_samples//2, n_trials//2) - used by LLM loop.
+            X_disc_test: (n_samples//2, n_trials//2) - test within discovery phase.
+
+        X_validate = (train, test)
+            X_val_train: (n_samples//2, n_trials//2) - held out, unseen by LLM.
+            X_val_test: (n_samples//2, n_trials//2) - held out final evaluation.
+
+        X_eval
+            (n_samples//2, min(n_eval_trials, n_trials//2)) - small fingerprint subset
+            from discover train trials, used for deduplication.
     """
     rng = np.random.default_rng(seed)
 
@@ -44,7 +55,7 @@ def load_data(
 
     X = {'x': np.tile(x, (n_samples, 1)), 'y': y}
 
-    return _split(X, seed, n_eval_trials)
+    return _split(X, seed, n_eval_trials, n_eval_samples)
 
 
 def loss_fn(model_output, data):
@@ -59,6 +70,7 @@ def _split(
     X: Dict[str, np.ndarray],
     seed: int,
     n_eval_trials: int,
+    n_eval_samples: int,
 ) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
     """Random sample split + random trial split → (X_discover, X_validate, X_eval)."""
     n_samples = next(iter(X.values())).shape[0]
@@ -83,7 +95,12 @@ def _split(
 
     n_eval = min(n_eval_trials, len(train_trials))
     eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
-    X_eval = _sel(disc_idx, eval_trials)
+    eval_samples = np.sort(rng.choice(disc_idx, min(n_eval_samples, len(disc_idx)), replace=False))
+    X_eval = _sel(eval_samples, eval_trials)
+
+    # Store which position each eval sample occupies in disc_idx for param matching in scoring
+    eval_sample_positions = np.searchsorted(disc_idx, eval_samples)
+    X_eval['_sample_indices'] = eval_sample_positions
 
     return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 

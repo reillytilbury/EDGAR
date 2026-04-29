@@ -89,6 +89,9 @@ def load_data(
     )
     X_eval = {"source": X_train[:, eval_t][np.newaxis], "target": Y_train[:, eval_t][np.newaxis]}
 
+    # Store which position each eval sample occupies for param matching in scoring (always 0 for this project)
+    X_eval['_sample_indices'] = np.array([0])
+
     return X_discover, X_validate, X_eval
 
 
