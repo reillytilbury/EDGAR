@@ -42,13 +42,14 @@ Example usage:
 from __future__ import annotations
 import json
 import numpy as np
+from itertools import combinations
 from .program import Program, BirthCertificate
 from .population import Population
 
 
-# ---------------------------------------------------------------------------
-# Seed and spawn — creating new programs and placing them on islands
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────
+# Initialization: seed and spawn
+# ─────────────────────────────────────────────────────────────────────────
 
 def seed(population: Population, seed_programs: list[Program], n_islands: int) -> list[set[int]]:
     """
@@ -102,16 +103,23 @@ def spawn(
             island.add(child.idx)
 
 
-# island operations: prune, sample, deduplicate. Each takes a set of Programs and returns the new island (set of global indices)
-def prune(programs: set[Program], keep_n: int) -> set[int]:
-    """
-    Return the best keep_n global indices by losses.discover.final.
+# ─────────────────────────────────────────────────────────────────────────
+# Sampling and pruning
+# ─────────────────────────────────────────────────────────────────────────
 
-        programs_0 = {pop[i] for i in island_0}  # e.g. losses 0.5, 0.2, 0.9
-        island_0   = prune(programs_0, keep_n=2) # {idx of 0.2, idx of 0.5}
+def prune(islands: list[set[int]], population: Population, evolution: dict) -> None:
+    """Prune each island to critical_population_size best programs, mutating islands in-place.
+
+    Args:
+        islands: list of island sets (each set contains program indices)
+        population: Population object to resolve indices to Programs
+        evolution: evolution config dict containing critical_population_size
     """
-    ranked = sorted(programs, key=lambda p: p.losses.discover.final)
-    return {p.idx for p in ranked[:keep_n]}
+    keep_n = evolution["critical_population_size"]
+    for i, island in enumerate(islands):
+        programs = {population[idx] for idx in island}
+        ranked = sorted(programs, key=lambda p: p.losses.discover.final)
+        islands[i] = {p.idx for p in ranked[:keep_n]}
 
 
 def uniform_sample(programs: set[Program], k: int = 1) -> set[int]:
@@ -148,6 +156,36 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
     return {programs[j].idx for j in chosen}
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Migration
+# ─────────────────────────────────────────────────────────────────────────
+
+def migrate(islands: list[set[int]], population: Population, evolution: dict, temperature: float) -> None:
+    """Sample migrants from each island via Boltzmann distribution and add to topology destination.
+
+    For each island i, sample n_migrants programs using Boltzmann distribution (biased toward
+    better programs) and add them to the destination island specified by topology[i].
+    Mutates islands in-place.
+
+    Args:
+        islands: list of island sets (each set contains program indices)
+        population: Population object to resolve indices to Programs
+        evolution: evolution config dict containing n_migrants and topology
+        temperature: temperature for Boltzmann sampling
+    """
+    n_migrants = evolution["n_migrants"]
+    topology = evolution["topology"]
+
+    for i, island in enumerate(islands):
+        programs = {population[idx] for idx in island}
+        sampled = boltzmann_sample(programs, k=n_migrants, temperature=temperature)
+        islands[topology[i]].update(sampled)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Deduplication
+# ─────────────────────────────────────────────────────────────────────────
+
 def _are_duplicates(p_i: Program, p_j: Program, loss_tol: float, cosine_tol: float) -> bool:
     if p_i.n_params is None or p_j.n_params is None or p_i.n_params != p_j.n_params:
         return False
@@ -161,69 +199,95 @@ def _are_duplicates(p_i: Program, p_j: Program, loss_tol: float, cosine_tol: flo
     return bool(cosine >= cosine_tol)
 
 
-def deduplicate(programs: set[Program], loss_tol: float = 0.01, cosine_tol: float = 0.95) -> set[int]:
-    """
-    Remove near-duplicate programs, keeping the lower loss copy from each pair.
+def deduplicate_inner(islands: list[set[int]], population: Population, loss_tol: float = 0.01, cosine_tol: float = 0.95) -> None:
+    """Remove near-duplicate programs within each island, mutating islands in-place.
+
     Two programs are considered duplicates if they pass all three checks:
         1. same number of parameters
         2. losses within loss_tol of each other
         3. cosine similarity of eval fingerprints >= cosine_tol
 
-        programs_0 = {pop[i] for i in island_0}
-        island_0   = deduplicate(programs_0)  # e.g. {0, 2} — duplicates removed
-    """
-    to_remove     = set()
-    programs_list = list(programs)
+    For each duplicate pair, keeps the lower loss copy.
 
-    for i, p_i in enumerate(programs_list):
-        if p_i.idx in to_remove:
-            continue
-        for p_j in programs_list[i+1:]:
-            if p_j.idx in to_remove:
+    Args:
+        islands: list of island sets (each set contains program indices)
+        population: Population object to resolve indices to Programs
+        loss_tol: loss tolerance for duplicate detection
+        cosine_tol: cosine similarity tolerance for duplicate detection
+    """
+    for i, island in enumerate(islands):
+        programs = [population[idx] for idx in island]
+        to_remove = set()
+
+        for p_j, p_k in combinations(programs, 2):
+            if p_j.idx in to_remove or p_k.idx in to_remove:
                 continue
-            if not _are_duplicates(p_i, p_j, loss_tol, cosine_tol):
+            if not _are_duplicates(p_j, p_k, loss_tol, cosine_tol):
                 continue
-            loser = p_i if p_i.losses.discover.final >= p_j.losses.discover.final else p_j
+            loser = p_j if p_j.losses.discover.final >= p_k.losses.discover.final else p_k
             to_remove.add(loser.idx)
 
-    return {p.idx for p in programs if p.idx not in to_remove}
+        islands[i] = {p.idx for p in programs if p.idx not in to_remove}
 
-# ---------------------------------------------------------------------------
-# Cross-island deduplication
-# ---------------------------------------------------------------------------
 
-def deduplicate_islands(
-    programs_a: set[Program],
-    programs_b: set[Program],
-    n_overlap: int = 6,
-    loss_tol: float = 0.01,
-    cosine_tol: float = 0.99,
-) -> tuple[set[int], set[int]]:
-    """
-    If n_overlap or more programs in island_a have a behavioral duplicate in island_b,
-    the islands are considered duplicates and the worse one is reset to {0, 1}.
+def deduplicate_outer(islands: list[set[int]], population: Population, n_overlap: int = 6, loss_tol: float = 0.01, cosine_tol: float = 0.99) -> None:
+    """Check all pairs of islands for behavioral duplicates, resetting worse islands if needed.
+
+    For each pair of islands, if n_overlap or more programs have a behavioral duplicate
+    in the other island, the worse island is reset to {0, 1}.
     The worse island is the one with the higher lowest loss; tiebreak on second-lowest, etc.
+    Mutates islands in-place.
 
-        island_a, island_b = deduplicate_islands(programs_a, programs_b, n_overlap=6)
-        # if islands are duplicates, the worse one is reset: e.g. island_b == {0, 1}
+    Args:
+        islands: list of island sets (each set contains program indices)
+        population: Population object to resolve indices to Programs
+        n_overlap: threshold for considering islands duplicates
+        loss_tol: loss tolerance for duplicate detection
+        cosine_tol: cosine similarity tolerance for duplicate detection
     """
-    overlap = sum(
-        1 for p_a in programs_a
-        if any(_are_duplicates(p_a, p_b, loss_tol, cosine_tol) for p_b in programs_b)
-    )
-    if overlap < n_overlap:
-        return {p.idx for p in programs_a}, {p.idx for p in programs_b}
+    for i, j in combinations(range(len(islands)), 2):
+        programs_a = {population[idx] for idx in islands[i]}
+        programs_b = {population[idx] for idx in islands[j]}
 
-    losses_a = sorted(p.losses.discover.final for p in programs_a)
-    losses_b = sorted(p.losses.discover.final for p in programs_b)
+        overlap = sum(
+            1 for p_a in programs_a
+            if any(_are_duplicates(p_a, p_b, loss_tol, cosine_tol) for p_b in programs_b)
+        )
+        if overlap < n_overlap:
+            continue
 
-    if losses_a <= losses_b:
-        return {p.idx for p in programs_a}, {0, 1}
-    return {0, 1}, {p.idx for p in programs_b}
+        losses_a = sorted(p.losses.discover.final for p in programs_a)
+        losses_b = sorted(p.losses.discover.final for p in programs_b)
 
-# ---------------------------------------------------------------------------
-# Island census save/load. 
-# ---------------------------------------------------------------------------
+        if losses_a <= losses_b:
+            islands[j] = {0, 1}
+        else:
+            islands[i] = {0, 1}
+
+
+def deduplicate(islands: list[set[int]], population: Population, evolution: dict) -> None:
+    """Apply within-island and between-island deduplication, mutating islands in-place.
+
+    First removes duplicates within each island, then checks adjacent islands for
+    cross-island duplicates and resets worse islands if needed.
+
+    Args:
+        islands: list of island sets (each set contains program indices)
+        population: Population object to resolve indices to Programs
+        evolution: evolution config dict containing loss_tol, cosine_tol, n_overlap
+    """
+    loss_tol = evolution.get("loss_tol", 0.01)
+    cosine_tol = evolution.get("cosine_tol", 0.95)
+    n_critical = evolution.get("critical_population_size", 12)
+    n_overlap = evolution.get("n_overlap", n_critical // 2)
+
+    deduplicate_inner(islands, population, loss_tol, cosine_tol)
+    deduplicate_outer(islands, population, n_overlap, loss_tol, cosine_tol)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Census: save and load island membership history
+# ─────────────────────────────────────────────────────────────────────────
 
 def save_island_census(census: list[list[set[int]]], path: str) -> None:
     """

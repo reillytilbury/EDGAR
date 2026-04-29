@@ -50,7 +50,7 @@ async def run(spec: TaskSpec) -> Path:
 
     for i in range(spec.evolution["n_iterations"]):
         mode, temperature, llms = spec.schedule(i)
-        spawn(population, islands, mode, temperature,
+        spawn(population, islands, i, mode, temperature,
               batch_size=spec.evolution["batch_size"],
               k_max=spec.llms["k_max"])
 
@@ -60,9 +60,9 @@ async def run(spec: TaskSpec) -> Path:
 
         score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
-        islands = deduplicate(islands, population)
-        islands = prune(islands, population, spec.evolution)
-        islands = migrate(islands, population, spec.evolution, mode, temperature)
+        deduplicate(islands, population, spec.evolution)
+        prune(islands, population, spec.evolution)
+        migrate(islands, population, spec.evolution, temperature)
         census.append([set(island) for island in islands])
 
     population.prepare_validation_scoring(islands)
