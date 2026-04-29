@@ -45,14 +45,14 @@ def _loss_traces_per_island(
         jitter = (island_idx - (n_islands - 1) / 2.0) * 0.05
         for p in island_progs:
             x_vals.append(p.birth.generation + jitter)
-            perp = perplexity(p.losses.discover.final, L_0)
+            perp = perplexity(p.program_losses.discover.final, L_0)
             y_vals.append(perp)
             custom.append(p.idx)
             label = p.name or f"P{p.idx}"
             perp_s = f"{perp:.4f}" if perp is not None else "N/A"
             hover.append(
                 f"<b>{label}</b><br>P(L): {perp_s}"
-                f"<br>train loss: {loss_str(p.losses.discover.final)}"
+                f"<br>train loss: {loss_str(p.program_losses.discover.final)}"
                 f"<br>mode: {p.birth.mode or ''}"
             )
         traces.append({
@@ -70,7 +70,7 @@ def _loss_traces_per_island(
 def _loss_seed_data(seeds: list[Program], L_0: float) -> dict:
     x, y, custom, hover = [], [], [], []
     for s in seeds:
-        perp = perplexity(s.losses.discover.final, L_0)
+        perp = perplexity(s.program_losses.discover.final, L_0)
         x.append(-1)
         y.append(perp)
         custom.append(s.idx)
@@ -78,7 +78,7 @@ def _loss_seed_data(seeds: list[Program], L_0: float) -> dict:
         perp_s = f"{perp:.4f}" if perp is not None else "N/A"
         hover.append(
             f"<b>{label}</b><br>P(L): {perp_s}"
-            f"<br>train loss: {loss_str(s.losses.discover.final)}"
+            f"<br>train loss: {loss_str(s.program_losses.discover.final)}"
         )
     return {"x": x, "y": y, "custom": custom, "hover": hover}
 
@@ -187,16 +187,16 @@ def _gd_traces_per_island(
         island_progs = [
             p for p in progs
             if p.birth.island == island_idx
-            and p.losses.discover.init is not None
-            and p.losses.discover.final is not None
+            and p.program_losses.discover.init is not None
+            and p.program_losses.discover.final is not None
         ]
         if not island_progs:
             continue
         x_vals, y_vals, custom, hover = [], [], [], []
         for p in island_progs:
-            p_init = perplexity(p.losses.discover.init, L_0)
-            p_final = perplexity(p.losses.discover.final, L_0)
-            delta = p.losses.discover.init - p.losses.discover.final
+            p_init = perplexity(p.program_losses.discover.init, L_0)
+            p_final = perplexity(p.program_losses.discover.final, L_0)
+            delta = p.program_losses.discover.init - p.program_losses.discover.final
             x_vals.append(p_init)
             y_vals.append(p_final)
             custom.append(p.idx)
@@ -224,11 +224,11 @@ def _gd_seed_data(seeds: list[Program], L_0: float) -> tuple[dict, list[float]]:
     x, y, custom, hover = [], [], [], []
     all_perp: list[float] = []
     for s in seeds:
-        if s.losses.discover.init is None or s.losses.discover.final is None:
+        if s.program_losses.discover.init is None or s.program_losses.discover.final is None:
             continue
-        p_init = perplexity(s.losses.discover.init, L_0)
-        p_final = perplexity(s.losses.discover.final, L_0)
-        delta = s.losses.discover.init - s.losses.discover.final
+        p_init = perplexity(s.program_losses.discover.init, L_0)
+        p_final = perplexity(s.program_losses.discover.final, L_0)
+        delta = s.program_losses.discover.init - s.program_losses.discover.final
         x.append(p_init)
         y.append(p_final)
         custom.append(s.idx)

@@ -6,7 +6,8 @@ A Program is one evolved candidate. Top-level fields:
 - code: Code — numpy source for model and param_est
 - code_jax: Code — JAX-translated source for model and param_est
 - name: descriptive model name from the LLM (e.g. "Double Gaussian Model")
-- losses: Losses — per-split init/final losses
+- program_losses: Losses — per-split init/final scalar losses (include complexity penalty)
+- sample_losses: per-sample cross-validated losses (no penalty), shape (n_samples,)
 - n_params: total number of model parameters, set by count_params()
 - eval_fingerprint: array of model outputs used for deduplication
 - idx: global Population index, set automatically when added to a Population
@@ -63,9 +64,11 @@ class Program:
     code:             Code = field(default_factory=Code)
     code_jax:         Code = field(default_factory=Code)
     name:             str | None = None
-    losses:           Losses = field(default_factory=Losses)
+    program_losses:   Losses = field(default_factory=Losses)
     n_params:         int | None = None
     eval_fingerprint: np.ndarray | None = field(default=None, repr=False)
+    params:           dict | None = field(default=None, repr=False)
+    sample_losses:    np.ndarray | None = field(default=None, repr=False)
     idx:              int | None = field(default=None, init=False)
 
     def compile(self) -> tuple[Callable, Callable]:

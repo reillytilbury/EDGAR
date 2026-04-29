@@ -3,7 +3,6 @@ from __future__ import annotations
 import numpy as np
 import jax.numpy as jnp
 from scipy.io import loadmat
-from typing import Tuple
 
 
 # Module-level context populated by load_data; used by image_feedback/plot.py.
@@ -19,12 +18,7 @@ def load_data(
     max_cells: int = 64,
     max_train_images: int = 1024,
     anchor_cell_count: int = 8,
-    minimodel_repo_path: str = "",
-    teacher_checkpoint_path: str = "",
-    use_teacher_diagnostics: bool = True,
-    teacher_device: str = "cpu",
     random_seed: int = 42,
-    n_eval_trials: int = 256,
 ) -> Tuple[Tuple[dict, dict], Tuple[dict, dict], dict]:
     """
     Load mouse V1 image-response data and split into discover/validate/eval partitions.
@@ -97,12 +91,6 @@ def load_data(
             "n_train_trials": int(n_train),
             "n_test_trials": int(n_test),
             "anchor_cell_count": int(anchor_cell_count),
-            "minimodel_repo_path": minimodel_repo_path,
-            "teacher_checkpoint_path": teacher_checkpoint_path,
-            "use_teacher_diagnostics": bool(use_teacher_diagnostics),
-            "teacher_device": teacher_device,
-            "teacher_total_neurons": int(train_response_all.shape[0]),
-            "teacher_state": None,
         }
     )
     _DIAGNOSTIC_CACHE.clear()
@@ -117,52 +105,35 @@ def load_data(
 
     # Trial split: train images vs test images (preserves natural train/test boundary)
     train_trials = np.arange(n_train, dtype=np.int64)
-    test_trials = np.arange(n_train, n_trials, dtype=np.int64)
+    test_trials  = np.arange(n_train, n_trials, dtype=np.int64)
 
-    return _split(X, random_seed, train_trials, test_trials, n_eval_trials)
+    # ── split samples 50/50 into discover / validate ──
+    rng = np.random.default_rng(random_seed)
+    perm_s   = rng.permutation(n_samples)
+    disc_idx = np.sort(perm_s[:n_samples // 2])
+    val_idx  = np.sort(perm_s[n_samples // 2:])
+
+    X_disc_train = {k: v[disc_idx][..., train_trials] for k, v in X.items()}
+    X_disc_test  = {k: v[disc_idx][..., test_trials]  for k, v in X.items()}
+    X_val_train  = {k: v[val_idx][...,  train_trials] for k, v in X.items()}
+    X_val_test   = {k: v[val_idx][...,  test_trials]  for k, v in X.items()}
+
+    # ── build X_eval: single cell from discover train for fingerprinting ──
+    eval_samples = np.sort(rng.choice(disc_idx, 1, replace=False))
+    eval_pos     = np.searchsorted(disc_idx, eval_samples)
+    X_eval       = {k: v[eval_samples][..., train_trials] for k, v in X.items()}
+    X_eval['_sample_indices'] = eval_pos
+
+    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
 
 def loss_fn(model_output, data):
     y_true = jnp.asarray(data["response"], dtype=jnp.float32)
     y_pred = jnp.clip(jnp.asarray(model_output, dtype=jnp.float32), 1e-4, 1e6)
-    return jnp.mean(y_pred - y_true * jnp.log(y_pred))
+    return jnp.mean(y_pred - y_true * jnp.log(y_pred), axis=-1)
 
 
 # ── internal helpers ──
-
-def _split(
-    X: dict,
-    seed: int,
-    train_trials: np.ndarray,
-    test_trials: np.ndarray,
-    n_eval_trials: int,
-) -> Tuple[Tuple[dict, dict], Tuple[dict, dict], dict]:
-    n_samples = next(iter(X.values())).shape[0]
-    rng = np.random.default_rng(seed)
-
-    perm_s = rng.permutation(n_samples)
-    disc_idx = np.sort(perm_s[:n_samples // 2])
-    val_idx = np.sort(perm_s[n_samples // 2:])
-
-    def _sel(sidx, tidx):
-        return {k: v[sidx][..., tidx] for k, v in X.items()}
-
-    X_disc_train = _sel(disc_idx, train_trials)
-    X_disc_test = _sel(disc_idx, test_trials)
-    X_val_train = _sel(val_idx, train_trials)
-    X_val_test = _sel(val_idx, test_trials)
-
-    n_eval = min(n_eval_trials, len(train_trials))
-    eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
-    eval_samples = np.sort(rng.choice(disc_idx, 1, replace=False))
-    X_eval = _sel(eval_samples, eval_trials)
-
-    # Store which position each eval sample occupies in disc_idx for param matching in scoring
-    eval_sample_positions = np.searchsorted(disc_idx, eval_samples)
-    X_eval['_sample_indices'] = eval_sample_positions
-
-    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
-
 
 def _select_evenly_spaced_indices(n_total: int, n_keep: int) -> np.ndarray:
     if n_total <= 0 or n_keep <= 0:

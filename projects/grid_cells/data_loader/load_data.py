@@ -3,7 +3,6 @@ from __future__ import annotations
 import numpy as np
 import jax.numpy as jnp
 from scipy.ndimage import gaussian_filter
-from typing import Dict, Tuple
 
 
 def load_data(
@@ -22,22 +21,31 @@ def load_data(
     min_l2_norm: float = 1.0e-06,
     n_trial_blocks: int = 10,
     random_seed: int = 42,
-    n_eval_trials: int = 100,
     spatial_bin_cm: float = 3.0,
     smoothing_sigma: float = 1.5,
     wall_val: float = 0.75,
     module_key: str = "spikes_mod1",
     input_names: list | None = None,
-) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
+):
     """
     Load and preprocess grid-cell data.
 
     Returns
     -------
     X_discover, X_validate, X_eval
-        X_discover = (train, test) dicts split by trial blocks for use in the LLM loop.
-        X_validate = (train, test) dicts held out for final evaluation.
-        X_eval = small fixed trial subset from X_discover for fingerprinting.
+        Samples split 50/50, trials split by temporal blocks within discover/validate.
+
+        X_discover = (train, test)
+            X_disc_train: (n_cells//2, n_train_trials) - used by LLM loop.
+            X_disc_test:  (n_cells//2, n_test_trials)  - test within discovery phase.
+
+        X_validate = (train, test)
+            X_val_train: (n_cells//2, n_train_trials) - held out, unseen by LLM.
+            X_val_test:  (n_cells//2, n_test_trials)  - held out final evaluation.
+
+        X_eval
+            Single-cell fingerprint subset from discover train trials.
+            Shape: (1, n_train_trials).
     """
     if input_names is None:
         input_names = ["x", "y"]
@@ -126,65 +134,49 @@ def load_data(
         scale = np.maximum(l2, float(min_l2_norm))
         firing_rates = firing_rates * (float(target_l2_norm) / scale)
 
-    X = {
-        'pos_x': np.tile(features["x"], (n_cells, 1)),
-        'pos_y': np.tile(features["y"], (n_cells, 1)),
-        'response': firing_rates,
-    }
+    pos_x = np.tile(features["x"], (n_cells, 1))
+    pos_y = np.tile(features["y"], (n_cells, 1))
+    n_samples, n_trials = firing_rates.shape
 
-    return _split(X, random_seed, n_trial_blocks, n_eval_trials)
+    # ── split samples 50/50 into discover / validate ──
+    rng = np.random.default_rng(random_seed)
 
-
-def loss_fn(model_output, data):
-    return jnp.mean((data['response'] - model_output) ** 2)
-
-
-# ── internal helpers ──
-
-def _split(
-    X: Dict[str, np.ndarray],
-    seed: int,
-    n_trial_blocks: int,
-    n_eval_trials: int,
-) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
-    """Random sample split + block-based trial split → (X_discover, X_validate, X_eval)."""
-    n_samples = next(iter(X.values())).shape[0]
-    n_trials = next(iter(X.values())).shape[-1]
-    rng = np.random.default_rng(seed)
-
-    perm_s = rng.permutation(n_samples)
+    perm_s   = rng.permutation(n_samples)
     disc_idx = np.sort(perm_s[:n_samples // 2])
-    val_idx = np.sort(perm_s[n_samples // 2:])
+    val_idx  = np.sort(perm_s[n_samples // 2:])
 
-    # Block-based trial split preserves temporal structure
-    block_size = max(1, n_trials // n_trial_blocks)
-    blocks = [np.arange(start, min(start + block_size, n_trials))
-              for start in range(0, n_trials, block_size)]
-    blocks_arr = np.array(blocks, dtype=object)
-    perm_b = rng.permutation(len(blocks_arr))
+    # ── block-based trial split to preserve temporal structure ──
+    block_size    = max(1, n_trials // n_trial_blocks)
+    blocks        = [np.arange(start, min(start + block_size, n_trials))
+                     for start in range(0, n_trials, block_size)]
+    blocks_arr    = np.array(blocks, dtype=object)
+    perm_b        = rng.permutation(len(blocks_arr))
     n_train_blocks = len(blocks_arr) // 2
-    train_trials = np.sort(np.concatenate(blocks_arr[perm_b[:n_train_blocks]]).astype(int))
-    test_trials = np.sort(np.concatenate(blocks_arr[perm_b[n_train_blocks:]]).astype(int))
+    train_trials  = np.sort(np.concatenate(blocks_arr[perm_b[:n_train_blocks]]).astype(int))
+    test_trials   = np.sort(np.concatenate(blocks_arr[perm_b[n_train_blocks:]]).astype(int))
 
-    def _sel(sidx, tidx):
-        return {k: v[sidx][..., tidx] for k, v in X.items()}
+    X_disc_train = {'pos_x': pos_x[disc_idx][:, train_trials], 'pos_y': pos_y[disc_idx][:, train_trials], 'response': firing_rates[disc_idx][:, train_trials]}
+    X_disc_test  = {'pos_x': pos_x[disc_idx][:, test_trials],  'pos_y': pos_y[disc_idx][:, test_trials],  'response': firing_rates[disc_idx][:, test_trials]}
+    X_val_train  = {'pos_x': pos_x[val_idx][:, train_trials],  'pos_y': pos_y[val_idx][:, train_trials],  'response': firing_rates[val_idx][:, train_trials]}
+    X_val_test   = {'pos_x': pos_x[val_idx][:, test_trials],   'pos_y': pos_y[val_idx][:, test_trials],   'response': firing_rates[val_idx][:, test_trials]}
 
-    X_disc_train = _sel(disc_idx, train_trials)
-    X_disc_test = _sel(disc_idx, test_trials)
-    X_val_train = _sel(val_idx, train_trials)
-    X_val_test = _sel(val_idx, test_trials)
-
-    n_eval = min(n_eval_trials, len(train_trials))
-    eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
-    eval_samples = np.sort(rng.choice(disc_idx, 1, replace=False))
-    X_eval = _sel(eval_samples, eval_trials)
-
-    # Store which position each eval sample occupies in disc_idx for param matching in scoring
-    eval_sample_positions = np.searchsorted(disc_idx, eval_samples)
-    X_eval['_sample_indices'] = eval_sample_positions
+    # ── build X_eval: single cell from discover train for fingerprinting ──
+    eval_pos     = rng.choice(len(disc_idx), 1, replace=False)
+    X_eval = {
+        'pos_x':            pos_x[disc_idx][eval_pos][:, train_trials],
+        'pos_y':            pos_y[disc_idx][eval_pos][:, train_trials],
+        'response':         firing_rates[disc_idx][eval_pos][:, train_trials],
+        '_sample_indices':  eval_pos,
+    }
 
     return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
+
+def loss_fn(model_output, data):
+    return jnp.mean((data['response'] - model_output) ** 2, axis=-1)
+
+
+# ── internal helpers ──
 
 def _compute_rate_maps(
     x: np.ndarray,
