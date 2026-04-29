@@ -1,32 +1,36 @@
+from __future__ import annotations
+
 import numpy as np
+import jax.numpy as jnp
 from scipy.io import loadmat
 from scipy.signal import butter, filtfilt
 from typing import Tuple
 
-from src import utils
 
-# Configuration constants from project config
-RANDOM_SEED = 42
-N_CELLS = 4000
-DOWNSAMPLE_FACTOR = 4
-VAR_THRESH = 0.0001
-ZSCORE = True
-
-
-def load_and_process_data(
+def load_data(
     data_path: str = "",
-    random_seed: int = RANDOM_SEED,
-    n_cells: int = N_CELLS,
-    downsample_factor: int = DOWNSAMPLE_FACTOR,
-    var_thresh: float = VAR_THRESH,
-    zscore: bool = ZSCORE,
-) -> dict:
+    random_seed: int = 42,
+    n_cells: int = 4000,
+    downsample_factor: int = 4,
+    var_thresh: float = 0.0001,
+    zscore: bool = True,
+    block_size: int = 180,
+    time_split_mode: str = "interleave",
+    n_eval_trials: int = 100,
+) -> Tuple[Tuple[dict, dict], Tuple[dict, dict], dict]:
     """
     Load spontaneous activity data and split into source/target populations.
 
-    Returns dict with:
-        'source': shape (2, n_source, n_time) — sample 0 = train cells, 1 = test cells
-        'target': shape (2, n_target, n_time) — sample 0 = train cells, 1 = test cells
+    Returns
+    -------
+    X_discover, X_validate, X_eval
+        X_discover = (train, test) dicts over time, using train-cell populations.
+        X_validate = (train, test) dicts over time, using test-cell populations.
+        X_eval = small fixed time subset from X_discover for fingerprinting.
+
+    Data shape: {"source": (1, n_source, T), "target": (1, n_target, T)}
+    The leading 1-dim sample axis lets scoring.py vmap over it once, so the
+    model sees source/target as 2-D matrices (n_cells, T) as expected.
     """
     random_seed = int(random_seed)
     n_cells = int(n_cells)
@@ -68,29 +72,31 @@ def load_and_process_data(
         Y_train = _zscore_rows(Y_train)
         Y_test = _zscore_rows(Y_test)
 
-    source = np.stack([X_train, X_test], axis=0)  # (2, n_source, T)
-    target = np.stack([Y_train, Y_test], axis=0)  # (2, n_target, T)
-    return {"source": source, "target": target}
+    T = X_train.shape[1]
+    train_t, test_t = _make_time_split(T, block_size, time_split_mode)
 
+    n_eval = min(n_eval_trials, len(train_t))
+    eval_t = np.sort(rng.choice(train_t, n_eval, replace=False))
 
-def train_test_split(
-    X: dict,
-    random_seed: int,
-    block_size: int = 180,
-    mode: str = "interleave",
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Return train sample index (always 0) and train trial indices.
-    """
-    n_trials = utils.data_n_trials(X)
-    assert utils.data_n_samples(X) == 2, "Expected exactly 2 samples."
-    train_trials, _ = _make_time_split(n_trials, block_size, mode)
-    return np.array([0]), train_trials
+    # Shape: (1, n_cells, T_*) — 1-dim sample axis for scoring.py vmap
+    X_discover = (
+        {"source": X_train[:, train_t][np.newaxis], "target": Y_train[:, train_t][np.newaxis]},
+        {"source": X_train[:, test_t][np.newaxis], "target": Y_train[:, test_t][np.newaxis]},
+    )
+    X_validate = (
+        {"source": X_test[:, train_t][np.newaxis], "target": Y_test[:, train_t][np.newaxis]},
+        {"source": X_test[:, test_t][np.newaxis], "target": Y_test[:, test_t][np.newaxis]},
+    )
+    X_eval = {"source": X_train[:, eval_t][np.newaxis], "target": Y_train[:, eval_t][np.newaxis]}
+
+    return X_discover, X_validate, X_eval
 
 
 def loss_fn(model_output, data):
     return jnp.mean((data["target"] - model_output) ** 2)
 
+
+# ── internal helpers ──
 
 def _load_mat_spont(
     mat_path: str,

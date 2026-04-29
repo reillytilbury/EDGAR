@@ -1,25 +1,38 @@
 io:
   data_path: /home/reilly/datasets/spontaneous_data/spont_M161025_MP030_20161120.mat
+
 evolution:
   n_iterations: 3
   batch_size: 3
   n_islands: 4
+
 llms:
   model_llm:
-  - gemini-2.5-pro
-  - gemini-2.0-flash
+    - gemini-2.5-pro
+    - gemini-2.0-flash
   swear_words:
-  - sklearn
-  - PLSRegression
-  - scipy.optimize
-  - optimize.minimize
-  - curve_fit
-  - cvxpy
-  - torch
-  - tensorflow
+    - sklearn
+    - PLSRegression
+    - scipy.optimize
+    - optimize.minimize
+    - curve_fit
+    - cvxpy
+    - torch
+    - tensorflow
+
 scoring:
   param_penalty_weight: 0.0
   timeout_s: 60.0
   gradient_descent:
     max_iter: 200
     learning_rate: 0.01
+
+project_params:
+  random_seed: 42
+  n_cells: 4000
+  downsample_factor: 4
+  var_thresh: 0.0001
+  zscore: true
+  block_size: 180
+  time_split_mode: interleave
+  n_eval_trials: 100

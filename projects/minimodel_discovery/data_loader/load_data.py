@@ -3,69 +3,39 @@ from __future__ import annotations
 import numpy as np
 import jax.numpy as jnp
 from scipy.io import loadmat
-
-from src import utils
-
-# Configuration constants from project config
-MOUSE_ID = 4
-MIN_FEV = 0.15
-MAX_CELLS = 64
-MAX_TRAIN_IMAGES = 1024
-ANCHOR_CELL_COUNT = 8
-MINIMODEL_REPO_PATH = "/home/reilly/Documents/code/minimodel"
-TEACHER_CHECKPOINT_PATH = "/home/reilly/Documents/code/minimodel/notebooks/checkpoints/FX8_051623_2layer_16_320_clamp_norm_depthsep_pool.pt"
-USE_TEACHER_DIAGNOSTICS = True
-TEACHER_DEVICE = "cpu"
+from typing import Tuple
 
 
+# Module-level context populated by load_data; used by image_feedback/plot.py.
 _DATASET_CONTEXT: dict[str, object] = {}
 _DIAGNOSTIC_CACHE: dict[tuple, dict[str, object]] = {}
 
 
-def _select_evenly_spaced_indices(n_total: int, n_keep: int) -> np.ndarray:
-    if n_total <= 0 or n_keep <= 0:
-        return np.zeros((0,), dtype=np.int64)
-    if n_keep >= n_total:
-        return np.arange(n_total, dtype=np.int64)
-    return np.unique(np.linspace(0, n_total - 1, n_keep).round().astype(np.int64))
-
-
-def _normalize_responses(
-    train_response: np.ndarray,
-    test_repeats: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    scale = np.std(train_response, axis=1, keepdims=True)
-    scale = np.maximum(scale, 1e-2)
-    train_norm = train_response / scale
-    test_repeats_norm = test_repeats / scale[:, None, :]
-    test_mean_norm = np.nanmean(test_repeats_norm, axis=1)
-    return train_norm.astype(np.float32), test_mean_norm.astype(np.float32), test_repeats_norm.astype(np.float32)
-
-
-def _compute_fev_from_repeats(repeats: np.ndarray) -> np.ndarray:
-    fev = np.zeros((repeats.shape[0],), dtype=np.float32)
-    for idx in range(repeats.shape[0]):
-        cell_repeats = repeats[idx]
-        total_var = float(np.nanvar(cell_repeats.reshape(-1), ddof=1))
-        noise_var = float(np.nanmean(np.nanvar(cell_repeats, axis=0, ddof=1)))
-        denom = max(total_var, 1e-6)
-        fev[idx] = np.float32((total_var - noise_var) / denom)
-    return fev
-
-
-def load_and_process_data(
+def load_data(
     data_path: str,
     image_path: str,
-    mouse_id: int = MOUSE_ID,
-    min_fev: float = MIN_FEV,
-    max_cells: int = MAX_CELLS,
-    max_train_images: int = MAX_TRAIN_IMAGES,
-    anchor_cell_count: int = ANCHOR_CELL_COUNT,
-    minimodel_repo_path: str = MINIMODEL_REPO_PATH,
-    teacher_checkpoint_path: str = TEACHER_CHECKPOINT_PATH,
-    use_teacher_diagnostics: bool = USE_TEACHER_DIAGNOSTICS,
-    teacher_device: str = TEACHER_DEVICE,
-):
+    mouse_id: int = 4,
+    min_fev: float = 0.15,
+    max_cells: int = 64,
+    max_train_images: int = 1024,
+    anchor_cell_count: int = 8,
+    minimodel_repo_path: str = "",
+    teacher_checkpoint_path: str = "",
+    use_teacher_diagnostics: bool = True,
+    teacher_device: str = "cpu",
+    random_seed: int = 42,
+    n_eval_trials: int = 256,
+) -> Tuple[Tuple[dict, dict], Tuple[dict, dict], dict]:
+    """
+    Load mouse V1 image-response data and split into discover/validate/eval partitions.
+
+    Returns
+    -------
+    X_discover, X_validate, X_eval
+        X_discover = (train, test) — train cells × train images and train cells × test images.
+        X_validate = (train, test) — held-out cells × the same image splits.
+        X_eval = small image subset from discover cells for fingerprinting.
+    """
     raw = np.load(data_path, allow_pickle=True)
     stimulus_mat = loadmat(image_path, squeeze_me=True)
     images = np.transpose(stimulus_mat["img"], (2, 0, 1)).astype(np.float32)
@@ -137,21 +107,19 @@ def load_and_process_data(
     )
     _DIAGNOSTIC_CACHE.clear()
 
-    return {
-        "image": image_tensor,
+    X = {
+        "image": np.array(image_tensor),  # materialise broadcast: (n_cells, H, W, n_trials)
         "response": all_response.astype(np.float32),
         "response_repeats": response_repeats,
-        "stimulus_id": stimulus_id,
-        "cell_index": cell_index,
+        "stimulus_id": np.array(stimulus_id),
+        "cell_index": np.array(cell_index),
     }
 
+    # Trial split: train images vs test images (preserves natural train/test boundary)
+    train_trials = np.arange(n_train, dtype=np.int64)
+    test_trials = np.arange(n_train, n_trials, dtype=np.int64)
 
-def train_test_split(X, random_seed: int):
-    n_samples = utils.data_n_samples(X)
-    rng = np.random.default_rng(random_seed)
-    train_samples = np.sort(rng.choice(np.arange(n_samples), n_samples // 2, replace=False))
-    train_trials = np.arange(int(_DATASET_CONTEXT["n_train_trials"]), dtype=np.int64)
-    return train_samples, train_trials
+    return _split(X, random_seed, train_trials, test_trials, n_eval_trials)
 
 
 def loss_fn(model_output, data):
@@ -160,19 +128,63 @@ def loss_fn(model_output, data):
     return jnp.mean(y_pred - y_true * jnp.log(y_pred))
 
 
-def build_evaluation_points(
-    data,
-    random_seed: int = 0,
-    n_eval_images: int = 256,
-    source: str = "train_anchor",
-):
-    if source != "train_anchor":
-        raise ValueError(f"Unsupported evaluation point source: {source}")
+# ── internal helpers ──
 
-    n_trials = utils.data_n_trials(data)
-    if n_trials == 0:
-        raise ValueError("Cannot build evaluation points from empty trial set.")
-    n_keep = min(int(n_eval_images), int(n_trials))
-    rng = np.random.default_rng(random_seed)
-    trial_idx = np.sort(rng.choice(np.arange(n_trials), size=n_keep, replace=False))
-    return utils.slice_data_trials(data, trial_idx)
+def _split(
+    X: dict,
+    seed: int,
+    train_trials: np.ndarray,
+    test_trials: np.ndarray,
+    n_eval_trials: int,
+) -> Tuple[Tuple[dict, dict], Tuple[dict, dict], dict]:
+    n_samples = next(iter(X.values())).shape[0]
+    rng = np.random.default_rng(seed)
+
+    perm_s = rng.permutation(n_samples)
+    disc_idx = np.sort(perm_s[:n_samples // 2])
+    val_idx = np.sort(perm_s[n_samples // 2:])
+
+    def _sel(sidx, tidx):
+        return {k: v[sidx][..., tidx] for k, v in X.items()}
+
+    X_disc_train = _sel(disc_idx, train_trials)
+    X_disc_test = _sel(disc_idx, test_trials)
+    X_val_train = _sel(val_idx, train_trials)
+    X_val_test = _sel(val_idx, test_trials)
+
+    n_eval = min(n_eval_trials, len(train_trials))
+    eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
+    X_eval = _sel(disc_idx, eval_trials)
+
+    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
+
+
+def _select_evenly_spaced_indices(n_total: int, n_keep: int) -> np.ndarray:
+    if n_total <= 0 or n_keep <= 0:
+        return np.zeros((0,), dtype=np.int64)
+    if n_keep >= n_total:
+        return np.arange(n_total, dtype=np.int64)
+    return np.unique(np.linspace(0, n_total - 1, n_keep).round().astype(np.int64))
+
+
+def _normalize_responses(
+    train_response: np.ndarray,
+    test_repeats: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    scale = np.std(train_response, axis=1, keepdims=True)
+    scale = np.maximum(scale, 1e-2)
+    train_norm = train_response / scale
+    test_repeats_norm = test_repeats / scale[:, None, :]
+    test_mean_norm = np.nanmean(test_repeats_norm, axis=1)
+    return train_norm.astype(np.float32), test_mean_norm.astype(np.float32), test_repeats_norm.astype(np.float32)
+
+
+def _compute_fev_from_repeats(repeats: np.ndarray) -> np.ndarray:
+    fev = np.zeros((repeats.shape[0],), dtype=np.float32)
+    for idx in range(repeats.shape[0]):
+        cell_repeats = repeats[idx]
+        total_var = float(np.nanvar(cell_repeats.reshape(-1), ddof=1))
+        noise_var = float(np.nanmean(np.nanvar(cell_repeats, axis=0, ddof=1)))
+        denom = max(total_var, 1e-6)
+        fev[idx] = np.float32((total_var - noise_var) / denom)
+    return fev

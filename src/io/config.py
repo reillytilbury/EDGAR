@@ -95,7 +95,7 @@ def build_task_spec_from_config(config_path: Path) -> TaskSpec:
 
     Raises:
         FileNotFoundError: If config or required files don't exist
-        ValueError: If required callables (load_and_process_data, loss_fn) are missing from source files
+        ValueError: If required callables (load_data, loss_fn) are missing from source files
     """
     config_path = Path(config_path)
     if not config_path.is_absolute():
@@ -124,9 +124,9 @@ def build_task_spec_from_config(config_path: Path) -> TaskSpec:
 
     # 3. Load project callables from source files
     data_loader_path = PROJECT_ROOT / "projects" / task_name / "data_loader" / "load_data.py"
-    load_data_fn = load_function_from_source(data_loader_path.read_text(), "load_and_process_data")
+    load_data_fn = load_function_from_source(data_loader_path.read_text(), "load_data")
     if load_data_fn is None:
-        raise ValueError(f"{data_loader_path} must define callable load_and_process_data()")
+        raise ValueError(f"{data_loader_path} must define callable load_data()")
 
     loss_fn = load_function_from_source(data_loader_path.read_text(), "loss_fn")
     if loss_fn is None:
