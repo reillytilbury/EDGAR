@@ -176,7 +176,12 @@ def _split(
 
     n_eval = min(n_eval_trials, len(train_trials))
     eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
-    X_eval = _sel(disc_idx, eval_trials)
+    eval_samples = np.sort(rng.choice(disc_idx, 1, replace=False))
+    X_eval = _sel(eval_samples, eval_trials)
+
+    # Store which position each eval sample occupies in disc_idx for param matching in scoring
+    eval_sample_positions = np.searchsorted(disc_idx, eval_samples)
+    X_eval['_sample_indices'] = eval_sample_positions
 
     return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 

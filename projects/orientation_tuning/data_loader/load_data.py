@@ -11,6 +11,7 @@ def load_data(
     conc_threshold: float,
     random_seed: int = 42,
     n_eval_trials: int = 100,
+    n_eval_samples: int = 10,
 ) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
     """
     Load and preprocess orientation-tuning neural data.
@@ -51,7 +52,7 @@ def load_data(
         'response': response_cropped,
     }
 
-    return _split(X, random_seed, n_eval_trials)
+    return _split(X, random_seed, n_eval_trials, n_eval_samples)
 
 
 def loss_fn(model_output, data):
@@ -65,6 +66,7 @@ def _split(
     X: Dict[str, np.ndarray],
     seed: int,
     n_eval_trials: int,
+    n_eval_samples: int,
 ) -> Tuple[Tuple[Dict, Dict], Tuple[Dict, Dict], Dict]:
     """Random sample split + random trial split → (X_discover, X_validate, X_eval)."""
     n_samples = next(iter(X.values())).shape[0]
@@ -89,7 +91,12 @@ def _split(
 
     n_eval = min(n_eval_trials, len(train_trials))
     eval_trials = np.sort(rng.choice(train_trials, n_eval, replace=False))
-    X_eval = _sel(disc_idx, eval_trials)
+    eval_samples = np.sort(rng.choice(disc_idx, min(n_eval_samples, len(disc_idx)), replace=False))
+    X_eval = _sel(eval_samples, eval_trials)
+
+    # Store which position each eval sample occupies in disc_idx for param matching in scoring
+    eval_sample_positions = np.searchsorted(disc_idx, eval_samples)
+    X_eval['_sample_indices'] = eval_sample_positions
 
     return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 

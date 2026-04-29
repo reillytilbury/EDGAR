@@ -63,7 +63,9 @@ def _eval_loss(model_fn, loss_fn, params, data_test):
 
 
 def _eval_fingerprint(model_fn, params, X_eval):
-    return jax.vmap(model_fn, in_axes=(0, 0))(X_eval, params)
+    sample_indices = X_eval.pop('_sample_indices')
+    params_matched = jax.tree_map(lambda p: p[sample_indices], params)
+    return jax.vmap(model_fn, in_axes=(0, 0))(X_eval, params_matched)
 
 
 def _worker(queue, program, data, loss_fn, config, X_eval):
