@@ -30,7 +30,7 @@ from src.monitoring import create_family_tree, create_dynamic_progress_update
 from tqdm import tqdm
 from google import genai
 from dotenv import load_dotenv
-from tests.system.programs import _fake_cfg
+from tests.system.fakellm import FakeLLM, SeedFakeLLM
 import warnings
 import time
 
@@ -39,12 +39,6 @@ warnings.filterwarnings(
     category=FutureWarning,
     message="The behavior of DataFrame concatenation with empty or all-NA entries is deprecated.*",
 )
-
-
-def _extract_static_src(func: callable) -> str:
-    """Strip @staticmethod decorator and normalise indentation for getsource output."""
-    src = textwrap.dedent(inspect.getsource(func))
-    return re.sub(r"@staticmethod\s*\n", "", src)
 
 
 class ObjectiveTimeout(Exception):
@@ -1109,6 +1103,7 @@ async def generate_new_model(
     loss_data=None,
     complexity_penalty: float = 0.0,
     use_large_model: bool = True,
+    fake_llm: FakeLLM | None = None,
 ):
     """
     Propose a new model program by querying the LLM from island context.
@@ -1137,30 +1132,12 @@ async def generate_new_model(
         complexity_penalty (float): Complexity-penalty multiplier used when
             computing diagnostics losses.
         use_large_model (bool): Whether chat mode should use large model path.
-
+        fake_llm (FakeLLM | None): Pre-configured fake LLM engine, bypassing actual LLM calls for testing.
     Returns:
         tuple[str | None, str | None, str | None, tuple]:
             ``(code_string, prompt, llm_output, parent_ids)``.
             ``code_string`` is ``None`` when no valid code block is produced.
     """
-    if _fake_cfg["candidates"] is not None:
-        candidates = _fake_cfg["candidates"]
-        counter = _fake_cfg["_gen_model_counter"]
-        _fake_cfg["_gen_model_counter"] += 1
-        prog = candidates[counter % len(candidates)]
-        n_parents = min(2, len(current_island))
-        parents = current_island.sample(n_parents, replace=False)
-        parent1_id = tuple(
-            parents.iloc[0][["iteration_number", "birth_island", "batch_index"]]
-        )
-        parent2_id = tuple(
-            parents.iloc[1 % n_parents][
-                ["iteration_number", "birth_island", "batch_index"]
-            ]
-        )
-        numpy_src = "import numpy as np\n\n" + _extract_static_src(prog.model)
-        return numpy_src, None, None, (parent1_id, parent2_id)
-
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
     random_programs = random_programs.sort_values(
@@ -1231,14 +1208,17 @@ async def generate_new_model(
         )
     else:
         # Legacy: independent query
-        llm_output = await llm_helper.call_llm_async(
-            program_prompt,
-            model_name=llm_name,
-            client=client,
-            temperature=temp,
-            thinking_budget=thinking_budget,
-            img_bytes=img_bytes,
-        )
+        if fake_llm is not None:
+            llm_output = fake_llm.gen_model()
+        else:
+            llm_output = await llm_helper.call_llm_async(
+                program_prompt,
+                model_name=llm_name,
+                client=client,
+                temperature=temp,
+                thinking_budget=thinking_budget,
+                img_bytes=img_bytes,
+            )
 
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -1279,6 +1259,7 @@ async def generate_new_parameter_estimator(
     image_refinement_dir=None,
     param_estimator_timeout_s: float | None = 5.0,
     objective_timeout_s: float | None = None,
+    fake_llm: FakeLLM | None = None,
 ):
     """
     Generate and optionally refine a parameter-estimator function via LLM.
@@ -1313,19 +1294,13 @@ async def generate_new_parameter_estimator(
             for estimator evaluation during refinement scoring.
         objective_timeout_s (float | None): Hard timeout (seconds) for each
             refinement objective call.
+        fake_llm (FakeLLM | None): Pre-configured fake LLM engine, bypassing actual LLM calls for testing.
 
     Returns:
         tuple[str | None, callable | None, dict]: Best estimator code string, parsed
             callable, and metadata dict with prompt/response info.
             Returns ``(None, None, pe_metadata)`` when generation/validation fails.
     """
-    if _fake_cfg["candidates"] is not None:
-        counter = _fake_cfg["_param_est_counter"]
-        _fake_cfg["_param_est_counter"] += 1
-        prog = _fake_cfg["candidates"][counter % len(_fake_cfg["candidates"])]
-        pe_src = "import numpy as np\n\n" + _extract_static_src(prog.param_est)
-        return pe_src, prog.param_est, {}
-
     pe_metadata = {
         "initial_prompt": None,
         "initial_response": None,
@@ -1365,14 +1340,17 @@ async def generate_new_parameter_estimator(
         banned_list = "\n".join(f"- {word}" for word in swear_words)
         prompt = f"{prompt}\n\n**Banned tokens (do not use in code):**\n{banned_list}\n"
 
-    llm_output = await llm_helper.call_llm_async(
-        prompt,
-        model_name=llm_name,
-        client=client,
-        temperature=temp,
-        thinking_budget=0.25,
-        img_bytes=None,
-    )
+    if fake_llm is not None:
+        llm_output = fake_llm.gen_param_est()
+    else:
+        llm_output = await llm_helper.call_llm_async(
+            prompt,
+            model_name=llm_name,
+            client=client,
+            temperature=temp,
+            thinking_budget=0.25,
+            img_bytes=None,
+        )
     pe_metadata["initial_prompt"] = prompt
     pe_metadata["initial_response"] = llm_output
     # extract the code block from the LLM output
@@ -1564,6 +1542,8 @@ async def translate_to_jax(
     llm_name="gemini-2.0-flash-lite",
     max_retries: int = 2,
     retry_delay_s: float = 2.0,
+    fake_llm: FakeLLM | None = None,
+    seed_fake_llm: SeedFakeLLM | None = None,
 ) -> tuple[str, callable, str | None, str | None]:
     """
     Translate a model code string to a JAX-compatible implementation via LLM.
@@ -1573,27 +1553,14 @@ async def translate_to_jax(
         client: The LLM client.
         prompt_manager: PromptManager used to build translation prompts.
         llm_name (str): LLM model name for translation.
+        fake_llm (FakeLLM | None): Pre-configured fake LLM engine, bypassing actual LLM calls for testing.
+        seed_fake_llm (SeedFakeLLM | None): Fake LLM for generating jax conversions of seed programs
 
     Returns:
         tuple[str | None, callable | None, str | None, str | None]:
             ``(jax_code_string, jax_callable, prompt, raw_response)``.
             Returns ``(None, None)`` when translation cannot be produced/parsed.
     """
-    if _fake_cfg["candidates"] is not None:
-        counter = _fake_cfg["_jax_trans_counter"]
-        _fake_cfg["_jax_trans_counter"] += 1
-        seed_jax = _fake_cfg["seed_jax"]
-        if counter < len(seed_jax):
-            jax_code, jax_func = seed_jax[counter]
-            return jax_code, jax_func, None, None
-        prog = _fake_cfg["candidates"][
-            (counter - len(seed_jax)) % len(_fake_cfg["candidates"])
-        ]
-        jax_src = getattr(
-            prog, "_jax_src", None
-        ) or "import jax.numpy as jnp\n\n" + _extract_static_src(prog.model_jax)
-        return jax_src, prog.model_jax, None, None
-
     if code_string is None:
         return None, None, None, None
 
@@ -1601,27 +1568,34 @@ async def translate_to_jax(
     if prompt is None:
         return None, None, None, None
 
-    # TODO rtilbury: Why is this necessary?
-    raw_response = None
-    for attempt in range(max_retries + 1):
-        raw_response = await llm_helper.call_llm_async(
-            prompt,
-            client=client,
-            model_name=llm_name,
-            temperature=0,
-        )
-        if isinstance(raw_response, str) and raw_response.strip():
-            break
-        if attempt < max_retries:
-            sleep_s = float(retry_delay_s) * (2**attempt)
-            logging.warning(
-                "JAX translation attempt %d/%d failed for model %s; retrying in %.1fs.",
-                attempt + 1,
-                max_retries + 1,
-                llm_name,
-                sleep_s,
+    if fake_llm is not None:
+        raw_response = fake_llm.gen_model_jax()
+
+    elif seed_fake_llm is not None:
+        raw_response = seed_fake_llm.gen_model_jax()
+
+    else:
+        # TODO rtilbury: Why is this necessary?
+        raw_response = None
+        for attempt in range(max_retries + 1):
+            raw_response = await llm_helper.call_llm_async(
+                prompt,
+                client=client,
+                model_name=llm_name,
+                temperature=0,
             )
-            await asyncio.sleep(sleep_s)
+            if isinstance(raw_response, str) and raw_response.strip():
+                break
+            if attempt < max_retries:
+                sleep_s = float(retry_delay_s) * (2**attempt)
+                logging.warning(
+                    "JAX translation attempt %d/%d failed for model %s; retrying in %.1fs.",
+                    attempt + 1,
+                    max_retries + 1,
+                    llm_name,
+                    sleep_s,
+                )
+                await asyncio.sleep(sleep_s)
 
     if not (isinstance(raw_response, str) and raw_response.strip()):
         logging.error(
@@ -1920,6 +1894,7 @@ async def hypothesis_engine(
     model_llm=None,
     param_est_llm=None,
     jax_translator_llm=None,
+    use_fake_llm=False,
     max_iter=1_000,
     learning_rate=3e-3,
     penalty_denominator=1,
@@ -1976,6 +1951,7 @@ async def hypothesis_engine(
         model_llm (str | list[str]): LLM(s) for model generation. Lists are traversed by iteration.
         param_est_llm (str | list[str]): LLM(s) for parameter estimator generation.
         jax_translator_llm (str | list[str]): LLM(s) for JAX translation.
+        use_fake_llm (bool): If True, use a FakeLLM for model generation.
         max_iter (int): Max optimization steps inside ``objective``.
         learning_rate (float): Optimizer learning rate inside ``objective``.
         numpy_programs (list[callable]): Seed NumPy model functions.
@@ -2017,12 +1993,17 @@ async def hypothesis_engine(
     param_est_llm_seq = _normalize_llm_sequence(param_est_llm, "param_est_llm")
     jax_llm_seq = _normalize_llm_sequence(jax_translator_llm, "jax_translator_llm")
 
-    # load api keys
-    if _fake_cfg["candidates"] is None:
+    # load api key
+    if use_fake_llm:
+        fake_llm = FakeLLM()
+        seed_fake_llm = SeedFakeLLM()
+        client = None
+
+    if not use_fake_llm:
         load_dotenv()
         client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-    else:
-        client = None
+        fake_llm = None
+        seed_fake_llm = None
 
     # Initialize IslandChatManager if using chat mode
     island_chat_manager = None
@@ -2091,7 +2072,13 @@ async def hypothesis_engine(
     jax_results = []
     for code_string in seed_code_strings:
         jax_results.append(
-            await translate_to_jax(code_string, client, prompt_manager, seed_jax_llm)
+            await translate_to_jax(
+                code_string,
+                client,
+                prompt_manager,
+                seed_jax_llm,
+                seed_fake_llm=seed_fake_llm,
+            )
         )
 
     jax_programs = []
@@ -2497,6 +2484,7 @@ async def hypothesis_engine(
                 loss_data=X[0, 1],
                 complexity_penalty=param_penalty_weight,
                 use_large_model=use_large_model,
+                fake_llm=fake_llm,
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)
@@ -2571,7 +2559,9 @@ async def hypothesis_engine(
         # convert to jax
         jax_llm_name = jax_llm_seq[i % len(jax_llm_seq)]
         model_function_translation_tasks = [
-            translate_to_jax(code_string, client, prompt_manager, jax_llm_name)
+            translate_to_jax(
+                code_string, client, prompt_manager, jax_llm_name, fake_llm=fake_llm
+            )
             for code_string in model_code_strings
         ]
         jax_results = await asyncio.gather(*model_function_translation_tasks)
@@ -2661,6 +2651,7 @@ async def hypothesis_engine(
                 image_refinement_dir=image_param_est_refine_dir,
                 param_estimator_timeout_s=param_estimator_timeout_s,
                 objective_timeout_s=objective_timeout_s,
+                fake_llm=fake_llm,
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)

@@ -16,4 +16,8 @@ OUTPUT_PATH = Path(__file__).parent / "output"
 
 
 def test_hypothesis_engine_system(tmp_path):
-    asyncio.run(_run_many(config_path=CONFIG_PATH, output_dir=str(OUTPUT_PATH)))
+    asyncio.run(
+        _run_many(
+            config_path=CONFIG_PATH, output_dir=str(OUTPUT_PATH), use_fake_llm=True
+        )
+    )

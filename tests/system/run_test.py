@@ -28,7 +28,6 @@ if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
 from src import utils
 from src.prompt_manager import PromptManager
 from src.data_summary import save_data_summary
-from tests.system.programs import setup_fake_engine
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -242,13 +241,16 @@ def _build_plot_model_fits_fn(spec_plot_fn):
     return _wrapped_plot_fn
 
 
-async def _run_many(config_path: str = None, output_dir: str | None = None):
+async def _run_many(
+    config_path: str = None, output_dir: str | None = None, use_fake_llm: bool = False
+):
     """
-    Run hypothesis_engine_fake with fake LLM responses.
+    Run hypothesis_engine_fake
 
     Args:
         config_path (str): Path to config.yaml. Defaults to tests/system/config.yaml.
         output_dir (str | None): Base output directory override. Defaults to program_databases/.
+        use_fake_llm (bool): Whether to use spoof LLM responses with deterministic behaviour (for testing). Defaults to False.
     """
     project_root = Path(__file__).parent.parent.parent  # EDGAR root
     if config_path is None:
@@ -363,9 +365,6 @@ async def _run_many(config_path: str = None, output_dir: str | None = None):
         random_seed=random_seed,
     )
 
-    # Configure fake LLM responses before calling the engine.
-    setup_fake_engine(params, spec_module.model_v1_jax, spec_module.model_v2_jax)
-
     def _require_llm(name: str):
         value = params.get(name)
         if value is None:
@@ -393,6 +392,7 @@ async def _run_many(config_path: str = None, output_dir: str | None = None):
         model_llm=_require_llm("model_llm"),
         param_est_llm=_require_llm("param_est_llm"),
         jax_translator_llm=_require_llm("jax_translator_llm"),
+        use_fake_llm=use_fake_llm,
         use_chat_mode=params.get("use_chat_mode", False),
         chat_token_limit=params.get("chat_token_limit", 50000),
         param_estimator_refinement_rounds=params.get(
@@ -419,4 +419,4 @@ if __name__ == "__main__":
     )
     parser.add_argument("--config", type=str, default=None, help="Path to config.yaml")
     args = parser.parse_args()
-    asyncio.run(_run_many(config_path=args.config))
+    asyncio.run(_run_many(config_path=args.config, use_fake_llm=True))

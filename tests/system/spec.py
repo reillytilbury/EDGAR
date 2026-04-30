@@ -21,7 +21,6 @@ Plotting:
 """
 
 import numpy as np
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from typing import Dict, Tuple
 import warnings
@@ -73,8 +72,8 @@ def load_and_process_data(
     a = np.linspace(-1, 1, n_samples)
     b = np.linspace(-1, 1, n_samples)
     c = np.linspace(-1, 1, n_samples)
-    k = np.linspace(1, 5, n_samples)
-    phi_0 = np.linspace(0, 2 * np.pi, n_samples)
+    k = np.full(n_samples, 4)
+    phi_0 = np.zeros((n_samples,))
 
     x = np.linspace(-1.0, 1.0, n_trials)
     warnings.warn(
@@ -193,27 +192,6 @@ def param_est_v1(data):
     return {"a": float(best_params[0]), "b": float(best_params[1])}
 
 
-def model_v1_jax(data, params):
-    """
-    Data keys used:
-    data['x']  # scalar input, shape (n_trials,)
-
-    A RELU model:
-    y = a * relu(x-b) = a * max(0, x-b)
-    Args:
-        data (dict): Data dict for one sample with key 'x', shape (n_trials,).
-        params (dict): Parameter dictionary with keys:
-            - a: Scaling factor.
-            - b: Threshold for RELU.
-    Returns:
-        np.ndarray: Predicted output, shape (n_trials,).
-    """
-    x = data["x"]
-    a = params["a"]
-    b = params["b"]
-    return a * jnp.maximum(0, x - b)
-
-
 def model_v2(data, params):
     """
     Data keys used:
@@ -256,29 +234,6 @@ def param_est_v2(data):
     A = np.vstack([x, np.ones(len(x))]).T
     a, b = np.linalg.lstsq(A, y, rcond=None)[0]
     return {"a": float(a), "b": float(b)}
-
-
-def model_v2_jax(data, params):
-    """
-    Data keys used:
-    data['x']  # scalar input, shape (n_trials,)
-
-    A simple linear model:
-    y = a*x + b
-
-    Args:
-        data (dict): Data dict for one sample with key 'x', shape (n_trials,).
-        params (dict): Parameter dictionary with keys:
-            - a: Linear slope.
-            - b: Linear intercept.
-
-    Returns:
-        np.ndarray: Predicted output, shape (n_trials,).
-    """
-    x = data["x"]
-    a = params["a"]
-    b = params["b"]
-    return a * x + b
 
 
 # ========================
