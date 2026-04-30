@@ -1102,6 +1102,7 @@ async def generate_new_model(
     loss_data=None,
     complexity_penalty: float = 0.0,
     use_large_model: bool = True,
+    fake_llm=None,
 ):
     """
     Propose a new model program by querying the LLM from island context.
@@ -1195,7 +1196,9 @@ async def generate_new_model(
         img_bytes = None
 
     # Use chat-based or legacy LLM call
-    if island_chat_manager is not None and island_id is not None:
+    if fake_llm is not None:
+        llm_output = fake_llm.gen_model()
+    elif island_chat_manager is not None and island_id is not None:
         llm_output = await island_chat_manager.ask_island(
             island_id,
             program_prompt,
@@ -1254,6 +1257,7 @@ async def generate_new_parameter_estimator(
     image_refinement_dir=None,
     param_estimator_timeout_s: float | None = 5.0,
     objective_timeout_s: float | None = None,
+    fake_llm=None,
 ):
     """
     Generate and optionally refine a parameter-estimator function via LLM.
@@ -1333,14 +1337,17 @@ async def generate_new_parameter_estimator(
         banned_list = "\n".join(f"- {word}" for word in swear_words)
         prompt = f"{prompt}\n\n**Banned tokens (do not use in code):**\n{banned_list}\n"
 
-    llm_output = await llm_helper.call_llm_async(
-        prompt,
-        model_name=llm_name,
-        client=client,
-        temperature=temp,
-        thinking_budget=0.25,
-        img_bytes=None,
-    )
+    if fake_llm is not None:
+        llm_output = fake_llm.gen_param_est()
+    else:
+        llm_output = await llm_helper.call_llm_async(
+            prompt,
+            model_name=llm_name,
+            client=client,
+            temperature=temp,
+            thinking_budget=0.25,
+            img_bytes=None,
+        )
     pe_metadata["initial_prompt"] = prompt
     pe_metadata["initial_response"] = llm_output
     # extract the code block from the LLM output
@@ -1532,6 +1539,8 @@ async def translate_to_jax(
     llm_name="gemini-2.0-flash-lite",
     max_retries: int = 2,
     retry_delay_s: float = 2.0,
+    fake_llm=None,
+    seed_fake_llm=None,
 ) -> tuple[str, callable, str | None, str | None]:
     """
     Translate a model code string to a JAX-compatible implementation via LLM.
@@ -1556,25 +1565,30 @@ async def translate_to_jax(
 
     # TODO rtilbury: Why is this necessary?
     raw_response = None
-    for attempt in range(max_retries + 1):
-        raw_response = await llm_helper.call_llm_async(
-            prompt,
-            client=client,
-            model_name=llm_name,
-            temperature=0,
-        )
-        if isinstance(raw_response, str) and raw_response.strip():
-            break
-        if attempt < max_retries:
-            sleep_s = float(retry_delay_s) * (2**attempt)
-            logging.warning(
-                "JAX translation attempt %d/%d failed for model %s; retrying in %.1fs.",
-                attempt + 1,
-                max_retries + 1,
-                llm_name,
-                sleep_s,
+    if fake_llm is not None:
+        raw_response = fake_llm.gen_model_jax()
+    elif seed_fake_llm is not None:
+        raw_response = seed_fake_llm.gen_model_jax()
+    else:
+        for attempt in range(max_retries + 1):
+            raw_response = await llm_helper.call_llm_async(
+                prompt,
+                client=client,
+                model_name=llm_name,
+                temperature=0,
             )
-            await asyncio.sleep(sleep_s)
+            if isinstance(raw_response, str) and raw_response.strip():
+                break
+            if attempt < max_retries:
+                sleep_s = float(retry_delay_s) * (2**attempt)
+                logging.warning(
+                    "JAX translation attempt %d/%d failed for model %s; retrying in %.1fs.",
+                    attempt + 1,
+                    max_retries + 1,
+                    llm_name,
+                    sleep_s,
+                )
+                await asyncio.sleep(sleep_s)
 
     if not (isinstance(raw_response, str) and raw_response.strip()):
         logging.error(
@@ -1891,6 +1905,7 @@ async def hypothesis_engine(
     log_jax_translations: bool = False,
     random_seed=42,  # consider setting up a seed_manager to make behaviours more robustly reproducible.
     full_dir_tuple=None,
+    use_fake_llm: bool = False,
 ):
     """
     Run the full island-based hypothesis search loop.
@@ -1971,8 +1986,16 @@ async def hypothesis_engine(
     jax_llm_seq = _normalize_llm_sequence(jax_translator_llm, "jax_translator_llm")
 
     # load api keys
-    load_dotenv()
-    client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+    if use_fake_llm:
+        from tests.system.fakellm import FakeLLM, SeedFakeLLM
+        fake_llm = FakeLLM()
+        seed_fake_llm = SeedFakeLLM()
+        client = None
+    else:
+        load_dotenv()
+        client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        fake_llm = None
+        seed_fake_llm = None
 
     # Initialize IslandChatManager if using chat mode
     island_chat_manager = None
@@ -2041,7 +2064,7 @@ async def hypothesis_engine(
     jax_results = []
     for code_string in seed_code_strings:
         jax_results.append(
-            await translate_to_jax(code_string, client, prompt_manager, seed_jax_llm)
+            await translate_to_jax(code_string, client, prompt_manager, seed_jax_llm, seed_fake_llm=seed_fake_llm)
         )
 
     jax_programs = []
@@ -2447,6 +2470,7 @@ async def hypothesis_engine(
                 loss_data=X[0, 1],
                 complexity_penalty=param_penalty_weight,
                 use_large_model=use_large_model,
+                fake_llm=fake_llm,
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)
@@ -2521,7 +2545,7 @@ async def hypothesis_engine(
         # convert to jax
         jax_llm_name = jax_llm_seq[i % len(jax_llm_seq)]
         model_function_translation_tasks = [
-            translate_to_jax(code_string, client, prompt_manager, jax_llm_name)
+            translate_to_jax(code_string, client, prompt_manager, jax_llm_name, fake_llm=fake_llm)
             for code_string in model_code_strings
         ]
         jax_results = await asyncio.gather(*model_function_translation_tasks)
@@ -2611,6 +2635,7 @@ async def hypothesis_engine(
                 image_refinement_dir=image_param_est_refine_dir,
                 param_estimator_timeout_s=param_estimator_timeout_s,
                 objective_timeout_s=objective_timeout_s,
+                fake_llm=fake_llm,
             )
             for island_idx in range(n_islands)
             for j in range(batch_size)

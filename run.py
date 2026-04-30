@@ -233,19 +233,23 @@ def _build_plot_model_fits_fn(spec_plot_fn):
     return _wrapped_plot_fn
 
 
-async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
+async def _run_many(
+    test_mode: bool = False,
+    config_path: str = "config.yaml",
+    use_fake_llm: bool = False,
+    output_dir: str | None = None,
+    spec_module_path: str | None = None,
+):
     """
     Asynchronously runs multiple experiments based on the provided configuration and parameters.
-    This function is designed to handle the setup, configuration, and execution of experiments
-    using a hypothesis engine. It supports both standard and test modes, allowing for flexible
-    execution depending on the use case.
+
     Args:
-        test_mode (bool, optional):
-            If True, runs the function in test mode with reduced parameters for quick validation.
-            Defaults to False.
-        config_path (str, optional):
-            Path to the configuration file. Can be an absolute path or relative to the project root.
-            Defaults to "config.yaml".
+        test_mode (bool): If True, runs with reduced parameters for quick validation.
+        config_path (str): Path to the configuration file.
+        use_fake_llm (bool): If True, uses deterministic fake LLM responses (for testing).
+        output_dir (str | None): Override for the output base directory.
+        spec_module_path (str | None): Dotted module path to load the spec from directly,
+            bypassing task-based discovery (e.g. ``"tests.system.spec"``).
     """
     # Resolve config directory (relative to project root)
     project_root = Path(__file__).parent
@@ -261,17 +265,18 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
     # Extract hyperparameters
     params = config.get('experiment_params', {})
     data_processing_params = config.get('data_processing_params', {})
-    task_name = config.get('task')
-    if not task_name:
-        raise ValueError("Config must specify `task` so the reader can load projects.<task>.spec")
 
-    # Auto-load experiment spec module by fixed naming convention.
-    spec_module_path = f"projects.{task_name}.spec"
+    # Auto-load experiment spec module: use explicit path if given, else discover from task name.
+    if spec_module_path is None:
+        task_name = config.get('task')
+        if not task_name:
+            raise ValueError("Config must specify `task` so the reader can load projects.<task>.spec")
+        spec_module_path = f"projects.{task_name}.spec"
     try:
         spec_module = importlib.import_module(spec_module_path)
     except ModuleNotFoundError as e:
         raise ValueError(
-            f"Could not import {spec_module_path}. Expected file projects/{task_name}/spec.py with required functions."
+            f"Could not import {spec_module_path}. Expected file at that dotted path."
         ) from e
 
     models = [getattr(spec_module, 'model_v1'), getattr(spec_module, 'model_v2')]
@@ -377,8 +382,8 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
         )
 
 
-        # Create full_dir wherever you run “python script.py” from…
-        base_dir = os.path.join(os.getcwd(), 'program_databases')
+        # Create full_dir wherever you run "python script.py" from…
+        base_dir = output_dir if output_dir is not None else os.path.join(os.getcwd(), 'program_databases')
         print("Base directory:", base_dir)
         os.makedirs(base_dir, exist_ok=True)
         date_stamp = pd.Timestamp.now().strftime("%m-%d")
@@ -436,6 +441,7 @@ async def _run_many(test_mode: bool = False, config_path: str = "config.yaml"):
             loss_fn=loss_fn,
             random_seed=random_seed,
             full_dir_tuple=full_dir_tuple,
+            use_fake_llm=use_fake_llm,
         )
 
 
@@ -443,5 +449,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Hypothesis Engine")
     parser.add_argument('--test_mode', action='store_true', help='Run in test mode with reduced iterations and time limit')
     parser.add_argument('--config', type=str, help='Path to experiment specific config file (relative to project root)', default="config.yaml")
+    parser.add_argument('--fake-llm', action='store_true', help='Use deterministic fake LLM responses (for testing)')
     args = parser.parse_args()
-    asyncio.run(_run_many(test_mode=args.test_mode, config_path=args.config))
+    asyncio.run(_run_many(test_mode=args.test_mode, config_path=args.config, use_fake_llm=args.fake_llm))
