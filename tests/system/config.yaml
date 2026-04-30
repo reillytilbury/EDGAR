@@ -1,0 +1,132 @@
+# ========================
+# Project Identity
+# ========================
+
+task: synthetic_data
+
+# Prompt-facing model family name.
+model_name: model
+
+
+# ========================
+# Data Defaults
+# ========================
+
+# Data-processing overrides for this task.
+data_processing_params:
+  SEED: 42
+  n_samples: 4
+  n_trials: 100
+  noise_std: 0.0
+
+
+# ========================
+# Experiment Runtime
+# ========================
+
+# Runtime overrides for this task.
+experiment_params:
+  n_iterations: 2
+  batch_size: 3
+  n_islands: 2
+  learning_rate: 1e-2
+  max_iter: 5000
+  critical_population_size: 5
+  exploration_topology: [1, 0]
+  exploitation_topology: [1, 0]
+  param_estimator_refinement_rounds: 0
+  open_family_tree: true
+  eval_keys: ['x']
+  x_min: -1.0
+  x_max: 1.0
+  n_bins: 100
+  objective_timeout_s: 5.0
+  model_llm: [gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash]
+  swear_words: []
+ 
+
+# ========================
+# Prompt Defaults
+# ========================
+
+# Prompt text overrides for this task.
+prompts:
+  program_prompt:
+    base: |
+      You are an AI scientist. The models below are sorted by performance, with the best parent last.
+      Your goal is to generate a new model, model_v{next_version}, that outperforms all previous models.
+      Analyze the progression of models, generalize what worked, and create a better model.
+    explore: |
+      Use the parent models as inspiration, but be creative and try new structure.
+      Identify model features that correlate with lower loss, combine strong ideas, and test novel variants.
+    exploit: |
+      Use the parent models as a template to produce a stronger model.
+      Extrapolate features associated with lower loss and remove weak or redundant structure.
+      You will be penalized for complexity, so keep the model as simple as possible.
+    image_analysis: |
+      **Image Analysis Instructions:**
+
+      Attached is a 3x3 diagnostic plot of model fits on a rich dataset.
+      For each subplot (sample):
+      * Black points are raw observed data `(x, y)`.
+      * Blue line is the binned mean response over x.
+      * Model_v1 is in green, model_v2 is in red.
+
+      Use the image to identify systematic failure modes across multiple samples.
+      Propose concrete changes to model structure motivated by these failures.
+
+    code_guidelines: |
+      **Code Generation Guidelines:**
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * Model signature must be `def model(data, params):` where `data` is a dict with keys "x" and "y" where `params` is a dict of named arrays/scalars.
+      * Ensure all free parameters are numeric, not strings.
+
+    docstring_guidelines: |
+      **Docstring Guidelines:**
+      * Begin by listing the parent models and give them a descriptive name, e.g., `parent_model_1: simple_exponential_decay-model`, `parent_model_2: double_exponential_decay_model`.
+      * Never refer to the models as `model_v1`, `model_v2`, etc. Instead, refer to them as `parent_models` or their descriptive names.
+      * Do not refer to the current model as `model_v{next_version}`. Instead, refer to it as "this model".
+      * Provide a simple equation for the model, including all free parameters.
+      * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+
+    per_model_detail: |
+      **Parent {model_idx} (loss={train_loss})**
+      {program_code_string}
+
+  parameter_estimator:
+    generation_base: |
+      You are an AI scientist. Your task is to create parameter_estimator_v{next_version} for model_v{next_version}.
+      Estimate parameters directly from input/output statistics.
+      Analyze parent estimators, generalize the strongest ideas, and create a better estimator.
+
+    base: |
+      You are an AI scientist. Improve parameter_estimator_prev for the current model.
+      The model and parent estimators are shown below.
+
+    code_guidelines: |
+      **Code Generation Guidelines:**
+      * Import any packages you use.
+      * Do not include any text other than the code.
+      * Function signature must be `def parameter_estimator(data):` where `data` is a dict with keys 'x' and 'y'.
+      * Return a parameter dict with keys matching the model's free parameters.
+      * Do not call the model function in your estimator code; this function must be self-contained.
+      * Do not use heavy optimization routines such as `curve_fit`, `least_squares`, or `minimize`.
+
+    docstring_guidelines: |
+      **Docstring Guidelines:**
+      * Summarize parent estimators by descriptive names, not version tags.
+      * Briefly explain how this estimator improves stability and fit quality.
+
+    refinement_image_instructions: |
+      **Image instructions:**
+      Attached is a 3x3 diagnostic plot of model fits with the current parameter_estimator on a rich dataset.
+      Identify systematic estimator failures and propose specific code-level fixes.
+      Do not call the model function in your parameter_estimator code.
+
+    per_model_detail: |
+      **Parent {model_idx} (loss={train_loss})**
+      Model:
+      {program_code_string}
+      Estimator:
+      {parameter_estimator_code_string}
