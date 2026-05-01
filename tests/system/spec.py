@@ -69,10 +69,10 @@ def load_and_process_data(
         ``[[data_train_train, data_train_test], [data_test_train, data_test_test]]``
         with the same split semantics as the legacy runner-managed split.
     """
-    a = np.linspace(-1, 1, n_samples)
-    b = np.linspace(-1, 1, n_samples)
-    c = np.linspace(-1, 1, n_samples)
-    k = np.full(n_samples, 4)
+    a = np.linspace(0.1, 1, n_samples)
+    b = np.linspace(0.1, 1, n_samples)
+    c = np.linspace(0.1, 1, n_samples)
+    k = np.full(n_samples, 6)
     phi_0 = np.zeros((n_samples,))
 
     x = np.linspace(-1.0, 1.0, n_trials)

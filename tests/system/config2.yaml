@@ -26,12 +26,12 @@ data_processing_params:
 
 # Runtime overrides for this task.
 experiment_params:
-  n_iterations: 2
-  batch_size: 3
+  n_iterations: 1
+  batch_size: 2
   n_islands: 2
   learning_rate: 1e-2
-  max_iter: 500
-  critical_population_size: 3 #per island capacity, pruning performed prior to migration
+  max_iter: 50
+  critical_population_size: 2 #per island capacity, pruning performed prior to migration
   n_migrants: 1
   exploration_topology: [1, 0]
   exploitation_topology: [1, 0]

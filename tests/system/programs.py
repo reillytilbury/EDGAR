@@ -85,5 +85,5 @@ class ProgramSolution:
 
     param_est = (
         "def parameter_estimator(data):\n"
-        '\treturn {"a": float(1), "b": float(0), "c": float(0), "k": float(1), "phi_0": float(0)}\n'
+        '\treturn {"a": float(1), "b": float(0), "c": float(0), "k": float(6), "phi_0": float(0)}\n'
     )
