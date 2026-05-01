@@ -227,7 +227,7 @@ inputs:
 
 experiment_params:
   num_runs: 1
-  n_iterations: 12
+  n_generations: 12
   time_limit: 60
   n_islands: 8
   batch_size: 6

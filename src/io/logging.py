@@ -1,0 +1,142 @@
+"""
+src/io/logging.py
+
+Human-readable run logging for EDGAR experiments.
+
+Creates a single run.log file and appends one summary block per generation.
+Verbosity is controlled by the level argument:
+
+  compact  — one summary block per generation (success rates, island state, global best)
+  code     — compact + generated code for each program born this generation
+  prompts  — code + reconstructed LLM prompts and image paths
+
+Prompts are reconstructed post-hoc from program birth metadata and the spec's
+prompt schemas, so no prompt state needs to be threaded through the main loop.
+
+Example usage:
+    log = open_log(spec.output_dir, level="compact")
+
+    for gen in range(spec.evolution["n_generations"]):
+        mode, temperature, llms = spec.schedule(i)
+        # ... run generation ...
+        log_generation(log, gen, population, islands, spec)
+
+    log.file.close()
+"""
+from __future__ import annotations
+
+import os
+import time
+from dataclasses import dataclass
+from typing import TextIO, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..evolution.population import Population
+    from ..io.task_spec import TaskSpec
+
+
+LEVELS = ("compact", "code", "prompts")
+
+
+@dataclass
+class RunLog:
+    file: TextIO
+    level: str
+    start_time: float
+
+
+def open_log(output_dir: str, level: str = "compact") -> RunLog:
+    """
+    Create run.log in output_dir and return a RunLog handle.
+
+    Args:
+        output_dir: Run output directory (spec.output_dir).
+        level: Verbosity — "compact", "code", or "prompts".
+    """
+    if level not in LEVELS:
+        raise ValueError(f"level must be one of {LEVELS}, got {level!r}")
+    os.makedirs(output_dir, exist_ok=True)
+    f = open(os.path.join(output_dir, "run.log"), "w")
+    f.write(f"EDGAR run log  |  level={level}\n{'=' * 60}\n\n")
+    f.flush()
+    return RunLog(file=f, level=level, start_time=time.monotonic())
+
+
+def log_generation(
+    log: RunLog,
+    gen: int,
+    population: Population,
+    islands: list[set[int]],
+    spec: TaskSpec,
+) -> None:
+    """
+    Append one generation's summary block to the log.
+
+    Derives all statistics from current population and island state — no
+    intermediate capture needed. Mode, temperature, and LLMs are recovered
+    from spec.schedule(gen). Prompts are reconstructed from each program's
+    birth metadata and the spec's prompt schemas.
+
+    Args:
+        log: RunLog handle from open_log().
+        gen: Generation index (0-based).
+        population: Current Population.
+        islands: Current island sets (post-prune and deduplicate).
+        spec: TaskSpec.
+    """
+    f = log.file
+    mode, temperature, llms = spec.schedule(gen)
+    born = [population[i] for i in range(len(population)) if population[i].birth.generation == gen]
+    n = len(born)
+
+    def pct(k): return f"{100 * k / n:.0f}%" if n else "n/a"
+
+    n_model     = sum(1 for p in born if p.code.model is not None)
+    n_param_est = sum(1 for p in born if p.code.param_est is not None)
+    n_jax       = sum(1 for p in born if p.code_jax.model is not None)
+    n_scored    = sum(1 for p in born if p.program_losses.discover.final not in (None, float("inf")))
+
+    all_final   = [population[i].program_losses.discover.final for i in range(len(population))]
+    valid       = [l for l in all_final if l is not None and l != float("inf")]
+    global_best = f"{min(valid):.6f}" if valid else "n/a"
+    elapsed     = time.monotonic() - log.start_time
+
+    f.write(f"{'=' * 60}\n")
+    f.write(f"Gen {gen:3d}  |  {mode}  |  temp={temperature:.3f}  |  elapsed={elapsed:.1f}s\n")
+    f.write(f"LLMs     model={llms.model}  param_est={llms.param_est}  jax={llms.jax}\n")
+    f.write(f"Spawned  {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n")
+    f.write(f"Global best discover loss: {global_best}\n\n")
+
+    for idx, island in enumerate(islands):
+        progs = [population[i] for i in island]
+        best  = min(progs, key=lambda p: p.program_losses.discover.final or float("inf"))
+        f.write(f"  Island {idx}  size={len(island)}  best=#{best.idx} {best.name!r}  loss={best.program_losses.discover.final:.6f}\n")
+    f.write("\n")
+
+    if log.level not in ("code", "prompts"):
+        f.flush()
+        return
+
+    for p in born:
+        f.write(f"  --- Program #{p.idx} (island={p.birth.island}) ---\n")
+        f.write(f"  [model]\n{p.code.model or '(none)'}\n")
+        f.write(f"  [param_est]\n{p.code.param_est or '(none)'}\n")
+        f.write(f"  [model_jax]\n{p.code_jax.model or '(none)'}\n")
+        f.write(f"  [param_est_jax]\n{p.code_jax.param_est or '(none)'}\n\n")
+
+    if log.level != "prompts":
+        f.flush()
+        return
+
+    for p in born:
+        parents  = [population[i] for i in p.birth.parent_indices]
+        mode_p   = p.birth.mode or "explore"
+        f.write(f"  --- Prompts for Program #{p.idx} ---\n")
+        f.write(f"  [model prompt]\n{spec.model_prompt_schema.build_prompt(mode_p, parents, spec.flat_config)}\n\n")
+        f.write(f"  [param_est prompt]\n{spec.param_est_prompt_schema.build_prompt('explore', parents, spec.flat_config)}\n\n")
+        f.write(f"  [jax prompt]\n{spec.jax_prompt_schema.build_prompt('explore', [p], spec.flat_config)}\n\n")
+        if p.image_path:
+            f.write(f"  [image] {p.image_path}\n")
+        f.write("\n")
+
+    f.flush()

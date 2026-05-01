@@ -69,6 +69,7 @@ class Program:
     eval_fingerprint: np.ndarray | None = field(default=None, repr=False)
     params:           dict | None = field(default=None, repr=False)
     sample_losses:    np.ndarray | None = field(default=None, repr=False)
+    image_path:       str | None = None
     idx:              int | None = field(default=None, init=False)
 
     def compile(self) -> tuple[Callable, Callable]:

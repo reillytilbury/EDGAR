@@ -26,40 +26,48 @@ type: project
 
 ---
 
-## TODO
-
-### Data loading
-- [x] Change signature of all project `load_data` functions to output `X_discover`, `X_validate`, `X_eval` using shared split logic; remove per-project `train_test_split` functions
-- [ ] Ensure all data is in JAX format
-- [x] Integrate Dabin's drop trials plan
-- [x] Need a way of saving hyperparameters/config in metadata-only format + code used to load + seed islands
-
-### Core scoring
-- [ ] Rethink `_eval_fingerprint` in scoring.py — current approach needs refinement
-- [ ] Support variable-length trials per sample — currently assumes rectangular data (all samples have same n_trials); would need list/dict of variable-length arrays instead
-- [ ] Separate input/target keys in data — prevent models from cheating by accessing target values. Add `input_keys` and `target_keys` to config, split data before passing to model_fn
-
-### LLM
-- [ ] Integrate image prompt into LLMs: add `image_dir` field to Program object, save images to disk
-
-### CLI + logging
-- [ ] Implement actual logging (monitoring currently just computes metrics) — see spec below
-- [ ] Add CLI verbosity flag (`--log-level compact/code/prompts`) — see spec below
-- [ ] **cli.py**: better validation — look for actual functions instead of just files
-
-### Utils removal
-- [x] Remove `src/utils.py` — deleted along with `src/io/__init__.py`; all project plotters and data loaders updated to use Program API directly
+## TODO (priority order)
 
 ### Tests
 - [ ] Tests for `src/evolution` (island operations, population, program)
-- [ ] Tests for `src/io` (config, task_spec, output_dirs)
+- [ ] Tests for `src/io` (config, task_spec)
 - [ ] Tests for `src/llm`
 - [ ] Integration test for `run.py` (small end-to-end run)
 - [ ] Wire tests to GitHub Actions CI with status badges in README
 
+### Core scoring
+- [ ] Separate input/target keys in data — prevent models from cheating by accessing target values. Add `input_keys` and `target_keys` to config, split data before passing to model_fn
+- [ ] Support variable-length trials per sample — currently assumes rectangular data (all samples have same n_trials); would need list/dict of variable-length arrays instead
+- [ ] Rethink `_eval_fingerprint` in scoring.py — design smell (indices smuggled in data dict), not urgent
+
+### LLM
+- [ ] Consider unifying `generate_models`, `generate_param_ests`, `translate_programs` into a single `generate(population, spec, prompt_type, ...)` — not worth it until there's a 4th generation type
+
 ### Documentation
 - [ ] Update README.md to reflect refactored architecture
 - [ ] Add documentation describing the refactors (what changed and why)
+
+---
+
+## Completed
+
+### Data loading
+- [x] Change signature of all project `load_data` functions to output `X_discover`, `X_validate`, `X_eval` using shared split logic; remove per-project `train_test_split` functions
+- [x] Ensure all data is in JAX format — `_to_jax()` helper added to all six `load_data` functions
+- [x] Integrate Dabin's drop trials plan
+- [x] Need a way of saving hyperparameters/config in metadata-only format + code used to load + seed islands
+
+### LLM
+- [x] Integrate image prompt into LLMs: `image_path` on Program, images saved at `output_dir/image_feedback/gen_NNN/island_NNN/batch_NNN/image.png`, bytes passed to `call_llm`
+
+### CLI + logging
+- [x] Implement logging (`src/io/logging.py`) with `compact`, `code`, `prompts` levels
+- [x] Add `--log-level` flag to `edgar run`
+- [x] `edgar run` accepts both `config.yaml` and `task_spec.yaml`; supports `--section.key=value` CLI overrides
+- [x] `edgar validate` checks actual functions exist, not just files
+
+### Utils removal
+- [x] Remove `src/utils.py` — deleted along with `src/io/__init__.py`; all project plotters and data loaders updated to use Program API directly
 
 ---
 
@@ -90,7 +98,7 @@ X_discover, X_validate, X_eval = load_and_split(spec)
 population = Population()
 islands = seed(spec, population, X_discover, X_eval)
 
-for i in range(spec.n_iterations):
+for gen in range(spec.n_generations):
     mode, temperature, llms = spec.schedule(i)
     prompt_schemas = spec.prompt_schemas(mode)
     spawn(population, islands, mode, temperature)
@@ -127,8 +135,8 @@ island_records.json
 - **island_records.json** — Island membership history. For each iteration, the set of program IDs active on each island:
 ```json
 [
-  [[0, 1, 2], [0, 1, 3]],  // iteration 0
-  [[0, 4],    [1, 5]]       // iteration 1
+  [[0, 1, 2], [0, 1, 3]],  // generation 0
+  [[0, 4],    [1, 5]]       // generation 1
 ]
 ```
 

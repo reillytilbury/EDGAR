@@ -10,6 +10,10 @@ _DATASET_CONTEXT: dict[str, object] = {}
 _DIAGNOSTIC_CACHE: dict[tuple, dict[str, object]] = {}
 
 
+def _to_jax(d):
+    return {k: jnp.array(v) if k != "_sample_indices" else v for k, v in d.items()}
+
+
 def load_data(
     data_path: str,
     image_path: str,
@@ -124,7 +128,7 @@ def load_data(
     X_eval       = {k: v[eval_samples][..., train_trials] for k, v in X.items()}
     X_eval['_sample_indices'] = eval_pos
 
-    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
+    return (_to_jax(X_disc_train), _to_jax(X_disc_test)), (_to_jax(X_val_train), _to_jax(X_val_test)), _to_jax(X_eval)
 
 
 def loss_fn(model_output, data):

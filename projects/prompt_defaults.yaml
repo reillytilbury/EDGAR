@@ -39,13 +39,13 @@ model:
     '
   docstring_guidelines: '**Docstring Guidelines:**
 
-    * Refer to parent models by descriptive names, not by version numbers.
+    * Use a descriptive name for this model, not a version number.
 
-    * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+    * Briefly describe what the model computes.
 
     '
   image_analysis_instructions: null
-  parent_detail_template: 'model: {descriptive_name}
+  parent_detail_template: 'Model {parent_number}: {descriptive_name}
 
     loss: {loss_discover}
 
@@ -74,13 +74,11 @@ parameter_estimator:
   code_guidelines: "**Code Generation Guidelines:**\n* Import any packages you use.\n* Do not include any text other than the code.\n* Function signature must be `def parameter_estimator(data):`, where `data` is the single-sample data dict used by `model`.\n* Return a parameter dict with the same keys expected by the model.\n* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.\n* Do not attempt to fit the parameters using complex fitting functions like {swear_words}. We only need a simple, fast initial estimate of the parameters.\n* Do not call the model function in your parameter_estimator code, as you will not have access to it! \n"
   docstring_guidelines: '**Docstring Guidelines:**
 
-    * Provide a simple equation for the model, including all free parameters.
-
-    * Include a brief description of how the model improves upon the previous models, citing specific features or changes that lead to lower loss.
+    * Briefly describe the estimation method.
 
     '
   image_analysis_instructions: null
-  parent_detail_template: 'model: {descriptive_name}
+  parent_detail_template: 'Model {parent_number}: {descriptive_name}
 
     loss: {loss_discover}
 

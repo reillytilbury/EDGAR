@@ -72,9 +72,10 @@ class PromptSchema(BaseModel):
         if parents:
             parents_text = [
                 self.parent_detail_template.format(
+                    parent_number=i + 1,
                     **{x: getattr(p, x, "") or "" for x in self.parent_vars}
                 )
-                for p in parents
+                for i, p in enumerate(parents)
             ]
             prompt_parts.append("\n".join(parents_text))
 

@@ -9,9 +9,9 @@ objects resolved from the island and return a new set of global indices.
 Cross-island operation (deduplicate_islands) takes two program sets and resets
 the worse island to the two seed programs {0, 1} if the islands are duplicates.
 
-island_census tracks each island's membership at the end of every iteration:
+island_census tracks each island's membership at the end of every generation:
 
-    census[island_id][iteration] -> set[int]
+    census[island_id][generation] -> set[int]
 
 Example usage:
 --------------
@@ -33,7 +33,7 @@ Example usage:
     # cross-island: if islands are too similar, reset the worse one to seed programs
     island_0, island_1 = deduplicate_islands(programs_0, programs_1, n_overlap=6)
 
-    # append current island state to census each iteration
+    # append current island state to census each generation
     for island_id, island in enumerate(islands):
         census[island_id].append(set(island))
     save_island_census(census, "census.json")
@@ -68,7 +68,7 @@ def seed(population: Population, seed_programs: list[Program], n_islands: int) -
 def spawn(
     population: Population,
     islands: list[set[int]],
-    iteration: int,
+    generation: int,
     mode: str,
     temperature: float,
     batch_size: int,
@@ -91,7 +91,7 @@ def spawn(
         for batch_idx in range(batch_size):
             child = Program(
                 birth=BirthCertificate(
-                    generation=iteration,
+                    generation=generation,
                     island=island_idx,
                     batch_index=batch_idx,
                     mode=mode,
@@ -290,7 +290,7 @@ def deduplicate(islands: list[set[int]], population: Population, evolution: dict
 def save_island_census(census: list[list[set[int]]], path: str) -> None:
     """
     Save island_census to JSON.
-    census[island_id][iteration] is the set of program indices at end of that iteration.
+    census[island_id][generation] is the set of program indices at end of that generation.
     """
     with open(path, "w") as f:
         json.dump([[list(s) for s in island] for island in census], f)

@@ -2,7 +2,7 @@ io:
   data_path: ""
 
 evolution:
-  n_iterations: 2
+  n_generations: 2
   batch_size: 3
   n_islands: 4
 

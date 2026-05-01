@@ -29,24 +29,19 @@ model:
   code_guidelines: "**Code Generation Guidelines:**\n\n* Import any packages you use.\n* Do not include any text other than the code.\n* Model signature must be `def model(data, params):` where `data` is a dict with keys 'pos_x', 'pos_y' and `params` is a dict of named arrays/scalars.\n* Ensure all free parameters are numeric, not strings.\n* Clip the free parameters to biologically plausible ranges at the beginning of the code.\n* If using `np.exp()`, ALWAYS clip the argument to prevent overflow.\n* Avoid boolean indexing; use `jnp.where()` instead for JAX compatibility.\n"
   docstring_guidelines: '**Docstring Guidelines:**
 
-    * Begin by listing the parent models with descriptive names.
+    * Use a descriptive name for this model, not a version number.
 
-    * Do not refer to the current model as a version number. Refer to it as "this model".
-
-    * Provide a simple equation for the model, including all free parameters.
-
-    * Include a brief description of how the model improves upon the previous models.
+    * Briefly describe what the model computes.
 
     '
   image_analysis_instructions: null
-  parent_detail_template: '**Parent {model_idx}**
+  parent_detail_template: '**Model {parent_number}**
 
     {program_code_string}
 
     '
   config_vars: []
   parent_vars:
-  - model_idx
   - program_code_string
 parameter_estimator:
   base: 'You are an AI scientist. Your task is to create a parameter estimator function to estimate the free parameters of the latest place cell model.
@@ -63,15 +58,11 @@ parameter_estimator:
   code_guidelines: "**Code Generation Guidelines:**\n* Import any packages you use.\n* Do not include any text other than the code.\n* Return a parameter dict with the same keys expected by the model.\n* Function signature must be `def parameter_estimator(data):`.\n* Your response **must** be less than {max_lines} lines.\n* Use spatial statistics (center of mass, covariance, peak detection) to estimate parameters.\n* Do not use complex fitting functions like `curve_fit`, `least_squares` or `minimize`.\n"
   docstring_guidelines: '**Docstring Guidelines:**
 
-    * Begin by listing the parent models with descriptive names.
-
-    * Do not refer to the current model as a version number. Refer to it as "this model".
-
-    * Include a brief description of the estimation method.
+    * Briefly describe the estimation method.
 
     '
   image_analysis_instructions: null
-  parent_detail_template: '**Parent {model_idx}**
+  parent_detail_template: '**Model {parent_number}**
 
     {parameter_estimator_code_string}
 
@@ -79,5 +70,4 @@ parameter_estimator:
   config_vars:
   - max_lines
   parent_vars:
-  - model_idx
   - parameter_estimator_code_string
