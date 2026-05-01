@@ -1,7 +1,7 @@
 """Loss progress + GD-effect visualizations from a Population.
 
 write_progress() emits two HTML files:
-- loss_progress.html — perplexity P(L) over iterations, one trace per island
+- loss_progress.html — perplexity P(L) over generations, one trace per island
 - gd_effect.html — perplexity of init loss vs final loss; above-diagonal = GD helped
 """
 from __future__ import annotations

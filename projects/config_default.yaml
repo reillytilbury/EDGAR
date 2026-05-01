@@ -10,7 +10,7 @@ io:
 
 evolution:
   # Number of generations per run.
-  n_iterations: 12
+  n_generations: 12
 
   # Time limit per run in minutes.
   time_limit: 60
@@ -35,7 +35,7 @@ llms:
   k_max: 2
 
   # LLMs for different tasks. Each can be a string or a list.
-  # If a list is provided, it is traversed in order by iteration (with cycling)
+  # If a list is provided, it is traversed in order by generation (with cycling)
   model_llm: [gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash]
   param_est_llm: gemini-2.0-flash
   jax_translator_llm: gemini-2.0-flash-lite

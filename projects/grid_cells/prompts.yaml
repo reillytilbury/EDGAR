@@ -21,24 +21,19 @@ model:
     '
   docstring_guidelines: '**Docstring Guidelines:**
 
-    * Begin by listing the parent models and give them descriptive names.
+    * Use a descriptive name for this model, not a version number.
 
-    * Do not refer to the current model as a version number. Refer to it as "this model".
-
-    * Provide a simple equation for the model, including all free parameters.
-
-    * Include a brief description of how the model improves upon the previous models.
+    * Briefly describe what the model computes.
 
     '
   image_analysis_instructions: null
-  parent_detail_template: '**Parent {model_idx}**
+  parent_detail_template: '**Model {parent_number}**
 
     {program_code_string}
 
     '
   config_vars: []
   parent_vars:
-  - model_idx
   - program_code_string
 parameter_estimator:
   base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest model.
@@ -67,15 +62,11 @@ parameter_estimator:
     '
   docstring_guidelines: '**Docstring Guidelines:**
 
-    * Begin by listing the parent models and give them descriptive names.
-
-    * Do not refer to the current model as a version number.
-
-    * Include a brief description of the estimation method.
+    * Briefly describe the estimation method.
 
     '
   image_analysis_instructions: null
-  parent_detail_template: '**Parent {model_idx}**
+  parent_detail_template: '**Model {parent_number}**
 
     {parameter_estimator_code_string}
 
@@ -83,5 +74,4 @@ parameter_estimator:
   config_vars:
   - max_lines
   parent_vars:
-  - model_idx
   - parameter_estimator_code_string

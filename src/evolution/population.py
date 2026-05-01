@@ -116,6 +116,7 @@ class Population:
                     eval_fingerprint=fingerprint,
                     params=_params_from_json(raw_params) if raw_params is not None else None,
                     sample_losses=np.array(raw_sample_losses) if raw_sample_losses is not None else None,
+                    image_path=d.get("image_path"),
                 )
                 pop.add(program)
         return pop

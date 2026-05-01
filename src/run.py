@@ -18,7 +18,7 @@ import argparse
 from pathlib import Path
 
 from .io.task_spec import TaskSpec
-from .io.output_dirs import make_output_dir
+from .io.logging import open_log, log_generation
 from .evolution.population import Population
 from .evolution.island import (
     seed,
@@ -29,34 +29,36 @@ from .evolution.island import (
     save_island_census,
 )
 from .llm.generate import (
-    generate_model_code,
-    generate_param_est_code,
-    translate_to_jax,
+    generate_models,
+    generate_param_ests,
+    translate_programs,
 )
 from .scoring.scoring import score
 
 
-async def run(spec: TaskSpec) -> Path:
-    output_dir = make_output_dir(spec.io["save_path"])
-    spec.save_task_spec(output_dir)
+async def run(spec: TaskSpec, log_level: str = "compact") -> str:
+    os.makedirs(spec.output_dir, exist_ok=True)
+    spec.save_task_spec(spec.output_dir)
+    log = open_log(spec.output_dir, log_level)
 
     X_discover, X_validate, X_eval = spec.load_data_fn(data_path=spec.io["data_path"], **spec.project_params)
     population = Population()
     islands = seed(population, spec.seed_programs, spec.evolution["n_islands"])
-    await translate_to_jax(population, spec.prompt_schemas.jax, spec.llms["jax_translator_llm"])
+    await translate_programs(population, spec.prompt_schemas.jax, spec.llms["jax_translator_llm"])
     score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
     census = []
 
-    for i in range(spec.evolution["n_iterations"]):
-        mode, temperature, llms = spec.schedule(i)
-        spawn(population, islands, i, mode, temperature,
+    for gen in range(spec.evolution["n_generations"]):
+        mode, temperature, llms = spec.schedule(gen)
+        spawn(population, islands, gen, mode, temperature,
               batch_size=spec.evolution["batch_size"],
               k_max=spec.llms["k_max"])
 
-        await generate_model_code(population, spec.prompt_schemas.model, llms.model, mode, temperature)
-        await generate_param_est_code(population, spec.prompt_schemas.param_est, llms.param_est)
-        await translate_to_jax(population, spec.prompt_schemas.jax, llms.jax)
+        await generate_models(population, spec.prompt_schemas.model, llms.model, mode, temperature,
+                              spec=spec, data=X_discover)
+        await generate_param_ests(population, spec.prompt_schemas.param_est, llms.param_est)
+        await translate_programs(population, spec.prompt_schemas.jax, llms.jax)
 
         score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
@@ -64,14 +66,16 @@ async def run(spec: TaskSpec) -> Path:
         prune(islands, population, spec.evolution)
         migrate(islands, population, spec.evolution, temperature)
         census.append([set(island) for island in islands])
+        log_generation(log, gen, population, islands, spec)
 
     population.prepare_validation_scoring(islands)
     score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
 
-    population.save(os.path.join(output_dir, "population.jsonl"))
-    save_island_census(census, os.path.join(output_dir, "island_census.jsonl"))
+    population.save(os.path.join(spec.output_dir, "population.jsonl"))
+    save_island_census(census, os.path.join(spec.output_dir, "island_census.jsonl"))
+    log.file.close()
 
-    return output_dir
+    return spec.output_dir
 
 
 

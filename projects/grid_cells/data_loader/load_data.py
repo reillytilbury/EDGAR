@@ -5,6 +5,10 @@ import jax.numpy as jnp
 from scipy.ndimage import gaussian_filter
 
 
+def _to_jax(d):
+    return {k: jnp.array(v) if k != "_sample_indices" else v for k, v in d.items()}
+
+
 def load_data(
     data_path: str,
     time_start: float = 27826,
@@ -169,7 +173,7 @@ def load_data(
         '_sample_indices':  eval_pos,
     }
 
-    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
+    return (_to_jax(X_disc_train), _to_jax(X_disc_test)), (_to_jax(X_val_train), _to_jax(X_val_test)), _to_jax(X_eval)
 
 
 def loss_fn(model_output, data):

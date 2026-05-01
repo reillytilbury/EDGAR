@@ -2,7 +2,7 @@ io:
   data_path: /home/reilly/Desktop/place_cell_data/hippocampus_place_cells.npz
 
 evolution:
-  n_iterations: 3
+  n_generations: 3
 
 project_params:
   time_bin_ms: 20

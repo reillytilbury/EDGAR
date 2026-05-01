@@ -7,6 +7,10 @@ from scipy.signal import butter, filtfilt
 from typing import Tuple
 
 
+def _to_jax(d):
+    return {k: jnp.array(v) if k != "_sample_indices" else v for k, v in d.items()}
+
+
 def load_data(
     data_path: str = "",
     random_seed: int = 42,
@@ -88,7 +92,7 @@ def load_data(
     # Store which position each eval sample occupies for param matching in scoring (always 0 for this project)
     X_eval['_sample_indices'] = np.array([0])
 
-    return X_discover, X_validate, X_eval
+    return (_to_jax(X_discover[0]), _to_jax(X_discover[1])), (_to_jax(X_validate[0]), _to_jax(X_validate[1])), _to_jax(X_eval)
 
 
 def loss_fn(model_output, data):

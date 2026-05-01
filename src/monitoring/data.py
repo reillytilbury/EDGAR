@@ -56,7 +56,7 @@ def is_seed(program: Program) -> bool:
 
 
 def compute_alive_set(census: list[list[set[int]]]) -> set[int]:
-    """Programs alive at end of run (union of each island's final-iteration set)."""
+    """Programs alive at end of run (union of each island's final-generation set)."""
     alive: set[int] = set()
     for island in census:
         if island:
@@ -79,7 +79,7 @@ def build_sidebar_data(
             "is_seed": is_seed(p),
             "is_dead": p.idx not in alive,
             "is_extinct": p.idx not in alive,
-            "iteration": p.birth.generation,
+            "generation": p.birth.generation,
             "island": p.birth.island,
             "island_label": (
                 f"Island {p.birth.island}" if p.birth.island >= 0 else "Seed"
