@@ -191,13 +191,37 @@ llms:
   model_llm: gemini-2.5-pro
 ```
 
-### 5. Validate
+### 5. Customise prompts (optional)
+
+Create `projects/<task>/prompts.yaml` to override the defaults in `projects/prompt_defaults.yaml`. The two files are **deep-merged**, so you only need to include the fields you want to change — everything else is inherited.
+
+String fields (`base`, `explore`, `code_guidelines`, etc.) are replaced entirely when specified. **List fields (`config_vars`, `parent_vars`) are also replaced entirely** — if you add a new variable, you must re-list all of them.
+
+`explore` and `exploit` can be set to `null` (or omitted entirely) if you don't need a mode-specific section — the JAX translator and parameter estimator prompts typically leave both as `null`.
+
+Example — override only the `base` and `code_guidelines` for model generation:
+
+```yaml
+model:
+  base: |
+    You are an AI scientist modelling orientation tuning in visual cortex.
+    Below are {k_max} neuron models sorted from worst to best.
+    Create a new model with lower loss than all of them.
+  code_guidelines: |
+    * Model signature: def model(data, params):
+    * data has keys "stimulus" (radians) and "response".
+    * Clip free parameters to biologically plausible ranges at the top of the function.
+```
+
+All other `model` fields (explore, exploit, docstring_guidelines, parent_detail_template, config_vars, parent_vars) are inherited from the defaults unchanged.
+
+### 6. Validate
 
 ```bash
 edgar validate my_task
 ```
 
-### 6. Run
+### 7. Run
 
 ```bash
 edgar run projects/my_task/config.yaml
@@ -268,17 +292,17 @@ All three prompt types (model generation, parameter estimator generation, JAX tr
 
 Each schema has these fields:
 
-| Field | Purpose |
-|-------|---------|
-| `base` | Always-included system/task description |
-| `explore` | Appended during the explore phase (first half of generations) |
-| `exploit` | Appended during the exploit phase (second half of generations) |
-| `code_guidelines` | Code format requirements |
-| `docstring_guidelines` | Docstring format requirements |
-| `image_analysis_instructions` | Optional instructions for reading prompt images |
-| `parent_detail_template` | Format string for each parent program block |
-| `config_vars` | List of variable names injected from the flat config dict |
-| `parent_vars` | List of variable names extracted from parent program objects |
+| Field | Required | Example |
+|-------|----------|---------|
+| `base` | yes | `"You are an AI scientist. Below are {k_max} models..."` |
+| `explore` | no (set `null` to omit) | `"Be creative and invent something new."` |
+| `exploit` | no (set `null` to omit) | `"Use the models below as a template."` |
+| `code_guidelines` | yes | `"* Function signature must be def model(data, params):"` |
+| `docstring_guidelines` | yes | `"* Use a descriptive name, not a version number."` |
+| `image_analysis_instructions` | no (set `null` to omit) | `"The image shows model fits. Prefer models that..."` |
+| `parent_detail_template` | yes | `"Model {parent_number}: {descriptive_name}\nloss: {loss_discover}\n{model_code}"` |
+| `config_vars` | yes (can be `[]`) | `[k_max, max_lines]` |
+| `parent_vars` | yes (can be `[]`) | `[descriptive_name, loss_discover, model_code]` |
 
 ### Template variables
 
