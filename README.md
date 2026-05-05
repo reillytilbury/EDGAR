@@ -260,6 +260,58 @@ population.save("population.jsonl")
 
 ---
 
+## Prompt System
+
+### Schema structure
+
+All three prompt types (model generation, parameter estimator generation, JAX translation) use the same `PromptSchema` structure defined in `projects/prompt_defaults.yaml`. A task can override any field in `projects/<task>/prompts.yaml` — the two files are deep-merged, so you only need to specify what changes.
+
+Each schema has these fields:
+
+| Field | Purpose |
+|-------|---------|
+| `base` | Always-included system/task description |
+| `explore` | Appended during the explore phase (first half of generations) |
+| `exploit` | Appended during the exploit phase (second half of generations) |
+| `code_guidelines` | Code format requirements |
+| `docstring_guidelines` | Docstring format requirements |
+| `image_analysis_instructions` | Optional instructions for reading prompt images |
+| `parent_detail_template` | Format string for each parent program block |
+| `config_vars` | List of variable names injected from the flat config dict |
+| `parent_vars` | List of variable names extracted from parent program objects |
+
+### Template variables
+
+There are two kinds of variables used in format strings:
+
+**`config_vars`** — filled from the merged `evolution + llms + scoring` config dict (i.e. `TaskSpec.flat_config`). Examples: `{k_max}`, `{max_lines}`, `{swear_words}`.
+
+**`parent_vars`** — filled from program objects via `getattr`. Each entry in `parent_vars` must be an attribute or property on `Program`. The available ones are: `descriptive_name`, `loss_discover`, `model_code`, `param_est_code`.
+
+### What "parent" means in prompts
+
+In the prompt context, *parent* means the programs currently shown to the LLM as examples — the `k_max` programs sampled from the island at spawn time. This is distinct from a program's *lineage parents* stored in `birth.parent_indices`. The same word is overloaded; in `PromptSchema` it always means "programs shown in the prompt".
+
+### Structured LLM output
+
+Each prompt type expects a structured JSON response, enforced by pydantic-ai. The schemas are in `src/llm/response_schema.py`:
+
+**Model generation → `ModelSchema`**
+- `thought_process` — step-by-step reasoning about what the parent models do and what change is being made
+- `descriptive_name` — short name for the new model (e.g. "Double Gaussian Model")
+- `latex_equations` — full equation in LaTeX
+- `code` — complete Python implementation of `def model(data, params):`
+
+**Parameter estimator generation → `ParamEstSchema`**
+- `thought_process` — reasoning about the model structure and parameter estimation strategy
+- `code` — complete Python implementation of `def parameter_estimator(data):`
+
+**JAX translation → `TranslationSchema`**
+- `model_code` — JAX-compatible translation of the model function
+- `param_est_code` — JAX-compatible translation of the parameter estimator
+
+---
+
 ## Configuration Reference
 
 All defaults live in `projects/config_default.yaml`. Override any key in `projects/<task>/config.yaml`.
@@ -274,12 +326,12 @@ All defaults live in `projects/config_default.yaml`. Override any key in `projec
 | Key | Default | Description |
 |-----|---------|-------------|
 | `n_generations` | 12 | Total generations |
+| `time_limit` | 60 | Wall-clock time limit for the run in minutes |
 | `n_islands` | 8 | Number of independent island populations |
 | `batch_size` | 6 | LLM calls per island per generation |
 | `critical_population_size` | 12 | Max programs per island after pruning |
 | `n_migrants` | 2 | Programs exchanged between islands per generation |
 | `topology` | `[1,2,...,7,0]` | Ring topology: topology[i] is island i's migration target |
-| `exploit_point` | 0.5 | Fraction of generations before switching explore→exploit |
 
 ### `llms`
 | Key | Default | Description |
@@ -300,7 +352,9 @@ All defaults live in `projects/config_default.yaml`. Override any key in `projec
 | `gradient_descent.learning_rate` | 0.003 | Gradient descent learning rate |
 
 ### `project_params`
-Arbitrary kwargs passed directly to `load_data()`. Use for task-specific settings like thresholds or random seeds.
+The only section that accepts arbitrary keys. All entries are passed as kwargs to `load_data()`. Use for task-specific settings like thresholds or random seeds.
+
+Keys in any other section (`io`, `evolution`, `llms`, `scoring`) that are not in the tables above will be ignored and trigger a warning at startup.
 
 ---
 

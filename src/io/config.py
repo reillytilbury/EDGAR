@@ -10,10 +10,26 @@ Private helpers (_deep_merge, _git_state) are also used by TaskSpec.
 from __future__ import annotations
 
 import subprocess
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+
+def _warn_unknown_keys(config: dict) -> None:
+    default = yaml.safe_load((PROJECT_ROOT / "projects" / "config_default.yaml").read_text()) or {}
+    for section, default_section in default.items():
+        if section == "project_params" or not isinstance(default_section, dict):
+            continue
+        known = set(default_section.keys())
+        for key in config.get(section, {}):
+            if key not in known:
+                warnings.warn(
+                    f"Unknown config key '{section}.{key}' — it will be ignored. "
+                    f"Only project_params accepts arbitrary keys.",
+                    stacklevel=4,
+                )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -79,6 +95,7 @@ class Config:
         task_prompt_path = PROJECT_ROOT / "projects" / task_name / "prompts.yaml"
         task_prompts = yaml.safe_load(task_prompt_path.read_text()) if task_prompt_path.exists() else {}
         prompts = _deep_merge(default_prompts, task_prompts)
+        _warn_unknown_keys(config)
 
         return cls(
             task_name=task_name,
