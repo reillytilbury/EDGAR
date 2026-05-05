@@ -1,12 +1,19 @@
 """
-Config helpers: deep merge and git state capture.
+Config: a flat, serialisable bundle of all settings needed to build a TaskSpec.
 
-These are private utilities used by TaskSpec.from_config.
+Two constructors:
+    Config.from_yaml(path)       — load a config.yaml and merge with project defaults
+    Config.from_taskspec(path)   — extract config from a task_spec.yaml saved by a previous run
+
+Private helpers (_deep_merge, _git_state) are also used by TaskSpec.
 """
 from __future__ import annotations
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -34,3 +41,83 @@ def _git_state() -> tuple[str, bool]:
     except Exception:
         dirty = True
     return sha, dirty
+
+
+@dataclass
+class Config:
+    """
+    All settings needed to construct a TaskSpec, in plain-dict form.
+
+    Constructed via from_yaml (live run) or from_taskspec (reproduce a past run).
+    TaskSpec.from_config(config) turns this into a fully-loaded TaskSpec.
+    """
+    task_name: str
+    io: dict
+    evolution: dict
+    llms: dict
+    scoring: dict
+    project_params: dict
+    prompts: dict
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> Config:
+        """
+        Load a config.yaml and merge with project defaults.
+
+        Args:
+            path: Path to a project config.yaml.
+        """
+        path = Path(path)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+
+        task_name = path.parent.name
+        default_config = yaml.safe_load((PROJECT_ROOT / "projects" / "config_default.yaml").read_text()) or {}
+        config = _deep_merge(default_config, yaml.safe_load(path.read_text()) or {})
+
+        default_prompts = yaml.safe_load((PROJECT_ROOT / "projects" / "prompt_defaults.yaml").read_text()) or {}
+        task_prompt_path = PROJECT_ROOT / "projects" / task_name / "prompts.yaml"
+        task_prompts = yaml.safe_load(task_prompt_path.read_text()) if task_prompt_path.exists() else {}
+        prompts = _deep_merge(default_prompts, task_prompts)
+
+        return cls(
+            task_name=task_name,
+            io=config.get("io", {}),
+            evolution=config.get("evolution", {}),
+            llms=config.get("llms", {}),
+            scoring=config.get("scoring", {}),
+            project_params=config.get("project_params", {}),
+            prompts=prompts,
+        )
+
+    @classmethod
+    def from_taskspec(cls, path: Path) -> Config:
+        """
+        Extract config from a task_spec.yaml saved by a previous run.
+
+        Callables, git state, and creation_timestamp are always regenerated fresh
+        when TaskSpec.from_config is later called — only the config dicts are preserved.
+
+        Args:
+            path: Path to a task_spec.yaml.
+        """
+        path = Path(path)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+
+        record = yaml.safe_load(path.read_text())
+        schemas = record["prompt_schemas"]
+        prompts = {
+            "model": schemas["model"],
+            "parameter_estimator": schemas["param_est"],
+            "jax_translator": schemas["jax"],
+        }
+        return cls(
+            task_name=record["task_name"],
+            io=record.get("io", {}),
+            evolution=record.get("evolution", {}),
+            llms=record.get("llms", {}),
+            scoring=record.get("scoring", {}),
+            project_params=record.get("project_params", {}),
+            prompts=prompts,
+        )

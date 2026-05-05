@@ -1,5 +1,9 @@
+from dotenv import load_dotenv
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.settings import ModelSettings
+
+load_dotenv()
+
 
 async def call_llm(
     prompt: str,
