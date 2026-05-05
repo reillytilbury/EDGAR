@@ -249,8 +249,8 @@ def init_project(task: str) -> int:
         llms:
           k_max: 2
           model_llm: gemini-2.5-flash
-          param_est_llm: gemini-2.0-flash
-          jax_translator_llm: gemini-2.0-flash-lite
+          param_est_llm: gemini-2.5-flash
+          jax_translator_llm: gemini-2.5-flash-lite
 
         scoring:
           param_penalty_weight: 0.01
