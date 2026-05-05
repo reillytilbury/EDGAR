@@ -86,3 +86,24 @@ class Program:
         model_fn, _ = self.compile()
         self.n_params = sum(np.asarray(v).size for v in model_fn.DEFAULT_PARAMS.values())
         return self.n_params
+
+    # ── prompt template properties ──
+    # These match the parent_vars used in prompt_defaults.yaml so that
+    # getattr(program, var_name) works in PromptSchema.build_prompt.
+
+    @property
+    def descriptive_name(self) -> str:
+        return self.name or ""
+
+    @property
+    def loss_discover(self) -> float | str:
+        v = self.program_losses.discover.final
+        return v if v is not None else "not yet scored"
+
+    @property
+    def model_code(self) -> str:
+        return self.code.model or ""
+
+    @property
+    def param_est_code(self) -> str:
+        return self.code.param_est or ""

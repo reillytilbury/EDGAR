@@ -380,9 +380,15 @@ def run_cli(argv=None) -> int:
         return validate_project(args.task)
     if args.command == "run":
         import asyncio
+        from .io.config import Config
         from .io.task_spec import TaskSpec
         from .run import run
-        spec = TaskSpec.from_config(Path(args.config))
+        path = Path(args.config)
+        if path.name == "task_spec.yaml":
+            config = Config.from_taskspec(path)
+        else:
+            config = Config.from_yaml(path)
+        spec = TaskSpec.from_config(config)
         if overrides:
             _apply_overrides(spec, overrides)
         asyncio.run(run(spec, log_level=args.log_level))
