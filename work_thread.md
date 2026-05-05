@@ -35,6 +35,9 @@ type: project
 - [ ] Integration test for `run.py` (small end-to-end run)
 - [ ] Wire tests to GitHub Actions CI with status badges in README
 
+### Evolution
+- [ ] **Temperature warping in `migrate`** — raw temperature from `schedule()` is in [1, 2] but `boltzmann_sample` expects something in [0, 1]. Correct transform is `T_warped = (T - 1.0) ** 4`, confirmed in old `hypothesis_engine.py` on the `main` remote branch.
+
 ### Core scoring
 - [ ] Separate input/target keys in data — prevent models from cheating by accessing target values. Add `input_keys` and `target_keys` to config, split data before passing to model_fn
 - [ ] Support variable-length trials per sample — currently assumes rectangular data (all samples have same n_trials); would need list/dict of variable-length arrays instead

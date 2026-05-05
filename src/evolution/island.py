@@ -173,6 +173,11 @@ def migrate(islands: list[set[int]], population: Population, evolution: dict, te
         evolution: evolution config dict containing n_migrants and topology
         temperature: temperature for Boltzmann sampling
     """
+    # TODO: temperature needs warping before being passed to boltzmann_sample.
+    # Raw temperature from schedule() lives in [1, 2]. The correct transform is
+    #     T_warped = (T - 1.0) ** 4
+    # which maps [1, 2] -> [0, 1] with a sharp decay, so migration becomes
+    # strongly selective late in the run. Confirmed in the old hypothesis_engine.py.
     n_migrants = evolution["n_migrants"]
     topology = evolution["topology"]
 
