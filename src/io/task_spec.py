@@ -201,9 +201,8 @@ class TaskSpec:
         import numpy as np
 
         n_generations = self.evolution["n_generations"]
-        exploit_point = self.evolution.get("exploit_point", 0.5)
 
-        mode = "explore" if generation < n_generations * exploit_point else "exploit"
+        mode = "explore" if generation < n_generations // 2 else "exploit"
         temperature = 1 + np.exp(-generation / n_generations)
 
         def _cycle(key):
