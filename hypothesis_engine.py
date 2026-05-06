@@ -355,7 +355,7 @@ async def generate_new_parameter_estimator(current_island,
         img_bytes = None
     
     llm_output = await utils.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
-                                            thinking_budget=0.25, img_bytes=img_bytes)
+                                            thinking_budget=0.0, img_bytes=img_bytes)
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -463,7 +463,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 large_lm_name = 'gemini-2.5-pro',
                 use_large_every = 3,
                 conc_thresh = 0.55, activity_thresh = 0.4,
-                data_path = '/home/reilly/Desktop/8279387/gratings_drifting_GT1_2019_04_12_1.npy'):
+                data_path = '/home/reilly/datasets/stringer_2021/gratings_drifting_GT1_2019_04_12_1.npy'):
     """ 
     Main function to run the hypothesis engine.
     """
@@ -639,6 +639,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                                                                    mode=mode, 
                                                                    k_max=k_max, 
                                                                    temp=temperature,
+                                                                   thinking_budget=1 if llm_name == large_lm_name else 0.0,
                                                                    spike_matrix=response_train, 
                                                                    stimuli=angles_train,
                                                                    img_dir=model_image_dirs[island_idx, j]) 
