@@ -36,6 +36,15 @@ from typing import Optional, Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from ..evolution.program import Program
 
+def _get_nested_attr(obj: Any, dotted_key: str, default: Any = None) -> Any:
+    item = obj
+
+    for part in dotted_key.split("."):
+        if item is None or not hasattr(item, part):
+            return default
+        item = getattr(item, part)
+
+    return item
 
 class PromptSchema(BaseModel):
     base: str
@@ -75,7 +84,7 @@ class PromptSchema(BaseModel):
             parents_text = [
                 self.parent_detail_template.format(
                     parent_number=i + 1,
-                    **{x.replace(".", "_"): getattr(p, x, "") for x in self.parent_vars}
+                    **{x.replace(".", "_"): _get_nested_attr(p, x, "") for x in self.parent_vars}
                 )
                 for i, p in enumerate(parents)
             ]
