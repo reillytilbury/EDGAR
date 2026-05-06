@@ -106,11 +106,15 @@ parameter_estimator:
   - code.model
   - code.param_est
 jax_translator:
-  base: 'Convert the following model and parameter estimator to be JAX-compatible.
+  base: 'Translate the following model and parameter estimator to be JAX-compatible.
+
+    Keep the functionality the same, but modify the code to meet the critical JAX compatibility requirements listed below. This will allow the model and parameter estimator to be efficiently compiled and run on accelerators.  
 
     Include all necessary imports (jax, jax.numpy as jnp).
 
     Ensure compatibility with jax.jit, jax.grad, and jax.vmap.
+
+    Ensure that the translated function has the same name and that their signatures remain the same.
 
     Return the translated model code and parameter estimator code separately.
 
@@ -129,7 +133,7 @@ jax_translator:
 
     * Never call Python `int()` / `float()` on JAX values.
 
-    * Preserve the `model.DEFAULT_PARAMS = {...}` line exactly as-is from the original code.
+    * Preserve the `model.DEFAULT_PARAMS = {{...}}` line exactly as-is from the original code.
 
     '
   docstring_guidelines: 'Do not include any text other than the code.
