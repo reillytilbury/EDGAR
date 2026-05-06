@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 
+import cloudpickle
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -25,7 +26,12 @@ from ..evolution.population import Population
 
 def _get_params(param_est_fn, default_params, data_train):
     try:
-        return jax.vmap(param_est_fn)(data_train)
+        n = next(iter(data_train.values())).shape[0]
+        per_sample = [
+            param_est_fn({k: np.asarray(v[i]) for k, v in data_train.items()})
+            for i in range(n)
+        ]
+        return jax.tree_util.tree_map(lambda *arrs: jnp.stack(arrs), *per_sample)
     except Exception:
         n = next(iter(data_train.values())).shape[0]
         return jax.tree_util.tree_map(lambda x: jnp.stack([x] * n), default_params)
@@ -74,9 +80,10 @@ def _eval_fingerprint(model_fn, params, X_eval):
     return jax.vmap(model_fn, in_axes=(0, 0))(X_eval, params_matched)
 
 
-def _worker(queue, program, data, loss_fn, config, X_eval):
+def _worker(queue, program, data, loss_fn_bytes, config, X_eval):
     """Score one program inside a subprocess. Always puts a 3-tuple on the queue."""
     try:
+        loss_fn = cloudpickle.loads(loss_fn_bytes)
         data_train, data_test = data
         model_fn, param_est_fn = program.compile()
         penalty = config["param_penalty_weight"] * program.n_params
@@ -114,7 +121,8 @@ def _score_one_model(
 
     ctx = mp.get_context("spawn")
     queue = ctx.Queue()
-    proc = ctx.Process(target=_worker, args=(queue, program, data, loss_fn, config, X_eval))
+    loss_fn_bytes = cloudpickle.dumps(loss_fn)
+    proc = ctx.Process(target=_worker, args=(queue, program, data, loss_fn_bytes, config, X_eval))
     proc.start()
     proc.join(timeout=config["timeout_s"])
     if proc.is_alive():
