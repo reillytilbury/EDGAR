@@ -50,6 +50,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     census = []
 
     for gen in range(spec.evolution["n_generations"]):
+        print(f"Generation {gen} / {spec.evolution['n_generations']}")
         mode, temperature, llms = spec.schedule(gen)
         spawn(population, islands, gen, mode, temperature,
               batch_size=spec.evolution["batch_size"],
@@ -57,7 +58,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
 
         await generate_models(population, spec.prompt_schemas.model, llms.model, mode, temperature,
                               spec=spec, data=X_discover)
-        await generate_param_ests(population, spec.prompt_schemas.param_est, llms.param_est)
+        await generate_param_ests(population, spec.prompt_schemas.param_est, llms.param_est, spec.flat_config)
         await translate_programs(population, spec.prompt_schemas.jax, llms.jax)
 
         score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")

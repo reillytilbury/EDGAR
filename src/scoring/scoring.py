@@ -53,7 +53,7 @@ def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
             best_loss, best_flat = float(loss_val), flat.copy()
         updates, opt_state = opt.update(grad, opt_state, flat)
         flat = optax.apply_updates(flat, updates)
-        if step % 50 == 0:
+        if step % 200 == 0:
             print(f"step {step:4d}  loss {loss_val:.4f}")
 
     return unflatten(best_flat)

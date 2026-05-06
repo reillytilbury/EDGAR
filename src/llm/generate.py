@@ -84,10 +84,15 @@ async def _generate_one_model(
     image_bytes = _prompt_image_bytes(spec, data, parents, program)
 
     prompt = prompt_schema.build_prompt(mode, parents, config)
-    result = await call_llm(prompt=prompt, llm_model=llm, output_type=ModelSchema,
-                            temperature=temperature, image_bytes=image_bytes)
+    result = await call_llm(
+        prompt=prompt,
+        llm_model=llm,
+        output_type=ModelSchema,
+        temperature=temperature,
+        image_bytes=image_bytes,
+    )
     header = f'"""\n{result.thought_process}\n\n{result.latex_equations}\n"""\n\n'
-    program.code.model = header + result.code
+    program.code.model = header + result.code + f'\n\nmodel.DEFAULT_PARAMS = {result.default_params!r}'
     program.name = result.descriptive_name
     program.birth.llm_name = llm
 
@@ -131,7 +136,12 @@ async def _generate_one_param_est(
     config: dict[str, Any] | None = None,
 ) -> None:
     prompt = prompt_schema.build_prompt("explore", parents, config)
-    result = await call_llm(prompt=prompt, llm_model=llm, output_type=ParamEstSchema, temperature=1.0)
+    result = await call_llm(
+        prompt=prompt,
+        llm_model=llm,
+        output_type=ParamEstSchema,
+        temperature=1.0,
+    )
     header = f'"""\n{result.thought_process}\n"""\n\n'
     program.code.param_est = header + result.code
 
