@@ -1,0 +1,22 @@
+io:
+  data_path: ""
+  save_path: ""
+
+evolution:
+  n_generations: 2
+  n_islands: 2
+  batch_size: 3
+  critical_population_size: 3
+  n_migrants: 1
+
+llms:
+  model_llm: gemini-2.0-flash
+  param_est_llm: gemini-2.0-flash
+  jax_translator_llm: gemini-2.0-flash-lite
+
+project_params:
+  seed: 0
+  n_samples: 4
+  n_trials: 100
+  noise_std: 0.0
+  n_eval_samples: 2

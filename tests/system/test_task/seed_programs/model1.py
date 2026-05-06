@@ -1,0 +1,12 @@
+import numpy as np
+
+
+def model(data, params):
+    """y = a * relu(x - b)"""
+    x = data['x']
+    a = params["a"]
+    b = params["b"]
+    return a * np.maximum(0, x - b)
+
+
+model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}

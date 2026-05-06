@@ -31,6 +31,8 @@ from typing import Callable
 
 import yaml
 
+from pydantic_ai.models import Model
+
 from ..evolution.program import Program, BirthCertificate, Code
 from ..llm.code_loading import load_function_from_source
 from ..llm.prompt_schema import PromptSchema
@@ -99,7 +101,7 @@ class TaskSpec:
         task_name = config.task_name
         prompts = config.prompts
 
-        data_loader_path = PROJECT_ROOT / "projects" / task_name / "data_loader" / "load_data.py"
+        data_loader_path = config.project_dir / "data_loader" / "load_data.py"
         load_data_fn = load_function_from_source(data_loader_path.read_text(), "load_data")
         if load_data_fn is None:
             raise ValueError(f"{data_loader_path} must define callable load_data()")
@@ -107,12 +109,12 @@ class TaskSpec:
         if loss_fn is None:
             raise ValueError(f"{data_loader_path} must define callable loss_fn()")
 
-        plot_path = PROJECT_ROOT / "projects" / task_name / "image_feedback" / "plot.py"
+        plot_path = config.project_dir / "image_feedback" / "plot.py"
         plot_fn = load_function_from_source(plot_path.read_text(), "plot_model_fits") if plot_path.exists() else None
 
         git_sha, git_dirty = _git_state()
 
-        seed_dir = PROJECT_ROOT / "projects" / task_name / "seed_programs"
+        seed_dir = config.project_dir / "seed_programs"
         seed_programs = []
         for batch_idx, model_path in enumerate(sorted(seed_dir.glob("model*.py"))):
             model_num = model_path.stem.replace("model", "")
@@ -208,6 +210,8 @@ class TaskSpec:
         def _cycle(key):
             seq = self.llms[key]
             if isinstance(seq, str):
+                return seq
+            if isinstance(seq, Model):
                 return seq
             return seq[generation % len(seq)]
 

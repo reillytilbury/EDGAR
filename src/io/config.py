@@ -68,6 +68,7 @@ class Config:
     TaskSpec.from_config(config) turns this into a fully-loaded TaskSpec.
     """
     task_name: str
+    project_dir: Path
     io: dict
     evolution: dict
     llms: dict
@@ -88,17 +89,19 @@ class Config:
             path = PROJECT_ROOT / path
 
         task_name = path.parent.name
+        project_dir = path.parent
         default_config = yaml.safe_load((PROJECT_ROOT / "projects" / "config_default.yaml").read_text()) or {}
         config = _deep_merge(default_config, yaml.safe_load(path.read_text()) or {})
 
         default_prompts = yaml.safe_load((PROJECT_ROOT / "projects" / "prompt_defaults.yaml").read_text()) or {}
-        task_prompt_path = PROJECT_ROOT / "projects" / task_name / "prompts.yaml"
+        task_prompt_path = project_dir / "prompts.yaml"
         task_prompts = yaml.safe_load(task_prompt_path.read_text()) if task_prompt_path.exists() else {}
         prompts = _deep_merge(default_prompts, task_prompts)
         _warn_unknown_keys(config)
 
         return cls(
             task_name=task_name,
+            project_dir=project_dir,
             io=config.get("io", {}),
             evolution=config.get("evolution", {}),
             llms=config.get("llms", {}),
@@ -131,6 +134,7 @@ class Config:
         }
         return cls(
             task_name=record["task_name"],
+            project_dir=PROJECT_ROOT / "projects" / record["task_name"],
             io=record.get("io", {}),
             evolution=record.get("evolution", {}),
             llms=record.get("llms", {}),
