@@ -100,7 +100,7 @@ def _score_one_model(
     loss_fn,
     config: dict,
     X_eval=None,
-) -> tuple[float, float, jnp.ndarray | None]:
+) -> tuple[float, float, jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
     """Score one program in a spawn subprocess; kill on timeout.
 
     Auto-populates program.n_params via count_params() if not set.
@@ -110,7 +110,7 @@ def _score_one_model(
         try:
             program.count_params()
         except Exception:
-            return (float("inf"), float("inf"), None)
+            return (float("inf"), float("inf"), None, None, None)
 
     ctx = mp.get_context("spawn")
     queue = ctx.Queue()
