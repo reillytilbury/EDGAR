@@ -373,7 +373,7 @@ async def generate_new_parameter_estimator(current_island,
 
 async def generate_new_parameter_estimator_from_image_feedback(image_prompt: str,
                                                                image_dir: str,
-                                                               model_name='gemini-2.0-flash',
+                                                               model_name='gemini-2.5-flash',
                                                                swear_words=['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn'],
                                                                max_lines=100,
                                                                temp=1,
@@ -414,7 +414,7 @@ async def generate_new_parameter_estimator_from_image_feedback(image_prompt: str
     func = utils.str_to_func(code_string, 'parameter_estimator')
     return code_string, func
 
-async def translate_to_jax(code_string: str, client, llm_name='gemini-2.0-flash-lite') -> tuple[str, callable]:
+async def translate_to_jax(code_string: str, client, llm_name='gemini-2.5-flash-lite') -> tuple[str, callable]:
     """
     Translates a neuron model code string to JAX format.
     Args:
@@ -458,9 +458,9 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 use_image_feedback=True, use_param_estimator=True,
                 exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
-                tiny_lm_name = 'gemini-2.0-flash-lite',
-                little_lm_name = 'gemini-2.0-flash',
-                large_lm_name = 'gemini-2.5-flash',
+                tiny_lm_name = 'gemini-2.5-flash-lite',
+                little_lm_name = 'gemini-2.5-flash',
+                large_lm_name = 'gemini-2.5-pro',
                 use_large_every = 3,
                 conc_thresh = 0.55, activity_thresh = 0.4,
                 data_path = '/home/reilly/Desktop/8279387/gratings_drifting_GT1_2019_04_12_1.npy'):

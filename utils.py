@@ -171,7 +171,7 @@ def split_via_ast(output: Union[str, None]) -> Union[Tuple[str, str], Tuple[None
 
 def call_llm(
     prompt_text: str,
-    model_name: str = "gemini-2.0-flash",
+    model_name: str = "gemini-2.5-flash",
     client: Union[genai.Client, anthropic.Client] = None,
     temperature: float = 1.0,
     thinking_budget: float = 1.0) -> Union[str, None]:
@@ -180,12 +180,14 @@ def call_llm(
     """
     if model_name[0] == 'g':
         try:
-            # create the config for the request (thinking budget for 2.5 flash model)
-            if '2.5-flash' in model_name:
+            # create the config for the request
+            if model_name in ['gemini-2.5-flash', 'gemini-2.5-pro']:
                 thinking_budget = int(thinking_budget * 24_576)
                 config = types.GenerateContentConfig(temperature=temperature, max_output_tokens=5_000, thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget))
-            else:
+            elif model_name == 'gemini-2.5-flash-lite':
                 config = types.GenerateContentConfig(temperature=temperature, max_output_tokens=5_000)
+            else:
+                raise ValueError(f"Unknown model name: {model_name}")
             
             # send the request to the GenAI client
             resp = client.models.generate_content(model=model_name, contents=[prompt_text], config=config)
@@ -213,7 +215,7 @@ def call_llm(
 async def call_llm_async(
     prompt_text: Union[str, None],
     client: Union[genai.Client, anthropic.Client],
-    model_name: str = "gemini-2.0-flash",
+    model_name: str = "gemini-2.5-flash",
     temperature: float = 1.0,
     thinking_budget: float = 1,
     img_bytes: Union[bytes, None] = None
@@ -1370,7 +1372,7 @@ def train_simplified(
 #     prompts = ["Return **ONLY** the numerical answer (to 2 decimal places), do **NOT** show your reasoning. A thin hoop of diameter d=0.3 is thrown on to an infinitely large chessboard with squares of side L=1.0. What is the chance of the hoop enclosing two colours?"] * 30
 #     t1 = time.time()
 #     # model_name = 'claude-3-5-haiku-latest'
-#     # model_name = 'gemini-2.0-flash'
+#     # model_name = 'gemini-2.5-flash'
 #     # model_name = 'gemini-1.5-flash-8b'
 #     # model_name = 'gemini-2.5-flash'
 #     model_name = 'gemini-2.5-flash-lite-preview-06-17'
@@ -1615,7 +1617,7 @@ def train_simplified(
 # for i in range(10):
 #     response = client.models.generate_content(
 #         model='gemini-2.5-flash-preview-05-20',
-#         # model='gemini-2.0-flash',
+#         # model='gemini-2.5-flash',
 #         contents=[prompt],
 #         config=config)
 
