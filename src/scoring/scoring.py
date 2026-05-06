@@ -26,12 +26,7 @@ from ..evolution.population import Population
 
 def _get_params(param_est_fn, default_params, data_train):
     try:
-        n = next(iter(data_train.values())).shape[0]
-        per_sample = [
-            param_est_fn({k: np.asarray(v[i]) for k, v in data_train.items()})
-            for i in range(n)
-        ]
-        return jax.tree_util.tree_map(lambda *arrs: jnp.stack(arrs), *per_sample)
+        return jax.vmap(param_est_fn)(data_train)
     except Exception:
         n = next(iter(data_train.values())).shape[0]
         return jax.tree_util.tree_map(lambda x: jnp.stack([x] * n), default_params)
