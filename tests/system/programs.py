@@ -1,0 +1,151 @@
+"""
+Predetermined program code strings for fake LLM testing.
+
+Provides Program1, Program2, ProgramSolution, InvalidProgram, and SeedPrograms
+with numpy model, JAX model, and parameter estimator code as class attributes.
+"""
+
+
+class Program1:
+    model = (
+        "import numpy as np\n\n"
+        "def model(data, params):\n"
+        '\t""" y = ax^2 +bx """\n'
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        "\treturn a * x**2 + b * x"
+    )
+
+    model_jax = (
+        "import jax.numpy as jnp\n\n"
+        "def model(data, params):\n"
+        '\t""" y = ax^2 +bx """\n'
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        "\treturn a * x**2 + b * x"
+    )
+
+    param_est = (
+        'def parameter_estimator(data):\n\treturn {"a": float(1), "b": float(0)}\n'
+    )
+
+
+class Program2:
+    model = (
+        "import numpy as np\n\n"
+        "def model(data, params):\n"
+        '\t"""y = ax^3 + bx^2 + cx"""\n'
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        '\tc = params["c"]\n'
+        "\treturn a * x**3 + b * x**2 + c * x"
+    )
+
+    model_jax = (
+        "import jax.numpy as jnp\n\n"
+        "def model(data, params):\n"
+        '\t"""y = ax^3 + bx^2 + cx"""\n'
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        '\tc = params["c"]\n'
+        "\treturn a * x**3 + b * x**2 + c * x"
+    )
+
+    param_est = (
+        "def parameter_estimator(data):\n"
+        '\treturn {"a": float(1), "b": float(0), "c": float(0)}\n'
+    )
+
+
+class ProgramSolution:
+    """Exact solution: y = (a*x^2 + b*x + c) * sin(k*x + phi_0)"""
+
+    model = (
+        "import numpy as np\n\n"
+        "def model(data, params):\n"
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        '\tc = params["c"]\n'
+        '\tk = params["k"]\n'
+        '\tphi_0 = params["phi_0"]\n'
+        "\treturn (a * x**2 + b * x + c) * np.sin(k * x + phi_0)"
+    )
+
+    model_jax = (
+        "import jax.numpy as jnp\n\n"
+        "def model(data, params):\n"
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        '\tc = params["c"]\n'
+        '\tk = params["k"]\n'
+        '\tphi_0 = params["phi_0"]\n'
+        "\treturn (a * x**2 + b * x + c) * jnp.sin(k * x + phi_0)"
+    )
+
+    param_est = (
+        "def parameter_estimator(data):\n"
+        '\treturn {"a": float(1), "b": float(0), "c": float(0), "k": float(6), "phi_0": float(0)}\n'
+    )
+
+
+class InvalidProgram:
+    """Program that fails to run due to a TypeError."""
+
+    model = (
+        "import numpy as np\n\n"
+        "def model(data, params):\n"
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        '\tc = np.zeros(("c"))\n'
+        "\treturn a * x**4 + b * x + c"
+    )
+
+    model_jax = (
+        "import jax.numpy as jnp\n\n"
+        "def model(data, params):\n"
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        '\tc = np.zeros(("c"))\n'
+        "\treturn a * x**4 + b * x + c"
+    )
+
+    param_est = (
+        "def parameter_estimator(data):\n"
+        '\treturn {"a": float(1), "b": float(0)}\n'
+    )
+
+
+class SeedPrograms:
+    """JAX model strings used by SeedFakeLLM."""
+
+    model_v1_jax = (
+        "import jax.numpy as jnp\n\n"
+        "def model(data, params):\n"
+        '\t""" y = a * relu(x - b) """\n'
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        "\treturn a * jnp.maximum(0, x - b)"
+    )
+
+    model_v2_jax = (
+        "import jax.numpy as jnp\n\n"
+        "def model(data, params):\n"
+        '\t""" y = a * x + b """\n'
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        "\treturn a * x + b"
+    )
+
+    param_est = (
+        'def parameter_estimator(data):\n\treturn {"a": float(1), "b": float(0)}\n'
+    )

@@ -12,6 +12,8 @@ import asyncio
 import os
 from typing import Any, TYPE_CHECKING
 
+from pydantic_ai.models import Model
+
 from ..evolution.program import Program
 from ..evolution.population import Population
 from ..llm.prompt_schema import PromptSchema
@@ -74,7 +76,7 @@ async def _generate_one_model(
     program: Program,
     parents: list[Program],
     prompt_schema: PromptSchema,
-    llm: str,
+    llm: str | Model,
     mode: str,
     temperature: float,
     config: dict[str, Any] | None = None,
@@ -100,7 +102,7 @@ async def _generate_one_model(
 async def generate_models(
     population: Population,
     prompt_schema: PromptSchema,
-    llm: str,
+    llm: str | Model,
     mode: str,
     temperature: float,
     config: dict[str, Any] | None = None,
@@ -132,7 +134,7 @@ async def _generate_one_param_est(
     program: Program,
     parents: list[Program],
     prompt_schema: PromptSchema,
-    llm: str,
+    llm: str | Model,
     config: dict[str, Any] | None = None,
 ) -> None:
     prompt = prompt_schema.build_prompt("explore", parents, config)
@@ -149,7 +151,7 @@ async def _generate_one_param_est(
 async def generate_param_ests(
     population: Population,
     prompt_schema: PromptSchema,
-    llm: str,
+    llm: str | Model,
     config: dict[str, Any] | None = None,
 ) -> None:
     """Generate numpy parameter estimator code for programs that have model code but no estimator.
@@ -170,7 +172,7 @@ async def generate_param_ests(
 async def _translate_one_program(
     program: Program,
     prompt_schema: PromptSchema,
-    llm: str,
+    llm: str | Model,
 ) -> None:
     prompt = prompt_schema.build_prompt("explore", [program])
     try:
@@ -186,7 +188,7 @@ async def _translate_one_program(
 async def translate_programs(
     population: Population,
     prompt_schema: PromptSchema,
-    llm: str,
+    llm: str | Model,
 ) -> None:
     """Translate all untranslated programs from numpy to JAX.
 
