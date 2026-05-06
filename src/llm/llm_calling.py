@@ -10,7 +10,7 @@ load_dotenv()
 
 async def call_llm(
     prompt: str,
-    llm_model: str,
+    llm_model: str | Model,
     output_type=str,
     image_bytes: bytes | None = None,
     temperature: float = 1.0,
