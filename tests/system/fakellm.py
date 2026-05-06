@@ -1,12 +1,12 @@
 # Define programs which will be returned by the fake LLM call
-from .programs import Program1, Program2, ProgramSolution
+from .programs import Program1, Program2, ProgramSolution, InvalidProgram
 
 
 class FakeLLM:
     """A fake LLM engine that returns pre-configured candidates and seed_jax outputs instead of making actual LLM calls."""
 
     def __init__(self, offset: float = 0.1):
-        self.programs = (Program1, Program2, ProgramSolution)
+        self.programs = (Program1, InvalidProgram, ProgramSolution)
         self.model_counter = [0, 0, 0]
         self.model_jax_counter = [0, 0, 0]
         self.param_est_counter = [0, 0, 0]

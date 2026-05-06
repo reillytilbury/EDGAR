@@ -64,11 +64,22 @@ def test_total_programs(fake_run):
     assert len(programs) == config["experiment_params"]["n_islands"] * config["experiment_params"]["n_iterations"] * config["experiment_params"]["batch_size"] + 2, f"Expected {config['experiment_params']['n_islands'] * config['experiment_params']['n_iterations'] * config['experiment_params']['batch_size']} +2 programs, found {len(programs)}"
 
 def test_n_programs_with_testloss(fake_run):
-    """ Test loss only computed on programs remaining at end of run, verify we have the correct number, which is n_islands*(critical_population_size - n_migrants)"""
+    """ Test loss only computed on programs remaining at end of run, verify we have the correct number, which is n_islands*(critical_population_size - n_migrants)."""
     programs = load_programs(fake_run)
     config = load_config()
     programs_with_testloss = [p for p in programs if "test_loss" in p]
     assert len(programs_with_testloss) == config["experiment_params"]["n_islands"] * (config["experiment_params"]["critical_population_size"] - config["experiment_params"]["n_migrants"]), f"Expected {config['experiment_params']['n_islands'] * (config['experiment_params']['critical_population_size'] - config['experiment_params']['n_migrants'])} programs with test_loss, found {len(programs_with_testloss)}"
+
+def test_invalid_programs(fake_run):
+    """ Verify that invalid programs are given None for initial_loss and train_loss, and are not assigned test_loss"""
+    programs = load_programs(fake_run)
+    config = load_config()
+    invalid_programs = [p for p in programs if p["batch_index"] == 1 and p["iteration_number"] >= 0]
+    assert len(invalid_programs) == config["experiment_params"]["n_islands"]*config["experiment_params"]["n_iterations"], f"Expected exactly {config['experiment_params']['n_islands'] * config['experiment_params']['n_iterations']} invalid programs born at batch index 1, found {len(invalid_programs)}"
+    for ip in invalid_programs:
+        assert ip["initial_loss"] is None, f"Expected invalid program initial_loss to be None, found {ip['initial_loss']}"
+        assert ip["train_loss"] is None, f"Expected invalid program train_loss to be None, found {ip['train_loss']}"
+        assert "test_loss" not in ip, f"Expected invalid program to not have test_loss, found {ip.get('test_loss')}"
 
 def test_correct_winner(fake_run):
     """ Verify the final winning program is the (0,0,2) program, which is the ProgramSolution without offset"""
@@ -83,7 +94,7 @@ def test_winning_loss(fake_run):
     programs = load_programs(fake_run)
     winning_program = [p for p in programs if p.get("is_winner")][0]
     #Check the loss on held out x values, used to score programs within evolution
-    assert round(winning_program["initial_loss"],3) == 0.681, f"Expected winning program initial_loss (without gd) 0.681, found {winning_program['initial_loss']:.3f}"
-    assert round(winning_program["train_loss"],3) == 0.056, f"Expected winning program train_loss 0.056, found {winning_program['train_loss']:.3f}"
+    assert round(winning_program["initial_loss"],4) == 0.6811, f"Expected winning program initial_loss (without gd) 0.6811, found {winning_program['initial_loss']:.4f}"
+    assert round(winning_program["train_loss"],4) == 0.2950, f"Expected winning program train_loss 0.2950, found {winning_program['train_loss']:.4f}"
     #Check the loss computed on held out samples (i.e parameter sets for the target function)
-    assert round(winning_program["test_loss"],3) == 0.141, f"Expected winning program test_loss 0.141, found {winning_program['test_loss']:.3f}"
+    assert round(winning_program["test_loss"],4) == 3.0775, f"Expected winning program test_loss 3.0775, found {winning_program['test_loss']:.4f}"

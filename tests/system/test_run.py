@@ -13,7 +13,7 @@ import yaml
 
 from run import _run_many
 
-CONFIG_PATH = str(Path(__file__).parent / "config2.yaml")
+CONFIG_PATH = str(Path(__file__).parent / "config.yaml")
 
 def load_programs(output_dir):
     """Helper to load from program_generation_log.jsonl"""
@@ -38,7 +38,8 @@ def run(tmp_path_factory):
     """
     output_dir = tmp_path_factory.mktemp("outputdir")                                   
     asyncio.run(                                                                            
-        _run_many(                                                                          
+        _run_many(
+            test_mode = True,                                                                          
             config_path=CONFIG_PATH,                                             
             output_dir=str(output_dir),                                                     
             use_fake_llm=False,                                                    
@@ -56,14 +57,14 @@ def test_program_log_written(run):
     assert log.exists(), "program_generation_log.jsonl not written to output directory"
 
 def test_total_programs(run):
-    """ Verifies expected number of programs generated and logged"""
+    """ Verifies expected number of programs generated and logged, remember test_mode=True overrides parameters in config.yaml, to:
+        n_iterations = 1, n_islands = 2, batch_size = 2, so we expect 2*1*2 + 2 (initial programs) = 6 total programs."""
     programs= load_programs(run)
-    config = load_config()
-    assert len(programs) == config["experiment_params"]["n_islands"] * config["experiment_params"]["n_iterations"] * config["experiment_params"]["batch_size"] + 2, f"Expected {config['experiment_params']['n_islands'] * config['experiment_params']['n_iterations'] * config['experiment_params']['batch_size']} +2 programs, found {len(programs)}"
+    assert len(programs) == 6, f"Expected 6 programs, found {len(programs)}"
 
 def test_n_programs_with_testloss(run):
-    """ Test loss only computed on programs remaining at end of run, verify we have the correct number, which is n_islands*(critical_population_size - n_migrants)"""
+    """ Test loss only computed on programs remaining at end of run, verify we have the correct number, which is n_islands*(critical_population_size).
+        With test_mode=True, we have n_islands=2, critical_population_size=2, so expect 4 programs with test_loss."""
     programs = load_programs(run)
-    config = load_config()
     programs_with_testloss = [p for p in programs if "test_loss" in p]
-    assert len(programs_with_testloss) == config["experiment_params"]["n_islands"] * (config["experiment_params"]["critical_population_size"] - config["experiment_params"]["n_migrants"]), f"Expected {config['experiment_params']['n_islands'] * (config['experiment_params']['critical_population_size'] - config['experiment_params']['n_migrants'])} programs with test_loss, found {len(programs_with_testloss)}"
+    assert len(programs_with_testloss) == 4, f"Expected 4 programs with test_loss, found {len(programs_with_testloss)}"

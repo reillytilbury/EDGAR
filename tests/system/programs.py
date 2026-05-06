@@ -87,3 +87,31 @@ class ProgramSolution:
         "def parameter_estimator(data):\n"
         '\treturn {"a": float(1), "b": float(0), "c": float(0), "k": float(6), "phi_0": float(0)}\n'
     )
+
+class InvalidProgram:
+    """Program which fails to run"""
+
+    model = (
+        "import numpy as np\n\n"
+        "def model(data, params):\n"
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        '\tc = np.zeros(("c"))\n' #Throws TypeError
+        "\treturn a * x**4 + b * x + c"
+    )
+
+    model_jax = (
+        "import jax.numpy as jnp\n\n"
+        "def model(data, params):\n"
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        '\tc = np.zeros(("c"))\n' #Throws TypeError
+        "\treturn a * x**4 + b * x + c"
+    )
+
+    param_est = (
+        "def parameter_estimator(data):\n"
+        '\treturn {"a": float(1), "b": float(0)}\n'
+    )
