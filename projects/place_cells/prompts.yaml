@@ -26,7 +26,7 @@ model:
     You will be *penalized* for complexity.
 
     '
-  code_guidelines: "**Code Generation Guidelines:**\n\n* Import any packages you use.\n* Do not include any text other than the code.\n* Model signature must be `def model(data, params):` where `data` is a dict with keys 'pos_x', 'pos_y' and `params` is a dict of named arrays/scalars.\n* Ensure all free parameters are numeric, not strings.\n* Clip the free parameters to biologically plausible ranges at the beginning of the code.\n* If using `np.exp()`, ALWAYS clip the argument to prevent overflow.\n* Avoid boolean indexing; use `jnp.where()` instead for JAX compatibility.\n"
+  code_guidelines: "**Code Generation Guidelines:**\n\n* Import any packages you use.\n* Do not include any text other than the code.\n* Model signature must be `def model(data, params):` where `data` is a dict with keys 'pos_x', 'pos_y' and `params` is a dict of named arrays/scalars.\n* Ensure all free parameters are numeric, not strings.\n* Clip the free parameters to biologically plausible ranges at the beginning of the code.\n* If using `np.exp()`, ALWAYS clip the argument to prevent overflow.\n* Avoid boolean indexing; use `jnp.where()` instead for JAX compatibility.\n* You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).\n"
   docstring_guidelines: '**Docstring Guidelines:**
 
     * Use a descriptive name for this model, not a version number.
@@ -37,12 +37,12 @@ model:
   image_analysis_instructions: null
   parent_detail_template: '**Model {parent_number}**
 
-    {program_code_string}
+    {code_model}
 
     '
   config_vars: []
   parent_vars:
-  - program_code_string
+  - code.model
 parameter_estimator:
   base: 'You are an AI scientist. Your task is to create a parameter estimator function to estimate the free parameters of the latest place cell model.
 
@@ -64,10 +64,10 @@ parameter_estimator:
   image_analysis_instructions: null
   parent_detail_template: '**Model {parent_number}**
 
-    {parameter_estimator_code_string}
+    {code_param_est}
 
     '
   config_vars:
   - max_lines
   parent_vars:
-  - parameter_estimator_code_string
+  - code.param_est
