@@ -3,7 +3,7 @@
 #
 # Two kinds of template variables:
 #   - config_vars: come from config/spec, passed explicitly (e.g. k, max_lines, swear_words)
-#   - parent_vars: come from Program fields, extracted from parent Programs (e.g. descriptive_name, loss_discover, model_code)
+#   - parent_vars: dotted paths into Program fields (e.g. "name", "code.model", "program_losses.discover.final")
 
 model:
   base: 'You are an AI scientist. Below are {k_max} models describing a phenomenon, sorted from worst to best.
@@ -36,6 +36,8 @@ model:
 
     * Ensure all free parameters (values in `params`) are numeric, not strings or functions.
 
+    * You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).
+
     '
   docstring_guidelines: '**Docstring Guidelines:**
 
@@ -45,11 +47,11 @@ model:
 
     '
   image_analysis_instructions: null
-  parent_detail_template: 'Model {parent_number}: {descriptive_name}
+  parent_detail_template: 'Model {parent_number}: {name}
 
-    loss: {loss_discover}
+    loss: {program_losses_discover_final}
 
-    {model_code}
+    {code_model}
 
     ----------------------------
 
@@ -57,9 +59,9 @@ model:
   config_vars:
   - k_max
   parent_vars:
-  - descriptive_name
-  - loss_discover
-  - model_code
+  - name
+  - program_losses.discover.final
+  - code.model
 parameter_estimator:
   base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest model (shown last below).
 
@@ -78,15 +80,15 @@ parameter_estimator:
 
     '
   image_analysis_instructions: null
-  parent_detail_template: 'Model {parent_number}: {descriptive_name}
+  parent_detail_template: 'Model {parent_number}: {name}
 
-    loss: {loss_discover}
+    loss: {program_losses_discover_final}
 
-    {model_code}
+    {code_model}
 
     \n
 
-    {param_est_code}
+    {code_param_est}
 
     \n
 
@@ -99,10 +101,10 @@ parameter_estimator:
   - max_lines
   - swear_words
   parent_vars:
-  - descriptive_name
-  - loss_discover
-  - model_code
-  - param_est_code
+  - name
+  - program_losses.discover.final
+  - code.model
+  - code.param_est
 jax_translator:
   base: 'Convert the following model and parameter estimator to be JAX-compatible.
 
@@ -127,6 +129,8 @@ jax_translator:
 
     * Never call Python `int()` / `float()` on JAX values.
 
+    * Preserve the `model.DEFAULT_PARAMS = {...}` line exactly as-is from the original code.
+
     '
   docstring_guidelines: 'Do not include any text other than the code.
 
@@ -134,15 +138,15 @@ jax_translator:
   image_analysis_instructions: null
   parent_detail_template: 'Model code:
 
-    {model_code}
+    {code_model}
 
 
     Parameter estimator code:
 
-    {param_est_code}
+    {code_param_est}
 
     '
   config_vars: []
   parent_vars:
-  - model_code
-  - param_est_code
+  - code.model
+  - code.param_est

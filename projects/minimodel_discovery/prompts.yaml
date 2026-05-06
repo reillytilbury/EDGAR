@@ -18,7 +18,7 @@ model:
     Prefer clearer nonlinear combinations of existing primitive features over adding parameters.
 
     '
-  code_guidelines: "**Code Generation Guidelines:**\n* Import only lightweight modules.\n* Do not include any text other than code.\n* Model signature must be `def model(data, params):`.\n* The image input is `data[\"image\"]`.\n* You must build the model using primitives imported from `projects.minimodel_discovery.primitives`.\n* Do not introduce learned convolution kernels, FFT filter banks, or CNN layers.\n* Keep the parameterization compact: scalar readout parameters plus low-dimensional channel weights.\n* Your response must be under {max_lines} lines.\n"
+  code_guidelines: "**Code Generation Guidelines:**\n* Import only lightweight modules.\n* Do not include any text other than code.\n* Model signature must be `def model(data, params):`.\n* The image input is `data[\"image\"]`.\n* You must build the model using primitives imported from `projects.minimodel_discovery.primitives`.\n* Do not introduce learned convolution kernels, FFT filter banks, or CNN layers.\n* Keep the parameterization compact: scalar readout parameters plus low-dimensional channel weights.\n* Your response must be under {max_lines} lines.\n* You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).\n"
   docstring_guidelines: '**Docstring Guidelines:**
 
     * Name this model by its mechanism, not a version number.
@@ -29,13 +29,13 @@ model:
   image_analysis_instructions: null
   parent_detail_template: '**Model {parent_number}**
 
-    {program_code_string}
+    {code_model}
 
     '
   config_vars:
   - max_lines
   parent_vars:
-  - program_code_string
+  - code.model
 parameter_estimator:
   base: 'You are creating a compact parameter estimator for the current model.
 
@@ -69,10 +69,10 @@ parameter_estimator:
   image_analysis_instructions: null
   parent_detail_template: '**Model {parent_number}**
 
-    {parameter_estimator_code_string}
+    {code_param_est}
 
     '
   config_vars:
   - max_lines
   parent_vars:
-  - parameter_estimator_code_string
+  - code.param_est

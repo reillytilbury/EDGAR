@@ -36,6 +36,8 @@ model:
 
     * Do not force positivity at the final output layer.
 
+    * You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).
+
     '
   docstring_guidelines: '**Docstring Guidelines:**
 
@@ -47,12 +49,12 @@ model:
   image_analysis_instructions: null
   parent_detail_template: '**Model {parent_number}**
 
-    {program_code_string}
+    {code_model}
 
     '
   config_vars: []
   parent_vars:
-  - program_code_string
+  - code.model
 parameter_estimator:
   base: 'You are an AI scientist. Your task is to create a parameter estimator to estimate the free parameters of the latest model.
 
@@ -92,10 +94,10 @@ parameter_estimator:
   image_analysis_instructions: null
   parent_detail_template: '**Model {parent_number}**
 
-    {parameter_estimator_code_string}
+    {code_param_est}
 
     '
   config_vars:
   - max_lines
   parent_vars:
-  - parameter_estimator_code_string
+  - code.param_est
