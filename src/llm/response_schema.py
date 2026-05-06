@@ -27,6 +27,14 @@ class ModelSchema(BaseModel):
             "Must include imports, any helper functions, and the model function definition."
         )
     )
+    default_params: dict = Field(
+        description=(
+            "A dict of sensible numeric initial values for every free parameter used by the model. "
+            "Keys must exactly match those used in `params` inside the model function. "
+            "Values must be numeric scalars or plain lists (no numpy arrays). "
+            "Example: {'amplitude': 1.0, 'decay_rate': 0.1, 'offset': 0.0}"
+        )
+    )
 
 
 class ParamEstSchema(BaseModel):

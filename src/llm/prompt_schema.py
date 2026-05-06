@@ -6,8 +6,10 @@ Schema holding the component parts of a prompt.
 There are two kinds of template variables:
 - config_vars: come from config/spec (e.g. k, max_lines, swear_words).
   Only source: the config file / TaskSpec.
-- parent_vars: come from Program fields (e.g. descriptive_name, loss_discover,
-  model_code). Extracted from parent Programs by the caller.
+- parent_vars: dotted paths into Program fields (e.g. "name",
+  "code.model", "program_losses.discover.final"). Dots in the path are
+  replaced with underscores to form the template variable name, so
+  "code.model" is referenced as {code_model} in parent_detail_template.
 
 Example usage:
     schema = PromptSchema(
@@ -15,15 +17,15 @@ Example usage:
         explore="Be creative...",
         code_guidelines="Function signature must be...",
         docstring_guidelines="Include a brief description...",
-        parent_detail_template="model: {descriptive_name}\\nloss: {loss_discover}\\n{model_code}\\n",
+        parent_detail_template="model: {name}\\nloss: {program_losses_discover_final}\\n{code_model}\\n",
         config_vars=["k_max"],
-        parent_vars=["descriptive_name", "loss_discover", "model_code"],
+        parent_vars=["name", "program_losses.discover.final", "code.model"],
     )
 
     # config: flat dict from TaskSpec.flat_config (merged evolution + llms + scoring)
     config = {"k_max": 2, "max_lines": 50, "swear_words": "scipy.optimize, curve_fit"}
 
-    # parents: list of Program objects (parent_vars extracted via getattr)
+    # parents: list of Program objects (parent_vars extracted via dotted-path traversal)
     prompt = schema.build_prompt("explore", parents, config)
 """
 from __future__ import annotations
@@ -73,7 +75,7 @@ class PromptSchema(BaseModel):
             parents_text = [
                 self.parent_detail_template.format(
                     parent_number=i + 1,
-                    **{x: getattr(p, x, "") or "" for x in self.parent_vars}
+                    **{x.replace(".", "_"): getattr(p, x, "") for x in self.parent_vars}
                 )
                 for i, p in enumerate(parents)
             ]
