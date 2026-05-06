@@ -58,7 +58,7 @@ class Losses:
     validate: LossPair = field(default_factory=lambda: LossPair(init=None, final=float("inf")))
 
 
-@dataclass
+@dataclass(eq=False)
 class Program:
     birth:            BirthCertificate
     code:             Code = field(default_factory=Code)
