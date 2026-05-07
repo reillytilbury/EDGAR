@@ -14,7 +14,8 @@ class Program1:
         '\tx = data["x"]\n'
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
-        "\treturn a * x**2 + b * x"
+        "\treturn a * x**2 + b * x\n\n"
+        'model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}'
     )
 
     model_jax = (
@@ -24,7 +25,8 @@ class Program1:
         '\tx = data["x"]\n'
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
-        "\treturn a * x**2 + b * x"
+        "\treturn a * x**2 + b * x\n\n"
+        'model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}'
     )
 
     param_est = (
@@ -41,7 +43,8 @@ class Program2:
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
         '\tc = params["c"]\n'
-        "\treturn a * x**3 + b * x**2 + c * x"
+        "\treturn a * x**3 + b * x**2 + c * x\n\n"
+        'model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0, "c": 0.0}'
     )
 
     model_jax = (
@@ -52,7 +55,8 @@ class Program2:
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
         '\tc = params["c"]\n'
-        "\treturn a * x**3 + b * x**2 + c * x"
+        "\treturn a * x**3 + b * x**2 + c * x\n\n"
+        'model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0, "c": 0.0}'
     )
 
     param_est = (
@@ -73,7 +77,8 @@ class ProgramSolution:
         '\tc = params["c"]\n'
         '\tk = params["k"]\n'
         '\tphi_0 = params["phi_0"]\n'
-        "\treturn (a * x**2 + b * x + c) * np.sin(k * x + phi_0)"
+        "\treturn (a * x**2 + b * x + c) * np.sin(k * x + phi_0)\n\n"
+        'model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0, "c": 0.0, "k": 6.0, "phi_0": 0.0}'
     )
 
     model_jax = (
@@ -85,7 +90,8 @@ class ProgramSolution:
         '\tc = params["c"]\n'
         '\tk = params["k"]\n'
         '\tphi_0 = params["phi_0"]\n'
-        "\treturn (a * x**2 + b * x + c) * jnp.sin(k * x + phi_0)"
+        "\treturn (a * x**2 + b * x + c) * jnp.sin(k * x + phi_0)\n\n"
+        'model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0, "c": 0.0, "k": 6.0, "phi_0": 0.0}'
     )
 
     param_est = (
@@ -104,7 +110,8 @@ class InvalidProgram:
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
         '\tc = np.zeros(("c"))\n'
-        "\treturn a * x**4 + b * x + c"
+        "\treturn a * x**4 + b * x + c\n\n"
+        'model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}'
     )
 
     model_jax = (
@@ -113,8 +120,9 @@ class InvalidProgram:
         '\tx = data["x"]\n'
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
-        '\tc = np.zeros(("c"))\n'
-        "\treturn a * x**4 + b * x + c"
+        '\tc = jnp.zeros(("c"))\n'
+        "\treturn a * x**4 + b * x + c\n\n"
+        'model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}'
     )
 
     param_est = (
@@ -133,7 +141,8 @@ class SeedPrograms:
         '\tx = data["x"]\n'
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
-        "\treturn a * jnp.maximum(0, x - b)"
+        "\treturn a * jnp.maximum(0, x - b)\n\n"
+        'model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}'
     )
 
     model_v2_jax = (
@@ -143,7 +152,8 @@ class SeedPrograms:
         '\tx = data["x"]\n'
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
-        "\treturn a * x + b"
+        "\treturn a * x + b\n\n"
+        'model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}'
     )
 
     param_est = (
