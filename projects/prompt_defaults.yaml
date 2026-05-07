@@ -123,6 +123,8 @@ jax_translator:
 
     * Use `jnp` everywhere (no `np`).
 
+    * Use `jnp.clip` for clipping values — do NOT use `jax.lax.clip` (removed in JAX v0.6.0).
+
     * Avoid Python control flow (if/for) that depends on array values.
 
     * Do not use dynamic array shapes.
