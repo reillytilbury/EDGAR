@@ -17,6 +17,7 @@ import jax
 import jax.numpy as jnp
 import optax
 from jax.flatten_util import ravel_pytree
+import warnings
 
 from ..evolution.program import Program
 from ..evolution.population import Population
@@ -131,6 +132,7 @@ def _score_one_model(
         try:
             program.count_params()
         except AttributeError:
+            warnings.warn(f"Program #{program.idx} count_params failed (no model.DEFAULT_PARAMS), assigning infinite loss")
             return (float("inf"), float("inf"), None, None, None)
 
     ctx = mp.get_context("spawn")
