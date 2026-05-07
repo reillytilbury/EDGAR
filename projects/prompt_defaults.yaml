@@ -36,7 +36,7 @@ model:
 
     * Ensure all free parameters (values in `params`) are numeric, not strings or functions.
 
-    * You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).
+    * You must also provide `default_params`: a dict of sensible initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be floats.
 
     '
   docstring_guidelines: '**Docstring Guidelines:**
