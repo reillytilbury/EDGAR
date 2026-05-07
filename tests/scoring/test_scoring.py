@@ -24,15 +24,13 @@ def model(data, params):
 model.DEFAULT_PARAMS = {'w': jnp.array(1.0)}
 """
 
-# repeated large XLA matmuls to hang the subprocess during XLA execution
 SLOW_MODEL_CODE = """
+import time
 import jax.numpy as jnp
 
 def model(data, params):
-    x = jnp.ones((1000, 1000))
-    for _ in range(10_000):
-        x = jnp.dot(x, x)
-    return params['w'] * data['x'] + x[0, 0] * 0.0
+    time.sleep(15)
+    return params['w'] * data['x']
 
 model.DEFAULT_PARAMS = {'w': jnp.array(1.0)}
 """
@@ -45,9 +43,14 @@ def parameter_estimator(data):
 """
 
 BASE_CONFIG = {
-    "timeout_s": 30.0,
+    "timeout_s": 10.0,
     "param_penalty_weight": 0.0,
     "gradient_descent": {"max_iter": 20, "learning_rate": 0.01},
+}
+
+BASE_CONFIG_WITH_PARAM_PENALTY = {
+    **BASE_CONFIG,
+    "param_penalty_weight": 0.01,
 }
 
 
@@ -66,13 +69,12 @@ def _make_data(n_samples=3, n_trials=8):
 def loss_fn(output, data):
     return jnp.mean((output - data["y"]) ** 2, axis=-1)
 
-
 # --- _score_one_model ---
 
 def test_score_one_model_returns_finite_loss():
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, *_ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
     assert jnp.isfinite(final_loss)
     assert jnp.isfinite(initial_loss)
     assert final_loss >= 0.0
@@ -83,9 +85,15 @@ def test_score_one_model_perfect_fit():
     """w=1.0 with y=x should give near-zero loss after optimization."""
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    final_loss, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+    final_loss, _, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
     assert final_loss < 1e-4
 
+def test_score_one_model_perfect_fit_with_param_penalty():
+    """w=1.0 with y=x should give near-param_penalty loss after optimization."""
+    program = _make_program(FAST_MODEL_CODE)
+    data = (_make_data(), _make_data())
+    final_loss, _, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG_WITH_PARAM_PENALTY)
+    assert final_loss < BASE_CONFIG_WITH_PARAM_PENALTY["param_penalty_weight"]  + 1e-4 #since n_params=1
 
 def test_score_one_model_auto_populates_n_params():
     program = _make_program(FAST_MODEL_CODE)
@@ -99,7 +107,7 @@ def test_score_one_model_kills_slow_model():
     data = (_make_data(), _make_data())
     config = {**BASE_CONFIG, "timeout_s": 2.0}
     t0 = time.time()
-    final_loss, initial_loss, *_ = _score_one_model(program, data, loss_fn, config)
+    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, config)
     elapsed = time.time() - t0
     assert final_loss == float("inf")
     assert initial_loss == float("inf")
@@ -120,7 +128,7 @@ def test_score_writes_back_to_population():
         assert jnp.isfinite(pop[i].program_losses.discover.final)
         assert jnp.isfinite(pop[i].program_losses.discover.init)
         assert pop[i].program_losses.discover.final < 1e-4
-        assert pop[i].program_losses.validate.final is None
+        assert pop[i].program_losses.validate.final == float("inf") #this is set to inf, so final validation scoring is opt in, see scoring._needs_scoring, population.prepare_validation_scoring
         assert pop[i].n_params == 1
 
 
