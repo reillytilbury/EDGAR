@@ -44,18 +44,22 @@ class Code:
     model: str | None = None
     param_est: str | None = None
 
+class _NotYetPrepared:
+    """ Marker for programs that haven't been prepared for validation scoring.
+        See, prepare_validation_scoring"""
+    def __repr__(self): return "NOT_YET_PREPARED"
+    def __float__(self): raise TypeError("Invalid operation on unset loss")
 
 @dataclass
 class LossPair:
     init: float | None = None
-    final: float | None = None
+    final: float | _NotYetPrepared | None = None
 
 
 @dataclass
 class Losses:
     discover: LossPair = field(default_factory=LossPair)
-    validate: LossPair = field(default_factory=lambda: LossPair(init=None, final=float("inf")))
-
+    validate: LossPair = field(default_factory=lambda: LossPair(init=None, final=_NotYetPrepared()))
 
 @dataclass
 class Program:
@@ -83,7 +87,7 @@ class Program:
 
     def count_params(self) -> int:
         model_fn, _ = self.compile()
-        self.n_params = sum(np.asarray(v).size for v in model_fn.DEFAULT_PARAMS.values())
+        self.n_params = sum(np.asarray(v).size for v in model_fn.DEFAULT_PARAMS.values()) #Assumes model_fn has DEFAULT_PARAMS
         return self.n_params
 
     # ── prompt template properties ──
