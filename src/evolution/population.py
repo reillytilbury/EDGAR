@@ -39,12 +39,12 @@ from .program import Program, BirthCertificate, Code, LossPair, Losses
 
 
 def _params_to_json(params: dict) -> dict:
-    """Recursively convert param pytree leaves (arrays) to nested Python lists."""
+    """Convert param pytree leaves (arrays) to Python lists."""
     return {k: v.tolist() if hasattr(v, "tolist") else v for k, v in params.items()}
 
 
 def _params_from_json(params: dict) -> dict:
-    """Reconstruct param pytree from JSON (nested lists → numpy arrays)."""
+    """Convert param pytree from JSON (lists → numpy arrays)."""
     return {k: np.array(v) if isinstance(v, list) else v for k, v in params.items()}
 
 
