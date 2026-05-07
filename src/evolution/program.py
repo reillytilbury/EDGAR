@@ -28,7 +28,6 @@ from ..llm.code_loading import load_function_from_source
 MODEL_ENTRYPOINT     = "model"
 PARAM_EST_ENTRYPOINT = "parameter_estimator"
 
-
 @dataclass
 class BirthCertificate:
     generation: int
