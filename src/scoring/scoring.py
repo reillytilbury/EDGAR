@@ -138,12 +138,13 @@ def _score_one_model(
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
     proc = ctx.Process(target=_worker, args=(queue, program, data, loss_fn_bytes, config, X_eval))
     proc.start()
-    result = queue.get()   # get result as soon as it's available
-    proc.join(timeout=config["timeout_s"])
-    if proc.is_alive():
+    try:
+        result = queue.get(timeout=config["timeout_s"])
+    except mp.queues.Empty: #if subproces doesn't respond in time config["timeout_s"]
         proc.kill()
         proc.join()
         return (float("inf"), float("inf"), None, None, None)
+    proc.join()
     return result
 
 
