@@ -8,11 +8,23 @@ evolution:
   batch_size: 3
   critical_population_size: 3
   n_migrants: 1
+  topology: [1, 0]
 
 llms:
+  k_max: 2
   model_llm: gemini-2.0-flash
   param_est_llm: gemini-2.0-flash
   jax_translator_llm: gemini-2.0-flash-lite
+  max_lines: 50
+  swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
+
+scoring:
+  param_penalty_weight: 0.01
+  timeout_s: 120.0
+
+  gradient_descent:
+    max_iter: 50
+    learning_rate: 1e-2
 
 project_params:
   seed: 0
