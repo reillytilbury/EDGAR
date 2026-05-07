@@ -149,8 +149,14 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
     if k > len(programs):
         raise ValueError(f"k={k} exceeds population size {len(programs)}")
     losses = np.array([p.program_losses.discover.final for p in programs], dtype=float)
-    # update  None or NaN losses to inf
-    losses = np.where(np.isnan(losses) | np.isinf(losses), float("inf"), losses)        
+    # if all losses are NaN or inf or None, raise an error 
+    if np.all(np.isnan(losses) | np.isinf(losses) | (losses == None)):
+        raise ValueError("All losses are NaN or inf; cannot perform Boltzmann sampling")
+    # replace non-finite losses with worst_finite + 1 so std stays finite
+    losses = np.where(np.isnan(losses) | np.isinf(losses), float("inf"), losses)
+    finite_losses = losses[np.isfinite(losses)]
+    worst_finite = finite_losses.max() if len(finite_losses) > 0 else 0.0
+    losses = np.where(np.isinf(losses), worst_finite + 1.0, losses) # if we fail to evaluate the model for any samples, this will return inf losses rather than crashing (due to inf / inf)
     logits = -(losses - losses.min()) / (np.std(losses) + 1e-6) / max(temperature, 1e-3)
     logits -= logits.max()
     probs = np.exp(logits)
