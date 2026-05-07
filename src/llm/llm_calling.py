@@ -9,6 +9,7 @@ from pydantic_ai.exceptions import UserError
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.models import Model
 
 
 _DOTENV_LOADED = False
