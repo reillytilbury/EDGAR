@@ -1,3 +1,4 @@
+import os
 from dotenv import load_dotenv
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.exceptions import UserError
@@ -7,7 +8,6 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.models import Model
 
 load_dotenv()
-
 
 async def call_llm(
     prompt: str,
@@ -33,16 +33,22 @@ async def call_llm(
     Returns:
         The model output, either as a string or as an instance of `output_type`.
     """
-    _ensure_dotenv_loaded()
+    #_ensure_dotenv_loaded()
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise UserError(
             "GOOGLE_API_KEY is not set. Export it in your shell or place it in the repo .env file."
         )
-    model = GoogleModel(
-        llm_model,
-        provider=GoogleProvider(api_key=api_key),
-    )
+    if isinstance(llm_model, str):
+        model = GoogleModel(
+            llm_model,
+            provider=GoogleProvider(api_key=api_key),
+        )
+    elif isinstance(llm_model, Model):
+        model = llm_model
+    else:
+        raise TypeError("llm_model must be a string or a PydanticAI Model instance.")
+    
     agent = Agent(model, output_type=output_type)
 
     user_input = (

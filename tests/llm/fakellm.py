@@ -14,7 +14,7 @@ Example usage:
 """
 from pydantic_ai.models.test import TestModel
 
-from .programs import Program1, InvalidProgram, ProgramSolution, SeedPrograms
+from .programs import Program1, Program2, InvalidProgram, ProgramSolution, SeedPrograms
 
 
 class FakeLLM:
@@ -38,12 +38,16 @@ class FakeLLM:
             self._programs[idx].model,
             self.offset * self._model_counter[idx],
         )
+        latex_equation = self._programs[idx].latex_equation
+        default_params = self._programs[idx].default_params
+        
         self._model_counter[idx] += 1
         return TestModel(custom_output_args={
             "thought_process": "fake thought process",
             "descriptive_name": f"Fake Model {idx}",
-            "latex_equations": "y = f(x)",
+            "latex_equations": latex_equation,
             "code": code,
+            "default_params": default_params
         })
 
     def gen_param_est(self) -> TestModel:
@@ -56,7 +60,7 @@ class FakeLLM:
             "code": code,
         })
 
-    def gen_model_jax(self) -> TestModel:
+    def gen_translation(self) -> TestModel:
         """Return a TestModel whose output matches TranslationSchema for the next program in rotation."""
         idx = self._model_jax_counter.index(min(self._model_jax_counter))
         model_code = self._add_offset(

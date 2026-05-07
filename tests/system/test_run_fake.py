@@ -11,7 +11,7 @@ from pathlib import Path
 from src.run import run
 from src.io.config import Config
 from src.io.task_spec import TaskSpec
-from tests.system.fakellm import FakeLLM, SeedFakeLLM
+from tests.llm.fakellm import FakeLLM, SeedFakeLLM
 
 CONFIG_PATH = Path(__file__).parent / "test_task" / "config.yaml"
 
@@ -27,7 +27,7 @@ def fake_run(tmp_path_factory):
     n_gen = spec.evolution["n_generations"]
     spec.llms["model_llm"] = [fake.gen_model() for _ in range(n_gen)]
     spec.llms["param_est_llm"] = [fake.gen_param_est() for _ in range(n_gen)]
-    spec.llms["jax_translator_llm"] = seed_fake.gen_model_jax()
+    spec.llms["jax_translator_llm"] = [seed_fake.gen_model_jax() for _ in range(2)]+ [fake.gen_model_jax() for _ in range(n_gen-2)]
 
     asyncio.run(run(spec))
     return spec.output_dir
