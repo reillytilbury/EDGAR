@@ -88,12 +88,29 @@ def _worker(queue, program, data, loss_fn_bytes, config, X_eval):
         initial_loss = _eval_loss(model_fn, loss_fn, params_init, data_train) + penalty
         params = _optimize(model_fn, loss_fn, params_init, data_train, config["gradient_descent"])
         final_loss = _eval_loss(model_fn, loss_fn, params, data_test) + penalty
+    except Exception as e:
+        import traceback
+        print(f"[scoring] program #{program.idx} failed during compile/optimize/eval: {e}")
+        print(f"[scoring] traceback:\n{traceback.format_exc()}")
+        print(f"[scoring] code_jax.model:\n{program.code_jax.model}")
+        print(f"[scoring] code_jax.param_est:\n{program.code_jax.param_est}")
+        queue.put((float("inf"), float("inf"), None, None, None))
+        return
+
+    # Fingerprint and sample losses are non-critical: failures here don't poison the loss.
+    try:
         fingerprint = _eval_fingerprint(model_fn, params, X_eval) if X_eval is not None else None
+    except Exception as e:
+        print(f"[scoring] program #{program.idx} fingerprint failed (ignored): {e}")
+        fingerprint = None
+
+    try:
         sample_losses = _eval_sample_losses(model_fn, loss_fn, params, data_test)
-        result = (final_loss, initial_loss, fingerprint, params, sample_losses)
-    except Exception:
-        result = (float("inf"), float("inf"), None, None, None)
-    queue.put(result)
+    except Exception as e:
+        print(f"[scoring] program #{program.idx} sample_losses failed (ignored): {e}")
+        sample_losses = None
+
+    queue.put((final_loss, initial_loss, fingerprint, params, sample_losses))
 
 
 # ── per-program ──
