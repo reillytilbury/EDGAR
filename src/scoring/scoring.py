@@ -130,7 +130,7 @@ def _score_one_model(
     if program.n_params is None:
         try:
             program.count_params()
-        except Exception:
+        except AttributeError:
             return (float("inf"), float("inf"), None, None, None)
 
     ctx = mp.get_context("spawn")
