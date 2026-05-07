@@ -84,7 +84,7 @@ def spawn(
     Mutates: population (adds shells), islands (adds new indices)
     """
     for island_idx, island in enumerate(islands):
-        programs = {population[i] for i in island}
+        programs = [population[i] for i in island]
         assert len(programs) >= k_max, f"Not enough programs in island {island_idx} to sample {k_max} parents"
         parent_indices = list(uniform_sample(programs, k=k_max))
 
@@ -117,7 +117,7 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
     """
     keep_n = evolution["critical_population_size"]
     for i, island in enumerate(islands):
-        programs = {population[idx] for idx in island}
+        programs = [population[idx] for idx in island]
         # explicitly handle cases where the loss is None or inf to avoid sorting issues
         ranked = sorted(programs, key=lambda p: float('inf') if p.program_losses.discover.final is None else p.program_losses.discover.final)
         islands[i] = {p.idx for p in ranked[:keep_n]}
@@ -146,11 +146,12 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
         parents    = boltzmann_sample(programs_0, k=2, temperature=1.0)  # e.g. {0, 2}
     """
     programs = list(programs)
+    print("boltzmann_sample programs: ", programs)
     if k > len(programs):
         raise ValueError(f"k={k} exceeds population size {len(programs)}")
     losses = np.array([p.program_losses.discover.final for p in programs], dtype=float)
     # if all losses are NaN or inf or None, raise an error 
-    if np.all(np.isnan(losses) | np.isinf(losses) | (losses == None)):
+    if np.all(np.isnan(losses) | np.isinf(losses) | (losses is None)):
         raise ValueError("All losses are NaN or inf; cannot perform Boltzmann sampling")
     # replace non-finite losses with worst_finite + 1 so std stays finite
     losses = np.where(np.isnan(losses) | np.isinf(losses), float("inf"), losses)
@@ -191,7 +192,7 @@ def migrate(islands: list[set[int]], population: Population, evolution: dict, te
     topology = evolution["topology"]
 
     for i, island in enumerate(islands):
-        programs = {population[idx] for idx in island}
+        programs = [population[idx] for idx in island]
         sampled = boltzmann_sample(programs, k=n_migrants, temperature=temperature)
         islands[topology[i]].update(sampled)
 
@@ -260,8 +261,8 @@ def deduplicate_outer(islands: list[set[int]], population: Population, n_overlap
         cosine_tol: cosine similarity tolerance for duplicate detection
     """
     for i, j in combinations(range(len(islands)), 2):
-        programs_a = {population[idx] for idx in islands[i]}
-        programs_b = {population[idx] for idx in islands[j]}
+        programs_a = [population[idx] for idx in islands[i]]
+        programs_b = [population[idx] for idx in islands[j]]
 
         overlap = sum(
             1 for p_a in programs_a

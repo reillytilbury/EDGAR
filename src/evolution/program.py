@@ -71,8 +71,6 @@ class Program:
     image_path:       str | None = None
     idx:              int | None = field(default=None, init=False)
 
-    __hash__ = object.__hash__
-
     def compile(self) -> tuple[Callable, Callable]:
         """Compile JAX source into callable (model_fn, param_est_fn)."""
         model_fn = load_function_from_source(self.code_jax.model, MODEL_ENTRYPOINT)
