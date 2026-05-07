@@ -2,16 +2,20 @@
 TaskSpec: A frozen bundle containing all configuration and callables needed to run an EDGAR experiment.
 
 TaskSpec serves two purposes:
-1. Load and merge the task and default configs + project code into ready-to-use fields
+1. Load project callables and seed programs from a Config into ready-to-use fields
 2. Save a record of exact settings used so runs can be reproduced
 
 Construction:
-    from_config(path)  — accepts either a config.yaml or a task_spec.yaml from a previous run
+    from_config(config)  — accepts a Config object built from Config.from_yaml or Config.from_taskspec
 
 Example usage:
 --------------
-    spec = TaskSpec.from_config("projects/my_task/config.yaml")
-    spec = TaskSpec.from_config("runs/03-15/10-30-45/task_spec.yaml")
+    # New run from a config file:
+    spec = TaskSpec.from_config(Config.from_yaml("projects/my_task/config.yaml"))
+
+    # Reproduce a previous run from its saved task_spec:
+    spec = TaskSpec.from_config(Config.from_taskspec("runs/03-15/10-30-45/task_spec.yaml"))
+
     mode, temp, llms = spec.schedule(generation=0)
     spec.save_task_spec(run_dir)
 """
@@ -80,41 +84,20 @@ class TaskSpec:
     # ── constructors ──
 
     @classmethod
-    def from_config(cls, path: Path) -> TaskSpec:
+    def from_config(cls, config: "Config") -> TaskSpec:
         """
-        Build a TaskSpec from a config.yaml or a task_spec.yaml from a previous run.
+        Build a TaskSpec from a Config object.
 
-        If passed a task_spec.yaml, extracts the config dicts directly from the record.
-        If passed a config.yaml, loads and merges with defaults.
-        Either way, callables, git state, and creation_timestamp are always fresh.
+        Callables, git state, and creation_timestamp are always fresh.
+        Use Config.from_yaml for a new run, Config.from_taskspec to reproduce a past run.
 
         Args:
-            path: Path to a config.yaml or task_spec.yaml.
+            config: A Config object built from Config.from_yaml or Config.from_taskspec.
         """
-        from .config import _deep_merge, _git_state, PROJECT_ROOT
+        from .config import _git_state, PROJECT_ROOT
 
-        path = Path(path)
-        if not path.is_absolute():
-            path = PROJECT_ROOT / path
-
-        if path.name == "task_spec.yaml":
-            record = yaml.safe_load(path.read_text())
-            task_name = record["task_name"]
-            config = {k: record[k] for k in ("io", "evolution", "llms", "scoring", "project_params")}
-            schemas = record["prompt_schemas"]
-            prompts = {
-                "model": schemas["model"],
-                "parameter_estimator": schemas["param_est"],
-                "jax_translator": schemas["jax"],
-            }
-        else:
-            task_name = path.parent.name
-            default_config = yaml.safe_load((PROJECT_ROOT / "projects" / "config_default.yaml").read_text()) or {}
-            config = _deep_merge(default_config, yaml.safe_load(path.read_text()) or {})
-            default_prompts = yaml.safe_load((PROJECT_ROOT / "projects" / "prompt_defaults.yaml").read_text()) or {}
-            task_prompt_path = PROJECT_ROOT / "projects" / task_name / "prompts.yaml"
-            task_prompts = yaml.safe_load(task_prompt_path.read_text()) if task_prompt_path.exists() else {}
-            prompts = _deep_merge(default_prompts, task_prompts)
+        task_name = config.task_name
+        prompts = config.prompts
 
         data_loader_path = PROJECT_ROOT / "projects" / task_name / "data_loader" / "load_data.py"
         load_data_fn = load_function_from_source(data_loader_path.read_text(), "load_data")
@@ -143,11 +126,11 @@ class TaskSpec:
             task_name=task_name,
             git_sha=git_sha,
             git_dirty=git_dirty,
-            io=config.get("io", {}),
-            evolution=config.get("evolution", {}),
-            llms=config.get("llms", {}),
-            scoring=config.get("scoring", {}),
-            project_params=config.get("project_params", {}),
+            io=config.io,
+            evolution=config.evolution,
+            llms=config.llms,
+            scoring=config.scoring,
+            project_params=config.project_params,
             model_prompt_schema=PromptSchema(**prompts["model"]),
             param_est_prompt_schema=PromptSchema(**prompts["parameter_estimator"]),
             jax_prompt_schema=PromptSchema(**prompts["jax_translator"]),
@@ -218,9 +201,8 @@ class TaskSpec:
         import numpy as np
 
         n_generations = self.evolution["n_generations"]
-        exploit_point = self.evolution.get("exploit_point", 0.5)
 
-        mode = "explore" if generation < n_generations * exploit_point else "exploit"
+        mode = "explore" if generation < n_generations // 2 else "exploit"
         temperature = 1 + np.exp(-generation / n_generations)
 
         def _cycle(key):

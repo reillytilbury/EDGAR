@@ -82,8 +82,14 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run EDGAR")
-    parser.add_argument("config", type=str, help="Path to task config.yaml")
+    parser.add_argument("config", type=str, help="Path to task config.yaml or task_spec.yaml")
     args = parser.parse_args()
 
-    spec = TaskSpec.from_config(Path(args.config))
+    from .io.config import Config
+    path = Path(args.config)
+    if path.name == "task_spec.yaml":
+        config = Config.from_taskspec(path)
+    else:
+        config = Config.from_yaml(path)
+    spec = TaskSpec.from_config(config)
     asyncio.run(run(spec))

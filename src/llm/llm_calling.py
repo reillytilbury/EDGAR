@@ -1,8 +1,3 @@
-from __future__ import annotations
-
-import os
-from pathlib import Path
-
 from dotenv import load_dotenv
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.exceptions import UserError
@@ -10,16 +5,7 @@ from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.settings import ModelSettings
 
-
-_DOTENV_LOADED = False
-
-
-def _ensure_dotenv_loaded() -> None:
-    global _DOTENV_LOADED
-    if _DOTENV_LOADED:
-        return
-    load_dotenv(dotenv_path=Path.cwd() / ".env")
-    _DOTENV_LOADED = True
+load_dotenv()
 
 
 async def call_llm(

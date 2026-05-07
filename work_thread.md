@@ -35,6 +35,9 @@ type: project
 - [ ] Integration test for `run.py` (small end-to-end run)
 - [ ] Wire tests to GitHub Actions CI with status badges in README
 
+### Evolution
+- [ ] **Temperature warping in `migrate`** — raw temperature from `schedule()` is in [1, 2] but `boltzmann_sample` expects something in [0, 1]. Correct transform is `T_warped = (T - 1.0) ** 4`, confirmed in old `hypothesis_engine.py` on the `main` remote branch.
+
 ### Core scoring
 - [ ] Separate input/target keys in data — prevent models from cheating by accessing target values. Add `input_keys` and `target_keys` to config, split data before passing to model_fn
 - [ ] Support variable-length trials per sample — currently assumes rectangular data (all samples have same n_trials); would need list/dict of variable-length arrays instead
@@ -44,7 +47,7 @@ type: project
 - [ ] Consider unifying `generate_models`, `generate_param_ests`, `translate_programs` into a single `generate(population, spec, prompt_type, ...)` — not worth it until there's a 4th generation type
 
 ### Documentation
-- [ ] Update README.md to reflect refactored architecture
+- [x] Update README.md to reflect refactored architecture
 - [ ] Add documentation describing the refactors (what changed and why)
 
 ---
@@ -68,6 +71,11 @@ type: project
 
 ### Utils removal
 - [x] Remove `src/utils.py` — deleted along with `src/io/__init__.py`; all project plotters and data loaders updated to use Program API directly
+
+### Bug fixes (found by Dabin during first run)
+- [x] API key not loaded: added `load_dotenv()` to `llm_calling.py` so `.env` is read; renamed `.env` key from `GOOGLE_API_KEY` to `GEMINI_API_KEY` (pydantic-ai name)
+- [x] Seed models not appearing in prompts: `PromptSchema.build_prompt` uses `getattr(p, "model_code")` etc., but `Program` had no such attributes. Added properties `descriptive_name`, `loss_discover`, `model_code`, `param_est_code` to `Program`.
+- [x] `TaskSpec.from_config` accepted both config.yaml and task_spec.yaml via filename branch: split into `Config.from_yaml` / `Config.from_taskspec` in `config.py`; `TaskSpec.from_config` now takes a `Config` object only. CLI and `run.py` __main__ do the routing.
 
 ---
 

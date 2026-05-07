@@ -1,10 +1,14 @@
-# EDGAR-gamma: Equation Discovery with Graphical AI Reasoning
+# EDGAR: Equation Discovery with Graphical AI Reasoning
 
-EDGAR-gamma is an evolutionary framework for discovering equations with LLM-generated programs and parameter estimators.
+EDGAR is an evolutionary framework for discovering scientific equations using LLM-generated programs and parameter estimators.
 
-## Lightweight Quickstart (5 minutes)
+Each run evolves a population of candidate models across multiple islands. The LLM generates numpy model code and parameter estimators; JAX-translated versions are then optimised via gradient descent. Programs are selected, pruned, and migrated between islands over many generations.
 
-### 1) Install
+---
+
+## Quickstart
+
+### 1. Install
 
 ```bash
 conda create -n edgar python=3.13 -y
@@ -12,284 +16,417 @@ conda activate edgar
 pip install -r requirements.txt
 ```
 
-### 2) Set API key
+### 2. Set API key
+
+Add your Gemini API key to `.env` in the project root:
 
 ```bash
-export GOOGLE_API_KEY=your_gemini_api_key
+echo "GEMINI_API_KEY=your_key_here" > .env
 ```
 
-### 3) Run the shortest end-to-end experiment
+The key is loaded automatically at runtime via `python-dotenv`. You can also export it directly:
 
 ```bash
-python -m run --config experiments/synthetic_data/override_config.yaml --test_mode
+export GEMINI_API_KEY=your_key_here
 ```
 
-### 4) Run a full example
+### 3. Run an experiment
 
 ```bash
-python -m run --config experiments/orientation_tuning/override_config.yaml
+edgar run projects/orientation_tuning/config.yaml
 ```
 
-Run outputs are written to `program_databases/MM-DD/HH-MM-SS/`.
-Most useful artifacts:
-- `combined/programs_db.csv`
-- `combined/top_model_fits.png`
-- `combined/train_vs_test_loss.png`
-- `hypothesis_engine.log`
-
-## New Experiment TODO (Minimal)
-
-If you are setting up a new task, use this as a checklist first. Then use the detailed sections below for examples.
-
-- [ ] Create `experiments/your_task_name/`.
-- [ ] Add `experiments/your_task_name/override_config.yaml`.
-- [ ] In `override_config.yaml`, define required keys: `task`, `model_name`, `load_and_process_data_fn`, `create_train_test_sample_split_fn`, `create_train_test_trial_split_fn`, `seed_programs.module`, `seed_programs.function_seeds` (2 names), `seed_programs.parameter_estimator_seeds` (2 names), `data_processing_params`, `inputs`, and `experiment_params` (or rely on defaults from `experiments/DEFAULT/config.yaml`).
-- [ ] Add `experiments/your_task_name/seed_programs.py` with exactly 2 model functions (`def ...(X, ...)`) and 2 parameter estimator functions (`def ...(X, y)`).
-- [ ] Add `experiments/your_task_name/data_parser.py` with `load_and_process_data(...)`, `create_train_test_sample_split(...)`, and `create_train_test_trial_split(...)`.
-- [ ] Add `experiments/your_task_name/diagnostics.py` with `select_evaluation_points(...)` and `plot_model_fits(...)` (required if you want diagnostics/image feedback).
-- [ ] Run:
+Control logging verbosity (default: `compact`):
 
 ```bash
-python -m run --config experiments/your_task_name/override_config.yaml
+edgar run projects/orientation_tuning/config.yaml --log-level code
+edgar run projects/orientation_tuning/config.yaml --log-level prompts
 ```
 
-## How Configuration Works
+Override config values on the command line:
 
-`run.py` merges:
-- Base defaults: `experiments/DEFAULT/config.yaml`
-- Your experiment override: `--config experiments/<task>/override_config.yaml`
+```bash
+edgar run projects/orientation_tuning/config.yaml --evolution.n_generations=5
+edgar run projects/orientation_tuning/config.yaml --llms.model_llm=gemini-2.5-pro
+```
 
-This repository does not include a root `config.yaml`, so always pass `--config`.
+Reproduce a previous run from its saved `task_spec.yaml`:
+
+```bash
+edgar run program_databases/05-06/14-32-10/task_spec.yaml
+```
+
+---
 
 ## Project Layout
 
 ```text
 EDGAR-gamma/
-├── experiments/
-│   ├── DEFAULT/
-│   │   └── config.yaml
-│   ├── orientation_tuning/
-│   │   ├── override_config.yaml
-│   │   ├── seed_programs.py
-│   │   ├── data_parser.py
-│   │   └── diagnostics.py
-│   └── ...
+├── projects/
+│   ├── config_default.yaml          # Base defaults for all projects
+│   ├── prompt_defaults.yaml         # Base prompt schemas
+│   └── <task_name>/
+│       ├── config.yaml              # Task-specific config overrides
+│       ├── prompts.yaml             # (optional) Task-specific prompt overrides
+│       ├── seed_programs/
+│       │   ├── model1.py, model2.py
+│       │   └── param_est1.py, param_est2.py
+│       ├── data_loader/
+│       │   └── load_data.py         # Must define: load_data(), loss_fn()
+│       └── image_feedback/
+│           └── plot.py              # Optional: plot_model_fits()
 ├── src/
-│   ├── hypothesis_engine.py
-│   ├── llm/
-│   ├── scoring/
+│   ├── run.py                       # Main entry point
+│   ├── cli.py                       # edgar CLI
 │   ├── evolution/
-│   └── ...
-├── run.py
+│   │   ├── program.py               # Program dataclass
+│   │   ├── population.py            # Population (append-only, JSONL persistence)
+│   │   └── island.py                # seed, spawn, prune, deduplicate, migrate
+│   ├── io/
+│   │   ├── config.py                # Config class: from_yaml / from_taskspec
+│   │   ├── task_spec.py             # TaskSpec: frozen run bundle
+│   │   └── logging.py              # open_log, log_generation
+│   ├── llm/
+│   │   ├── generate.py              # generate_models, generate_param_ests, translate_programs
+│   │   ├── llm_calling.py           # call_llm (pydantic-ai wrapper)
+│   │   └── prompt_schema.py         # PromptSchema.build_prompt
+│   └── scoring/
+│       └── scoring.py               # score() with subprocess timeout
+├── program_databases/               # Run outputs (gitignored)
+├── .env                             # API keys (gitignored)
 └── tests/
 ```
 
-## Create a New Experiment
+---
 
-Use this checklist to get from zero to a runnable experiment quickly.
+## Run Output
 
-### 1) Create a task folder
+Each run writes to `program_databases/MM-DD/HH-MM-SS/`:
+
+```text
+program_databases/
+└── MM-DD/
+    └── HH-MM-SS/
+        ├── task_spec.yaml          # Full config + git SHA + prompt schemas + seed code. Read-only.
+        ├── population.jsonl        # All Programs — code, losses, params, lineage. Main scientific output.
+        ├── island_census.jsonl     # Island membership at the end of each generation.
+        ├── run.log                 # Human-readable execution trace.
+        └── image_feedback/         # Only present if plot_fn is defined.
+            └── gen_000/
+                └── island_000/
+                    └── batch_000/
+                        └── image.png
+```
+
+---
+
+## Setting Up a New Project
+
+### 1. Scaffold
 
 ```bash
-mkdir -p experiments/your_task_name
+edgar init-project my_task
 ```
 
-### 2) Add `seed_programs.py`
+This creates:
 
-Minimum requirement: exactly 2 model seeds and exactly 2 parameter estimator seeds.
-
-```python
-import numpy as np
-
-def neuron_model_1(X, a=1.0, b=0.0):
-    x = X[0]
-    return a * np.cos(x) + b
-
-
-def neuron_model_2(X, a=1.0, b=0.0, c=0.1):
-    x = X[0]
-    return a * np.cos(x - c) + b
-
-
-def parameter_estimator_1(X, y):
-    return np.array([np.std(y), np.mean(y)])
-
-
-def parameter_estimator_2(X, y):
-    return np.array([np.std(y), np.mean(y), 0.0])
+```
+projects/my_task/
+├── config.yaml
+├── seed_programs/model1.py, model2.py, param_est1.py, param_est2.py
+├── data_loader/load_data.py
+└── image_feedback/plot.py
 ```
 
-Seed rules:
-- Model signature is `def ...(X, ...)`
-- `X` shape is `(n_features, n_trials)`
-- Access features by index (`X[0]`, `X[1]`, ...)
-- Keep estimators simple heuristics (avoid optimize/curve_fit-style solvers)
-- Give all free parameters default values
+Each file contains a stub with a docstring. Fill in the implementations.
 
-### 3) Add `data_parser.py`
+### 2. Fill in `data_loader/load_data.py`
 
-Return a dict with model-ready inputs and outputs. Canonical shape is:
-- `inputs`: `(n_samples, n_features, n_trials)`
-- `outputs`: `(n_samples, n_targets, n_trials)`
+Must define two callables:
 
-### Features vs Targets (with examples)
+**`load_data(data_path, **kwargs) -> (X_discover, X_validate, X_eval)`**
 
-- `n_features` is how many input variables each model uses per trial.
-- `n_targets` is how many outputs the model predicts per trial.
-- In model code, `X` has shape `(n_features, n_trials)`, so each feature is `X[i]`.
+Returns three splits:
+- `X_discover = (X_disc_train, X_disc_test)` — seen by the LLM discovery loop
+- `X_validate = (X_val_train, X_val_test)` — never seen during discovery
+- `X_eval` — small fingerprint subset (dict of JAX arrays + `_sample_indices`)
 
-Examples:
-- Orientation tuning: 1 feature (`theta`), 1 target (single-cell firing rate).
-    - Shapes:
-        - `X`: `(1, n_trials)`
-        - model output: `(n_trials,)`
-- Grid-cell tuning with position input: 2 features (`x`, `y`), 1 target (single-cell firing rate).
-    - Shapes:
-        - `X`: `(2, n_trials)`
-        - model output: `(n_trials,)`
-- Multi-cell prediction: 2 features (`x`, `y`), `N` targets (firing rates for `N` cells).
-    - Shapes:
-        - `X`: `(2, n_trials)`
-        - model output: `(N, n_trials)` (or equivalent canonical outputs tensor with `n_targets=N`)
+All arrays should be JAX arrays. Data shape convention: `(n_samples, n_trials)` per key.
 
-Current limitation:
-- Data is represented as a plain `dict[str, np.ndarray]` where all values share the same last dimension (n_trials).
+**`loss_fn(model_output, data) -> JAX array of shape (n_samples,)`**
 
-```python
-import numpy as np
-import jax
-import jax.numpy as jnp
+Per-sample loss between model predictions and data.
 
+### 3. Fill in seed programs
 
-def load_and_process_data(data_path, **kwargs):
-    data = np.load(data_path, allow_pickle=True).item()
+`model*.py` must define `def model(data, params):`
+- `data`: dict of JAX arrays, one sample, e.g. `data['stimulus']` shape `(n_trials,)`
+- `params`: dict of named scalars/arrays
+- Returns predictions shape `(n_trials,)`
+- Must have `model.DEFAULT_PARAMS = {"param_name": initial_value, ...}`
 
-    # Example arrays (adapt to your dataset)
-    # response: (n_samples, n_trials)
-    # stimulus: (n_trials,)
-    response = data["response"]
-    stimulus = data["stimulus"]
+`param_est*.py` must define `def parameter_estimator(data):`
+- Returns a parameter dict with the same keys as `model.DEFAULT_PARAMS`
+- Keep it simple (no scipy.optimize / curve_fit)
 
-    n_samples, n_trials = response.shape
-    # Broadcast stimulus to (n_samples, n_trials)
-    stimulus_tiled = np.tile(stimulus.reshape(1, -1), (n_samples, 1))
+### 4. Configure `config.yaml`
 
-    return {'stimulus': stimulus_tiled, 'response': response}
-
-
-def create_train_test_sample_split(n_samples, training_sample_ratio=0.5, random_seed=0):
-    key = jax.random.PRNGKey(random_seed)
-    n_train = int(n_samples * training_sample_ratio)
-    idx = jax.random.permutation(key, jnp.arange(n_samples))
-    return idx[:n_train], idx[n_train:]
-
-
-def create_train_test_trial_split(n_trials, random_seed=0):
-    rng = np.random.default_rng(random_seed)
-    idx = rng.permutation(n_trials)
-    n_train = n_trials // 2
-    return idx[:n_train], idx[n_train:]
-```
-
-### 4) Add `diagnostics.py` (recommended)
-
-Required functions:
-- `select_evaluation_points(inputs, n_points=100, random_seed=0, **kwargs)`
-- `plot_model_fits(plot_data, ...)`
-
-Fastest path: copy and adapt `experiments/DEFAULT/diagnostics.py`.
-
-### 5) Add `override_config.yaml`
+Override only what differs from `projects/config_default.yaml`. Minimum:
 
 ```yaml
-task: your_task_name
-load_and_process_data_fn: experiments.your_task_name.data_parser.load_and_process_data
-create_train_test_sample_split_fn: experiments.your_task_name.data_parser.create_train_test_sample_split
-create_train_test_trial_split_fn: experiments.your_task_name.data_parser.create_train_test_trial_split
-
-diagnostics_path: experiments/your_task_name
-
-seed_programs:
-  module: experiments.your_task_name.seed_programs
-  function_seeds:
-    - neuron_model_1
-    - neuron_model_2
-  parameter_estimator_seeds:
-    - parameter_estimator_1
-    - parameter_estimator_2
-
-data_processing_params:
+io:
   data_path: /path/to/data.npy
-
-inputs:
-  - name: stimulus
-    description: "Primary input variable"
-
-experiment_params:
-  num_runs: 1
-  n_generations: 12
-  time_limit: 60
-  n_islands: 8
-  batch_size: 6
-  max_iter: 1000
-  critical_population_size: 12
-  min_wise_population_size: 0
-  n_migrants: 2
-  fit_params: true
-  tol: 1e-6
-  exploit_point: 0.5
-  learning_rate: 3e-3
-  param_penalty_weight: 0.01
-  FAILED_PROGRAM_COST: .inf
-  exploration_topology: [1, 2, 3, 4, 5, 6, 7, 0]
-  exploitation_topology: [1, 2, 3, 4, 5, 6, 7, 0]
-  model_llm: gemini-2.5-flash
-  param_est_llm: gemini-2.0-flash
-  jax_translator_llm: gemini-2.0-flash-lite
 ```
 
-Then run:
+Common overrides:
+
+```yaml
+project_params:
+  my_threshold: 0.5   # kwargs passed to load_data()
+
+evolution:
+  n_generations: 20
+
+llms:
+  model_llm: gemini-2.5-pro
+```
+
+### 5. Customise prompts (optional)
+
+Create `projects/<task>/prompts.yaml` to override the defaults in `projects/prompt_defaults.yaml`. The two files are **deep-merged**, so you only need to include the fields you want to change — everything else is inherited.
+
+String fields (`base`, `explore`, `code_guidelines`, etc.) are replaced entirely when specified. **List fields (`config_vars`, `parent_vars`) are also replaced entirely** — if you add a new variable, you must re-list all of them.
+
+`explore` and `exploit` can be set to `null` (or omitted entirely) if you don't need a mode-specific section — the JAX translator and parameter estimator prompts typically leave both as `null`.
+
+Example — override only the `base` and `code_guidelines` for model generation:
+
+```yaml
+model:
+  base: |
+    You are an AI scientist modelling orientation tuning in visual cortex.
+    Below are {k_max} neuron models sorted from worst to best.
+    Create a new model with lower loss than all of them.
+  code_guidelines: |
+    * Model signature: def model(data, params):
+    * data has keys "stimulus" (radians) and "response".
+    * Clip free parameters to biologically plausible ranges at the top of the function.
+```
+
+All other `model` fields (explore, exploit, docstring_guidelines, parent_detail_template, config_vars, parent_vars) are inherited from the defaults unchanged.
+
+### 6. Validate
 
 ```bash
-python -m run --config experiments/your_task_name/override_config.yaml
+edgar validate my_task
 ```
 
-## Useful Commands
+### 7. Run
 
-Run all tests:
+```bash
+edgar run projects/my_task/config.yaml
+```
+
+---
+
+## Architecture
+
+### Config and TaskSpec
+
+`Config` holds the plain-dict settings from YAML. `TaskSpec` wraps a `Config` plus loaded callables, seed programs, and git metadata.
+
+```python
+from src.io.config import Config
+from src.io.task_spec import TaskSpec
+
+# New run:
+spec = TaskSpec.from_config(Config.from_yaml("projects/my_task/config.yaml"))
+
+# Reproduce a previous run:
+spec = TaskSpec.from_config(Config.from_taskspec("program_databases/05-06/14-32-10/task_spec.yaml"))
+```
+
+### Evolution loop (pseudocode)
+
+```
+X_discover, X_validate, X_eval = load_data(spec)
+population = Population()
+islands = seed(population, spec.seed_programs, n_islands)
+translate_to_jax(population)
+score(population, X_discover, X_eval, split="discover")
+
+for gen in range(n_generations):
+    mode, temperature, llms = spec.schedule(gen)
+    spawn(population, islands, gen, mode, temperature)
+
+    generate_models(population, prompt_schemas.model, llms.model, ...)
+    generate_param_ests(population, prompt_schemas.param_est, llms.param_est)
+    translate_to_jax(population, prompt_schemas.jax, llms.jax)
+
+    score(population, X_discover, X_eval, split="discover")
+    deduplicate(islands, population)
+    prune(islands, population)
+    migrate(islands, population, temperature)
+
+score(population, X_validate, split="validate")
+population.save("population.jsonl")
+```
+
+### Key classes
+
+| Class | File | Purpose |
+|-------|------|---------|
+| `Config` | `src/io/config.py` | Plain-dict config bundle. `from_yaml` / `from_taskspec`. |
+| `TaskSpec` | `src/io/task_spec.py` | Frozen run bundle. Adds callables, seeds, git state. |
+| `Program` | `src/evolution/program.py` | One evolved candidate: code, losses, params, lineage. |
+| `Population` | `src/evolution/population.py` | Append-only list with JSONL save/load. |
+| `PromptSchema` | `src/llm/prompt_schema.py` | Prompt template. `build_prompt(mode, parents, config)`. |
+
+---
+
+## Prompt System
+
+### Schema structure
+
+All three prompt types (model generation, parameter estimator generation, JAX translation) use the same `PromptSchema` structure defined in `projects/prompt_defaults.yaml`. A task can override any field in `projects/<task>/prompts.yaml` — the two files are deep-merged, so you only need to specify what changes.
+
+Each schema has these fields:
+
+| Field | Required | Example |
+|-------|----------|---------|
+| `base` | yes | `"You are an AI scientist. Below are {k_max} models..."` |
+| `explore` | no (set `null` to omit) | `"Be creative and invent something new."` |
+| `exploit` | no (set `null` to omit) | `"Use the models below as a template."` |
+| `code_guidelines` | yes | `"* Function signature must be def model(data, params):"` |
+| `docstring_guidelines` | yes | `"* Use a descriptive name, not a version number."` |
+| `image_analysis_instructions` | no (set `null` to omit) | `"The image shows model fits. Prefer models that..."` |
+| `parent_detail_template` | yes | `"Model {parent_number}: {descriptive_name}\nloss: {loss_discover}\n{model_code}"` |
+| `config_vars` | yes (can be `[]`) | `[k_max, max_lines]` |
+| `parent_vars` | yes (can be `[]`) | `[descriptive_name, loss_discover, model_code]` |
+
+### Template variables
+
+There are two kinds of variables used in format strings:
+
+**`config_vars`** — filled from the merged `evolution + llms + scoring` config dict (i.e. `TaskSpec.flat_config`). Examples: `{k_max}`, `{max_lines}`, `{swear_words}`.
+
+**`parent_vars`** — filled from program objects via `getattr`. Each entry in `parent_vars` must be an attribute or property on `Program`. The available ones are: `descriptive_name`, `loss_discover`, `model_code`, `param_est_code`.
+
+### What "parent" means in prompts
+
+In the prompt context, *parent* means the programs currently shown to the LLM as examples — the `k_max` programs sampled from the island at spawn time. This is distinct from a program's *lineage parents* stored in `birth.parent_indices`. The same word is overloaded; in `PromptSchema` it always means "programs shown in the prompt".
+
+### Structured LLM output
+
+Each prompt type expects a structured JSON response, enforced by pydantic-ai. The schemas are in `src/llm/response_schema.py`:
+
+**Model generation → `ModelSchema`**
+- `thought_process` — step-by-step reasoning about what the parent models do and what change is being made
+- `descriptive_name` — short name for the new model (e.g. "Double Gaussian Model")
+- `latex_equations` — full equation in LaTeX
+- `code` — complete Python implementation of `def model(data, params):`
+
+**Parameter estimator generation → `ParamEstSchema`**
+- `thought_process` — reasoning about the model structure and parameter estimation strategy
+- `code` — complete Python implementation of `def parameter_estimator(data):`
+
+**JAX translation → `TranslationSchema`**
+- `model_code` — JAX-compatible translation of the model function
+- `param_est_code` — JAX-compatible translation of the parameter estimator
+
+---
+
+## Configuration Reference
+
+All defaults live in `projects/config_default.yaml`. Override any key in `projects/<task>/config.yaml`.
+
+### `io`
+| Key | Default | Description |
+|-----|---------|-------------|
+| `data_path` | — | Path to task data (required) |
+| `save_path` | `program_databases` | Output base directory |
+
+### `evolution`
+| Key | Default | Description |
+|-----|---------|-------------|
+| `n_generations` | 12 | Total generations |
+| `time_limit` | 60 | Wall-clock time limit for the run in minutes |
+| `n_islands` | 8 | Number of independent island populations |
+| `batch_size` | 6 | LLM calls per island per generation |
+| `critical_population_size` | 12 | Max programs per island after pruning |
+| `n_migrants` | 2 | Programs exchanged between islands per generation |
+| `topology` | `[1,2,...,7,0]` | Ring topology: topology[i] is island i's migration target |
+
+### `llms`
+| Key | Default | Description |
+|-----|---------|-------------|
+| `model_llm` | `gemini-2.5-flash` | LLM for model code. String or list (cycled by generation). |
+| `param_est_llm` | `gemini-2.0-flash` | LLM for parameter estimator code |
+| `jax_translator_llm` | `gemini-2.0-flash-lite` | LLM for JAX translation |
+| `k_max` | 2 | Number of parent programs shown per prompt |
+| `max_lines` | 50 | Max lines allowed in a parameter estimator response |
+| `swear_words` | `['lstsq', 'scipy.optimize', ...]` | Banned fragments in generated code |
+
+### `scoring`
+| Key | Default | Description |
+|-----|---------|-------------|
+| `param_penalty_weight` | 0.01 | Complexity penalty per parameter |
+| `timeout_s` | 120.0 | Wall-clock timeout per scoring run (seconds) |
+| `gradient_descent.max_iter` | 1000 | Max gradient descent iterations |
+| `gradient_descent.learning_rate` | 0.003 | Gradient descent learning rate |
+
+### `project_params`
+The only section that accepts arbitrary keys. All entries are passed as kwargs to `load_data()`. Use for task-specific settings like thresholds or random seeds.
+
+Keys in any other section (`io`, `evolution`, `llms`, `scoring`) that are not in the tables above will be ignored and trigger a warning at startup.
+
+---
+
+## Logging Levels
+
+| Level | Contents |
+|-------|----------|
+| `compact` | One summary per generation: mode, temperature, LLMs, success rates, per-island best, global best, elapsed time |
+| `code` | Everything in compact + generated code for each program |
+| `prompts` | Everything in code + full LLM prompts and image paths |
+
+---
+
+## Implementation notes
+
+### Scoring subprocesses
+
+Each program is scored in a fresh subprocess (`scoring.py`). This is intentional: JAX-compiled code from LLM output can hang, OOM, or segfault in ways that are unrecoverable in-process. The subprocess is killed after `scoring.timeout_s` seconds, making timeouts reliable regardless of what the generated code does.
+
+### LLM failure handling
+
+`generate_models`, `generate_param_ests`, and `translate_programs` all use `asyncio.gather(..., return_exceptions=True)`. Failed LLM calls are caught and silently dropped — the corresponding program just keeps `None` code fields and gets filtered out at scoring time. Check `run.log` at `code` or `prompts` verbosity to see failures.
+
+---
+
+## Remaining work
+
+### Tests (highest priority)
+- Tests for `src/evolution` — island operations, population, program
+- Tests for `src/io` — config, task_spec
+- Tests for `src/llm`
+- Integration test for `run.py` (small end-to-end run)
+- Wire tests to GitHub Actions CI
+
+### Core scoring
+- **Separate input/target keys** — currently the full data dict (including target values) is passed to `model(data, params)`, so models can cheat by reading the target directly. Need `input_keys` / `target_keys` in config to split before passing.
+- **Variable-length trials** — assumes rectangular data (all samples same `n_trials`); would need list/dict of variable-length arrays.
+- **`_eval_fingerprint` design** — sample indices are smuggled into the data dict via `_sample_indices`. Flagged as a design smell; not urgent.
+
+### LLM
+- Consider unifying `generate_models`, `generate_param_ests`, `translate_programs` into a single `generate(population, spec, prompt_type, ...)` — deferred until there's a fourth generation type.
+
+---
+
+## Tests
 
 ```bash
 python -m pytest tests -q
 ```
 
-Run one module:
-
-```bash
-python -m pytest tests/test_orientation_tuning_seed_loss_regression.py -q
-```
-
-## Common Failure Modes
-
-- `Config file not found`: you forgot `--config .../override_config.yaml`
-- `There must be exactly 2 ... seeds`: seed list lengths are not exactly 2
-- `FAILED_PROGRAM_COST` for everything: seed code or data parser is broken
-- `NonConcreteBooleanIndexError`: JAX-incompatible code (boolean indexing/control flow)
-- Missing diagnostics plots: `diagnostics_path` invalid or diagnostics module missing required functions
-
-## Citation
-
-```bibtex
-@article{edgar-gamma,
-  title={EDGAR-gamma: Equation Discovery with Graphical AI Reasoning},
-  author={Your Name},
-  year={2026}
-}
-```
-
-## License
-
-[]
-
-## Contributing
-
-[]
+Currently only scoring tests exist (`src/scoring/tests/test_scoring.py`).
