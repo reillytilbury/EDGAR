@@ -53,13 +53,15 @@ def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
             best_loss, best_flat = float(loss_val), flat.copy()
         updates, opt_state = opt.update(grad, opt_state, flat)
         flat = optax.apply_updates(flat, updates)
-        if step % 200 == 0:
+        if step % 200 == 0 or step == gd_config["max_iter"] - 1:
             print(f"step {step:4d}  loss {loss_val:.4f}")
 
     return unflatten(best_flat)
 
 
 def _eval_loss(model_fn, loss_fn, params, data_test):
+    if params is None:
+        return float("inf")
     output = jax.vmap(model_fn, in_axes=(0, 0))(data_test, params)
     return float(jnp.mean(loss_fn(output, data_test)))
 
@@ -70,8 +72,8 @@ def _eval_sample_losses(model_fn, loss_fn, params, data_test):
 
 
 def _eval_fingerprint(model_fn, params, X_eval):
-    sample_indices = X_eval.pop('_sample_indices')
-    params_matched = jax.tree_map(lambda p: p[sample_indices], params)
+    sample_indices = X_eval['_sample_indices']
+    params_matched = jax.tree_util.tree_map(lambda p: p[sample_indices], params)
     return jax.vmap(model_fn, in_axes=(0, 0))(X_eval, params_matched)
 
 
@@ -119,12 +121,13 @@ def _score_one_model(
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
     proc = ctx.Process(target=_worker, args=(queue, program, data, loss_fn_bytes, config, X_eval))
     proc.start()
+    result = queue.get()   # get result as soon as it's available
     proc.join(timeout=config["timeout_s"])
     if proc.is_alive():
         proc.kill()
         proc.join()
         return (float("inf"), float("inf"), None, None, None)
-    return queue.get()
+    return result
 
 
 # ── population-level ──
