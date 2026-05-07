@@ -12,6 +12,8 @@ Covers:
 import numpy as np
 import pytest
 
+from src.evolution.program import _NotYetPrepared
+
 class TestCompile:
     def test_compile_returns_callables(self, make_program):
         model_fn, param_est_fn = make_program().compile()
@@ -67,8 +69,8 @@ class TestLossesDefaults:
     def test_discover_init_is_none(self, make_program):
         assert make_program().program_losses.discover.init is None
 
-    def test_validate_final_is_inf(self, make_program):
-        assert make_program().program_losses.validate.final == float("inf")
+    def test_validate_final_is_not_yet_prepared(self, make_program):
+        assert isinstance(make_program().program_losses.validate.final, _NotYetPrepared)
 
     def test_validate_init_is_none(self, make_program):
         assert make_program().program_losses.validate.init is None

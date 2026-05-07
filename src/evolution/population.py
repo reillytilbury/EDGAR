@@ -66,7 +66,7 @@ class Population:
         """Set validation loss to None for programs alive at validation time.
 
         Programs on an island are eligible for validation scoring. This resets their
-        validation.final loss from inf to None so _needs_scoring can identify them.
+        validation.final loss from _NotYetPrepared to None so _needs_scoring can identify them.
 
         Args:
             islands: dict or list of island sets containing program indices
