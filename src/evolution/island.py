@@ -118,7 +118,8 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
     keep_n = evolution["critical_population_size"]
     for i, island in enumerate(islands):
         programs = {population[idx] for idx in island}
-        ranked = sorted(programs, key=lambda p: p.program_losses.discover.final)
+        # explicitly handle cases where the loss is None or inf to avoid sorting issues
+        ranked = sorted(programs, key=lambda p: float('inf') if p.program_losses.discover.final is None else p.program_losses.discover.final)
         islands[i] = {p.idx for p in ranked[:keep_n]}
 
 
@@ -148,6 +149,8 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
     if k > len(programs):
         raise ValueError(f"k={k} exceeds population size {len(programs)}")
     losses = np.array([p.program_losses.discover.final for p in programs], dtype=float)
+    # update  None or NaN losses to inf
+    losses = np.where(np.isnan(losses) | np.isinf(losses), float("inf"), losses)        
     logits = -(losses - losses.min()) / (np.std(losses) + 1e-6) / max(temperature, 1e-3)
     logits -= logits.max()
     probs = np.exp(logits)
