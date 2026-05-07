@@ -58,7 +58,7 @@ class Losses:
     validate: LossPair = field(default_factory=lambda: LossPair(init=None, final=float("inf")))
 
 
-@dataclass(eq=False)
+@dataclass
 class Program:
     birth:            BirthCertificate
     code:             Code = field(default_factory=Code)
@@ -71,6 +71,8 @@ class Program:
     sample_losses:    np.ndarray | None = field(default=None, repr=False)
     image_path:       str | None = None
     idx:              int | None = field(default=None, init=False)
+
+    __hash__ = object.__hash__
 
     def compile(self) -> tuple[Callable, Callable]:
         """Compile JAX source into callable (model_fn, param_est_fn)."""
