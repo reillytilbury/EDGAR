@@ -21,4 +21,4 @@ project_params:
   n_samples: 1000
   n_trials: 2000
   noise_std: 0.1
-  n_eval_trials: 100
+  n_eval_samples: 100
