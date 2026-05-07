@@ -1,4 +1,5 @@
 import pytest
+from src.evolution.population import Population
 from src.evolution.program import BirthCertificate, Code, Program
 
 @pytest.fixture
@@ -78,3 +79,14 @@ def make_program(linear_model_code, linear_param_est_code):
         )
 
     return _factory
+
+@pytest.fixture
+def make_population():
+    p1 = make_program(linear_model_code, linear_param_est_code)
+    p1.name = "LinearModel"
+    p2 = make_program(quadratic_model_code, quadratic_param_est_code)
+    p2.name = "QuadraticModel"
+    pop = Population()
+    pop.add(p1)
+    pop.add(p2)
+    return pop

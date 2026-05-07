@@ -58,12 +58,12 @@ def seed(population: Population, seed_programs: list[Program], n_islands: int) -
     Mutates: population (adds seed programs)
     Returns: islands — list of n_islands sets, each containing all seed indices
     """
+    assert len(population) == 0, "Initial population must be empty"
     for program in seed_programs:
         population.add(program)
 
     seed_indices = {p.idx for p in seed_programs}
     return [set(seed_indices) for _ in range(n_islands)]
-
 
 def spawn(
     population: Population,
