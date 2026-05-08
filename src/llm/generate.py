@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import os
 from typing import Any, TYPE_CHECKING
+import traceback
+import warnings
 
 from pydantic_ai.models import Model
 
@@ -181,8 +183,11 @@ async def _translate_one_program(
             program.code_jax.model = result.model_code
         if load_function_from_source(result.param_est_code, "parameter_estimator") is not None:
             program.code_jax.param_est = result.param_est_code
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.warn(
+            f"[translate] program #{program.idx} JAX translation failed: {e}\n"
+            f"{traceback.format_exc()}"
+        )
 
 
 async def translate_programs(
