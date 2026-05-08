@@ -21,10 +21,11 @@ class FakeLLM:
     """Returns TestModel instances with predetermined program code instead of calling a real LLM."""
 
     def __init__(self, offset: float = 0.1):
-        self._programs = (Program1, InvalidProgram, ProgramSolution)
+        self._programs = (Program1, Program2, ProgramSolution)
         self._model_counter = [0, 0, 0]
         self._model_jax_counter = [0, 0, 0]
         self._param_est_counter = [0, 0, 0]
+        self._param_est_jax_counter = [0, 0, 0]
         self.offset = offset
 
     @staticmethod
@@ -32,7 +33,7 @@ class FakeLLM:
         return code + f" + {offset:.3f}\n"
 
     def gen_model(self) -> TestModel:
-        """Return a TestModel whose output matches ModelSchema for the next program in rotation."""
+        """Return a TestModel which outputs a model matching ModelSchema for the next program in rotation."""
         idx = self._model_counter.index(min(self._model_counter))
         code = self._add_offset(
             self._programs[idx].model,
@@ -51,7 +52,7 @@ class FakeLLM:
         })
 
     def gen_param_est(self) -> TestModel:
-        """Return a TestModel whose output matches ParamEstSchema for the next program in rotation."""
+        """Return a TestModel which outputs a parameter estimator matching ParamEstSchema for the next program in rotation."""
         idx = self._param_est_counter.index(min(self._param_est_counter))
         code = self._programs[idx].param_est
         self._param_est_counter[idx] += 1
@@ -60,17 +61,25 @@ class FakeLLM:
             "code": code,
         })
 
-    def gen_translation(self) -> TestModel:
-        """Return a TestModel whose output matches TranslationSchema for the next program in rotation."""
+    def gen_model_translation(self) -> TestModel:
+        """Return a TestModel which outputs a jax-translated model matching TranslationSchema for the next program in rotation."""
         idx = self._model_jax_counter.index(min(self._model_jax_counter))
         model_code = self._add_offset(
             self._programs[idx].model_jax,
             self.offset * self._model_jax_counter[idx],
         )
-        param_est_code = self._programs[idx].param_est
         self._model_jax_counter[idx] += 1
         return TestModel(custom_output_args={
-            "code": model_code + "\n\n" + param_est_code,
+            "code": model_code,
+        })
+    
+    def gen_param_est_translation(self) -> TestModel:
+        """Return a TestModel which outputs a jax-translated parameter estimator matching TranslationSchema for the next program in rotation."""
+        idx = self._param_est_jax_counter.index(min(self._param_est_jax_counter))
+        code = self._programs[idx].param_est
+        self._param_est_jax_counter[idx] += 1
+        return TestModel(custom_output_args={
+            "code": code,
         })
 
 
