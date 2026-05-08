@@ -15,7 +15,7 @@ import json
 import numpy as np
 from src.evolution.population import Population, _params_to_json, _params_from_json
 from src.evolution.program import _NotYetPrepared, BirthCertificate, Program, Code, Losses, LossPair
-
+from tests.evolution.utils import make_program, linear_model_code, linear_param_est_code
 
 def initialize_program(i, model_code, param_est_code):
     """
@@ -36,7 +36,7 @@ def initialize_program(i, model_code, param_est_code):
 
 
 class TestPopulation:
-    def test_population_add_programs(self, make_program):
+    def test_population_add_programs(self):
         pop = Population()
         assert len(pop) == 0
 
@@ -53,11 +53,11 @@ class TestPopulation:
         assert pop[1].name == program2.name
 
     def test_population_save_and_load(
-        self, make_program, tmp_path, linear_model_code, linear_param_est_code
+        self, tmp_path
     ):
         pop = Population()
         for i in range(3):
-            program = initialize_program(i, linear_model_code, linear_param_est_code)
+            program = initialize_program(i, linear_model_code(), linear_param_est_code())
             pop.add(program)
         pop.save(tmp_path / "population.jsonl")
         loaded_pop = Population.load(tmp_path / "population.jsonl")
@@ -78,23 +78,23 @@ class TestPopulation:
             )
             assert p_original.idx == p_loaded.idx
 
-        def test_population_prepare_validation_scoring(self, make_program):
-            pop = Population()
-            for i in range(5):
-                program = make_program()
-                program.name = f"Program {i}"
-                pop.add(program)
-                assert isinstance(pop[i].program_losses.validate.final, _NotYetPrepared)  # Initially set to NotYetPrepared
+    def test_population_prepare_validation_scoring(self):
+        pop = Population()
+        for i in range(5):
+            program = make_program()
+            program.name = f"Program {i}"
+            pop.add(program)
+            assert isinstance(pop[i].program_losses.validate.final, _NotYetPrepared)  # Initially set to NotYetPrepared
 
-            # Prepare validation scoring for programs at indices 1, 3, 4
-            pop.prepare_validation_scoring(islands=[{1, 3, 4}])
+        # Prepare validation scoring for programs at indices 1, 3, 4
+        pop.prepare_validation_scoring(islands=[{1, 3, 4}])
 
-            # Check that validation.final is None for programs at indices 1, 3, 4 and unchanged for others
-            for i in range(5):
-                if i in {1, 3, 4}:
-                    assert pop[i].program_losses.validate.final is None
-                else:
-                    assert isinstance(pop[i].program_losses.validate.final, _NotYetPrepared)
+        # Check that validation.final is None for programs at indices 1, 3, 4 and unchanged for others
+        for i in range(5):
+            if i in {1, 3, 4}:
+                assert pop[i].program_losses.validate.final is None
+            else:
+                assert isinstance(pop[i].program_losses.validate.final, _NotYetPrepared)
 
 
 class TestParamSerialization:

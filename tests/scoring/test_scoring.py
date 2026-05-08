@@ -19,8 +19,6 @@ FAST_MODEL_CODE = """
 import jax.numpy as jnp
 def model(data, params):
     return params['w'] * data['x']
-
-model.DEFAULT_PARAMS = {'w': jnp.array(1.0)}
 """
 
 SLOW_MODEL_CODE = """
@@ -30,8 +28,6 @@ import jax.numpy as jnp
 def model(data, params):
     time.sleep(15)
     return params['w'] * data['x']
-
-model.DEFAULT_PARAMS = {'w': jnp.array(1.0)}
 """
 
 PARAM_EST_CODE = """
@@ -53,10 +49,11 @@ BASE_CONFIG_WITH_PARAM_PENALTY = {
 }
 
 
-def _make_program(model_code):
+def _make_program(model_code, default_params = {"w": jnp.array(1.0)}):
     return Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
         code_jax=Code(model=model_code, param_est=PARAM_EST_CODE),
+        _default_params = default_params
     )
 
 
@@ -94,12 +91,12 @@ def test_score_one_model_perfect_fit_with_param_penalty():
     final_loss, _, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG_WITH_PARAM_PENALTY)
     assert final_loss < BASE_CONFIG_WITH_PARAM_PENALTY["param_penalty_weight"]  + 1e-4 #since n_params=1
 
-def test_score_one_model_auto_populates_n_params():
-    program = _make_program(FAST_MODEL_CODE)
+def test_score_one_gives_infinite_loss_for_program_with_none_default_params():
+    program = _make_program(FAST_MODEL_CODE, default_params=None)
     assert program.n_params is None
-    _score_one_model(program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG)
-    assert program.n_params == 1
-
+    final_loss, initial_loss, _, _, _ = _score_one_model(program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG)
+    assert final_loss == float("inf")
+    assert initial_loss == float("inf")
 
 def test_score_one_model_kills_slow_model():
     program = _make_program(SLOW_MODEL_CODE)

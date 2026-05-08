@@ -124,6 +124,7 @@ class TaskSpec:
                 birth=BirthCertificate(generation=-1, island=-1, batch_index=batch_idx, mode="seed"),
                 code=Code(model=model_path.read_text(), param_est=param_est_path.read_text()),
                 name=f"Seed Model {model_num}",
+                _default_params = cls._extract_default_params(model_path.read_text())
             ))
 
         return cls(
@@ -259,3 +260,10 @@ class TaskSpec:
             jax_model=self.jax_model_prompt_schema,
             jax_param_est=self.jax_param_est_prompt_schema,
         )
+
+    # Load default_params from model code
+    @staticmethod
+    def _extract_default_params(model_code: str) -> dict:
+        func = load_function_from_source(model_code, "model")
+        default_params = getattr(func, "DEFAULT_PARAMS", None)
+        return default_params
