@@ -2,9 +2,10 @@ import pytest
 import asyncio
 from tests.llm.fakellm import FakeLLM
 from tests.llm.programs import Program1
+from tests.llm.utils import run_model_code, run_param_est_code
 from src.llm.llm_calling import call_llm
 from src.llm.response_schema import ModelSchema, ParamEstSchema, TranslationSchema
-
+import numpy as np
 
 @pytest.mark.asyncio
 async def test_call_llm_with_fake_model():
@@ -22,6 +23,10 @@ async def test_call_llm_with_fake_model():
     assert result.latex_equations == Program1.latex_equation
     assert result.code.startswith(Program1.model) #code added an offset, so check it starts with same
     assert result.default_params == Program1.default_params
+    #Try running the code and check it produces expected output
+    output = run_model_code(result.code, {"x": np.array([0,1.0,2.0])}, result.default_params)
+    expected_output = np.array([0,3,8]) #y = x^2 +2x
+    assert np.allclose(output, expected_output)
 
 @pytest.mark.asyncio
 async def test_call_llm_with_fake_param_est():
@@ -36,11 +41,15 @@ async def test_call_llm_with_fake_param_est():
     assert isinstance(result, ParamEstSchema)
     assert result.thought_process == "fake thought process"
     assert result.code == Program1.param_est
+    #Try running the code and check it produces expected output
+    output = run_param_est_code(result.code, {"x": np.array([0,1.0,2.0])})
+    expected_output = Program1.default_params #In the programs we just return the default params as the estimate
+    assert output == expected_output
 
 @pytest.mark.asyncio
-async def test_call_llm_with_fake_translation():
+async def test_call_llm_with_fake_model_translation():
     llm = FakeLLM()
-    translation = llm.gen_translation()
+    translation = llm.gen_model_translation()
     result = await call_llm(
         prompt = "Fake prompt",
         llm_model = translation,
@@ -49,4 +58,24 @@ async def test_call_llm_with_fake_translation():
 
     assert isinstance(result, TranslationSchema)
     assert result.code.startswith(Program1.model_jax)
-    assert Program1.param_est in result.code
+    #Try running the code and check it produces expected output
+    output = run_model_code(result.code, {"x": np.array([0,1.0,2.0])}, Program1.default_params)
+    expected_output = np.array([0,3,8]) #y = x^2 +2x
+    assert np.allclose(output, expected_output)
+
+@pytest.mark.asyncio
+async def test_call_llm_with_fake_param_est_translation():
+    llm = FakeLLM()
+    translation = llm.gen_param_est_translation()
+    result = await call_llm(
+        prompt = "Fake prompt",
+        llm_model = translation,
+        output_type = TranslationSchema
+    )
+
+    assert isinstance(result, TranslationSchema)
+    assert result.code == Program1.param_est
+    #Try running the code and check it produces expected output
+    output = run_param_est_code(result.code, {"x": np.array([0,1.0,2.0])})
+    expected_output = Program1.default_params #In the programs we just return the default params as the estimate
+    assert output == expected_output
