@@ -44,7 +44,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     X_discover, X_validate, X_eval = spec.load_data_fn(data_path=spec.io["data_path"], **spec.project_params)
     population = Population()
     islands = seed(population, spec.seed_programs, spec.evolution["n_islands"])
-    await translate_programs(population, spec.prompt_schemas.jax, spec.llms["jax_translator_llm"])
+    await translate_programs(population, spec.prompt_schemas.jax_model, spec.prompt_schemas.jax_param_est, spec.llms["jax_translator_llm"])
     score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
     census = []
@@ -59,7 +59,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
         await generate_models(population, spec.prompt_schemas.model, llms.model, mode, temperature,
                               spec=spec, data=X_discover[1]) # use test data of X_discover for plotting 
         await generate_param_ests(population, spec.prompt_schemas.param_est, llms.param_est, spec.flat_config)
-        await translate_programs(population, spec.prompt_schemas.jax, llms.jax)
+        await translate_programs(population, spec.prompt_schemas.jax_model, spec.prompt_schemas.jax_param_est, llms.jax)
 
         score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
