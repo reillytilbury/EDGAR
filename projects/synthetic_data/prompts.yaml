@@ -83,6 +83,5 @@ parameter_estimator:
     {code_model}
 
     '
-  config_vars: []
   program_vars:
   - code.model
