@@ -1,3 +1,4 @@
+import warnings
 from collections.abc import Callable
 
 def load_function_from_source(
@@ -23,7 +24,8 @@ def load_function_from_source(
     ns = {}
     try:
         exec(source, ns)
-    except Exception:
+    except Exception as e:
+        warnings.warn(f"[code_loading] exec failed for '{entrypoint_name}': {e}")
         return None
 
     # Return the requested object only if it is callable.
