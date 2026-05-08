@@ -28,7 +28,8 @@ from ..evolution.population import Population
 def _get_params(param_est_fn, default_params, data_train):
     try:
         return jax.vmap(param_est_fn)(data_train)
-    except Exception:
+    except Exception as e:
+        warnings.warn(f"[scoring] param_est_fn failed, falling back to default params: {e}")
         n = next(iter(data_train.values())).shape[0]
         return jax.tree_util.tree_map(lambda x: jnp.stack([x] * n), default_params)
 
