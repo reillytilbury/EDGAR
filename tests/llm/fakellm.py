@@ -21,7 +21,7 @@ class FakeLLM:
     """Returns TestModel instances with predetermined program code instead of calling a real LLM."""
 
     def __init__(self, offset: float = 0.1):
-        self._programs = (Program1, Program2, ProgramSolution)
+        self._programs = (Program1, InvalidProgram, ProgramSolution)
         self._model_counter = [0, 0, 0]
         self._model_jax_counter = [0, 0, 0]
         self._param_est_counter = [0, 0, 0]
