@@ -70,8 +70,7 @@ class FakeLLM:
         param_est_code = self._programs[idx].param_est
         self._model_jax_counter[idx] += 1
         return TestModel(custom_output_args={
-            "model_code": model_code,
-            "param_est_code": param_est_code,
+            "code": model_code + "\n\n" + param_est_code,
         })
 
 
@@ -88,6 +87,5 @@ class SeedFakeLLM:
         model_code = self._seed_models[self._counter]
         self._counter += 1
         return TestModel(custom_output_args={
-            "model_code": model_code,
-            "param_est_code": SeedPrograms.param_est,
+            "code": model_code + "\n\n" + SeedPrograms.param_est,
         })

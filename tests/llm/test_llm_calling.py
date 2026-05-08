@@ -48,5 +48,5 @@ async def test_call_llm_with_fake_translation():
     )
 
     assert isinstance(result, TranslationSchema)
-    assert result.model_code.startswith(Program1.model_jax)
-    assert result.param_est_code == Program1.param_est
+    assert result.code.startswith(Program1.model_jax)
+    assert Program1.param_est in result.code

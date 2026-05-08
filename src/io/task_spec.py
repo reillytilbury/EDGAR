@@ -39,7 +39,7 @@ from ..llm.prompt_schema import PromptSchema
 
 
 LLMs = namedtuple("LLMs", ["model", "param_est", "jax"])
-PromptSchemas = namedtuple("PromptSchemas", ["model", "param_est", "jax"])
+PromptSchemas = namedtuple("PromptSchemas", ["model", "param_est", "jax_model", "jax_param_est"])
 
 
 @dataclass
@@ -70,7 +70,8 @@ class TaskSpec:
     # prompt schemas — one per LLM task, built from merged prompt yamls
     model_prompt_schema: PromptSchema
     param_est_prompt_schema: PromptSchema
-    jax_prompt_schema: PromptSchema
+    jax_model_prompt_schema: PromptSchema
+    jax_param_est_prompt_schema: PromptSchema
 
     # project callables
     load_data_fn: Callable
@@ -135,7 +136,8 @@ class TaskSpec:
             project_params=config.project_params,
             model_prompt_schema=PromptSchema(**prompts["model"]),
             param_est_prompt_schema=PromptSchema(**prompts["parameter_estimator"]),
-            jax_prompt_schema=PromptSchema(**prompts["jax_translator"]),
+            jax_model_prompt_schema=PromptSchema(**prompts["jax_translator_model"]),
+            jax_param_est_prompt_schema=PromptSchema(**prompts["jax_translator_param_est"]),
             load_data_fn=load_data_fn,
             loss_fn=loss_fn,
             plot_fn=plot_fn,
@@ -175,7 +177,8 @@ class TaskSpec:
             "prompt_schemas": {
                 "model": self.model_prompt_schema.model_dump(),
                 "param_est": self.param_est_prompt_schema.model_dump(),
-                "jax": self.jax_prompt_schema.model_dump(),
+                "jax_model": self.jax_model_prompt_schema.model_dump(),
+                "jax_param_est": self.jax_param_est_prompt_schema.model_dump(),
             },
         }
 
@@ -252,5 +255,6 @@ class TaskSpec:
         return PromptSchemas(
             model=self.model_prompt_schema,
             param_est=self.param_est_prompt_schema,
-            jax=self.jax_prompt_schema,
+            jax_model=self.jax_model_prompt_schema,
+            jax_param_est=self.jax_param_est_prompt_schema,
         )

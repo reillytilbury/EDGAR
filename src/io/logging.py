@@ -134,7 +134,8 @@ def log_generation(
         f.write(f"  --- Prompts for Program #{p.idx} ---\n")
         f.write(f"  [model prompt]\n{spec.model_prompt_schema.build_prompt(mode_p, parents, spec.flat_config)}\n\n")
         f.write(f"  [param_est prompt]\n{spec.param_est_prompt_schema.build_prompt('explore', parents, spec.flat_config)}\n\n")
-        f.write(f"  [jax prompt]\n{spec.jax_prompt_schema.build_prompt('explore', [p], spec.flat_config)}\n\n")
+        f.write(f"  [jax model prompt]\n{spec.jax_model_prompt_schema.build_prompt('explore', [p], spec.flat_config)}\n\n")
+        f.write(f"  [jax param_est prompt]\n{spec.jax_param_est_prompt_schema.build_prompt('explore', [p], spec.flat_config)}\n\n")
         if p.image_path:
             f.write(f"  [image] {p.image_path}\n")
         f.write("\n")

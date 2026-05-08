@@ -174,16 +174,22 @@ async def generate_param_ests(
 
 async def _translate_one_program(
     program: Program,
-    prompt_schema: PromptSchema,
+    model_prompt_schema: PromptSchema,
+    param_est_prompt_schema: PromptSchema,
     llm: str | Model,
 ) -> None:
-    prompt = prompt_schema.build_prompt("explore", [program])
+    model_prompt = model_prompt_schema.build_prompt("explore", [program])
+    param_est_prompt = param_est_prompt_schema.build_prompt("explore", [program])
     try:
-        result = await call_llm(prompt=prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0)
-        if load_function_from_source(result.model_code, "model") is not None:
-            program.code_jax.model = result.model_code
-        if load_function_from_source(result.param_est_code, "parameter_estimator") is not None:
-            program.code_jax.param_est = result.param_est_code
+        model_result, param_est_result = await asyncio.gather(
+            call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0),
+            call_llm(prompt=param_est_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0),
+            return_exceptions=True,
+        )
+        if not isinstance(model_result, Exception) and load_function_from_source(model_result.code, "model") is not None:
+            program.code_jax.model = model_result.code
+        if not isinstance(param_est_result, Exception) and load_function_from_source(param_est_result.code, "parameter_estimator") is not None:
+            program.code_jax.param_est = param_est_result.code
     except Exception as e:
         warnings.warn(
             f"[translate] program #{program.idx} JAX translation failed: {e}\n"
@@ -193,7 +199,8 @@ async def _translate_one_program(
 
 async def translate_programs(
     population: Population,
-    prompt_schema: PromptSchema,
+    model_prompt_schema: PromptSchema,
+    param_est_prompt_schema: PromptSchema,
     llm: str | Model,
 ) -> None:
     """Translate all untranslated programs from numpy to JAX.
@@ -202,6 +209,6 @@ async def translate_programs(
     """
     programs = _needs_jax_translation(population)
     await asyncio.gather(*[
-        _translate_one_program(p, prompt_schema, llm)
+        _translate_one_program(p, model_prompt_schema, param_est_prompt_schema, llm)
         for p in programs
     ], return_exceptions=True)
