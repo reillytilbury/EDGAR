@@ -13,16 +13,19 @@ import numpy as np
 import pytest
 
 from src.evolution.program import _NotYetPrepared
+from tests.evolution.utils import make_program, wrong_entrypoint_code
 
 class TestCompile:
-    def test_compile_returns_callables(self, make_program):
-        model_fn, param_est_fn = make_program().compile()
+    def test_compile_returns_callables(self):
+        program = make_program()
+        model_fn, param_est_fn = program.compile()
         assert callable(model_fn)
         assert callable(param_est_fn)
 
-    def test_compiled_model_produces_correct_numeric_output(self, make_program):
+    def test_compiled_model_produces_correct_numeric_output(self):
         data = {"x": np.array([1.0, 2.0])}
-        model_fn, param_est_fn = make_program().compile()
+        program = make_program()
+        model_fn, param_est_fn = program.compile()
         params = param_est_fn(data)
         assert list(params.values()) == pytest.approx(
             [1.0, 2.0]
@@ -30,47 +33,71 @@ class TestCompile:
         result = model_fn(data, params)
         assert result.tolist() == pytest.approx([3.0, 4.0])  # y = x + 2
 
-    def test_compile_raises_when_model_code_missing(self, make_program):
+    def test_compile_raises_when_model_code_missing(self):
+        program = make_program(model_code = None)
         with pytest.raises(ValueError, match="model"):
-            make_program(model_code=None).compile()
+            program.compile()
 
-    def test_compile_raises_when_param_est_code_missing(self, make_program):
+    def test_compile_raises_when_param_est_code_missing(self):
+        program = make_program(param_est_code=None)
         with pytest.raises(ValueError, match="parameter_estimator"):
-            make_program(param_est_code=None).compile()
+            program.compile()
 
     def test_compile_raises_when_model_entrypoint_wrong(
-        self, make_program, wrong_entrypoint_code
+        self
     ):
+        program = make_program(model_code=wrong_entrypoint_code())
         with pytest.raises(ValueError, match="model"):
-            make_program(model_code=wrong_entrypoint_code).compile()
+            program.compile()
 
     def test_compile_raises_when_param_est_entrypoint_wrong(
-        self, make_program, wrong_entrypoint_code
+        self
     ):
+        program = make_program(param_est_code=wrong_entrypoint_code())
         with pytest.raises(ValueError, match="parameter_estimator"):
-            make_program(param_est_code=wrong_entrypoint_code).compile()
+            program.compile()
 
-def test_count_params(make_program):
+def test_no_default_params():
     program = make_program()
     assert program.n_params is None
-    n_params = program.count_params()
-    assert n_params == 2  # a and b
-    assert program.n_params == n_params  # cached value
+    with pytest.warns(UserWarning):
+        assert program.default_params is None
 
-def test_count_params_fails_on_invalid_code(make_program):
-    program = make_program(model_code="def model(data, params): return 1") #No model.DEFAULT_PARAMS
-    with pytest.raises(AttributeError):
-        program.count_params()
+def test_initializing_with_default_params():
+    default_params = {'a': 1.0, 'b': 2.0}
+    program = make_program(default_params=default_params)
+    assert program.n_params == 2
+    assert program.default_params == default_params
+
+def test_setting_default_params_after_initialization():
+    program = make_program()
+    assert program.n_params is None
+    assert program.default_params is None
+    default_params = {'a': 1.0, 'b': 2.0, 'c': 3.0}
+    program.default_params = default_params
+    assert program.n_params == 3
+    assert program.default_params == default_params
+
+def test_setting_default_params_with_invalid_input():
+    program = make_program()
+    with pytest.warns(UserWarning):
+        program.default_params = "not a dict"
+    assert program.n_params is None
+    assert program.default_params is None
 
 class TestLossesDefaults:
-    def test_discover_final_is_none(self, make_program):
-        assert make_program().program_losses.discover.final is None
+    def test_discover_final_is_none(self):
+        program = make_program()
+        assert program.program_losses.discover.final is None
 
-    def test_discover_init_is_none(self, make_program):
-        assert make_program().program_losses.discover.init is None
+    def test_discover_init_is_none(self):
+        program = make_program()
+        assert program.program_losses.discover.init is None
 
-    def test_validate_final_is_not_yet_prepared(self, make_program):
-        assert isinstance(make_program().program_losses.validate.final, _NotYetPrepared)
+    def test_validate_final_is_not_yet_prepared(self):
+        program = make_program()
+        assert isinstance(program.program_losses.validate.final, _NotYetPrepared) 
 
-    def test_validate_init_is_none(self, make_program):
-        assert make_program().program_losses.validate.init is None
+    def test_validate_init_is_none(self):
+        program = make_program()
+        assert program.program_losses.validate.init is None

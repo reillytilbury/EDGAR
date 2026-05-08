@@ -86,7 +86,7 @@ def _worker(queue, program, data, loss_fn_bytes, config, X_eval):
         data_train, data_test = data
         model_fn, param_est_fn = program.compile()
         penalty = config["param_penalty_weight"] * program.n_params
-        params_init = _get_params(param_est_fn, model_fn.DEFAULT_PARAMS, data_train)
+        params_init = _get_params(param_est_fn, program.default_params, data_train)
         initial_loss = _eval_loss(model_fn, loss_fn, params_init, data_train) + penalty
         params = _optimize(model_fn, loss_fn, params_init, data_train, config["gradient_descent"])
         final_loss = _eval_loss(model_fn, loss_fn, params, data_test) + penalty
@@ -126,15 +126,11 @@ def _score_one_model(
 ) -> tuple[float, float, jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
     """Score one program in a spawn subprocess; kill on timeout.
 
-    Auto-populates program.n_params via count_params() if not set.
     Returns (final_loss, initial_loss, eval_fingerprint, params).
     """
     if program.n_params is None:
-        try:
-            program.count_params()
-        except AttributeError:
-            warnings.warn(f"Program #{program.idx} count_params failed (no model.DEFAULT_PARAMS), assigning infinite loss")
-            return (float("inf"), float("inf"), None, None, None)
+        warnings.warn(f"Program #{program.idx} has n_params=None, applying infinite loss, verify that its default_params were set prior to scoring")
+        return (float("inf"), float("inf"), None, None, None)
 
     ctx = mp.get_context("spawn")
     queue = ctx.Queue()

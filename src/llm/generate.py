@@ -97,7 +97,8 @@ async def _generate_one_model(
         image_bytes=image_bytes,
     )
     header = f'"""\n{result.thought_process}\n\n{result.latex_equations}\n"""\n\n'
-    program.code.model = header + result.code + f'\n\nmodel.DEFAULT_PARAMS = {result.default_params!r}'
+    program.code.model = header + result.code
+    program.default_params = result.default_params 
     program.name = result.descriptive_name
     program.birth.llm_name = llm
 
