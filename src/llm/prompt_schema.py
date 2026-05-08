@@ -54,7 +54,6 @@ class PromptSchema(BaseModel):
     docstring_guidelines: str
     image_analysis_instructions: Optional[str] = None
     program_detail_template: str
-    config_vars: list[str] = Field(default_factory=list)
     program_vars: list[str] = Field(default_factory=list)
 
     def build_prompt(

@@ -196,6 +196,5 @@ jax_translator_param_est:
     {code_param_est}
 
     '
-  config_vars: []
   program_vars:
   - code.param_est
