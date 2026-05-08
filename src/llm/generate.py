@@ -66,7 +66,8 @@ def _prompt_image_bytes(spec: TaskSpec, data: dict, parents: list[Program], prog
         spec.plot_fn(data, parents, save_path=img_path)
         program.image_path = img_path
         return open(img_path, "rb").read()
-    except Exception:
+    except Exception as e:
+        warnings.warn(f"[generate] plot_fn failed for program #{program.idx}: {e}")
         return None
 
 
