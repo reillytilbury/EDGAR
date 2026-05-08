@@ -57,7 +57,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
               k_max=spec.llms["k_max"])
 
         await generate_models(population, spec.prompt_schemas.model, llms.model, mode, temperature,
-                              spec=spec, data=X_discover)
+                              spec=spec, data=X_discover[1]) # use test data of X_discover for plotting 
         await generate_param_ests(population, spec.prompt_schemas.param_est, llms.param_est, spec.flat_config)
         await translate_programs(population, spec.prompt_schemas.jax, llms.jax)
 
