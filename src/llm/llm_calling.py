@@ -16,6 +16,7 @@ async def call_llm(
     image_bytes: bytes | None = None,
     temperature: float = 1.0,
     thinking: bool | str | None = None,
+    max_tokens: int | None = 32_000,
 ):
     """
     Call an LLM through PydanticAI and return the parsed output.
@@ -29,11 +30,11 @@ async def call_llm(
         temperature: Sampling temperature for the model.
         thinking: Optional reasoning effort setting. Can be `True`, `False`, or one of
             "minimal", "low", "medium", "high", "xhigh".
+        max_tokens: Maximum number of tokens to generate.
 
     Returns:
         The model output, either as a string or as an instance of `output_type`.
     """
-    #_ensure_dotenv_loaded()
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise UserError(
@@ -62,6 +63,7 @@ async def call_llm(
         model_settings=ModelSettings(
             temperature=temperature,
             thinking=thinking,
+            max_tokens=max_tokens,
         ),
     )
     return result.output
