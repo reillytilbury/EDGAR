@@ -133,6 +133,8 @@ jax_translator:
 
     * Preserve the `model.DEFAULT_PARAMS = {{...}}` line exactly as-is from the original code.
 
+    * Use the docstrings in the original code to understand the intended behavior, but only add a minimal amount of docstrings in the JAX version to conserve tokens.
+
     '
   docstring_guidelines: 'Do not include any text other than the code.
 
