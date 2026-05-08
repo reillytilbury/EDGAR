@@ -206,8 +206,9 @@ def _are_duplicates(p_i: Program, p_j: Program, loss_tol: float, cosine_tol: flo
         return False
     if p_i.eval_fingerprint is None or p_j.eval_fingerprint is None:
         return False
-    if abs(p_i.program_losses.discover.final - p_j.program_losses.discover.final) > loss_tol:
-        return False
+    if p_i.program_losses.discover.final is not None and p_j.program_losses.discover.final is not None:
+        if abs(p_i.program_losses.discover.final - p_j.program_losses.discover.final) > loss_tol:
+            return False
     y_i = p_i.eval_fingerprint.flatten()
     y_j = p_j.eval_fingerprint.flatten()
     cosine = np.dot(y_i, y_j) / (np.linalg.norm(y_i) * np.linalg.norm(y_j) + 1e-6)
@@ -270,9 +271,10 @@ def deduplicate_outer(islands: list[set[int]], population: Population, n_overlap
         )
         if overlap < n_overlap:
             continue
-
-        losses_a = sorted(p.program_losses.discover.final for p in programs_a)
-        losses_b = sorted(p.program_losses.discover.final for p in programs_b)
+        
+        # explicitly handle cases where the loss is None or NaN to avoid sorting issues
+        losses_a = sorted(p.program_losses.discover.final if p.program_losses.discover.final is not None else float("inf") for p in programs_a)
+        losses_b = sorted(p.program_losses.discover.final if p.program_losses.discover.final is not None else float("inf") for p in programs_b)
 
         if losses_a <= losses_b:
             islands[j] = {0, 1}
