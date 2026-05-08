@@ -50,8 +50,6 @@ def wrong_entrypoint_code():
     return """
 def not_a_model(data, params):
     return params['a'] * data['x']
-
-not_a_model.DEFAULT_PARAMS = {'a': 1.0}
 """
 
 def make_empty_program(number: int = 0):
@@ -66,14 +64,15 @@ def make_empty_population(num_programs: int = 2):
         pop.add(make_empty_program(number=i))
     return pop
 
-def make_program(model_code = linear_model_code(), param_est_code = linear_param_est_code(), number = 0):
+def make_program(model_code = linear_model_code(), param_est_code = linear_param_est_code(), number = 0, default_params = None):
     return Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
         code_jax=Code(
             model=model_code,
             param_est=param_est_code
         ),
-        name = f"Program{number}"
+        name = f"Program{number}",
+        _default_params = default_params
     )
 
 def make_population():

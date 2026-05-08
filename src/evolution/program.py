@@ -21,6 +21,7 @@ Save and load is handled by Population, not Program directly.
 
 from __future__ import annotations
 import numpy as np
+import warnings
 from dataclasses import dataclass, field
 from typing import Callable
 from ..llm.code_loading import load_function_from_source
@@ -74,6 +75,12 @@ class Program:
     sample_losses:    np.ndarray | None = field(default=None, repr=False)
     image_path:       str | None = None
     idx:              int | None = field(default=None, init=False)
+    _default_params:  dict | None = None
+
+    #Called on initialization after default __init__ 
+    def __post_init__(self):
+        if self._default_params is not None:
+            self.default_params = self._default_params #use the setter to validate and set n_params
 
     def compile(self) -> tuple[Callable, Callable]:
         """Compile JAX source into callable (model_fn, param_est_fn)."""
@@ -84,11 +91,6 @@ class Program:
         if param_est_fn is None:
             raise ValueError(f"{self.birth}: could not load '{PARAM_EST_ENTRYPOINT}'")
         return model_fn, param_est_fn
-
-    def count_params(self) -> int:
-        model_fn, _ = self.compile()
-        self.n_params = sum(np.asarray(v).size for v in model_fn.DEFAULT_PARAMS.values()) #Assumes model_fn has DEFAULT_PARAMS
-        return self.n_params
 
     # ── prompt template properties ──
     # These match the program_vars used in prompt_defaults.yaml so that
@@ -110,3 +112,25 @@ class Program:
     @property
     def param_est_code(self) -> str:
         return self.code.param_est or ""
+
+    @property
+    def default_params(self) -> dict:
+        if self._default_params is None:
+            warnings.warn(f"Accessing default_params=None of Program #{self.idx}, default_params was not set, or setting failed", UserWarning)
+            #We don't raise an error as this program will be assigned infinite loss during scoring
+        return self._default_params
+    
+    @default_params.setter
+    def default_params(self, default_params_dict: dict):
+        """
+            Set the default parameters dictionary for the program.
+            Counts the number of parameters and caches it in self.n_params
+        """
+        try:
+            self._default_params = default_params_dict
+            self.n_params = sum(np.asarray(v).size for v in default_params_dict.values())
+        except Exception as e:
+            warnings.warn(f"Failed to set default_params for Program #{self.idx}: {e}", UserWarning)
+            #We don't raise an error as this program will be assigned infinite loss during scoring
+            self._default_params = None
+            self.n_params = None
