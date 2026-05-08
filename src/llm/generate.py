@@ -13,6 +13,7 @@ import os
 from typing import Any, TYPE_CHECKING
 import traceback
 import warnings
+import itertools
 
 from pydantic_ai.models import Model
 
@@ -106,7 +107,7 @@ async def _generate_one_model(
 async def generate_models(
     population: Population,
     prompt_schema: PromptSchema,
-    llm: str | Model,
+    llm: str | Model| list[str | Model],
     mode: str,
     temperature: float,
     config: dict[str, Any] | None = None,
@@ -121,12 +122,13 @@ async def generate_models(
     Mutates: program.code.model, program.name, program.birth.llm_name, program.image_path
     """
     programs = _needs_model_code(population)
+    llm_iter = itertools.cycle(llm) if isinstance(llm, list) else itertools.repeat(llm)
     await asyncio.gather(*[
         _generate_one_model(
-            p, _resolve_parents(population, p), prompt_schema, llm, mode, temperature,
+            p, _resolve_parents(population, p), prompt_schema, llm_i, mode, temperature,
             config, spec, data,
         )
-        for p in programs
+        for p, llm_i in zip(programs, llm_iter)
     ], return_exceptions=True)
 
 
@@ -136,7 +138,6 @@ async def generate_models(
 
 async def _generate_one_param_est(
     program: Program,
-    parents: list[Program],
     prompt_schema: PromptSchema,
     llm: str | Model,
     config: dict[str, Any] | None = None,
@@ -164,7 +165,7 @@ async def generate_param_ests(
     """
     programs = _needs_param_est_code(population)
     await asyncio.gather(*[
-        _generate_one_param_est(p, _resolve_parents(population, p), prompt_schema, llm, config)
+        _generate_one_param_est(p, prompt_schema, llm, config)
         for p in programs
     ], return_exceptions=True)
 
