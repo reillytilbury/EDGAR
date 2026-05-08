@@ -3,7 +3,7 @@
 #
 # Two kinds of template variables:
 #   - config_vars: come from config/spec, passed explicitly (e.g. k, max_lines, swear_words)
-#   - parent_vars: dotted paths into Program fields (e.g. "name", "code.model", "program_losses.discover.final")
+#   - program_vars: dotted paths into Program fields (e.g. "name", "code.model", "program_losses.discover.final")
 
 model:
   base: 'You are an AI scientist. Below are {k_max} models describing a phenomenon, sorted from worst to best.
@@ -47,7 +47,7 @@ model:
 
     '
   image_analysis_instructions: null
-  parent_detail_template: 'Model {parent_number}: {name}
+  program_detail_template: 'Model {parent_number}: {name}
 
     loss: {program_losses_discover_final}
 
@@ -58,7 +58,7 @@ model:
     '
   config_vars:
   - k_max
-  parent_vars:
+  program_vars:
   - name
   - program_losses.discover.final
   - code.model
@@ -73,14 +73,22 @@ parameter_estimator:
     '
   explore: null
   exploit: null
-  code_guidelines: "**Code Generation Guidelines:**\n* Import any packages you use.\n* Do not include any text other than the code.\n* Function signature must be `def parameter_estimator(data):`, where `data` is the single-sample data dict used by `model`.\n* Return a parameter dict with the same keys expected by the model.\n* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.\n* Do not attempt to fit the parameters using complex fitting functions like {swear_words}. We only need a simple, fast initial estimate of the parameters.\n* Do not call the model function in your parameter_estimator code, as you will not have access to it! \n"
+  code_guidelines: '**Code Generation Guidelines:**
+    * Import any packages you use.
+    * Do not include any text other than the code.
+    * Function signature must be `def parameter_estimator(data):`, where `data` is the single-sample data dict used by `model`.
+    * Return a parameter dict with the same keys expected by the model.\n* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
+    * Do not attempt to fit the parameters using complex fitting functions like {swear_words}. We only need a simple, fast initial estimate of the parameters.
+    * Do not call the model function in your parameter_estimator code, as you will not have access to it!
+    * It is VERY IMPORTANT that the returned params dictionary has keys that exactly match the keys expected by the model, and that all values are floats. If the keys do not match, or if any value is not a float, your parameter_estimator will be rejected.
+    '
   docstring_guidelines: '**Docstring Guidelines:**
 
     * Briefly describe the estimation method.
 
     '
   image_analysis_instructions: null
-  parent_detail_template: 'Model {parent_number}: {name}
+  program_detail_template: 'Model {parent_number}: {name}
 
     loss: {program_losses_discover_final}
 
@@ -100,13 +108,15 @@ parameter_estimator:
   config_vars:
   - max_lines
   - swear_words
-  parent_vars:
+  program_vars:
   - name
   - program_losses.discover.final
   - code.model
   - code.param_est
 jax_translator_model:
   base: 'Translate the following model function to JAX-compatible code.
+
+    Ensure that keys of data and params dicts are preserved.
 
     Include all necessary imports (jax, jax.numpy as jnp).
 
@@ -139,13 +149,13 @@ jax_translator_model:
 
     '
   image_analysis_instructions: null
-  parent_detail_template: 'Model code:
+  program_detail_template: 'Model code:
 
     {code_model}
 
     '
   config_vars: []
-  parent_vars:
+  program_vars:
   - code.model
 
 jax_translator_param_est:
@@ -181,11 +191,11 @@ jax_translator_param_est:
 
     '
   image_analysis_instructions: null
-  parent_detail_template: 'Parameter estimator code:
+  program_detail_template: 'Parameter estimator code:
 
     {code_param_est}
 
     '
   config_vars: []
-  parent_vars:
+  program_vars:
   - code.param_est
