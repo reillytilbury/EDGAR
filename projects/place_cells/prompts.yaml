@@ -67,7 +67,5 @@ parameter_estimator:
     {code_model}
 
     '
-  config_vars:
-  - max_lines
   program_vars:
   - code.model
