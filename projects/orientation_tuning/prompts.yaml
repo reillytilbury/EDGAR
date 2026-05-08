@@ -60,10 +60,10 @@ parameter_estimator:
   image_analysis_instructions: null
   parent_detail_template: '**Model {parent_number}**
 
-    {code_param_est}
+    {code_model}
 
     '
   config_vars:
   - max_lines
   parent_vars:
-  - code.param_est
+  - code.model
