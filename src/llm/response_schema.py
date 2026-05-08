@@ -54,9 +54,6 @@ class ParamEstSchema(BaseModel):
 
 
 class TranslationSchema(BaseModel):
-    model_code: str = Field(
-        description="The model function translated to JAX-compatible code, including imports."
-    )
-    param_est_code: str = Field(
-        description="The parameter estimator function translated to JAX-compatible code, including imports."
+    code: str = Field(
+        description="The translated JAX-compatible code, including imports."
     )

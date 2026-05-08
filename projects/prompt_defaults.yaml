@@ -105,14 +105,12 @@ parameter_estimator:
   - program_losses.discover.final
   - code.model
   - code.param_est
-jax_translator:
-  base: 'Convert the following model and parameter estimator to be JAX-compatible.
+jax_translator_model:
+  base: 'Translate the following model function to JAX-compatible code.
 
     Include all necessary imports (jax, jax.numpy as jnp).
 
     Ensure compatibility with jax.jit, jax.grad, and jax.vmap.
-
-    Return the translated model code and parameter estimator code separately.
 
     '
   explore: null
@@ -129,14 +127,15 @@ jax_translator:
 
     * Do not use dynamic array shapes.
 
-    * Never call Python `int()` / `float()` on JAX values.
+    * Never call Python `int()` / `float()` on JAX values. Use x.astype(float) instead.
+
+    * jnp.bincount requires a static `length` argument (note: numpy uses `minlength=` but JAX renamed it to `length=`). Always pass a concrete integer: jnp.bincount(x, length=n_bins). Never omit `length=`.
 
     * Preserve the `model.DEFAULT_PARAMS = {{...}}` line exactly as-is from the original code.
 
-    * Use the docstrings in the original code to understand the intended behavior, but only add a minimal amount of docstrings in the JAX version to conserve tokens.
-
     '
   docstring_guidelines: 'Do not include any text other than the code.
+    Use the docstrings in the original code to understand the intended behavior, but only add a minimal amount of docstrings in the JAX version to conserve tokens.
 
     '
   image_analysis_instructions: null
@@ -144,13 +143,49 @@ jax_translator:
 
     {code_model}
 
+    '
+  config_vars: []
+  parent_vars:
+  - code.model
 
-    Parameter estimator code:
+jax_translator_param_est:
+  base: 'Translate the following parameter estimator function to JAX-compatible code.
+
+    Include all necessary imports (jax, jax.numpy as jnp).
+
+    Ensure compatibility with jax.jit, jax.grad, and jax.vmap.
+
+    '
+  explore: null
+  exploit: null
+  code_guidelines: 'CRITICAL JAX compatibility requirements:
+
+    * Replace all boolean indexing with `jnp.where`.
+
+    * Use `jnp` everywhere (no `np`).
+
+    * Use `jnp.clip` for clipping values — do NOT use `jax.lax.clip` (removed in JAX v0.6.0).
+
+    * Avoid Python control flow (if/for) that depends on array values.
+
+    * Do not use dynamic array shapes.
+
+    * Never call Python `int()` / `float()` on JAX values. Use x.astype(float) instead.
+
+    * jnp.bincount requires a static `length` argument (note: numpy uses `minlength=` but JAX renamed
+    it to `length=`). Always pass a concrete integer: jnp.bincount(x, length=n_bins). Never omit `length=`.
+
+    '
+  docstring_guidelines: 'Do not include any text other than the code.
+    Use the docstrings in the original code to understand the intended behavior, but only add a minimal amount of docstrings in the JAX version to conserve tokens.
+
+    '
+  image_analysis_instructions: null
+  parent_detail_template: 'Parameter estimator code:
 
     {code_param_est}
 
     '
   config_vars: []
   parent_vars:
-  - code.model
   - code.param_est
