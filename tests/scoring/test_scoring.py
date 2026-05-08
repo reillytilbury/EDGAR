@@ -1,6 +1,7 @@
 import sys
 import time
 from pathlib import Path
+import pytest
 
 import jax.numpy as jnp
 
@@ -35,6 +36,13 @@ import jax.numpy as jnp
 
 def parameter_estimator(data):
     return {'w': jnp.array(1.0)}
+"""
+
+FAILING_PARAM_EST_CODE = """
+import jax.numpy as jnp
+
+def parameter_estimator(data):
+    raise RuntimeError("param_est intentionally broken")
 """
 
 BASE_CONFIG = {
@@ -108,6 +116,21 @@ def test_score_one_model_kills_slow_model():
     assert final_loss == float("inf")
     assert initial_loss == float("inf")
     assert elapsed < 10.0  # subprocess was killed; didn't wait for the loop
+
+
+
+def test_score_one_model_falls_back_to_default_params():
+    """param_est_fn raises → _get_params falls back to default_params, loss still finite."""
+    program = Program(
+        birth=BirthCertificate(generation=0, island=0, batch_index=0),
+        code_jax=Code(model=FAST_MODEL_CODE, param_est=FAILING_PARAM_EST_CODE),
+        _default_params={"w": jnp.array(1.0)},
+    )
+    data = (_make_data(), _make_data())
+    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+
+    assert jnp.isfinite(final_loss)
+    assert jnp.isfinite(initial_loss)
 
 
 # --- score (population) ---
