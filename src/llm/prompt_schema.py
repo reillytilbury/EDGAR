@@ -6,10 +6,10 @@ Schema holding the component parts of a prompt.
 There are two kinds of template variables:
 - config_vars: come from config/spec (e.g. k, max_lines, swear_words).
   Only source: the config file / TaskSpec.
-- parent_vars: dotted paths into Program fields (e.g. "name",
+- program_vars: dotted paths into Program fields (e.g. "name",
   "code.model", "program_losses.discover.final"). Dots in the path are
   replaced with underscores to form the template variable name, so
-  "code.model" is referenced as {code_model} in parent_detail_template.
+  "code.model" is referenced as {code_model} in program_detail_template.
 
 Example usage:
     schema = PromptSchema(
@@ -17,15 +17,15 @@ Example usage:
         explore="Be creative...",
         code_guidelines="Function signature must be...",
         docstring_guidelines="Include a brief description...",
-        parent_detail_template="model: {name}\\nloss: {program_losses_discover_final}\\n{code_model}\\n",
+        program_detail_template="model: {name}\\nloss: {program_losses_discover_final}\\n{code_model}\\n",
         config_vars=["k_max"],
-        parent_vars=["name", "program_losses.discover.final", "code.model"],
+        program_vars=["name", "program_losses.discover.final", "code.model"],
     )
 
     # config: flat dict from TaskSpec.flat_config (merged evolution + llms + scoring)
     config = {"k_max": 2, "max_lines": 50, "swear_words": "scipy.optimize, curve_fit"}
 
-    # parents: list of Program objects (parent_vars extracted via dotted-path traversal)
+    # parents: list of Program objects (program_vars extracted via dotted-path traversal)
     prompt = schema.build_prompt("explore", parents, config)
 """
 from __future__ import annotations
@@ -53,21 +53,21 @@ class PromptSchema(BaseModel):
     code_guidelines: str
     docstring_guidelines: str
     image_analysis_instructions: Optional[str] = None
-    parent_detail_template: str
+    program_detail_template: str
     config_vars: list[str] = Field(default_factory=list)
-    parent_vars: list[str] = Field(default_factory=list)
+    program_vars: list[str] = Field(default_factory=list)
 
     def build_prompt(
         self,
         mode: str,
-        parents: list[Program] | None = None,
+        programs: list[Program] | None = None,
         config: dict[str, Any] | None = None,
     ) -> str:
         """Build a prompt by selecting and formatting schema sections."""
         if mode not in {"explore", "exploit"}:
             raise ValueError("mode must be 'explore' or 'exploit'")
 
-        parents = parents or []
+        programs = programs or []
         config = config or {}
 
         sections = [
@@ -80,14 +80,14 @@ class PromptSchema(BaseModel):
 
         prompt_parts = [s.format(**config) for s in sections if s]
 
-        if parents:
-            parents_text = [
-                self.parent_detail_template.format(
+        if programs:
+            programs_text = [
+                self.program_detail_template.format(
                     parent_number=i + 1,
-                    **{x.replace(".", "_"): _get_nested_attr(p, x, "") for x in self.parent_vars}
+                    **{x.replace(".", "_"): _get_nested_attr(p, x, "") for x in self.program_vars}
                 )
-                for i, p in enumerate(parents)
+                for i, p in enumerate(programs)
             ]
-            prompt_parts.append("\n".join(parents_text))
+            prompt_parts.append("\n".join(programs_text))
 
         return "\n\n".join(prompt_parts).strip()

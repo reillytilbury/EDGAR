@@ -91,7 +91,7 @@ class Program:
         return self.n_params
 
     # ── prompt template properties ──
-    # These match the parent_vars used in prompt_defaults.yaml so that
+    # These match the program_vars used in prompt_defaults.yaml so that
     # getattr(program, var_name) works in PromptSchema.build_prompt.
 
     @property
