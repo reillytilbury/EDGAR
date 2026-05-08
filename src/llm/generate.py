@@ -140,7 +140,7 @@ async def _generate_one_param_est(
     llm: str | Model,
     config: dict[str, Any] | None = None,
 ) -> None:
-    prompt = prompt_schema.build_prompt("explore", parents, config)
+    prompt = prompt_schema.build_prompt("explore", [program], config)
     result = await call_llm(
         prompt=prompt,
         llm_model=llm,
