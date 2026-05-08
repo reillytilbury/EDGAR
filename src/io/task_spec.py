@@ -123,6 +123,7 @@ class TaskSpec:
             seed_programs.append(Program(
                 birth=BirthCertificate(generation=-1, island=-1, batch_index=batch_idx, mode="seed"),
                 code=Code(model=model_path.read_text(), param_est=param_est_path.read_text()),
+                name=f"Seed Model {model_num}",
             ))
 
         return cls(
