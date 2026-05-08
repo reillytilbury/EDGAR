@@ -14,9 +14,9 @@ class Program1:
         '\tx = data["x"]\n'
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
-        "\treturn a * x**2 + b * x\n\n"
+        "\treturn a * x**2 + b * x"
     )
-    default_params = {"a": 1.0, "b": 0.0}
+    default_params = {"a": 1.0, "b": 2.0}
     latex_equation = r'y = ax^2 + bx'
 
     model_jax = (
@@ -26,11 +26,11 @@ class Program1:
         '\tx = data["x"]\n'
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
-        "\treturn a * x**2 + b * x\n\n"
+        "\treturn a * x**2 + b * x"
     )
 
     param_est = (
-        'def parameter_estimator(data):\n\treturn {"a": float(1), "b": float(0)}\n'
+        'def parameter_estimator(data):\n\treturn {"a": float(1), "b": float(2)}\n'
     )
 
 
@@ -43,10 +43,10 @@ class Program2:
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
         '\tc = params["c"]\n'
-        "\treturn a * x**3 + b * x**2 + c * x\n\n"
+        "\treturn a * x**3 + b * x**2 + c * x"
     )
 
-    default_params = {"a": 1.0, "b": 0.0, "c": 0.0}
+    default_params = {"a": 1.0, "b": 2.0, "c": 3.0}
     latex_equation = r'y = ax^3 + bx^2 + cx'
 
     model_jax = (
@@ -57,12 +57,12 @@ class Program2:
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
         '\tc = params["c"]\n'
-        "\treturn a * x**3 + b * x**2 + c * x\n\n"
+        "\treturn a * x**3 + b * x**2 + c * x"
     )
 
     param_est = (
         "def parameter_estimator(data):\n"
-        '\treturn {"a": float(1), "b": float(0), "c": float(0)}\n'
+        '\treturn {"a": float(1), "b": float(2), "c": float(3)}\n'
     )
 
 
@@ -78,10 +78,10 @@ class ProgramSolution:
         '\tc = params["c"]\n'
         '\tk = params["k"]\n'
         '\tphi_0 = params["phi_0"]\n'
-        "\treturn (a * x**2 + b * x + c) * np.sin(k * x + phi_0)\n\n"
+        "\treturn (a * x**2 + b * x + c) * np.sin(k * x + phi_0)"
     )
 
-    default_params = {"a": 1.0, "b": 0.0, "c": 0.0, "k": 6.0, "phi_0": 0.0}
+    default_params = {"a": 1.0, "b": 2.0, "c": 3.0, "k": 6.0, "phi_0": 0.0}
     latex_equation = r'y = (ax^2 + bx + c) \sin(kx + \phi_0)'
 
     model_jax = (
@@ -93,12 +93,12 @@ class ProgramSolution:
         '\tc = params["c"]\n'
         '\tk = params["k"]\n'
         '\tphi_0 = params["phi_0"]\n'
-        "\treturn (a * x**2 + b * x + c) * jnp.sin(k * x + phi_0)\n\n"
+        "\treturn (a * x**2 + b * x + c) * jnp.sin(k * x + phi_0)"
     )
 
     param_est = (
         "def parameter_estimator(data):\n"
-        '\treturn {"a": float(1), "b": float(0), "c": float(0), "k": float(6), "phi_0": float(0)}\n'
+        '\treturn {"a": float(1), "b": float(2), "c": float(3), "k": float(6), "phi_0": float(0)}\n'
     )
 
 
@@ -112,7 +112,7 @@ class InvalidProgram:
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
         '\tc = np.zeros(("c"))\n'
-        "\treturn a * x**4 + b * x + c\n\n"
+        "\treturn a * x**4 + b * x + c"
     )
 
     default_params = {"a": 1.0, "b": 0.0}
@@ -125,7 +125,7 @@ class InvalidProgram:
         '\ta = params["a"]\n'
         '\tb = params["b"]\n'
         '\tc = jnp.zeros(("c"))\n'
-        "\treturn a * x**4 + b * x + c\n\n"
+        "\treturn a * x**4 + b * x + c"
     )
 
     param_est = (
