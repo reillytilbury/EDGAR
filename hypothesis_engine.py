@@ -3,6 +3,13 @@ import os
 import logging
 import asyncio
 import numpy as np
+
+# Must be set before importing JAX. CUDA command buffers can fail to instantiate
+# on memory-constrained GPUs even when the actual model arrays would fit.
+_xla_flags = os.environ.get("XLA_FLAGS", "")
+if "--xla_gpu_enable_command_buffer" not in _xla_flags:
+    os.environ["XLA_FLAGS"] = f"{_xla_flags} --xla_gpu_enable_command_buffer=".strip()
+
 import jax, jax.numpy as jnp
 import timeout_decorator
 import jaxopt, optax
@@ -14,6 +21,7 @@ from google import genai
 from dotenv import load_dotenv
 import warnings
 import time
+import argparse
 warnings.filterwarnings(
     "ignore",
     category=FutureWarning,
@@ -355,7 +363,7 @@ async def generate_new_parameter_estimator(current_island,
         img_bytes = None
     
     llm_output = await utils.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
-                                            thinking_budget=0.0, img_bytes=img_bytes)
+                                            thinking_budget=0.25, img_bytes=img_bytes)
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -458,6 +466,10 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 use_image_feedback=True, use_param_estimator=True,
                 exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
+                data_type = 'stringer',
+                signal_fraction_thresh = 0.9, 
+                n_bins=1024, 
+                min_repeats=3,
                 tiny_lm_name = 'gemini-2.5-flash-lite',
                 little_lm_name = 'gemini-2.5-flash',
                 large_lm_name = 'gemini-2.5-pro',
@@ -471,40 +483,74 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     load_dotenv()
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-    # load and preprocess data
-    neural_data = np.load(data_path, allow_pickle=True)
-    neural_data = neural_data.item()
-    response = utils.extract_stimulus_related_response(neural_data, n_pcs=0)
-    angles = neural_data['istim']
-    n_trials = response.shape[1]
-    n_trials_small = int(n_trials * activity_thresh)
+    # # load and preprocess data
+    # neural_data = np.load(data_path, allow_pickle=True)
+    # neural_data = neural_data.item()
+    # response = utils.extract_stimulus_related_response(neural_data, n_pcs=0)
+    # angles = neural_data['istim']
+    # n_trials = response.shape[1]
+    # n_trials_small = int(n_trials * activity_thresh)
 
-    # filter 
-    active = (response > 0).astype(np.float32)
-    firing_probs = np.mean(active, axis=1)
-    conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
-    good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
-    n_good_cells = len(good_cells)
+    # # filter 
+    # active = (response > 0).astype(np.float32)
+    # firing_probs = np.mean(active, axis=1)
+    # conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
+    # good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
+    # n_good_cells = len(good_cells)
 
-    # update angles and response to be (n_cells_small, n_trials_small) and (n_cells_small, n_trials_small)
-    response_cropped, angles_cropped = np.zeros((len(good_cells), n_trials_small)), np.zeros((len(good_cells), n_trials_small))
-    for i, cell in enumerate(good_cells):
-        active_trials = response[cell] > 0
-        active_trials_idx = np.where(active_trials)[0][:n_trials_small]
-        response_cropped[i] = response[cell, active_trials_idx]
-        angles_cropped[i] = angles[active_trials_idx]
+    # # update angles and response to be (n_cells_small, n_trials_small) and (n_cells_small, n_trials_small)
+    # response_cropped, angles_cropped = np.zeros((len(good_cells), n_trials_small)), np.zeros((len(good_cells), n_trials_small))
+    # for i, cell in enumerate(good_cells):
+    #     active_trials = response[cell] > 0
+    #     active_trials_idx = np.where(active_trials)[0][:n_trials_small]
+    #     response_cropped[i] = response[cell, active_trials_idx]
+    #     angles_cropped[i] = angles[active_trials_idx]
         
-    # update response and angles to be the cropped versions and convert to JAX arrays, normalize and split into train/test
-    response, angles = jnp.asarray(response_cropped), jnp.asarray(angles_cropped)
-    response = 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # normalize response
+    # # update response and angles to be the cropped versions and convert to JAX arrays, normalize and split into train/test
+    # response, angles = jnp.asarray(response_cropped), jnp.asarray(angles_cropped)
+    # response = 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # normalize response
+    # key = jax.random.PRNGKey(42)
+    # training_size = n_good_cells // 2
+    # shuffled_indices = jax.random.permutation(key, jnp.arange(n_good_cells))
+    # training_cells, test_cells = shuffled_indices[:training_size], shuffled_indices[training_size:]
+    # response_train, response_test = response[training_cells, :], response[test_cells, :]
+    # angles_train, angles_test = angles[training_cells, :], angles[test_cells, :]
+    # print(f"Selected {len(good_cells)} cells with activity > {activity_thresh} and concentration > {conc_thresh}.")
+    # print(f"Using {len(training_cells)} cells for training and {len(test_cells)} cells for testing.")
+
+    response, angles = utils.load_data(data_dir = data_path,
+                                data_type=data_type,
+                                conc_thresh=conc_thresh,
+                                activity_thresh=activity_thresh,
+                                signal_fraction_thresh=signal_fraction_thresh,
+                                n_bins=n_bins, min_repeats=min_repeats,
+                                shuffle=False)
+
+    # # response is of shape (n_repeats, n_cells, n_bins) and angles (n_bins,), convert to (n_cells, n_trials) where n_trials = n_repeats * n_bins
+    # n_repeats, n_cells, n_bins = response.shape
+    # response = response.transpose(1, 0, 2).reshape(n_cells, n_repeats * n_bins)
+    # # make angles the same shape as response, i.e. (n_cells, n_repeats * n_bins) by tiling angles n_repeats times and repeating for each cell
+    # angles = jnp.tile(jnp.tile(angles, n_repeats), (n_cells, 1))
+
+    # response is of shape (n_repeats, n_cells, n_bins) and angles (n_bins,), average over repeats to get response of shape (n_cells, n_bins)
+    n_repeats, n_cells, n_bins = response.shape
+    response = jnp.mean(response, axis=0)
+    # make angles the same shape as response, i.e. (n_cells, n_bins) by tiling angles once and repeating for each cell
+    angles = jnp.tile(angles, (n_cells, 1))
+
+    # print the shapes of response and angles
+    print(f"Response shape: {response.shape}, Angles shape: {angles.shape}")
+    # scale responses
+    response = np.sqrt(2) * 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # normalize response
+
+    # split into training and test cells
     key = jax.random.PRNGKey(42)
-    training_size = n_good_cells // 2
-    shuffled_indices = jax.random.permutation(key, jnp.arange(n_good_cells))
+    training_size = n_cells // 2
+    shuffled_indices = jax.random.permutation(key, jnp.arange(n_cells))
     training_cells, test_cells = shuffled_indices[:training_size], shuffled_indices[training_size:]
     response_train, response_test = response[training_cells, :], response[test_cells, :]
+    # split angles in the same way
     angles_train, angles_test = angles[training_cells, :], angles[test_cells, :]
-    print(f"Selected {len(good_cells)} cells with activity > {activity_thresh} and concentration > {conc_thresh}.")
-    print(f"Using {len(training_cells)} cells for training and {len(test_cells)} cells for testing.")
 
     # create a dataframe to store the programs in each island
     islands = []
@@ -610,7 +656,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     # -----------------------------
     for i in tqdm(range(n_iterations), desc="Hypothesis Engine Iterations"):
         # check if time limit is reached
-        if time.time() - t_start > time_limit * 60:
+        if (time.time() - t_start) / 60 > time_limit:  # stop 5 minutes before the time limit to allow for final evaluations and saving
             logging.info(f"Time limit of {time_limit} minutes reached. Stopping iterations.")
             break
         logging.info(f"Iteration {i}")
@@ -639,7 +685,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                                                                    mode=mode, 
                                                                    k_max=k_max, 
                                                                    temp=temperature,
-                                                                   thinking_budget=1 if llm_name == large_lm_name else 0.0,
+                                                                   thinking_budget=1 if llm_name == large_lm_name else 0.25,
                                                                    spike_matrix=response_train, 
                                                                    stimuli=angles_train,
                                                                    img_dir=model_image_dirs[island_idx, j]) 
@@ -916,8 +962,50 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
             )
 
 if __name__ == "__main__":
-    for i in range(4):
-        print("running with standard params")
-        asyncio.run(main(n_iterations=12, time_limit=60, use_image_feedback=True, use_large_every=3,
-                         param_penalty_weight=0.01,
-                         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5))
+    # Run jacob's data
+    data_path_bz15 = [['/home/reilly/datasets/jacob data/bz15/data2.npy',
+                  '/home/reilly/datasets/jacob data/bz15/data3.npy',
+                  '/home/reilly/datasets/jacob data/bz15/data5.npy'],
+                ['/home/reilly/datasets/jacob data/bz15/meta2.mat',
+                '/home/reilly/datasets/jacob data/bz15/meta3.mat',
+                '/home/reilly/datasets/jacob data/bz15/meta5.mat']]
+    
+    data_path_bz16 = [['/home/reilly/datasets/jacob data/bz16/BZ016_2025-06-24_1_dspikes.npy'], 
+                      ['/home/reilly/datasets/jacob data/bz16/2025-06-24_1_BZ016_Block.mat']]
+
+    # Each entry is one independent run of main(). Replicates differ only in their
+    # internal RNG draws and Gemini sampling, so they can run on separate machines.
+    RUN_CONFIGS_BZ15 = [
+        dict(n_iterations=12, time_limit=60,
+             data_path=data_path_bz15, data_type='jacob',
+             use_image_feedback=True, use_large_every=3,
+             param_penalty_weight=0.01,
+             activity_thresh=0.4, signal_fraction_thresh=0.6,
+             n_bins=1024, min_repeats=3,
+             exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
+    ] * 4
+
+    RUN_CONFIGS_BZ16 = [
+        dict(n_iterations=12, time_limit=60,
+             data_path=data_path_bz16, data_type='jacob',
+             use_image_feedback=True, use_large_every=3,
+             param_penalty_weight=0.01,
+             activity_thresh=0.4, signal_fraction_thresh=0.5,
+             n_bins=1024, min_repeats=2,
+             exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)] * 4
+
+    RUN_CONFIGS = RUN_CONFIGS_BZ15 + RUN_CONFIGS_BZ16
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run-idx', type=int, default=None,
+                        help='Run only this config index (for parallel cloud execution). '
+                             'If omitted, runs all configs sequentially as before.')
+    args = parser.parse_args()
+
+    if args.run_idx is None:
+        for cfg in RUN_CONFIGS:
+            asyncio.run(main(**cfg))
+    else:
+        asyncio.run(main(**RUN_CONFIGS[args.run_idx]))
+        
+# WHEN SWITCHING BACK TO STRINGER DATA, REMEMBER TO CHANGE n_mean default in plot_model_fits back to 50

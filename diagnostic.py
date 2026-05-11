@@ -7,7 +7,8 @@ from typing import Optional, Callable, Sequence
 def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
                     x: jnp.ndarray, y: jnp.ndarray, 
                     cell_selection: Sequence[int],
-                    n_eval: int = 100, n_mean: int = 50,
+                    n_eval: int = 100, 
+                    n_mean: int = 75, # for stringer data, use n_mean=50; for jacob data, use n_mean=75
                     colours: list = ["#FDC91E", "#15AC15", '#EB2B2C'],
                     labels: Optional[list] = None, 
                     title: str = '',

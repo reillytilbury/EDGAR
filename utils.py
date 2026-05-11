@@ -792,20 +792,21 @@ def unbiased_signal_fraction(R, min_repeats=2):
     # ----------------------------------------------------------------
     # Per-angle means and within-angle variances
     # ----------------------------------------------------------------
-    mu_angles = np.mean(R, axis=0)        # (n_cells, n_angles)
-    var_angles = np.var(R, axis=0, ddof=1)  # (n_cells, n_angles)
+    mu_angles  = np.nanmean(R, axis=0)         # (n_cells, n_angles)
+    var_angles = np.nanvar(R, axis=0, ddof=1)  # (n_cells, n_angles)
 
     # ----------------------------------------------------------------
     # Unbiased stimulus-related and noise variances
     # ----------------------------------------------------------------
     N = n_angles
-    R_s = np.full(N, n_repeats, dtype=float)  # repeats per stimulus, constant
+    # actual non-NaN repeat count per angle (averaged across cells)
+    R_s = np.nansum(~np.isnan(R), axis=0).mean(axis=0).clip(min=1)  # (n_angles,)
 
     # Global mean across all stimuli
-    fbar_dot = np.mean(mu_angles, axis=1)  # (n_cells,)
+    fbar_dot = np.nanmean(mu_angles, axis=1)  # (n_cells,)
 
     # Across-stimulus variance (stimulus-related term)
-    term1 = np.mean((mu_angles - fbar_dot[:, None])**2, axis=1)
+    term1 = np.nanmean((mu_angles - fbar_dot[:, None])**2, axis=1)
 
     # Bias correction term (Eq. from Sahani & Linden, 2003)
     term2 = ((N - 1) / N**2) * np.sum(var_angles / R_s[None, :], axis=1)
@@ -827,11 +828,12 @@ def unbiased_signal_fraction(R, min_repeats=2):
 def load_data(data_dir: Union[str, List[List[str]]],
               data_type: str = 'stringer',
               shuffle: bool = False,
-              conc_thresh: float = 0.4, 
-              activity_thresh: float = 0.0, 
+              conc_thresh: float = 0.4,
+              activity_thresh: float = 0.0,
               signal_fraction_thresh: float = 0.0,
-              n_bins: int = 256, 
-              min_repeats: int = 6) -> Tuple[jnp.ndarray, jnp.ndarray]:
+              n_bins: int = 256,
+              min_repeats: int = 6,
+              return_indices: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Load and preprocess neural data from a specified directory.
 
@@ -861,7 +863,7 @@ def load_data(data_dir: Union[str, List[List[str]]],
     angles : jnp.ndarray
         Preprocessed stimulus angles. (n_bins,)
     """
-    assert data_type in ['stringer', 'jacob', 'ali'], "data_type must be either 'stringer', 'jacob', or 'ali'"
+    assert data_type in ['stringer', 'jacob', 'ali', 'hayley'], "data_type must be either 'stringer', 'jacob', 'ali', or 'hayley'"
 
     # load data matrix (n_cells, n_trials) and angles (n_trials,)
     if data_type == 'stringer':
@@ -915,6 +917,17 @@ def load_data(data_dir: Union[str, List[List[str]]],
         angles_flat = np.repeat(angles, n_blocks)  # now angles is (n_trials*n_blocks)
         response, angles = response_flat, angles_flat
     
+    elif data_type == 'hayley':
+        counts = np.load(data_dir)                     # (n_cells, 360, n_repeats)
+        n_cells, n_ori, n_rep = counts.shape
+        response = counts.reshape(n_cells, n_ori * n_rep)   # (n_cells, n_trials)
+        oris_rad = np.deg2rad(np.arange(n_ori))
+        angles   = np.repeat(oris_rad, n_rep)          # each orientation repeated n_rep times
+        if shuffle:
+            perm     = np.random.permutation(response.shape[1])
+            response = response[:, perm]
+            angles   = angles[perm]
+
     else:  # 'ali' data
         # with open(data_dir, 'rb') as f:
         #     neural_data = pickle.load(f)
@@ -939,9 +952,9 @@ def load_data(data_dir: Union[str, List[List[str]]],
             angles = angles[perm]
 
     # Activity, concentration filtering
-    active = (response > 0).astype(np.float32)
-    firing_probs = np.mean(active, axis=1)
-    conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
+    active = np.where(np.isnan(response), np.nan, (response > 0).astype(np.float32))
+    firing_probs = np.nanmean(active, axis=1)
+    conc = np.abs(np.nansum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.nansum(response, axis=1))
     good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
     n_good_cells = len(good_cells)
     print(f"Selected {n_good_cells} / {response.shape[0]} cells with activity > {activity_thresh} and concentration > {conc_thresh}.")
@@ -950,6 +963,7 @@ def load_data(data_dir: Union[str, List[List[str]]],
     conc = conc[good_cells]
     firing_probs = firing_probs[good_cells]
     response = response[good_cells, :]
+    kept_indices = good_cells.copy()  # track global indices through filtering
 
     # bin responses
     bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
@@ -972,7 +986,7 @@ def load_data(data_dir: Union[str, List[List[str]]],
             # pool_indices = relevant_indices[r * pool_size:(r + 1) * pool_size]
             # this choice of indices keeps blocks separate
             pool_indices = relevant_indices[r::min_repeats][:pool_size]
-            mean_responses.append(np.mean(response[:, pool_indices], axis=1))
+            mean_responses.append(np.nanmean(response[:, pool_indices], axis=1))
         response_binned[:, :, b] = np.array(mean_responses)
     angles = bin_centers
     response = response_binned
@@ -991,6 +1005,9 @@ def load_data(data_dir: Union[str, List[List[str]]],
     print(f"Selected {n_reliable_cells} / {n_good_cells} cells with signal fraction > {signal_fraction_thresh}.")
     # keep only reliable cells
     response = response[:, reliable_cells, :]
+    kept_indices = kept_indices[np.array(reliable_cells)]  # final global indices
+    if return_indices:
+        return response, angles, kept_indices
     return response, angles
 
 def train_with_patience_optimization(
