@@ -82,6 +82,13 @@ class FakeLLM:
             "code": code,
         })
 
+    def gen_translation(self) -> TestModel:
+        """Return a TestModel which outputs combined JAX model + param_est code for the next program in rotation."""
+        idx = self._model_jax_counter.index(min(self._model_jax_counter))
+        code = self._programs[idx].model_jax + "\n\n" + self._programs[idx].param_est
+        self._model_jax_counter[idx] += 1
+        return TestModel(custom_output_args={"code": code})
+
 
 class SeedFakeLLM:
     """Returns TestModel instances for JAX seeding, cycling through two simple models."""
