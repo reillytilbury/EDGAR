@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Callable
 import traceback
 import warnings
 import itertools
@@ -32,26 +32,24 @@ if TYPE_CHECKING:
 # Filters — which programs need work at each stage
 # ---------------------------------------------------------------------------
 
-def _needs_model_code(population: Population) -> list[Program]:
-    return [population[i] for i in range(len(population))
-            if population[i].code.model is None]
+def _needs_model_code(program: Program) -> bool:
+    return program.code.model is None
 
+def _needs_param_est_code(program: Program) -> bool:
+    return program.code.model is not None and program.code.param_est is None
 
-def _needs_param_est_code(population: Population) -> list[Program]:
-    return [population[i] for i in range(len(population))
-            if population[i].code.model is not None
-            and population[i].code.param_est is None]
+def _needs_model_translation(program: Program) -> bool:
+    return program.code.model is not None and program.code_jax.model is None
 
-
-def _needs_jax_translation(population: Population) -> list[Program]:
-    return [population[i] for i in range(len(population))
-            if population[i].code.model is not None
-            and population[i].code_jax.model is None]
-
+def _needs_param_est_translation(program: Program) -> bool:
+    return program.code.param_est is not None and program.code_jax.param_est is None
 
 def _resolve_parents(population: Population, program: Program) -> list[Program]:
     return [population[i] for i in program.birth.parent_indices]
 
+# Helper for turning LLM argument into list
+def _to_list(x, n_repeats: int) -> list:
+    return x if isinstance(x, list) else [x] * n_repeats
 
 def _prompt_image_bytes(spec: TaskSpec, data: dict, parents: list[Program], program: Program) -> bytes | None:
     if spec is None or spec.plot_fn is None or data is None:
@@ -121,14 +119,16 @@ async def generate_models(
 
     Mutates: program.code.model, program.name, program.birth.llm_name, program.image_path
     """
-    programs = _needs_model_code(population)
-    llm_iter = itertools.cycle(llm) if isinstance(llm, list) else itertools.repeat(llm)
+    llms = _to_list(llm, len(population))
+    programs, llms = zip(*[
+        (p, llm_i) for p, llm_i in zip(population, llms)
+        if _needs_model_code(p)])
     await asyncio.gather(*[
         _generate_one_model(
             p, _resolve_parents(population, p), prompt_schema, llm_i, mode, temperature,
             config, spec, data,
         )
-        for p, llm_i in zip(programs, llm_iter)
+        for p, llm_i in zip(programs, llms)
     ], return_exceptions=True)
 
 
@@ -156,48 +156,93 @@ async def _generate_one_param_est(
 async def generate_param_ests(
     population: Population,
     prompt_schema: PromptSchema,
-    llm: str | Model,
+    llm: str | Model | list[str | Model],
     config: dict[str, Any] | None = None,
 ) -> None:
     """Generate numpy parameter estimator code for programs that have model code but no estimator.
 
     Mutates: program.code.param_est
     """
-    programs = _needs_param_est_code(population)
+    llms = _to_list(llm, len(population))
+    programs, llms = zip(*[
+        (p, llm_i) for p, llm_i in zip(population, llms)
+        if _needs_param_est_code(p)])
     await asyncio.gather(*[
-        _generate_one_param_est(p, prompt_schema, llm, config)
-        for p in programs
+        _generate_one_param_est(p, prompt_schema, llm_i, config)
+        for p, llm_i in zip(programs, llms)
     ], return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------
 # JAX translation
 # ---------------------------------------------------------------------------
-
-async def _translate_one_program(
+async def _translate_one_model(
     program: Program,
     model_prompt_schema: PromptSchema,
-    param_est_prompt_schema: PromptSchema,
     llm: str | Model,
 ) -> None:
     model_prompt = model_prompt_schema.build_prompt("explore", [program])
-    param_est_prompt = param_est_prompt_schema.build_prompt("explore", [program])
     try:
-        model_result, param_est_result = await asyncio.gather(
-            call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0),
-            call_llm(prompt=param_est_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0),
-            return_exceptions=True,
-        )
-        if not isinstance(model_result, Exception) and load_function_from_source(model_result.code, "model") is not None:
+        model_result = await call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0)
+        if load_function_from_source(model_result.code, "model") is not None:
             program.code_jax.model = model_result.code
-        if not isinstance(param_est_result, Exception) and load_function_from_source(param_est_result.code, "parameter_estimator") is not None:
-            program.code_jax.param_est = param_est_result.code
     except Exception as e:
         warnings.warn(
-            f"[translate] program #{program.idx} JAX translation failed: {e}\n"
+            f"[translate] program #{program.idx} JAX model translation failed: {e}\n"
             f"{traceback.format_exc()}"
         )
 
+async def _translate_one_param_est(
+    program: Program,
+    param_est_prompt_schema: PromptSchema,
+    llm: str | Model,
+) -> None:
+    param_est_prompt = param_est_prompt_schema.build_prompt("explore", [program])
+    try:
+        param_est_result = await call_llm(prompt=param_est_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0)
+        if load_function_from_source(param_est_result.code, "parameter_estimator") is not None:
+            program.code_jax.param_est = param_est_result.code
+    except Exception as e:
+        warnings.warn(
+            f"[translate] program #{program.idx} JAX parameter estimator translation failed: {e}\n"
+            f"{traceback.format_exc()}"
+        )
+
+async def _translate_models(
+    population: Population,
+    model_prompt_schema: PromptSchema,
+    llm: str | Model| list[str | Model],
+) -> None:
+    """Translate all untranslated model code from numpy to JAX.
+
+    Mutates: program.code_jax.model
+    """
+    llms = _to_list(llm, len(population))
+    programs, llms = zip(*[
+        (p, llm_i) for p, llm_i in zip(population, llms)
+        if _needs_model_translation(p)])
+    await asyncio.gather(*[
+        _translate_one_model(p, model_prompt_schema, llm_i)
+        for p, llm_i in zip(programs, llms)
+    ], return_exceptions=True)
+
+async def _translate_param_ests(
+    population: Population,
+    param_est_prompt_schema: PromptSchema,
+    llm: str | Model| list[str | Model],
+) -> None:
+    """Translate all untranslated parameter estimator code from numpy to JAX.
+
+    Mutates: program.code_jax.param_est
+    """
+    llms = _to_list(llm, len(population))
+    programs, llms = zip(*[
+        (p, llm_i) for p, llm_i in zip(population, llms)
+        if _needs_param_est_translation(p)])
+    await asyncio.gather(*[
+        _translate_one_param_est(p, param_est_prompt_schema, llm_i)
+        for p, llm_i in zip(programs, llms)
+    ], return_exceptions=True)
 
 async def translate_programs(
     population: Population,
@@ -209,8 +254,7 @@ async def translate_programs(
 
     Mutates: program.code_jax.model, program.code_jax.param_est
     """
-    programs = _needs_jax_translation(population)
-    await asyncio.gather(*[
-        _translate_one_program(p, model_prompt_schema, param_est_prompt_schema, llm)
-        for p in programs
-    ], return_exceptions=True)
+    await asyncio.gather(
+        _translate_models(population, model_prompt_schema, llm),
+        _translate_param_ests(population, param_est_prompt_schema, llm),
+    )
