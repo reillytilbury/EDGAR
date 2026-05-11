@@ -303,3 +303,28 @@ async def test_translate_programs():
     for p in population:
         assert p.code_jax.model == expected_jax
         assert p.code_jax.param_est == expected_jax
+
+@pytest.mark.asyncio
+async def test_translate_programs_different_llms():
+    """
+        Translate both model and param_est code for programs which require it.
+        Use different lists of TestModels for model and param_est translation
+    """
+    prompt_schema = PromptSchema(
+        base="...",
+        explore="...",
+        code_guidelines='...',
+        docstring_guidelines="...",
+        program_detail_template="..",
+        program_vars=[],
+    )
+    population = await generate_fake_param_ests(3) #Has model+param_est, needs jax translation
+    llm = FakeLLM()
+    llm_model = [llm.gen_model_translation() for _ in range(3)]
+    llm_param_est = [llm.gen_param_est_translation() for _ in range(3)]
+    await translate_programs(population, prompt_schema, prompt_schema, llm_model, llm_param_est)
+    programs = [Program1(), InvalidProgram(), ProgramSolution()]
+    #Check jax code
+    for i, p in enumerate(population):
+        assert p.code_jax.model == programs[i].model_jax + " + 0.000\n"
+        assert p.code_jax.param_est == programs[i].param_est

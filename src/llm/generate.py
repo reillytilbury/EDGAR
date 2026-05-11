@@ -248,7 +248,8 @@ async def translate_programs(
     population: Population,
     model_prompt_schema: PromptSchema,
     param_est_prompt_schema: PromptSchema,
-    llm: str | Model,
+    llm: str | Model | list[str | Model],
+    llm_param_est: str | Model | list[str | Model] = None
 ) -> None:
     """Translate all untranslated programs from numpy to JAX.
 
@@ -256,5 +257,5 @@ async def translate_programs(
     """
     await asyncio.gather(
         _translate_models(population, model_prompt_schema, llm),
-        _translate_param_ests(population, param_est_prompt_schema, llm),
+        _translate_param_ests(population, param_est_prompt_schema, llm_param_est or llm),
     )
