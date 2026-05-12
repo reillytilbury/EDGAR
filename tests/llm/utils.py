@@ -3,7 +3,7 @@ from src.llm.code_loading import load_function_from_source
 from src.llm.generate import _generate_one_model, _generate_one_param_est, generate_models, generate_param_ests
 from src.llm.prompt_schema import PromptSchema
 from tests.evolution.utils import make_empty_program
-from tests.llm.fakellm import FakeLLM
+from tests.llm.fakellm import FakeLLM, CyclingModel
 from tests.llm.programs import InvalidProgram, Program1
 
 def run_model_code(code: str, data: dict, params: dict):
@@ -42,7 +42,7 @@ async def generate_fake_models(n: int):
         program_vars=[],
     )
     llm = FakeLLM()
-    llm_models = [llm.gen_model() for _ in range(9)]
+    llm_models = CyclingModel([llm.gen_model() for _ in range(n)])
     await generate_models(population, prompt_schema, llm_models, "explore", 1.0)
     return population
 
@@ -74,6 +74,6 @@ async def generate_fake_param_ests(n: int):
         program_vars=[],
     )
     llm = FakeLLM()
-    llm_models = [llm.gen_param_est() for _ in range(n)]
+    llm_models = CyclingModel([llm.gen_param_est() for _ in range(n)])
     await generate_param_ests(population, prompt_schema, llm_models)
     return population
