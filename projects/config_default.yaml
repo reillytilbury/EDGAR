@@ -38,7 +38,9 @@ llms:
   # If a list is provided, it is traversed in order by generation (with cycling)
   model_llm: [gemini-2.5-flash, gemini-2.5-flash, gemini-2.5-flash]
   param_est_llm: gemini-2.5-flash
-  jax_translator_llm: gemini-2.5-flash-lite
+  jax_model_translator_llm: gemini-2.5-flash-lite
+  jax_param_est_translator_llm: gemini-2.5-flash-lite
+
 
   # Max lines allowed in a parameter estimator response.
   max_lines: 50
