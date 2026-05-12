@@ -45,22 +45,22 @@ class Code:
     model: str | None = None
     param_est: str | None = None
 
-class _NotYetPrepared:
+class NotValidated:
     """ Marker for programs that haven't been prepared for validation scoring.
         See, prepare_validation_scoring"""
-    def __repr__(self): return "NOT_YET_PREPARED"
+    def __repr__(self): return "NOTVALIDATED"
     def __float__(self): raise TypeError("Invalid operation on unset loss")
 
 @dataclass
 class LossPair:
     init: float | None = None
-    final: float | _NotYetPrepared | None = None
+    final: float | NotValidated | None = None
 
 
 @dataclass
 class Losses:
     discover: LossPair = field(default_factory=LossPair)
-    validate: LossPair = field(default_factory=lambda: LossPair(init=None, final=_NotYetPrepared()))
+    validate: LossPair = field(default_factory=lambda: LossPair(init=None, final=NotValidated()))
 
 @dataclass
 class Program:

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.evolution.program import Program, BirthCertificate, Code, _NotYetPrepared
+from src.evolution.program import Program, BirthCertificate, Code, NotValidated
 from src.evolution.population import Population
 from src.scoring.scoring import _score_one_model, score
 
@@ -147,7 +147,7 @@ def test_score_writes_back_to_population():
         assert jnp.isfinite(pop[i].program_losses.discover.final)
         assert jnp.isfinite(pop[i].program_losses.discover.init)
         assert pop[i].program_losses.discover.final < 1e-4
-        assert isinstance(pop[i].program_losses.validate.final, _NotYetPrepared) #this is set to _NotYetPrepared, so final validation scoring is opt in, see scoring._needs_scoring, population.prepare_validation_scoring
+        assert isinstance(pop[i].program_losses.validate.final, NotValidated) #this is set to NotValidated, so final validation scoring is opt in, see scoring._needs_scoring, population.prepare_validation_scoring
         assert pop[i].n_params == 1
 
 
