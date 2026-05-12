@@ -29,6 +29,7 @@ import os
 import time
 from dataclasses import dataclass
 from typing import TextIO, TYPE_CHECKING
+from ..evolution.program import NotValidated
 
 if TYPE_CHECKING:
     from ..evolution.population import Population
@@ -97,13 +98,13 @@ def log_generation(
     n_scored    = sum(1 for p in born if p.program_losses.discover.final not in (None, float("inf")))
 
     all_final   = [population[i].program_losses.discover.final for i in range(len(population))]
-    valid       = [l for l in all_final if l is not None and l != float("inf")]
+    valid       = [l for l in all_final if l is not None and not isinstance(l, NotValidated)]
     global_best = f"{min(valid):.6f}" if valid else "n/a"
     elapsed     = time.monotonic() - log.start_time
 
     f.write(f"{'=' * 60}\n")
     f.write(f"Gen {gen:3d}  |  {mode}  |  temp={temperature:.3f}  |  elapsed={elapsed:.1f}s\n")
-    f.write(f"LLMs     model={llms.model}  param_est={llms.param_est}  jax={llms.jax}\n")
+    f.write(f"LLMs     model={llms.model}  param_est={llms.param_est}  model_jax={llms.model_jax}  model_param_est={llms.param_est_jax}\n")
     f.write(f"Spawned  {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n")
     f.write(f"Global best discover loss: {global_best}\n\n")
 

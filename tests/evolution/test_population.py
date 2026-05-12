@@ -14,7 +14,7 @@ Covers:
 import json
 import numpy as np
 from src.evolution.population import Population, _params_to_json, _params_from_json
-from src.evolution.program import _NotYetPrepared, BirthCertificate, Program, Code, Losses, LossPair
+from src.evolution.program import NotValidated, BirthCertificate, Program, Code, Losses, LossPair
 from tests.evolution.utils import make_program, linear_model_code, linear_param_est_code
 
 def initialize_program(i, model_code, param_est_code):
@@ -84,7 +84,7 @@ class TestPopulation:
             program = make_program()
             program.name = f"Program {i}"
             pop.add(program)
-            assert isinstance(pop[i].program_losses.validate.final, _NotYetPrepared)  # Initially set to NotYetPrepared
+            assert isinstance(pop[i].program_losses.validate.final, NotValidated)  # Initially set to NotValidated
 
         # Prepare validation scoring for programs at indices 1, 3, 4
         pop.prepare_validation_scoring(islands=[{1, 3, 4}])
@@ -94,7 +94,7 @@ class TestPopulation:
             if i in {1, 3, 4}:
                 assert pop[i].program_losses.validate.final is None
             else:
-                assert isinstance(pop[i].program_losses.validate.final, _NotYetPrepared)
+                assert isinstance(pop[i].program_losses.validate.final, NotValidated)
 
 
 class TestParamSerialization:

@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 import numpy as np
-from .program import Program, BirthCertificate, Code, LossPair, Losses
+from .program import NotValidated, Program, BirthCertificate, Code, LossPair, Losses
 
 
 def _params_to_json(params: dict) -> dict:
@@ -66,7 +66,7 @@ class Population:
         """Set validation loss to None for programs alive at validation time.
 
         Programs on an island are eligible for validation scoring. This resets their
-        validation.final loss from _NotYetPrepared to None so _needs_scoring can identify them.
+        validation.final loss from NotValidatedto None so _needs_scoring can identify them.
 
         Args:
             islands: dict or list of island sets containing program indices
@@ -89,6 +89,11 @@ class Population:
                     d["params"] = _params_to_json(p.params)
                 if d["sample_losses"] is not None:
                     d["sample_losses"] = p.sample_losses.tolist()
+                if isinstance(d["program_losses"]["validate"]["final"], NotValidated):
+                    d["program_losses"]["validate"]["final"] = "NOTVALIDATED"
+                llm = d["birth"]["llm_name"]
+                if llm is not None and not isinstance(llm, str):
+                    d["birth"]["llm_name"] = getattr(llm, "model_name", repr(llm))
                 f.write(json.dumps(d) + "\n")
 
     @classmethod
