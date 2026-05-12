@@ -27,5 +27,7 @@ def parameter_estimator(data):
             if loss < best_loss:
                 best_loss = loss
                 best_params = (a, b)
+    a = best_params[0]
+    b = best_params[1]
 
-    return {"a": float(best_params[0]), "b": float(best_params[1])}
+    return {"a": a.astype(float), "b": b.astype(float)}
