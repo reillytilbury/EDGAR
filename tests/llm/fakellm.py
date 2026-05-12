@@ -8,11 +8,19 @@ and ProgramSolution with an incrementing offset applied to model code.
 SeedFakeLLM returns TestModel instances for JAX-only seeding, cycling through two
 simple JAX models.
 
+CyclingModel wraps a list of TestModel instances and delegates each request() call to
+the next model in the list, allowing a single Model object to produce different outputs
+per program without needing to pass per-program LLM lists through the pipeline.
+
 Example usage:
     fake = FakeLLM()
-    result = await call_llm("prompt", llm_model=fake.gen_model(), output_type=ModelSchema)
+    cycling = CyclingModel([fake.gen_model() for _ in range(6)])
+    result = await call_llm("prompt", llm_model=cycling, output_type=ModelSchema)
 """
+from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.settings import ModelSettings
 
 from .programs import Program1, Program2, InvalidProgram, ProgramSolution, SeedPrograms
 
@@ -98,10 +106,46 @@ class SeedFakeLLM:
     def __init__(self):
         self._counter = 0
 
-    def gen_model_jax(self) -> TestModel:
+    def gen_model_translation(self) -> TestModel:
         """Return a TestModel whose output matches TranslationSchema for the next seed model."""
-        model_code = self._seed_models[self._counter]
+        model_code = self._seed_models[self._counter%len(self._seed_models)]
         self._counter += 1
         return TestModel(custom_output_args={
-            "code": model_code + "\n\n" + SeedPrograms.param_est,
+            "code": model_code + "\n"
         })
+    
+    def gen_param_est_translation(self) -> TestModel:
+        """Return a TestModel whose output matches TranslationSchema for the next seed model."""
+        return TestModel(custom_output_args={
+            "code": SeedPrograms.param_est + "\n"
+        })
+
+
+class CyclingModel(Model):
+    """Wraps a list of TestModel instances, delegating each request to the next in sequence.
+
+    Use this instead of passing per-program LLM lists through the pipeline — a single
+    CyclingModel instance naturally produces different outputs for each call_llm invocation.
+    """
+
+    def __init__(self, models: list[TestModel]):
+        self._models = models
+        self._counter = 0
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        m = self._models[self._counter % len(self._models)]
+        self._counter += 1
+        return await m.request(messages, model_settings, model_request_parameters)
+
+    @property
+    def model_name(self) -> str:
+        return "cycling-test-model"
+
+    @property
+    def system(self) -> str:
+        return "test"
