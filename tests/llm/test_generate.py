@@ -3,7 +3,7 @@ from src.llm.generate import _generate_one_model, _generate_one_param_est, gener
 from src.llm.prompt_schema import PromptSchema
 from tests.evolution.utils import make_empty_program
 from tests.llm.programs import Program1, InvalidProgram, ProgramSolution
-from tests.llm.fakellm import FakeLLM
+from tests.llm.fakellm import FakeLLM, CyclingModel
 from tests.llm.utils import generate_one_fake_model, generate_one_fake_param_est, generate_fake_models, generate_fake_param_ests
 
 #Model generation
@@ -92,9 +92,8 @@ async def test_generate_distinct_models():
         program_detail_template="..",
         program_vars=[],
     )
-    llm1 = FakeLLM()
     llm = FakeLLM()
-    llm_models = [llm1.gen_model()] + [llm.gen_model() for _ in range(9)] #TestModels with code for Program1, InvalidProgram, and ProgramSolution
+    llm_models = CyclingModel([llm.gen_model() for _ in range(9)])
     await generate_models(population, prompt_schema, llm_models, "explore", 1.0)
 
     #Check existing program is unchanged
@@ -151,9 +150,8 @@ async def test_generate_param_est():
     no_model = make_empty_program() #Needs model and param est
     model_no_param_est = await generate_fake_models(3)
     model_and_param_est = await generate_one_fake_param_est() #Already has model and param est
-    llm1 = FakeLLM()
-    llm2 = FakeLLM()
-    llm_models = [llm1.gen_param_est()] +[llm2.gen_param_est() for _ in range(3)] + [llm1.gen_param_est()] #TestModels with param est code for InvalidProgram and ProgramSolution
+    llm = FakeLLM()
+    llm_models = CyclingModel([llm.gen_param_est() for _ in range(3)])
     population = [no_model] + model_no_param_est + [model_and_param_est]
     await generate_param_ests(population, prompt_schema, llm_models)
 
@@ -232,9 +230,8 @@ async def test_translate_models():
     models_no_jax = await generate_fake_models(3)
     model_jax = await generate_one_fake_model() #Already has model
     model_jax.code_jax.model = "Existing jax model code" #Set existing jax model code to check it is unchanged
-    llm1 = FakeLLM()
-    llm2 = FakeLLM()
-    llm_models = [llm1.gen_model_translation()] +[llm2.gen_model_translation() for _ in range(3)] + [llm1.gen_model_translation()] #TestModels with param est code for InvalidProgram and ProgramSolution
+    llm = FakeLLM()
+    llm_models = CyclingModel([llm.gen_model_translation() for _ in range(3)])
     population = [no_model] + models_no_jax + [model_jax]
     await _translate_models(population, prompt_schema, llm_models)
 
@@ -266,9 +263,8 @@ async def test_translate_param_ests():
     param_ests_no_jax = await generate_fake_param_ests(3) #Has model+param_est, needs jax translation
     param_est_jax = await generate_one_fake_param_est() #Already has param_est
     param_est_jax.code_jax.param_est = "Existing jax param_est code" #Set existing jax to check it is unchanged
-    llm1 = FakeLLM()
-    llm2 = FakeLLM()
-    llm_models = [llm1.gen_param_est_translation()] + [llm2.gen_param_est_translation() for _ in range(3)] + [llm1.gen_param_est_translation()]
+    llm = FakeLLM()
+    llm_models = CyclingModel([llm.gen_param_est_translation() for _ in range(3)])
     population = [no_param_est] + param_ests_no_jax + [param_est_jax]
     await _translate_param_ests(population, prompt_schema, llm_models)
 
@@ -320,8 +316,8 @@ async def test_translate_programs_different_llms():
     )
     population = await generate_fake_param_ests(3) #Has model+param_est, needs jax translation
     llm = FakeLLM()
-    llm_model = [llm.gen_model_translation() for _ in range(3)]
-    llm_param_est = [llm.gen_param_est_translation() for _ in range(3)]
+    llm_model = CyclingModel([llm.gen_model_translation() for _ in range(3)])
+    llm_param_est = CyclingModel([llm.gen_param_est_translation() for _ in range(3)])
     await translate_programs(population, prompt_schema, prompt_schema, llm_model, llm_param_est)
     programs = [Program1(), InvalidProgram(), ProgramSolution()]
     #Check jax code
