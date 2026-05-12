@@ -12,7 +12,7 @@ Covers:
 import numpy as np
 import pytest
 
-from src.evolution.program import _NotYetPrepared
+from src.evolution.program import NotValidated
 from tests.evolution.utils import make_program, wrong_entrypoint_code
 
 class TestCompile:
@@ -96,7 +96,7 @@ class TestLossesDefaults:
 
     def test_validate_final_is_not_yet_prepared(self):
         program = make_program()
-        assert isinstance(program.program_losses.validate.final, _NotYetPrepared) 
+        assert isinstance(program.program_losses.validate.final, NotValidated) 
 
     def test_validate_init_is_none(self):
         program = make_program()
