@@ -16,4 +16,4 @@ def parameter_estimator(data):
 
     A = np.vstack([x, np.ones(len(x))]).T
     a, b = np.linalg.lstsq(A, y, rcond=None)[0]
-    return {"a": float(a), "b": float(b)}
+    return {"a": a.astype(float), "b": b.astype(float)}
