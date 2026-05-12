@@ -9,4 +9,4 @@ def model(data, params):
     return a * np.maximum(0, x - b)
 
 
-model.DEFAULT_PARAMS = {"a": 1.0, "b": 0.0}
+model.DEFAULT_PARAMS = {"a": float(1.0), "b": float(0.0)}
