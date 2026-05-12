@@ -146,7 +146,6 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
         parents    = boltzmann_sample(programs_0, k=2, temperature=1.0)  # e.g. {0, 2}
     """
     programs = list(programs)
-    print("boltzmann_sample programs: ", programs)
     if k > len(programs):
         raise ValueError(f"k={k} exceeds population size {len(programs)}")
     losses = np.array([p.program_losses.discover.final for p in programs], dtype=float)
