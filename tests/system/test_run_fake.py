@@ -11,7 +11,7 @@ from pathlib import Path
 from src.run import run
 from src.io.config import Config
 from src.io.task_spec import TaskSpec
-from tests.llm.fakellm import FakeLLM, SeedFakeLLM
+from tests.llm.fakellm import FakeLLM, SeedFakeLLM, CyclingModel
 
 CONFIG_PATH = Path(__file__).parent / "test_task" / "config.yaml"
 
@@ -22,12 +22,16 @@ def fake_run(tmp_path_factory):
     spec = TaskSpec.from_config(config)
     spec.io["save_path"] = str(tmp_path_factory.mktemp("output"))
 
+    n_gen = spec.evolution["n_generations"]
+    n_per_gen = spec.evolution["batch_size"] * spec.evolution["n_islands"]
+    n_seed = len(spec.seed_programs)
     fake = FakeLLM()
     seed_fake = SeedFakeLLM()
-    n_gen = spec.evolution["n_generations"]
-    spec.llms["model_llm"] = [fake.gen_model() for _ in range(n_gen)]
-    spec.llms["param_est_llm"] = [fake.gen_param_est() for _ in range(n_gen)]
-    spec.llms["jax_translator_llm"] = [seed_fake.gen_model_jax() for _ in range(2)]+ [fake.gen_model_jax() for _ in range(n_gen-2)]
+
+    spec.llms["model_llm"] = CyclingModel([fake.gen_model() for _ in range(n_gen * n_per_gen)])
+    spec.llms["param_est_llm"] = CyclingModel([fake.gen_param_est() for _ in range(n_gen * n_per_gen)])
+    spec.llms["jax_model_translator_llm"] = CyclingModel([seed_fake.gen_model_translation() for _ in range(n_seed)] + [fake.gen_model_translation() for _ in range(n_gen * n_per_gen)])
+    spec.llms["jax_param_est_translator_llm"] = CyclingModel([seed_fake.gen_param_est_translation() for _ in range(n_seed)] + [fake.gen_param_est_translation() for _ in range(n_gen * n_per_gen)])
 
     asyncio.run(run(spec))
     return spec.output_dir
