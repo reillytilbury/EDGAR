@@ -38,7 +38,7 @@ from ..llm.code_loading import load_function_from_source
 from ..llm.prompt_schema import PromptSchema
 
 
-LLMs = namedtuple("LLMs", ["model", "param_est", "jax"])
+LLMs = namedtuple("LLMs", ["model", "param_est", "model_jax", "param_est_jax"])
 PromptSchemas = namedtuple("PromptSchemas", ["model", "param_est", "jax_model", "jax_param_est"])
 
 
@@ -212,18 +212,11 @@ class TaskSpec:
         mode = "explore" if generation < n_generations // 2 else "exploit"
         temperature = 1 + np.exp(-generation / n_generations)
 
-        def _cycle(key):
-            seq = self.llms[key]
-            if isinstance(seq, str):
-                return seq
-            if isinstance(seq, Model):
-                return seq
-            return seq[generation % len(seq)]
-
         llms = LLMs(
-            model=_cycle("model_llm"),
-            param_est=_cycle("param_est_llm"),
-            jax=_cycle("jax_translator_llm"),
+            model=self.llms["model_llm"],
+            param_est=self.llms["param_est_llm"],
+            model_jax=self.llms["jax_model_translator_llm"],
+            param_est_jax=self.llms["jax_param_est_translator_llm"],
         )
 
         return mode, temperature, llms
