@@ -1,5 +1,6 @@
 from src.evolution.population import Population
 from src.evolution.program import BirthCertificate, Code, Program
+from tests.llm.programs import Seed1, Seed2, Program1, Program2, ProgramSolution, InvalidProgram
 
 def linear_model_code():
     return """
@@ -82,3 +83,20 @@ def make_population():
     pop.add(p1)
     pop.add(p2)
     return pop
+
+def make_seeds():
+    seed1 = Program(
+        birth = BirthCertificate(generation=-1, island=-1, batch_index=0),
+        code = Code(model=Seed1.model, param_est=Seed1.param_est),
+        name = "Seed1",
+        _default_params = Seed1.default_params,
+    )
+    seed2 = Program(
+        birth = BirthCertificate(generation=-1, island=-1, batch_index=1),
+        code = Code(model=Seed2.model, param_est=Seed2.param_est),
+        name = "Seed2",
+        _default_params = Seed2.default_params,
+    )
+    return [seed1, seed2]
+
+    

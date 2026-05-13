@@ -73,7 +73,7 @@ def spawn(
     temperature: float,
     batch_size: int,
     num_parents: int,
-    rng: np.random.Generator = np.random.default_rng(42),
+    rng: np.random.Generator,
 ) -> None:
     """
     Sample parents from each island and create empty Program shells.
@@ -86,9 +86,9 @@ def spawn(
     """
     for island_idx, island in enumerate(islands):
         programs = [population[i] for i in island]
-        parent_indices = list(uniform_sample(programs, k=num_parents, rng=rng))
 
         for batch_idx in range(batch_size):
+            parent_indices = list(uniform_sample(programs, k=num_parents, rng=rng))
             child = Program(
                 birth=BirthCertificate(
                     generation=generation,
@@ -123,42 +123,41 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
         islands[i] = {p.idx for p in ranked[:keep_n]}
 
 
-def uniform_sample(programs: set[Program], k: int, rng: np.random.Generator = np.random.default_rng(42)) -> set[int]:
+def uniform_sample(programs: list[Program], k: int, rng: np.random.Generator) -> set[int]:
     """
     Sample k global indices uniformly at random.
 
-        programs_0 = {pop[i] for i in island_0}
+        programs_0 = [pop[i] for i in island_0]
         parents    = uniform_sample(programs_0, k=2)  # e.g. {0, 2}
     """
-    programs = list(programs)
     if k > len(programs):
         raise ValueError(f"k={k} exceeds number of programs sampled from {len(programs)}")
     chosen = rng.choice(len(programs), size=k, replace=False)
     return {programs[j].idx for j in chosen}
 
 
-def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.0, rng: np.random.Generator = np.random.default_rng(42)) -> set[int]:
-    """
+def boltzmann_sample(programs: list[Program], k: int, temperature: float, rng: np.random.Generator) -> set[int]:
+    r"""
     Sample k global indices using a Boltzmann distribution over relative,
     std-normalised losses. High temperature → uniform, low → best dominate.
+    Programs are sampled from the prob. distribution:
+    Math:
+        P_i = exp(g_i) / sum_j(exp(g_j)),
+        g_i = -z_i / max(temperature, 1e-3),
+        z_i = (loss_i - loss_min) / (std_loss + 1e-6)
 
-        programs_0 = {pop[i] for i in island_0}
+        programs_0 = [pop[i] for i in island_0]
         parents    = boltzmann_sample(programs_0, k=2, temperature=1.0)  # e.g. {0, 2}
     """
-    programs = list(programs)
     if k > len(programs):
         raise ValueError(f"k={k} exceeds number of programs sampled from {len(programs)}")
-    losses = np.array([p.program_losses.discover.final for p in programs], dtype=float)
-    # if all losses are NaN or inf or None, raise an error 
-    if np.all(np.isnan(losses) | np.isinf(losses) | (losses is None)):
-        raise ValueError("All losses are NaN or inf; cannot perform Boltzmann sampling")
-    # replace non-finite losses with worst_finite + 1 so std stays finite
-    losses = np.where(np.isnan(losses) | np.isinf(losses), float("inf"), losses)
+    losses = np.array([p.program_losses.discover.final for p in programs], dtype=float) #dtype = float converts None to nan
+    losses = np.where(np.isnan(losses) | np.isinf(losses), float("inf"), losses) #convert NaN, +-inf to +inf
     finite_losses = losses[np.isfinite(losses)]
     worst_finite = finite_losses.max() if len(finite_losses) > 0 else 0.0
-    losses = np.where(np.isinf(losses), worst_finite + 1.0, losses) # if we fail to evaluate the model for any samples, this will return inf losses rather than crashing (due to inf / inf)
-    logits = -(losses - losses.min()) / (np.std(losses) + 1e-6) / max(temperature, 1e-3)
-    logits -= logits.max()
+    losses = np.where(np.isinf(losses), worst_finite + 1.0, losses) #convert +inf to worst_finite + 1
+    logits = -(losses - losses.min()) / (np.std(losses) + 1e-6) / max(temperature, 1e-3) #compute g_i logits
+    logits -= logits.max() #ensures largest value being exponentiated is 0, so exp(g_i) is in [0, 1]
     probs = np.exp(logits)
     probs /= probs.sum()
     chosen = rng.choice(len(programs), size=k, replace=False, p=probs)
@@ -169,7 +168,7 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
 # Migration
 # ─────────────────────────────────────────────────────────────────────────
 
-def migrate(islands: list[set[int]], population: Population, evolution: dict, temperature: float, rng: np.random.Generator = np.random.default_rng(42)) -> None:
+def migrate(islands: list[set[int]], population: Population, evolution: dict, temperature: float, rng: np.random.Generator) -> None:
     """Sample migrants from each island via Boltzmann distribution and add to topology destination.
 
     For each island i, sample n_migrants programs using Boltzmann distribution (biased toward
@@ -182,19 +181,29 @@ def migrate(islands: list[set[int]], population: Population, evolution: dict, te
         evolution: evolution config dict containing n_migrants and topology
         temperature: temperature for Boltzmann sampling
     """
-    # TODO: temperature needs warping before being passed to boltzmann_sample.
+    # Temperature needs warping before being passed to boltzmann_sample.
     # Raw temperature from schedule() lives in [1, 2]. The correct transform is
     #     T_warped = (T - 1.0) ** 4
     # which maps [1, 2] -> [0, 1] with a sharp decay, so migration becomes
     # strongly selective late in the run. Confirmed in the old hypothesis_engine.py.
+
+    if len(islands) != len(evolution["topology"]):
+        raise ValueError("Length of topology must match number of islands")
+
     n_migrants = evolution["n_migrants"]
     topology = evolution["topology"]
+    T_warped = (temperature - 1.0) ** 4
 
-    for i, island in enumerate(islands):
+    #First collect which programs will be migrated
+    updates = []
+    for island in islands:
         programs = [population[idx] for idx in island]
-        sampled = boltzmann_sample(programs, k=n_migrants, temperature=temperature, rng=rng)
-        islands[topology[i]].update(sampled)
+        sampled = boltzmann_sample(programs, k=n_migrants, temperature=T_warped, rng=rng)
+        updates.append(sampled)
 
+    # Copy the migrants across to destination islands, updating all islands simultaneously
+    for destination, migrants in zip(topology, updates):
+        islands[destination].update(migrants)
 
 # ─────────────────────────────────────────────────────────────────────────
 # Deduplication
