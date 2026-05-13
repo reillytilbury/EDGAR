@@ -140,3 +140,17 @@ def write_family_tree(
     out_path = out_dir / "family_tree.html"
     out_path.write_text(html)
     return out_path
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python -m src.monitoring.family_tree <path/to/population.jsonl>")
+        sys.exit(1)
+
+    pop_path = Path(sys.argv[1])
+    population = Population.load(str(pop_path))
+    out_dir = pop_path.parent
+    out_path = write_family_tree(population, census=[], out_dir=out_dir)
+    print(f"Written: {out_path}")
