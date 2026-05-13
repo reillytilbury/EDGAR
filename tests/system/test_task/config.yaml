@@ -11,7 +11,7 @@ evolution:
   topology: [1, 0]
 
 llms:
-  k_max: 2
+  num_parents: 2
   model_llm: gemini-2.0-flash
   param_est_llm: gemini-2.0-flash
   jax_model_translator_llm: gemini-2.0-flash-lite
