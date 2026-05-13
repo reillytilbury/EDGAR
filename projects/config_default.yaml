@@ -32,7 +32,7 @@ evolution:
 
 llms:
   # Number of parent programs in each prompt
-  k_max: 2
+  num_parents: 2
 
   # LLMs for different tasks. Each can be a string or a list.
   # If a list is provided, it is traversed in order by generation (with cycling)

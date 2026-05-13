@@ -13,21 +13,22 @@ There are two kinds of template variables:
 
 Example usage:
     schema = PromptSchema(
-        base="You are a scientist. Below are {k_max} models...",
+        base="You are a scientist. Below are {num_parents} models...",
         explore="Be creative...",
         code_guidelines="Function signature must be...",
         docstring_guidelines="Include a brief description...",
         program_detail_template="model: {name}\\nloss: {program_losses_discover_final}\\n{code_model}\\n",
-        config_vars=["k_max"],
+        config_vars=["num_parents"],
         program_vars=["name", "program_losses.discover.final", "code.model"],
     )
 
     # config: flat dict from TaskSpec.flat_config (merged evolution + llms + scoring)
-    config = {"k_max": 2, "max_lines": 50, "swear_words": "scipy.optimize, curve_fit"}
+    config = {"num_parents": 2, "max_lines": 50, "swear_words": "scipy.optimize, curve_fit"}
 
     # parents: list of Program objects (program_vars extracted via dotted-path traversal)
     prompt = schema.build_prompt("explore", parents, config)
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
@@ -35,6 +36,7 @@ from typing import Optional, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..evolution.program import Program
+
 
 def _get_nested_attr(obj: Any, dotted_key: str, default: Any = None) -> Any:
     item = obj
@@ -45,6 +47,7 @@ def _get_nested_attr(obj: Any, dotted_key: str, default: Any = None) -> Any:
         item = getattr(item, part)
 
     return item
+
 
 class PromptSchema(BaseModel):
     base: str
@@ -83,7 +86,10 @@ class PromptSchema(BaseModel):
             programs_text = [
                 self.program_detail_template.format(
                     parent_number=i + 1,
-                    **{x.replace(".", "_"): _get_nested_attr(p, x, "") for x in self.program_vars}
+                    **{
+                        x.replace(".", "_"): _get_nested_attr(p, x, "")
+                        for x in self.program_vars
+                    },
                 )
                 for i, p in enumerate(programs)
             ]
