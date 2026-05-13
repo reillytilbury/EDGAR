@@ -116,7 +116,9 @@ parameter_estimator:
 jax_translator_model:
   base: 'Translate the following model function to JAX-compatible code.
 
-    Ensure that keys of data and params dicts are preserved.
+    Ensure that keys of data and params dicts are preserved. 
+    
+    Ensure that the input and output behavior of the function is preserved.
 
     Include all necessary imports (jax, jax.numpy as jnp).
 
