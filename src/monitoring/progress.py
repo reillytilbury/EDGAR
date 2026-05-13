@@ -298,3 +298,18 @@ def write_progress(
         _render_loss_progress(population, sidebar_data, out_dir, task_name),
         _render_gd_effect(population, sidebar_data, out_dir, task_name),
     )
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python -m src.monitoring.progress <path/to/population.jsonl>")
+        sys.exit(1)
+
+    pop_path = Path(sys.argv[1])
+    population = Population.load(str(pop_path))
+    out_dir = pop_path.parent
+    loss_path, gd_path = write_progress(population, census=[], out_dir=out_dir)
+    print(f"Written: {loss_path}")
+    print(f"Written: {gd_path}")

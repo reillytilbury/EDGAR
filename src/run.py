@@ -35,6 +35,7 @@ from .llm.generate import (
     translate_programs,
 )
 from .scoring.scoring import score
+from .monitoring.family_tree import write_family_tree
 
 
 async def run(spec: TaskSpec, log_level: str = "compact") -> str:
@@ -110,7 +111,10 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     save_island_census(census, os.path.join(spec.output_dir, "island_census.jsonl"))
     log.file.close()
 
-    return spec.output_dir
+    # generate family_tree
+    write_family_tree(population, census, spec.output_dir)
+    print(f"***** Run complete. Output directory: {spec.output_dir} *****")
+    return 
 
 
 if __name__ == "__main__":
