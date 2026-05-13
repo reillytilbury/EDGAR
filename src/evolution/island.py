@@ -73,6 +73,7 @@ def spawn(
     temperature: float,
     batch_size: int,
     num_parents: int,
+    rng: np.random.Generator = np.random.default_rng(42),
 ) -> None:
     """
     Sample parents from each island and create empty Program shells.
@@ -85,7 +86,7 @@ def spawn(
     """
     for island_idx, island in enumerate(islands):
         programs = [population[i] for i in island]
-        parent_indices = list(uniform_sample(programs, k = num_parents))
+        parent_indices = list(uniform_sample(programs, k=num_parents, rng=rng))
 
         for batch_idx in range(batch_size):
             child = Program(
@@ -122,7 +123,7 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
         islands[i] = {p.idx for p in ranked[:keep_n]}
 
 
-def uniform_sample(programs: set[Program], k: int = 1) -> set[int]:
+def uniform_sample(programs: set[Program], k: int, rng: np.random.Generator = np.random.default_rng(42)) -> set[int]:
     """
     Sample k global indices uniformly at random.
 
@@ -132,11 +133,11 @@ def uniform_sample(programs: set[Program], k: int = 1) -> set[int]:
     programs = list(programs)
     if k > len(programs):
         raise ValueError(f"k={k} exceeds number of programs sampled from {len(programs)}")
-    chosen = np.random.choice(len(programs), size=k, replace=False)
+    chosen = rng.choice(len(programs), size=k, replace=False)
     return {programs[j].idx for j in chosen}
 
 
-def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.0) -> set[int]:
+def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.0, rng: np.random.Generator = np.random.default_rng(42)) -> set[int]:
     """
     Sample k global indices using a Boltzmann distribution over relative,
     std-normalised losses. High temperature → uniform, low → best dominate.
@@ -160,7 +161,7 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
     logits -= logits.max()
     probs = np.exp(logits)
     probs /= probs.sum()
-    chosen = np.random.choice(len(programs), size=k, replace=False, p=probs)
+    chosen = rng.choice(len(programs), size=k, replace=False, p=probs)
     return {programs[j].idx for j in chosen}
 
 
@@ -168,7 +169,7 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
 # Migration
 # ─────────────────────────────────────────────────────────────────────────
 
-def migrate(islands: list[set[int]], population: Population, evolution: dict, temperature: float) -> None:
+def migrate(islands: list[set[int]], population: Population, evolution: dict, temperature: float, rng: np.random.Generator = np.random.default_rng(42)) -> None:
     """Sample migrants from each island via Boltzmann distribution and add to topology destination.
 
     For each island i, sample n_migrants programs using Boltzmann distribution (biased toward
@@ -191,7 +192,7 @@ def migrate(islands: list[set[int]], population: Population, evolution: dict, te
 
     for i, island in enumerate(islands):
         programs = [population[idx] for idx in island]
-        sampled = boltzmann_sample(programs, k=n_migrants, temperature=temperature)
+        sampled = boltzmann_sample(programs, k=n_migrants, temperature=temperature, rng=rng)
         islands[topology[i]].update(sampled)
 
 
