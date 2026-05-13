@@ -6,7 +6,7 @@
 #   - program_vars: dotted paths into Program fields (e.g. "name", "code.model", "program_losses.discover.final")
 
 model:
-  base: 'You are an AI scientist. Below are {k_max} models describing a phenomenon, sorted from worst to best.
+  base: 'You are an AI scientist. Below are {num_parents} models describing a phenomenon, sorted from worst to best.
 
     Your task is to create a new model, that is better than all the models below.
 
@@ -57,7 +57,7 @@ model:
 
     '
   config_vars:
-  - k_max
+  - num_parents
   program_vars:
   - name
   - program_losses.discover.final

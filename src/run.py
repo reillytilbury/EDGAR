@@ -1,6 +1,7 @@
 """
 Main runner. Translates the pseudocode directly into real code.
 """
+
 from __future__ import annotations
 
 # JAX/XLA runtime guards — must be set before any import that loads JAX.
@@ -41,10 +42,18 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     spec.save_task_spec(spec.output_dir)
     log = open_log(spec.output_dir, log_level)
 
-    X_discover, X_validate, X_eval = spec.load_data_fn(data_path=spec.io["data_path"], **spec.project_params)
+    X_discover, X_validate, X_eval = spec.load_data_fn(
+        data_path=spec.io["data_path"], **spec.project_params
+    )
     population = Population()
     islands = seed(population, spec.seed_programs, spec.evolution["n_islands"])
-    await translate_programs(population, spec.prompt_schemas.jax_model, spec.prompt_schemas.jax_param_est, spec.llms["jax_model_translator_llm"], spec.llms["jax_param_est_translator_llm"])
+    await translate_programs(
+        population,
+        spec.prompt_schemas.jax_model,
+        spec.prompt_schemas.jax_param_est,
+        spec.llms["jax_model_translator_llm"],
+        spec.llms["jax_param_est_translator_llm"],
+    )
     score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
     census = []
@@ -52,16 +61,40 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     for gen in range(spec.evolution["n_generations"]):
         print(f"Generation {gen} / {spec.evolution['n_generations']}")
         mode, temperature, llms = spec.schedule(gen)
-        spawn(population, islands, gen, mode, temperature,
-              batch_size=spec.evolution["batch_size"],
-              k_max=spec.llms["k_max"])
+        spawn(
+            population,
+            islands,
+            gen,
+            mode,
+            temperature,
+            batch_size=spec.evolution["batch_size"],
+            num_parents=spec.llms["num_parents"],
+        )
 
-        await generate_models(population, spec.prompt_schemas.model, llms.model, mode, temperature,
-                              config=spec.flat_config, spec=spec, data=X_discover[1]) # use test data of X_discover for plotting
-        await generate_param_ests(population, spec.prompt_schemas.param_est, llms.param_est, spec.flat_config)
-        await translate_programs(population, spec.prompt_schemas.jax_model, spec.prompt_schemas.jax_param_est, llms.model_jax, llms.param_est_jax)
+        await generate_models(
+            population,
+            spec.prompt_schemas.model,
+            llms.model,
+            mode,
+            temperature,
+            config=spec.flat_config,
+            spec=spec,
+            data=X_discover[1],
+        )  # use test data of X_discover for plotting
+        await generate_param_ests(
+            population, spec.prompt_schemas.param_est, llms.param_est, spec.flat_config
+        )
+        await translate_programs(
+            population,
+            spec.prompt_schemas.jax_model,
+            spec.prompt_schemas.jax_param_est,
+            llms.model_jax,
+            llms.param_est_jax,
+        )
 
-        score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
+        score(
+            population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover"
+        )
 
         deduplicate(islands, population, spec.evolution)
         prune(islands, population, spec.evolution)
@@ -79,13 +112,15 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     return spec.output_dir
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run EDGAR")
-    parser.add_argument("config", type=str, help="Path to task config.yaml or task_spec.yaml")
+    parser.add_argument(
+        "config", type=str, help="Path to task config.yaml or task_spec.yaml"
+    )
     args = parser.parse_args()
 
     from .io.config import Config
+
     path = Path(args.config)
     if path.name == "task_spec.yaml":
         config = Config.from_taskspec(path)
