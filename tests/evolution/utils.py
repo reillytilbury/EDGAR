@@ -88,12 +88,14 @@ def make_seeds():
     seed1 = Program(
         birth = BirthCertificate(generation=-1, island=-1, batch_index=0),
         code = Code(model=Seed1.model, param_est=Seed1.param_est),
+        code_jax = Code(model=Seed1.model_jax, param_est=Seed1.param_est_jax),
         name = "Seed1",
         _default_params = Seed1.default_params,
     )
     seed2 = Program(
         birth = BirthCertificate(generation=-1, island=-1, batch_index=1),
         code = Code(model=Seed2.model, param_est=Seed2.param_est),
+        code_jax = Code(model=Seed2.model_jax, param_est=Seed2.param_est_jax),
         name = "Seed2",
         _default_params = Seed2.default_params,
     )

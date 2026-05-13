@@ -22,7 +22,7 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.settings import ModelSettings
 
-from .programs import Program1, Program2, InvalidProgram, ProgramSolution, SeedPrograms
+from .programs import Program1, Program2, InvalidProgram, ProgramSolution, Seed1, Seed2
 
 
 class FakeLLM:
@@ -101,23 +101,27 @@ class FakeLLM:
 class SeedFakeLLM:
     """Returns TestModel instances for JAX seeding, cycling through two simple models."""
 
-    _seed_models = (SeedPrograms.model_v1_jax, SeedPrograms.model_v2_jax)
+    _seed_models = (Seed1.model_jax, Seed2.model_jax)
+    _seed_param_ests = (Seed1.param_est_jax, Seed2.param_est_jax)
 
     def __init__(self):
-        self._counter = 0
+        self._model_counter = 0
+        self._param_est_counter = 0
 
     def gen_model_translation(self) -> TestModel:
         """Return a TestModel whose output matches TranslationSchema for the next seed model."""
-        model_code = self._seed_models[self._counter%len(self._seed_models)]
-        self._counter += 1
+        model_code = self._seed_models[self._model_counter%len(self._seed_models)]
+        self._model_counter += 1
         return TestModel(custom_output_args={
             "code": model_code + "\n"
         })
     
     def gen_param_est_translation(self) -> TestModel:
         """Return a TestModel whose output matches TranslationSchema for the next seed model."""
+        param_est_code = self._seed_param_ests[self._param_est_counter%len(self._seed_param_ests)]
+        self._param_est_counter += 1
         return TestModel(custom_output_args={
-            "code": SeedPrograms.param_est + "\n"
+            "code": param_est_code + "\n"
         })
 
 
