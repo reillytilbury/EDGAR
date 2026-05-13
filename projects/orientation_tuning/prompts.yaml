@@ -51,7 +51,23 @@ parameter_estimator:
     '
   explore: null
   exploit: null
-  code_guidelines: "**Code Generation Guidelines:**\n* Import any packages you use.\n* Do not include any text other than the code.\n* Return a parameter dict with the same keys expected by the model.\n* Function signature must be `def parameter_estimator(data):`.\n* Your response **must** be less than {max_lines} lines. If it is longer, it will be immediately rejected.\n* Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point.\n"
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do not include any text other than the code.
+
+    * Return a parameter dict with the same keys expected by the model.
+
+    * Function signature must be `def parameter_estimator(data):`.
+
+    * data is a dictionary with only two keys : "stimulus" and "response". 
+    
+    * Your response **must** be less than {max_lines} lines. If it is longer, it will be immediately rejected.
+
+    * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point.
+
+    '
   docstring_guidelines: '**Docstring Guidelines:**
 
     * Briefly describe the estimation method.

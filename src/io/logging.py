@@ -87,6 +87,7 @@ def log_generation(
     """
     f = log.file
     mode, temperature, llms = spec.schedule(gen)
+    llm = llms.model[gen % len(llms.model)] if isinstance(llms.model, list) else llms.model
     born = [population[i] for i in range(len(population)) if population[i].birth.generation == gen]
     n = len(born)
 
@@ -104,7 +105,7 @@ def log_generation(
 
     f.write(f"{'=' * 60}\n")
     f.write(f"Gen {gen:3d}  |  {mode}  |  temp={temperature:.3f}  |  elapsed={elapsed:.1f}s\n")
-    f.write(f"LLMs     model={llms.model}  param_est={llms.param_est}  model_jax={llms.model_jax}  model_param_est={llms.param_est_jax}\n")
+    f.write(f"LLMs     model={llm}  param_est={llms.param_est}  model_jax={llms.model_jax}  model_param_est={llms.param_est_jax}\n")
     f.write(f"Spawned  {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n")
     f.write(f"Global best discover loss: {global_best}\n\n")
 
