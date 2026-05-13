@@ -69,6 +69,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
             temperature,
             batch_size=spec.evolution["batch_size"],
             num_parents=spec.llms["num_parents"],
+            rng=spec.rng,
         )
 
         await generate_models(
@@ -98,7 +99,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
 
         deduplicate(islands, population, spec.evolution)
         prune(islands, population, spec.evolution)
-        migrate(islands, population, spec.evolution, temperature)
+        migrate(islands, population, spec.evolution, temperature, rng=spec.rng)
         census.append([set(island) for island in islands])
         log_generation(log, gen, population, islands, spec)
 

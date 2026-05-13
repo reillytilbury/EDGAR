@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 import yaml
 
 from pydantic_ai.models import Model
@@ -84,6 +85,9 @@ class TaskSpec:
     # seed programs — 2 Programs with numpy model_code + param_est_code
     seed_programs: list[Program] = field(default_factory=list)
 
+    # seeded RNG — use this instead of np.random directly for reproducibility
+    rng: np.random.Generator = field(default_factory=np.random.default_rng)
+
     # ── constructors ──
 
     @classmethod
@@ -101,7 +105,6 @@ class TaskSpec:
 
         task_name = config.task_name
         prompts = config.prompts
-
         data_loader_path = config.project_dir / "data_loader" / "load_data.py"
         load_data_fn = load_function_from_source(data_loader_path.read_text(), "load_data")
         if load_data_fn is None:
@@ -144,6 +147,7 @@ class TaskSpec:
             loss_fn=loss_fn,
             plot_fn=plot_fn,
             seed_programs=seed_programs,
+            rng=np.random.default_rng(config.project_params.get("random_seed")),
         )
 
     # ── persistence ──
