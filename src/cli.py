@@ -234,7 +234,7 @@ def init_project(task: str) -> int:
 
     # Write config
     config_text = dedent(
-        f"""\
+        """\
         io:
           data_path: /path/to/data.npy
           save_path: program_databases
@@ -247,7 +247,7 @@ def init_project(task: str) -> int:
           n_migrants: 2
 
         llms:
-          k_max: 2
+          num_parents: 2
           model_llm: gemini-2.5-flash
           param_est_llm: gemini-2.5-flash
           jax_translator_llm: gemini-2.5-flash-lite
@@ -259,11 +259,11 @@ def init_project(task: str) -> int:
     config_path.write_text(config_text, encoding="utf-8")
 
     print(f"Created project structure for '{task}':")
-    print(f"  seed_programs/: model1.py, model2.py, param_est1.py, param_est2.py")
-    print(f"  data_loader/: load_data.py")
-    print(f"  image_feedback/: plot.py")
-    print(f"  config.yaml")
-    print(f"\nNext: fill in the functions in each file")
+    print("  seed_programs/: model1.py, model2.py, param_est1.py, param_est2.py")
+    print("  data_loader/: load_data.py")
+    print("  image_feedback/: plot.py")
+    print("  config.yaml")
+    print("\nNext: fill in the functions in each file")
     return 0
 
 
@@ -286,13 +286,13 @@ def validate_project(task: str) -> int:
     ]
 
     required_fns = [
-        (task_path / "seed_programs" / "model1.py",      "model"),
-        (task_path / "seed_programs" / "model2.py",      "model"),
-        (task_path / "seed_programs" / "param_est1.py",  "parameter_estimator"),
-        (task_path / "seed_programs" / "param_est2.py",  "parameter_estimator"),
-        (task_path / "data_loader"   / "load_data.py",   "load_data"),
-        (task_path / "data_loader"   / "load_data.py",   "loss_fn"),
-        (task_path / "image_feedback"/ "plot.py",        "plot_model_fits"),
+        (task_path / "seed_programs" / "model1.py", "model"),
+        (task_path / "seed_programs" / "model2.py", "model"),
+        (task_path / "seed_programs" / "param_est1.py", "parameter_estimator"),
+        (task_path / "seed_programs" / "param_est2.py", "parameter_estimator"),
+        (task_path / "data_loader" / "load_data.py", "load_data"),
+        (task_path / "data_loader" / "load_data.py", "loss_fn"),
+        (task_path / "image_feedback" / "plot.py", "plot_model_fits"),
     ]
 
     errors = [f"Missing file: {f}" for f in required_files if not f.exists()]
@@ -301,7 +301,9 @@ def validate_project(task: str) -> int:
         if not path.exists():
             continue  # already reported as missing
         if load_function_from_source(path.read_text(), fn_name) is None:
-            errors.append(f"Missing function '{fn_name}' in {path.relative_to(task_path)}")
+            errors.append(
+                f"Missing function '{fn_name}' in {path.relative_to(task_path)}"
+            )
 
     if errors:
         print("Validation failed:")
@@ -310,11 +312,11 @@ def validate_project(task: str) -> int:
         return 1
 
     print(f"Validation passed for project '{task}'.")
-    print(f"  ✓ seed_programs/model1.py, model2.py  (model)")
-    print(f"  ✓ seed_programs/param_est1.py, param_est2.py  (parameter_estimator)")
-    print(f"  ✓ data_loader/load_data.py  (load_data, loss_fn)")
-    print(f"  ✓ image_feedback/plot.py  (plot_model_fits)")
-    print(f"  ✓ config.yaml")
+    print("  ✓ seed_programs/model1.py, model2.py  (model)")
+    print("  ✓ seed_programs/param_est1.py, param_est2.py  (parameter_estimator)")
+    print("  ✓ data_loader/load_data.py  (load_data, loss_fn)")
+    print("  ✓ image_feedback/plot.py  (plot_model_fits)")
+    print("  ✓ config.yaml")
     return 0
 
 
@@ -342,6 +344,7 @@ def _apply_overrides(spec, overrides: list[str]) -> None:
             raise ValueError(f"Unknown section '{section}'. Must be one of {sections}")
         try:
             import ast
+
             value = ast.literal_eval(value_str)
         except (ValueError, SyntaxError):
             value = value_str
@@ -349,16 +352,27 @@ def _apply_overrides(spec, overrides: list[str]) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="EDGAR project scaffold, validation, and run CLI")
+    parser = argparse.ArgumentParser(
+        description="EDGAR project scaffold, validation, and run CLI"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init-project", help="Create a new project with seed programs, data loader, and config")
+    p_init = sub.add_parser(
+        "init-project",
+        help="Create a new project with seed programs, data loader, and config",
+    )
     p_init.add_argument("task", type=str, help="Project name (folder under projects/)")
 
-    p_validate = sub.add_parser("validate", help="Validate project structure and required files")
-    p_validate.add_argument("task", type=str, help="Project name (folder under projects/)")
+    p_validate = sub.add_parser(
+        "validate", help="Validate project structure and required files"
+    )
+    p_validate.add_argument(
+        "task", type=str, help="Project name (folder under projects/)"
+    )
 
-    p_run = sub.add_parser("run", help="Run an EDGAR experiment from a config.yaml or task_spec.yaml")
+    p_run = sub.add_parser(
+        "run", help="Run an EDGAR experiment from a config.yaml or task_spec.yaml"
+    )
     p_run.add_argument("config", type=str, help="Path to config.yaml or task_spec.yaml")
     p_run.add_argument(
         "--log-level",
@@ -383,6 +397,7 @@ def run_cli(argv=None) -> int:
         from .io.config import Config
         from .io.task_spec import TaskSpec
         from .run import run
+
         path = Path(args.config)
         if path.name == "task_spec.yaml":
             config = Config.from_taskspec(path)

@@ -72,7 +72,7 @@ def spawn(
     mode: str,
     temperature: float,
     batch_size: int,
-    k_max: int,
+    num_parents: int,
 ) -> None:
     """
     Sample parents from each island and create empty Program shells.
@@ -85,8 +85,7 @@ def spawn(
     """
     for island_idx, island in enumerate(islands):
         programs = [population[i] for i in island]
-        assert len(programs) >= k_max, f"Not enough programs in island {island_idx} to sample {k_max} parents"
-        parent_indices = list(uniform_sample(programs, k=k_max))
+        parent_indices = list(uniform_sample(programs, k = num_parents))
 
         for batch_idx in range(batch_size):
             child = Program(
@@ -132,7 +131,7 @@ def uniform_sample(programs: set[Program], k: int = 1) -> set[int]:
     """
     programs = list(programs)
     if k > len(programs):
-        raise ValueError(f"k={k} exceeds population size {len(programs)}")
+        raise ValueError(f"k={k} exceeds number of programs sampled from {len(programs)}")
     chosen = np.random.choice(len(programs), size=k, replace=False)
     return {programs[j].idx for j in chosen}
 
@@ -147,7 +146,7 @@ def boltzmann_sample(programs: set[Program], k: int = 1, temperature: float = 1.
     """
     programs = list(programs)
     if k > len(programs):
-        raise ValueError(f"k={k} exceeds population size {len(programs)}")
+        raise ValueError(f"k={k} exceeds number of programs sampled from {len(programs)}")
     losses = np.array([p.program_losses.discover.final for p in programs], dtype=float)
     # if all losses are NaN or inf or None, raise an error 
     if np.all(np.isnan(losses) | np.isinf(losses) | (losses is None)):
