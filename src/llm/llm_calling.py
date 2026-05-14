@@ -81,7 +81,7 @@ async def call_llm(
     else:
         raise TypeError("llm_model must be a string or a PydanticAI Model instance.")
 
-    agent = Agent(model, output_type=output_type)
+    agent = Agent(model, output_type=output_type, output_retries=_MAX_RETRIES)
 
     user_input = (
         [prompt, BinaryContent(data=image_bytes, media_type="image/png")]
