@@ -40,9 +40,6 @@ def _needs_param_est_code(program: Program) -> bool:
 def _needs_model_translation(program: Program) -> bool:
     return program.code.model is not None and program.code_jax.model is None
 
-def _needs_param_est_translation(program: Program) -> bool:
-    return program.code.param_est is not None and program.code_jax.param_est is None
-
 def _filter_programs(population: Population, filter_rule: Callable[[Program], bool]) -> list[Program]:
     return [p for p in population if filter_rule(p)]
 
@@ -179,16 +176,6 @@ async def _translate_one_model(
     if load_function_from_source(model_result.code, "model") is not None:
         program.code_jax.model = model_result.code
 
-async def _translate_one_param_est(
-    program: Program,
-    param_est_prompt_schema: PromptSchema,
-    llm: str | Model,
-) -> None:
-    param_est_prompt = param_est_prompt_schema.build_prompt("explore", [program])
-    param_est_result = await call_llm(prompt=param_est_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0)
-    if load_function_from_source(param_est_result.code, "parameter_estimator") is not None:
-        program.code_jax.param_est = param_est_result.code
-
 async def _translate_models(
     population: Population,
     model_prompt_schema: PromptSchema,
@@ -204,33 +191,13 @@ async def _translate_models(
         for p in programs
     ])
 
-async def _translate_param_ests(
-    population: Population,
-    param_est_prompt_schema: PromptSchema,
-    llm: str | Model,
-) -> None:
-    """Translate all untranslated parameter estimator code from numpy to JAX.
-
-    Mutates: program.code_jax.param_est
-    """
-    programs = _filter_programs(population, _needs_param_est_translation)
-    await asyncio.gather(*[
-        _translate_one_param_est(p, param_est_prompt_schema, llm)
-        for p in programs
-    ])
-
 async def translate_programs(
     population: Population,
     model_prompt_schema: PromptSchema,
-    param_est_prompt_schema: PromptSchema,
     llm: str | Model,
-    llm_param_est: str | Model = None
 ) -> None:
-    """Translate all untranslated programs from numpy to JAX.
+    """Translate all untranslated model code from numpy to JAX.
 
-    Mutates: program.code_jax.model, program.code_jax.param_est
+    Mutates: program.code_jax.model
     """
-    await asyncio.gather(
-        _translate_models(population, model_prompt_schema, llm),
-        _translate_param_ests(population, param_est_prompt_schema, llm_param_est or llm),
-    )
+    await _translate_models(population, model_prompt_schema, llm)

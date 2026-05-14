@@ -39,8 +39,8 @@ from ..llm.code_loading import load_function_from_source
 from ..llm.prompt_schema import PromptSchema
 
 
-LLMs = namedtuple("LLMs", ["model", "param_est", "model_jax", "param_est_jax"])
-PromptSchemas = namedtuple("PromptSchemas", ["model", "param_est", "jax_model", "jax_param_est"])
+LLMs = namedtuple("LLMs", ["model", "param_est", "model_jax"])
+PromptSchemas = namedtuple("PromptSchemas", ["model", "param_est", "jax_model"])
 
 
 @dataclass
@@ -72,7 +72,6 @@ class TaskSpec:
     model_prompt_schema: PromptSchema
     param_est_prompt_schema: PromptSchema
     jax_model_prompt_schema: PromptSchema
-    jax_param_est_prompt_schema: PromptSchema
 
     # project callables
     load_data_fn: Callable
@@ -142,7 +141,6 @@ class TaskSpec:
             model_prompt_schema=PromptSchema(**prompts["model"]),
             param_est_prompt_schema=PromptSchema(**prompts["parameter_estimator"]),
             jax_model_prompt_schema=PromptSchema(**prompts["jax_translator_model"]),
-            jax_param_est_prompt_schema=PromptSchema(**prompts["jax_translator_param_est"]),
             load_data_fn=load_data_fn,
             loss_fn=loss_fn,
             plot_fn=plot_fn,
@@ -184,7 +182,6 @@ class TaskSpec:
                 "model": self.model_prompt_schema.model_dump(),
                 "param_est": self.param_est_prompt_schema.model_dump(),
                 "jax_model": self.jax_model_prompt_schema.model_dump(),
-                "jax_param_est": self.jax_param_est_prompt_schema.model_dump(),
             },
         }
 
@@ -220,7 +217,6 @@ class TaskSpec:
             model=self.llms["model_llm"],
             param_est=self.llms["param_est_llm"],
             model_jax=self.llms["jax_model_translator_llm"],
-            param_est_jax=self.llms["jax_param_est_translator_llm"],
         )
 
         return mode, temperature, llms
@@ -255,7 +251,6 @@ class TaskSpec:
             model=self.model_prompt_schema,
             param_est=self.param_est_prompt_schema,
             jax_model=self.jax_model_prompt_schema,
-            jax_param_est=self.jax_param_est_prompt_schema,
         )
 
     # Load default_params from model code

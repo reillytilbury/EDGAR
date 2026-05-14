@@ -27,7 +27,10 @@ from ..evolution.population import Population
 
 def _get_params(param_est_fn, default_params, data_train):
     try:
-        return jax.vmap(param_est_fn)(data_train)
+        n = next(iter(data_train.values())).shape[0]
+        data_np = {k: np.asarray(v) for k, v in data_train.items()}
+        per_sample = [param_est_fn({k: v[i] for k, v in data_np.items()}) for i in range(n)]
+        return {k: jnp.stack([jnp.asarray(s[k]) for s in per_sample]) for k in per_sample[0]}
     except Exception as e:
         warnings.warn(f"[scoring] param_est_fn failed, falling back to default params: {e}")
         n = next(iter(data_train.values())).shape[0]
@@ -95,7 +98,7 @@ def _worker(queue, program, data, loss_fn_bytes, config, X_eval):
         print(f"[scoring] program #{program.idx} failed during compile/optimize/eval: {e}")
         print(f"[scoring] traceback:\n{traceback.format_exc()}")
         print(f"[scoring] code_jax.model:\n{program.code_jax.model}")
-        print(f"[scoring] code_jax.param_est:\n{program.code_jax.param_est}")
+        print(f"[scoring] code.param_est:\n{program.code.param_est}")
         queue.put((float("inf"), float("inf"), None, None, None))
         return
 
@@ -150,10 +153,8 @@ def _score_one_model(
 # ── population-level ──
 
 def _has_jax_code(program: Program) -> bool:
-    """Does this program have jax code that can be scored?"""
-    has_model = program.code_jax.model
-    has_param_est = program.code_jax.param_est
-    return bool(has_model and has_param_est)
+    """Does this program have jax model code and a numpy param_est that can be scored?"""
+    return bool(program.code_jax.model and program.code.param_est)
 
 
 def _needs_scoring(population: Population, split: str) -> list[Program]:
