@@ -49,9 +49,6 @@ def _filter_programs(population: Population, filter_rule: Callable[[Program], bo
 def _resolve_parents(population: Population, program: Program) -> list[Program]:
     return [population[i] for i in program.birth.parent_indices]
 
-# Helper for turning LLM argument into list
-def _to_list(x, n_repeats: int) -> list:
-    return x if isinstance(x, list) else [x] * n_repeats
 
 def _prompt_image_bytes(spec: TaskSpec, data: dict, parents: list[Program], program: Program) -> bytes | None:
     if spec is None or spec.plot_fn is None or data is None:
