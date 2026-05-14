@@ -1,9 +1,9 @@
 import pytest
 import numpy as np
 from scipy.stats import chisquare
-from src.evolution.island import boltzmann_sample, migrate, prune, seed, spawn, uniform_sample
+from src.evolution.island import boltzmann_sample, migrate, prune, seed, spawn, uniform_sample, _are_duplicates, deduplicate_inner, deduplicate_outer, deduplicate
 from src.evolution.population import Population
-from tests.evolution.utils import make_empty_population, make_seeds
+from tests.evolution.utils import make_empty_population, make_seeds, make_fingerprint_population, make_fingerprint_program
 
 def test_seed():
     population = Population() #Must be an empty population
@@ -237,3 +237,241 @@ def test_migration_catches_mismatched_topology():
 
     with pytest.raises(ValueError):
         migrate(islands, population, evolution, temperature, rng)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Deduplication helpers
+# ─────────────────────────────────────────────────────────────────────────
+
+# Orthogonal unit vectors for fingerprint construction
+_E0 = [1.0, 0.0, 0.0, 0.0]
+_E1 = [0.0, 1.0, 0.0, 0.0]
+_E2 = [0.0, 0.0, 1.0, 0.0]
+_E3 = [0.0, 0.0, 0.0, 1.0]
+_E0_NEAR = [1.0, 0.01, 0.0, 0.0]  # cosine ~0.9999 with _E0
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# _are_duplicates
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_are_duplicates_same_fingerprint():
+    p0 = make_fingerprint_program(_E0, loss=1.0, n_params=2)
+    p1 = make_fingerprint_program(_E0, loss=1.0, n_params=2)
+    assert _are_duplicates(p0, p1, loss_tol=0.1, cosine_tol=0.95)
+
+
+def test_are_duplicates_orthogonal_fingerprints():
+    p0 = make_fingerprint_program(_E0, loss=1.0, n_params=2)
+    p1 = make_fingerprint_program(_E1, loss=1.0, n_params=2)
+    assert not _are_duplicates(p0, p1, loss_tol=0.1, cosine_tol=0.95)
+
+
+def test_are_duplicates_different_n_params():
+    p0 = make_fingerprint_program(_E0, loss=1.0, n_params=2)
+    p1 = make_fingerprint_program(_E0, loss=1.0, n_params=3)
+    assert not _are_duplicates(p0, p1, loss_tol=0.1, cosine_tol=0.95)
+
+
+def test_are_duplicates_none_n_params():
+    p0 = make_fingerprint_program(_E0, loss=1.0, n_params=2)
+    p1 = make_fingerprint_program(_E0, loss=1.0, n_params=2)
+    p1.n_params = None
+    assert not _are_duplicates(p0, p1, loss_tol=0.1, cosine_tol=0.95)
+
+
+def test_are_duplicates_none_fingerprint():
+    p0 = make_fingerprint_program(_E0, loss=1.0, n_params=2)
+    p1 = make_fingerprint_program(_E0, loss=1.0, n_params=2)
+    p1.eval_fingerprint = None
+    assert not _are_duplicates(p0, p1, loss_tol=0.1, cosine_tol=0.95)
+
+
+def test_are_duplicates_loss_diff_exceeds_tol():
+    p0 = make_fingerprint_program(_E0, loss=1.0, n_params=2)
+    p1 = make_fingerprint_program(_E0_NEAR, loss=2.0, n_params=2)  # diff = 1.0 > 0.1
+    assert not _are_duplicates(p0, p1, loss_tol=0.1, cosine_tol=0.95)
+
+
+def test_are_duplicates_none_loss_skips_loss_check():
+    """When either loss is None, the loss check is skipped and only fingerprint is compared."""
+    p0 = make_fingerprint_program(_E0, loss=None, n_params=2)
+    p1 = make_fingerprint_program(_E0, loss=5.0, n_params=2)
+    assert _are_duplicates(p0, p1, loss_tol=0.01, cosine_tol=0.95)
+
+
+def test_are_duplicates_near_identical_fingerprint():
+    p0 = make_fingerprint_program(_E0, loss=1.0, n_params=2)
+    p1 = make_fingerprint_program(_E0_NEAR, loss=1.0, n_params=2)
+    assert _are_duplicates(p0, p1, loss_tol=0.1, cosine_tol=0.95)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# deduplicate_inner
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_deduplicate_inner_removes_higher_loss_duplicate():
+    pop = make_fingerprint_population([
+        (_E0, 1.0),   # idx 0 — lower loss, kept
+        (_E0, 1.005), # idx 1 — higher loss, within tol, removed
+        (_E1, 1.0),   # idx 2 — different fingerprint, kept
+    ])
+    islands = [{0, 1, 2}]
+    deduplicate_inner(islands, pop)
+    assert islands[0] == {0, 2}
+
+
+def test_deduplicate_inner_keeps_both_when_not_duplicates():
+    pop = make_fingerprint_population([
+        (_E0, 0.5),  # idx 0
+        (_E1, 2.0),  # idx 1 — orthogonal
+    ])
+    islands = [{0, 1}]
+    deduplicate_inner(islands, pop)
+    assert islands[0] == {0, 1}
+
+
+def test_deduplicate_inner_no_fingerprint_not_deduplicated():
+    pop = make_fingerprint_population([
+        (_E0, 0.5),
+        (_E0, 0.5),
+    ])
+    pop[1].eval_fingerprint = None
+    islands = [{0, 1}]
+    deduplicate_inner(islands, pop)
+    assert islands[0] == {0, 1}
+
+
+def test_deduplicate_inner_independent_per_island():
+    """Duplicates in island 0 are removed; island 1 is unaffected."""
+    pop = make_fingerprint_population([
+        (_E0, 1.0),    # idx 0 — island 0 low loss
+        (_E0, 1.005),  # idx 1 — island 0 dup, removed
+        (_E1, 1.0),    # idx 2 — island 1
+        (_E2, 3.0),    # idx 3 — island 1
+    ])
+    islands = [{0, 1}, {2, 3}]
+    deduplicate_inner(islands, pop)
+    assert islands[0] == {0}
+    assert islands[1] == {2, 3}
+
+
+def test_deduplicate_inner_chain_keeps_best():
+    """A dup of B, B dup of C: once B is flagged for removal, A vs C is still checked."""
+    pop = make_fingerprint_population([
+        (_E0, 1.0),        # idx 0 — best
+        (_E0_NEAR, 1.005), # idx 1 — dup of 0, removed
+        (_E0, 1.008),      # idx 2 — dup of 0 (and 1), removed
+    ])
+    islands = [{0, 1, 2}]
+    deduplicate_inner(islands, pop)
+    assert islands[0] == {0}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# deduplicate_outer
+# ─────────────────────────────────────────────────────────────────────────
+
+def _make_overlapping_islands():
+    """Two islands of 4 programs, 3 fingerprint-duplicate pairs between them."""
+    # Pairs (0,4), (1,5), (2,6) are duplicates (losses within 0.005); (3,7) are not
+    # Island A has lower losses than island B
+    pop = make_fingerprint_population([
+        (_E0, 0.100),     # 0 — island A  dup of 4
+        (_E1, 0.500),     # 1 — island A  dup of 5
+        (_E2, 1.000),     # 2 — island A  dup of 6
+        (_E3, 2.000),     # 3 — island A  unique
+        (_E0, 0.105),     # 4 — island B  dup of 0
+        (_E1, 0.505),     # 5 — island B  dup of 1
+        (_E2, 1.005),     # 6 — island B  dup of 2
+        (_E0_NEAR, 3.0),  # 7 — island B  unique
+    ])
+    return pop, [{0, 1, 2, 3}, {4, 5, 6, 7}]
+
+
+def test_deduplicate_outer_resets_worse_island():
+    pop, islands = _make_overlapping_islands()
+    # Island A losses sorted: [0.1, 0.5, 1.0, 2.0]
+    # Island B losses sorted: [0.105, 0.505, 1.005, 3.0]
+    # A is better, so B is reset to {0, 1}
+    deduplicate_outer(islands, pop, n_overlap=3)
+    assert islands[0] == {0, 1, 2, 3}
+    assert islands[1] == {0, 1}
+
+
+def test_deduplicate_outer_no_reset_below_threshold():
+    pop, islands = _make_overlapping_islands()
+    # Require 4 overlapping pairs — there are only 3, so no reset
+    deduplicate_outer(islands, pop, n_overlap=4)
+    assert islands[0] == {0, 1, 2, 3}
+    assert islands[1] == {4, 5, 6, 7}
+
+
+def test_deduplicate_outer_resets_island_with_higher_losses():
+    """When island B has better losses than A, island A is reset."""
+    pop = make_fingerprint_population([
+        (_E0, 5.005),  # 0 — island A, dup of 3
+        (_E1, 6.005),  # 1 — island A, dup of 4
+        (_E2, 7.005),  # 2 — island A, dup of 5
+        (_E0, 5.000),  # 3 — island B, dup of 0
+        (_E1, 6.000),  # 4 — island B, dup of 1
+        (_E2, 7.000),  # 5 — island B, dup of 2
+    ])
+    islands = [{0, 1, 2}, {3, 4, 5}]
+    deduplicate_outer(islands, pop, n_overlap=3)
+    assert islands[0] == {0, 1}   # A reset (worse)
+    assert islands[1] == {3, 4, 5}
+
+
+def test_deduplicate_outer_three_islands_resets_only_overlapping_pair():
+    """With three islands, only pairs that exceed n_overlap are reset."""
+    pop = make_fingerprint_population([
+        (_E0, 0.100),  # 0 — island 0
+        (_E0, 0.105),  # 1 — island 1, dup of 0
+        (_E1, 5.000),  # 2 — island 2, distinct
+    ])
+    islands = [{0}, {1}, {2}]
+    # Only islands 0 and 1 overlap (1 pair), n_overlap=1 triggers reset of island 1
+    deduplicate_outer(islands, pop, n_overlap=1)
+    assert islands[0] == {0}
+    assert islands[1] == {0, 1}
+    assert islands[2] == {2}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# deduplicate (integration)
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_deduplicate_applies_inner_then_outer():
+    """Inner dedup removes a dup; outer then triggers cross-island reset."""
+    pop = make_fingerprint_population([
+        (_E0, 1.000),  # 0 — island 0 best
+        (_E0, 1.005),  # 1 — island 0 dup of 0 (diff=0.005), removed by inner
+        (_E0, 1.003),  # 2 — island 1, dup of 0 (diff=0.003)
+        (_E1, 2.000),  # 3 — island 1, distinct
+    ])
+    # critical_population_size=2 → n_overlap = 2//2 = 1
+    islands = [{0, 1}, {2, 3}]
+    evolution = {"critical_population_size": 2}
+    deduplicate(islands, pop, evolution)
+    # inner: island 0 → {0}; island 1 unchanged → {2, 3}
+    # outer: 1 overlap (0 dup of 2), n_overlap=1 → reset worse island
+    # island 0 losses [1.0] vs island 1 losses [1.003, 2.0] → island 1 is worse
+    assert islands[0] == {0}
+    assert islands[1] == {0, 1}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Census save / load
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_island_census_round_trip(tmp_path):
+    census = [
+        [{0, 1}, {0, 1, 2}, {0, 1, 2, 4}],
+        [{0, 1}, {0, 1, 3}, {0, 1, 3, 5}],
+    ]
+    path = str(tmp_path / "census.json")
+    from src.evolution.island import save_island_census, load_island_census
+    save_island_census(census, path)
+    loaded = load_island_census(path)
+    assert loaded == census
