@@ -105,7 +105,7 @@ def log_generation(
 
     f.write(f"{'=' * 60}\n")
     f.write(f"Gen {gen:3d}  |  {mode}  |  temp={temperature:.3f}  |  elapsed={elapsed:.1f}s\n")
-    f.write(f"LLMs     model={llm}  param_est={llms.param_est}  model_jax={llms.model_jax}  model_param_est={llms.param_est_jax}\n")
+    f.write(f"LLMs     model={llm}  param_est={llms.param_est}  model_jax={llms.model_jax}\n")
     f.write(f"Spawned  {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n")
     f.write(f"Global best discover loss: {global_best}\n\n")
 
@@ -123,8 +123,7 @@ def log_generation(
         f.write(f"  --- Program #{p.idx} (island={p.birth.island}) ---\n")
         f.write(f"  [model]\n{p.code.model or '(none)'}\n")
         f.write(f"  [param_est]\n{p.code.param_est or '(none)'}\n")
-        f.write(f"  [model_jax]\n{p.code_jax.model or '(none)'}\n")
-        f.write(f"  [param_est_jax]\n{p.code_jax.param_est or '(none)'}\n\n")
+        f.write(f"  [model_jax]\n{p.code_jax.model or '(none)'}\n\n")
 
     if log.level != "prompts":
         f.flush()
@@ -137,7 +136,6 @@ def log_generation(
         f.write(f"  [model prompt]\n{spec.model_prompt_schema.build_prompt(mode_p, parents, spec.flat_config)}\n\n")
         f.write(f"  [param_est prompt]\n{spec.param_est_prompt_schema.build_prompt('explore', parents, spec.flat_config)}\n\n")
         f.write(f"  [jax model prompt]\n{spec.jax_model_prompt_schema.build_prompt('explore', [p], spec.flat_config)}\n\n")
-        f.write(f"  [jax param_est prompt]\n{spec.jax_param_est_prompt_schema.build_prompt('explore', [p], spec.flat_config)}\n\n")
         if p.image_path:
             f.write(f"  [image] {p.image_path}\n")
         f.write("\n")
