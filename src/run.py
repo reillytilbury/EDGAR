@@ -34,6 +34,7 @@ from .llm.generate import (
     generate_param_ests,
     translate_programs,
 )
+from .llm.llm_calling import RetryConfig
 from .scoring.scoring import score
 from .monitoring.family_tree import write_family_tree
 
@@ -46,12 +47,16 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     X_discover, X_validate, X_eval = spec.load_data_fn(
         data_path=spec.io["data_path"], **spec.project_params
     )
+    retry_config = RetryConfig.from_config(spec.llms.get("retry", {}))
+    config = {**spec.flat_config, "retry_config": retry_config}
+
     population = Population()
     islands = seed(population, spec.seed_programs, spec.evolution["n_islands"])
     await translate_programs(
         population,
         spec.prompt_schemas.jax_model,
         spec.llms["jax_model_translator_llm"],
+        retry_config=retry_config,
     )
     score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
@@ -77,17 +82,18 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
             llms.model[gen % len(llms.model)] if isinstance(llms.model, list) else llms.model,
             mode,
             temperature,
-            config=spec.flat_config,
+            config=config,
             spec=spec,
             data=X_discover[1],
         )  # use test data of X_discover for plotting
         await generate_param_ests(
-            population, spec.prompt_schemas.param_est, llms.param_est, spec.flat_config
+            population, spec.prompt_schemas.param_est, llms.param_est, config,
         )
         await translate_programs(
             population,
             spec.prompt_schemas.jax_model,
             llms.model_jax,
+            retry_config=retry_config,
         )
 
         score(
