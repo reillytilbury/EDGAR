@@ -14,13 +14,15 @@ from src.io.task_spec import TaskSpec
 from tests.llm.fakellm import FakeLLM, SeedFakeLLM, CyclingModel
 
 CONFIG_PATH = Path(__file__).parent / "test_task" / "config.yaml"
+TEST_OUTPUT_DIR = Path(__file__).parents[2] / "test_output"
 
 @pytest.fixture(scope="session")
 def fake_run(tmp_path_factory):
     """Run the full pipeline with fake LLM responses once per test session."""
     config = Config.from_yaml(CONFIG_PATH)
     spec = TaskSpec.from_config(config)
-    spec.io["save_path"] = str(tmp_path_factory.mktemp("output"))
+    TEST_OUTPUT_DIR.mkdir(exist_ok=True)
+    spec.io["save_path"] = str(TEST_OUTPUT_DIR)
 
     n_gen = spec.evolution["n_generations"]
     n_per_gen = spec.evolution["batch_size"] * spec.evolution["n_islands"]
