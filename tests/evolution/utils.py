@@ -1,3 +1,4 @@
+import numpy as np
 from src.evolution.population import Population
 from src.evolution.program import BirthCertificate, Code, Program
 from tests.llm.programs import Seed1, Seed2, Program1, Program2, ProgramSolution, InvalidProgram
@@ -83,6 +84,34 @@ def make_population():
     pop.add(p1)
     pop.add(p2)
     return pop
+
+def make_fingerprint_program(
+    fingerprint: list[float],
+    loss: float | None = None,
+    n_params: int = 2,
+    number: int = 0,
+) -> Program:
+    """Create a Program with n_params and eval_fingerprint set for deduplication tests."""
+    p = make_empty_program(number)
+    p.n_params = n_params
+    p.eval_fingerprint = np.asarray(fingerprint, dtype=float)
+    p.program_losses.discover.final = loss
+    return p
+
+
+def make_fingerprint_population(specs: list[tuple]) -> Population:
+    """Create a population from a list of (fingerprint, loss, n_params) tuples.
+
+    Each spec is (fingerprint, loss) or (fingerprint, loss, n_params).
+    n_params defaults to 2 when omitted.
+    """
+    pop = Population()
+    for i, spec in enumerate(specs):
+        fp, loss = spec[0], spec[1]
+        n_params = spec[2] if len(spec) > 2 else 2
+        pop.add(make_fingerprint_program(fp, loss, n_params, number=i))
+    return pop
+
 
 def make_seeds():
     seed1 = Program(
