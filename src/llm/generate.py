@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, TYPE_CHECKING, Callable
-import traceback
 import warnings
+from typing import Any, TYPE_CHECKING, Callable
 import itertools
 
 from pydantic_ai.models import Model
@@ -100,7 +99,7 @@ async def _generate_one_model(
     )
     header = f'"""\n{result.thought_process}\n\n{result.latex_equations}\n"""\n\n'
     program.code.model = header + result.code
-    program.default_params = result.default_params 
+    program.default_params = result.default_params
     program.name = result.descriptive_name
     program.birth.llm_name = llm
 
@@ -129,7 +128,7 @@ async def generate_models(
             config, spec, data,
         )
         for p in programs
-    ], return_exceptions=True)
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +166,7 @@ async def generate_param_ests(
     await asyncio.gather(*[
         _generate_one_param_est(p, prompt_schema, llm, config)
         for p in programs
-    ], return_exceptions=True)
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -179,15 +178,9 @@ async def _translate_one_model(
     llm: str | Model,
 ) -> None:
     model_prompt = model_prompt_schema.build_prompt("explore", [program])
-    try:
-        model_result = await call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0)
-        if load_function_from_source(model_result.code, "model") is not None:
-            program.code_jax.model = model_result.code
-    except Exception as e:
-        warnings.warn(
-            f"[translate] program #{program.idx} JAX model translation failed: {e}\n"
-            f"{traceback.format_exc()}"
-        )
+    model_result = await call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0)
+    if load_function_from_source(model_result.code, "model") is not None:
+        program.code_jax.model = model_result.code
 
 async def _translate_one_param_est(
     program: Program,
@@ -195,15 +188,9 @@ async def _translate_one_param_est(
     llm: str | Model,
 ) -> None:
     param_est_prompt = param_est_prompt_schema.build_prompt("explore", [program])
-    try:
-        param_est_result = await call_llm(prompt=param_est_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0)
-        if load_function_from_source(param_est_result.code, "parameter_estimator") is not None:
-            program.code_jax.param_est = param_est_result.code
-    except Exception as e:
-        warnings.warn(
-            f"[translate] program #{program.idx} JAX parameter estimator translation failed: {e}\n"
-            f"{traceback.format_exc()}"
-        )
+    param_est_result = await call_llm(prompt=param_est_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0)
+    if load_function_from_source(param_est_result.code, "parameter_estimator") is not None:
+        program.code_jax.param_est = param_est_result.code
 
 async def _translate_models(
     population: Population,
@@ -218,7 +205,7 @@ async def _translate_models(
     await asyncio.gather(*[
         _translate_one_model(p, model_prompt_schema, llm)
         for p in programs
-    ], return_exceptions=True)
+    ])
 
 async def _translate_param_ests(
     population: Population,
@@ -233,7 +220,7 @@ async def _translate_param_ests(
     await asyncio.gather(*[
         _translate_one_param_est(p, param_est_prompt_schema, llm)
         for p in programs
-    ], return_exceptions=True)
+    ])
 
 async def translate_programs(
     population: Population,
