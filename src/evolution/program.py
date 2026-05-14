@@ -83,9 +83,9 @@ class Program:
             self.default_params = self._default_params #use the setter to validate and set n_params
 
     def compile(self) -> tuple[Callable, Callable]:
-        """Compile JAX source into callable (model_fn, param_est_fn)."""
+        """Compile JAX model and numpy parameter_estimator into callables."""
         model_fn = load_function_from_source(self.code_jax.model, MODEL_ENTRYPOINT)
-        param_est_fn = load_function_from_source(self.code_jax.param_est, PARAM_EST_ENTRYPOINT)
+        param_est_fn = load_function_from_source(self.code.param_est, PARAM_EST_ENTRYPOINT)
         if model_fn is None:
             raise ValueError(f"{self.birth}: could not load '{MODEL_ENTRYPOINT}'")
         if param_est_fn is None:

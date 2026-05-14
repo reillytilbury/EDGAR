@@ -131,7 +131,6 @@ class Config:
             "model": schemas["model"],
             "parameter_estimator": schemas["param_est"],
             "jax_translator_model": schemas["jax_model"],
-            "jax_translator_param_est": schemas["jax_param_est"],
         }
         return cls(
             task_name=record["task_name"],

@@ -51,9 +51,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     await translate_programs(
         population,
         spec.prompt_schemas.jax_model,
-        spec.prompt_schemas.jax_param_est,
         spec.llms["jax_model_translator_llm"],
-        spec.llms["jax_param_est_translator_llm"],
     )
     score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
@@ -89,9 +87,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
         await translate_programs(
             population,
             spec.prompt_schemas.jax_model,
-            spec.prompt_schemas.jax_param_est,
             llms.model_jax,
-            llms.param_est_jax,
         )
 
         score(
