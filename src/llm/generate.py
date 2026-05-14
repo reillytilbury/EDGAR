@@ -82,7 +82,7 @@ async def _generate_one_model(
     data: dict | None = None,
 ) -> None:
     image_bytes = _prompt_image_bytes(spec, data, parents, program)
-
+    cfg = config or {}
     prompt = prompt_schema.build_prompt(mode, parents, config)
     result = await call_llm(
         prompt=prompt,
@@ -90,7 +90,12 @@ async def _generate_one_model(
         output_type=ModelSchema,
         temperature=temperature,
         image_bytes=image_bytes,
+        log_raw_llm_response=cfg.get("log_raw_response", False),
+        retry_config=cfg.get("retry_config"),
     )
+    if result is None:
+        warnings.warn(f"[generate] Skipping model code for program #{program.idx}: call_llm returned None")
+        return
     header = f'"""\n{result.thought_process}\n\n{result.latex_equations}\n"""\n\n'
     program.code.model = header + result.code
     program.default_params = result.default_params
@@ -135,13 +140,19 @@ async def _generate_one_param_est(
     llm: str | Model,
     config: dict[str, Any] | None = None,
 ) -> None:
+    cfg = config or {}
     prompt = prompt_schema.build_prompt("explore", [program], config)
     result = await call_llm(
         prompt=prompt,
         llm_model=llm,
         output_type=ParamEstSchema,
         temperature=1.0,
+        log_raw_llm_response=cfg.get("log_raw_response", False),
+        retry_config=cfg.get("retry_config"),
     )
+    if result is None:
+        warnings.warn(f"[generate] Skipping param_est for program #{program.idx}: call_llm returned None")
+        return
     header = f'"""\n{result.thought_process}\n"""\n\n'
     program.code.param_est = header + result.code
 
@@ -170,16 +181,18 @@ async def _translate_one_model(
     program: Program,
     model_prompt_schema: PromptSchema,
     llm: str | Model,
+    retry_config: RetryConfig | None = None,
 ) -> None:
     model_prompt = model_prompt_schema.build_prompt("explore", [program])
-    model_result = await call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0)
-    if load_function_from_source(model_result.code, "model") is not None:
+    model_result = await call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0, retry_config=retry_config)
+    if model_result is not None and load_function_from_source(model_result.code, "model") is not None:
         program.code_jax.model = model_result.code
 
 async def _translate_models(
     population: Population,
     model_prompt_schema: PromptSchema,
     llm: str | Model,
+    retry_config: RetryConfig | None = None,
 ) -> None:
     """Translate all untranslated model code from numpy to JAX.
 
@@ -187,7 +200,7 @@ async def _translate_models(
     """
     programs = _filter_programs(population, _needs_model_translation)
     await asyncio.gather(*[
-        _translate_one_model(p, model_prompt_schema, llm)
+        _translate_one_model(p, model_prompt_schema, llm, retry_config)
         for p in programs
     ])
 
@@ -195,9 +208,10 @@ async def translate_programs(
     population: Population,
     model_prompt_schema: PromptSchema,
     llm: str | Model,
+    retry_config: RetryConfig | None = None,
 ) -> None:
     """Translate all untranslated model code from numpy to JAX.
 
     Mutates: program.code_jax.model
     """
-    await _translate_models(population, model_prompt_schema, llm)
+    await _translate_models(population, model_prompt_schema, llm, retry_config)
