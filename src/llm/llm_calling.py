@@ -2,26 +2,68 @@ import asyncio
 import os
 import random
 import warnings
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 from pydantic_ai import Agent, BinaryContent
-from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior, UserError
-from pydantic_ai.models import Model
+from pydantic_ai.capabilities.abstract import AbstractCapability
+from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior, UserError, ModelAPIError, UsageLimitExceeded
+from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.models import Model, ModelRequestContext
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.tools import RunContext
 
 load_dotenv()
 
-# 500 - Unexpected error on Google's servers, 503 - service temporarily down — all transient per Google's retry guidance.
-# 429 Rate-limited - because the number of requests we send concurrently is fixed, we should not ignore this error 
-# 400 Bad Request, 401 Unauthorized, 403 Forbidden → hard failures, do not retry.
-# Error guidelines : https://ai.google.dev/gemini-api/docs/troubleshooting
-_RETRYABLE_STATUS_CODES = frozenset({500, 503})
-_MAX_RETRIES = 3
-_INITIAL_DELAY = 1.0
-_BACKOFF_MULTIPLIER = 2.0
-_MAX_DELAY = 60.0
+
+@dataclass
+class RetryConfig:
+    max_retries: int = 3
+    initial_delay: float = 1.0
+    backoff_multiplier: float = 2.0
+    max_delay: float = 60.0
+    retryable_status_codes: frozenset[int] = field(default_factory=lambda: frozenset({500, 503}))
+
+    @classmethod
+    def from_config(cls, config: dict) -> "RetryConfig":
+        codes = config.get("retryable_status_codes", [500, 503])
+        return cls(
+            max_retries=config.get("max_retries", 3),
+            initial_delay=config.get("initial_delay", 1.0),
+            backoff_multiplier=config.get("backoff_multiplier", 2.0),
+            max_delay=config.get("max_delay", 60.0),
+            retryable_status_codes=frozenset(codes),
+        )
+
+
+class _LogRawResponseCapability(AbstractCapability):
+    """Prints the raw model response parts after every model call, before any parsing."""
+
+    async def after_model_request(
+        self,
+        ctx: RunContext,
+        *,
+        request_context: ModelRequestContext,
+        response: ModelResponse,
+    ) -> ModelResponse:
+        parts_summary = []
+        for part in response.parts:
+            if isinstance(part, TextPart):
+                parts_summary.append(f"  TextPart: {part.content!r}")
+            elif isinstance(part, ToolCallPart):
+                parts_summary.append(f"  ToolCallPart tool_name={part.tool_name!r} args={part.args!r}")
+            else:
+                parts_summary.append(f"  {type(part).__name__}: {part!r}")
+        lines = [f"[call_llm] raw model response (model={response.model_name}):"]
+        lines.append("\n".join(parts_summary) if parts_summary else "  (empty)")
+        lines.append(f"  usage: input_tokens={response.usage.input_tokens} output_tokens={response.usage.output_tokens}")
+        if response.provider_details:
+            lines.append(f"  provider_details: {response.provider_details}")
+        print("\n".join(lines))
+        return response
+
 
 
 async def call_llm(
@@ -32,6 +74,8 @@ async def call_llm(
     temperature: float = 1.0,
     thinking: bool | str | None = None,
     max_tokens: int | None = 10_000,
+    log_raw_llm_response: bool = False,
+    retry_config: RetryConfig | None = None,
 ):
     """
     Call an LLM through PydanticAI and return the parsed output.
@@ -72,7 +116,9 @@ async def call_llm(
     else:
         raise TypeError("llm_model must be a string or a PydanticAI Model instance.")
 
-    agent = Agent(model, output_type=output_type, output_retries=_MAX_RETRIES)
+    rc = retry_config or RetryConfig()
+    capabilities = [_LogRawResponseCapability()] if log_raw_llm_response else []
+    agent = Agent(model, output_type=output_type, output_retries=rc.max_retries, capabilities=capabilities)
 
     user_input = (
         [prompt, BinaryContent(data=image_bytes, media_type="image/png")]
@@ -86,32 +132,39 @@ async def call_llm(
         max_tokens=max_tokens,
     )
 
-    delay = _INITIAL_DELAY
-    for attempt in range(_MAX_RETRIES):
+    delay = rc.initial_delay
+    for attempt in range(rc.max_retries):
         try:
             result = await agent.run(user_input, model_settings=model_settings)
             return result.output
 
         except UnexpectedModelBehavior as e:
             type_name = getattr(output_type, "__name__", repr(output_type))
-            raise UnexpectedModelBehavior(
-                f"LLM output could not be parsed as {type_name!r}. "
-                f"Check that your prompt instructs the model to return the correct structure. "
-                f"Raw body: {e.body}. Original error: {e.message}"
-            ) from e
+            warnings.warn(
+                f"[call_llm] LLM output could not be parsed as {type_name!r} after exhausting retries — skipping. "
+                f"{e.message}"
+            )
+            return None
 
         except ModelHTTPError as e:
-            if e.status_code not in _RETRYABLE_STATUS_CODES:
+            if e.status_code not in rc.retryable_status_codes:
+                warnings.warn(f"[call_llm] Non-retryable HTTP {e.status_code} error: {e}")
                 raise
-            if attempt == _MAX_RETRIES - 1:
-                raise
+            if attempt == rc.max_retries - 1:
+                warnings.warn(
+                    f"[call_llm] HTTP {e.status_code} on final attempt {attempt + 1}/{rc.max_retries}. No more retries left. Returning None."
+                )
+                return None
             jitter = random.uniform(0, 1)
-            wait = min(delay + jitter, _MAX_DELAY)
+            wait = min(delay + jitter, rc.max_delay)
             warnings.warn(
-                f"[call_llm] HTTP {e.status_code} on attempt {attempt + 1}/{_MAX_RETRIES}, "
+                f"[call_llm] HTTP {e.status_code} on attempt {attempt + 1}/{rc.max_retries}, "
                 f"retrying in {wait:.1f}s."
             )
             await asyncio.sleep(wait)
-            delay = min(delay * _BACKOFF_MULTIPLIER, _MAX_DELAY)
+            delay = min(delay * rc.backoff_multiplier, rc.max_delay)
 
         # ModelAPIError (non-HTTP network failure), UsageLimitExceeded, UserError → propagate immediately
+        except (ModelAPIError, UsageLimitExceeded, UserError) as e:
+            warnings.warn(f"[call_llm] {type(e).__name__} encountered: {e}")
+            raise
