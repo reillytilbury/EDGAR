@@ -36,6 +36,8 @@ model:
 
     * Ensure all free parameters (values in `params`) are numeric, not strings or functions.
 
+    * Ensure all string values in function call arguments are properly JSON-escaped
+
     * You must also provide `default_params`: a dict of sensible initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be floats.
 
     '
@@ -80,6 +82,7 @@ parameter_estimator:
     * Return a parameter dict with the same keys expected by the model.\n* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
     * Do not attempt to fit the parameters using complex fitting functions like {swear_words}. We only need a simple, fast initial estimate of the parameters.
     * Do not call the model function in your parameter_estimator code, as you will not have access to it!
+    * Ensure all string values in function call arguments are properly JSON-escaped
     * It is VERY IMPORTANT that the returned params dictionary has keys that exactly match the keys expected by the model, and that all values are floats. If the keys do not match, or if any value is not a float, your parameter_estimator will be rejected.
     '
   docstring_guidelines: '**Docstring Guidelines:**
@@ -144,6 +147,8 @@ jax_translator_model:
     * jnp.bincount requires a static `length` argument (note: numpy uses `minlength=` but JAX renamed it to `length=`). Always pass a concrete integer: jnp.bincount(x, length=n_bins). Never omit `length=`.
 
     * Preserve the `model.DEFAULT_PARAMS = {{...}}` line exactly as-is from the original code.
+
+    * Ensure all string values in function call arguments are properly JSON-escaped
 
     '
   docstring_guidelines: 'Do not include any text other than the code.
