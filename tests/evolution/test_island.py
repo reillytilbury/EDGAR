@@ -85,7 +85,7 @@ def test_prune_all_losses_defined():
 
     islands = [{0,1,2}, {3,4,5}]
     init_programs = list(population._programs)
-    prune(islands, population, evolution = {"critical_population_size": 2})
+    prune(islands, population, evolution = {"critical_population_size": 3, "n_migrants": 1})
     assert islands[0] == {0,2}
     assert islands[1] == {4,5}
     assert population._programs == init_programs
@@ -97,7 +97,7 @@ def test_prune_missing_loss():
         population[i].program_losses.discover.final = loss
 
     islands = [{0,1,2}, {3,4,5}]
-    prune(islands, population, evolution = {"critical_population_size": 2})
+    prune(islands, population, evolution = {"critical_population_size": 3, "n_migrants": 1})
     assert islands[0] == {0,2}
     assert islands[1] == {3,4}
 
@@ -108,7 +108,7 @@ def test_prune_less_than_critical_num_losses():
         population[i].program_losses.discover.final = loss
 
     islands = [{0,1,2}, {3,4,5}] #4,5 dont have loss, when we prune we
-    prune(islands, population, evolution = {"critical_population_size": 2})
+    prune(islands, population, evolution = {"critical_population_size": 3, "n_migrants": 1})
     assert islands[0] == {0,2}
     assert islands[1] == {3,4}
 
@@ -372,7 +372,7 @@ def test_deduplicate_inner_chain_keeps_best():
 # deduplicate_outer
 # ─────────────────────────────────────────────────────────────────────────
 
-def _make_overlapping_islands():
+def make_islands_with_duplicates():
     """Two islands of 4 programs, 3 fingerprint-duplicate pairs between them."""
     # Pairs (0,4), (1,5), (2,6) are duplicates (losses within 0.005); (3,7) are not
     # Island A has lower losses than island B
@@ -389,53 +389,97 @@ def _make_overlapping_islands():
     return pop, [{0, 1, 2, 3}, {4, 5, 6, 7}]
 
 
-def test_deduplicate_outer_resets_worse_island():
-    pop, islands = _make_overlapping_islands()
-    # Island A losses sorted: [0.1, 0.5, 1.0, 2.0]
-    # Island B losses sorted: [0.105, 0.505, 1.005, 3.0]
-    # A is better, so B is reset to {0, 1}
-    deduplicate_outer(islands, pop, n_overlap=3)
-    assert islands[0] == {0, 1, 2, 3}
-    assert islands[1] == {0, 1}
-
-
-def test_deduplicate_outer_no_reset_below_threshold():
-    pop, islands = _make_overlapping_islands()
-    # Require 4 overlapping pairs — there are only 3, so no reset
-    deduplicate_outer(islands, pop, n_overlap=4)
-    assert islands[0] == {0, 1, 2, 3}
-    assert islands[1] == {4, 5, 6, 7}
-
-
-def test_deduplicate_outer_resets_island_with_higher_losses():
-    """When island B has better losses than A, island A is reset."""
+def test_deduplicate_outer_removes_higher_loss_from_j():
+    """Duplicate pair where island j has higher loss: j's program is removed, i untouched."""
     pop = make_fingerprint_population([
-        (_E0, 5.005),  # 0 — island A, dup of 3
-        (_E1, 6.005),  # 1 — island A, dup of 4
-        (_E2, 7.005),  # 2 — island A, dup of 5
-        (_E0, 5.000),  # 3 — island B, dup of 0
-        (_E1, 6.000),  # 4 — island B, dup of 1
-        (_E2, 7.000),  # 5 — island B, dup of 2
+        (_E0, 1.000),  # 0 — island i, lower loss
+        (_E1, 2.000),  # 1 — island i, unique
+        (_E0, 1.005),  # 2 — island j, dup of 0, higher loss → removed
+        (_E2, 3.000),  # 3 — island j, unique
     ])
-    islands = [{0, 1, 2}, {3, 4, 5}]
-    deduplicate_outer(islands, pop, n_overlap=3)
-    assert islands[0] == {0, 1}   # A reset (worse)
-    assert islands[1] == {3, 4, 5}
+    islands = [{0, 1}, {2, 3}]
+    deduplicate_outer(islands, pop, min_island_size=2)
+    assert islands[0] == {0, 1}
+    assert islands[1] == {3}
 
 
-def test_deduplicate_outer_three_islands_resets_only_overlapping_pair():
-    """With three islands, only pairs that exceed n_overlap are reset."""
+def test_deduplicate_outer_removes_higher_loss_from_i():
+    """Duplicate pair where island i has higher loss: i's program is removed, j untouched."""
+    pop = make_fingerprint_population([
+        (_E0, 1.005),  # 0 — island i, dup of 2, higher loss → removed
+        (_E1, 2.000),  # 1 — island i, unique
+        (_E0, 1.000),  # 2 — island j, lower loss
+        (_E2, 3.000),  # 3 — island j, unique
+    ])
+    islands = [{0, 1}, {2, 3}]
+    deduplicate_outer(islands, pop, min_island_size=2)
+    assert islands[0] == {1}
+    assert islands[1] == {2, 3}
+
+
+def test_deduplicate_outer_tie_keeps_lower_island_index():
+    """Equal losses: program in island j (higher index) is removed."""
+    pop = make_fingerprint_population([
+        (_E0, 1.000),  # 0 — island i
+        (_E1, 2.000),  # 1 — island i, unique
+        (_E0, 1.000),  # 2 — island j, exact same loss as 0 → j loses tie
+        (_E2, 3.000),  # 3 — island j, unique
+    ])
+    islands = [{0, 1}, {2, 3}]
+    deduplicate_outer(islands, pop, min_island_size=2)
+    assert islands[0] == {0, 1}
+    assert islands[1] == {3}
+
+
+def test_deduplicate_outer_skips_pair_below_min_island_size():
+    """Island smaller than min_island_size: no removals."""
+    pop = make_fingerprint_population([
+        (_E0, 1.000),  # 0 — island i
+        (_E0, 1.005),  # 1 — island j, dup of 0
+    ])
+    islands = [{0}, {1}]
+    deduplicate_outer(islands, pop, min_island_size=2)
+    assert islands[0] == {0}
+    assert islands[1] == {1}
+
+
+def test_deduplicate_outer_removes_multiple_duplicates():
+    """Three duplicate pairs across islands: all three higher-loss copies are removed."""
+    pop, islands = make_islands_with_duplicates()
+    deduplicate_outer(islands, pop, min_island_size=4)
+    assert islands[0] == {0, 1, 2, 3}
+    assert islands[1] == {7}  # 4, 5, 6 removed as higher-loss dups
+
+
+def test_deduplicate_outer_non_duplicates_untouched():
+    """Programs with orthogonal fingerprints are never removed."""
+    pop = make_fingerprint_population([
+        (_E0, 1.0),  # 0 — island i
+        (_E1, 1.0),  # 1 — island i
+        (_E2, 1.0),  # 2 — island j
+        (_E3, 1.0),  # 3 — island j
+    ])
+    islands = [{0, 1}, {2, 3}]
+    deduplicate_outer(islands, pop, min_island_size=2)
+    assert islands[0] == {0, 1}
+    assert islands[1] == {2, 3}
+
+
+def test_deduplicate_outer_three_islands():
+    """With three islands, only the overlapping pair has duplicates removed; third island untouched."""
     pop = make_fingerprint_population([
         (_E0, 0.100),  # 0 — island 0
-        (_E0, 0.105),  # 1 — island 1, dup of 0
-        (_E1, 5.000),  # 2 — island 2, distinct
+        (_E1, 2.000),  # 1 — island 0, unique
+        (_E0, 0.105),  # 2 — island 1, dup of 0, higher loss → removed
+        (_E2, 3.000),  # 3 — island 1, unique
+        (_E3, 4.000),  # 4 — island 2, distinct
+        (_E1, 5.000),  # 5 — island 2, distinct
     ])
-    islands = [{0}, {1}, {2}]
-    # Only islands 0 and 1 overlap (1 pair), n_overlap=1 triggers reset of island 1
-    deduplicate_outer(islands, pop, n_overlap=1)
-    assert islands[0] == {0}
-    assert islands[1] == {0, 1}
-    assert islands[2] == {2}
+    islands = [{0, 1}, {2, 3}, {4, 5}]
+    deduplicate_outer(islands, pop, min_island_size=2)
+    assert islands[0] == {0, 1}
+    assert islands[1] == {3}
+    assert islands[2] == {4, 5}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -443,22 +487,24 @@ def test_deduplicate_outer_three_islands_resets_only_overlapping_pair():
 # ─────────────────────────────────────────────────────────────────────────
 
 def test_deduplicate_applies_inner_then_outer():
-    """Inner dedup removes a dup; outer then triggers cross-island reset."""
+    """Inner removes within-island dup; outer then removes the cross-island dup."""
     pop = make_fingerprint_population([
         (_E0, 1.000),  # 0 — island 0 best
-        (_E0, 1.005),  # 1 — island 0 dup of 0 (diff=0.005), removed by inner
-        (_E0, 1.003),  # 2 — island 1, dup of 0 (diff=0.003)
-        (_E1, 2.000),  # 3 — island 1, distinct
+        (_E0, 1.005),  # 1 — island 0 dup of 0, removed by inner
+        (_E1, 2.000),  # 2 — island 0, distinct
+        (_E0, 1.003),  # 3 — island 1, dup of 0, higher loss → removed by outer
+        (_E1, 2.005),  # 4 — island 1, dup of 2, higher loss → removed by outer
+        (_E2, 3.000),  # 5 — island 1, distinct
     ])
-    # critical_population_size=2 → n_overlap = 2//2 = 1
-    islands = [{0, 1}, {2, 3}]
+    islands = [{0, 1, 2}, {3, 4, 5}]
     evolution = {"critical_population_size": 2}
     deduplicate(islands, pop, evolution)
-    # inner: island 0 → {0}; island 1 unchanged → {2, 3}
-    # outer: 1 overlap (0 dup of 2), n_overlap=1 → reset worse island
-    # island 0 losses [1.0] vs island 1 losses [1.003, 2.0] → island 1 is worse
-    assert islands[0] == {0}
-    assert islands[1] == {0, 1}
+    # inner: island 0 → {0, 2} (1 removed); island 1 unchanged → {3, 4, 5}
+    # outer: min_island_size=1.5; island 0 size=2, island 1 size=3 → both pass
+    #   0 dup of 3 (losses 1.0 vs 1.003) → 3 removed from island 1
+    #   2 dup of 4 (losses 2.0 vs 2.005) → 4 removed from island 1
+    assert islands[0] == {0, 2}
+    assert islands[1] == {5}
 
 
 # ─────────────────────────────────────────────────────────────────────────
