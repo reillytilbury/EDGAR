@@ -77,12 +77,11 @@ async def _generate_one_model(
     llm: str | Model,
     mode: str,
     temperature: float,
-    config: dict[str, Any] | None = None,
+    config: dict[str, Any],
     spec: TaskSpec | None = None,
     data: dict | None = None,
 ) -> None:
     image_bytes = _prompt_image_bytes(spec, data, parents, program)
-    cfg = config or {}
     prompt = prompt_schema.build_prompt(mode, parents, config)
     result = await call_llm(
         prompt=prompt,
@@ -90,8 +89,8 @@ async def _generate_one_model(
         output_type=ModelSchema,
         temperature=temperature,
         image_bytes=image_bytes,
-        log_raw_llm_response=cfg.get("log_raw_response", False),
-        retry_config=cfg.get("retry_config"),
+        log_raw_llm_response=config.get("log_raw_response", False),
+        retry_config=config.get("retry_config"),
     )
     if result is None:
         warnings.warn(f"[generate] Skipping model code for program #{program.idx}: call_llm returned None")
@@ -109,7 +108,7 @@ async def generate_models(
     llm: str | Model,
     mode: str,
     temperature: float,
-    config: dict[str, Any] | None = None,
+    config: dict[str, Any],
     spec: TaskSpec | None = None,
     data: dict | None = None,
 ) -> None:
@@ -138,17 +137,16 @@ async def _generate_one_param_est(
     program: Program,
     prompt_schema: PromptSchema,
     llm: str | Model,
-    config: dict[str, Any] | None = None,
+    config: dict[str, Any],
 ) -> None:
-    cfg = config or {}
     prompt = prompt_schema.build_prompt("explore", [program], config)
     result = await call_llm(
         prompt=prompt,
         llm_model=llm,
         output_type=ParamEstSchema,
         temperature=1.0,
-        log_raw_llm_response=cfg.get("log_raw_response", False),
-        retry_config=cfg.get("retry_config"),
+        log_raw_llm_response=config.get("log_raw_response", False),
+        retry_config=config.get("retry_config"),
     )
     if result is None:
         warnings.warn(f"[generate] Skipping param_est for program #{program.idx}: call_llm returned None")
@@ -161,7 +159,7 @@ async def generate_param_ests(
     population: Population,
     prompt_schema: PromptSchema,
     llm: str | Model,
-    config: dict[str, Any] | None = None,
+    config: dict[str, Any],
 ) -> None:
     """Generate numpy parameter estimator code for programs that have model code but no estimator.
 
