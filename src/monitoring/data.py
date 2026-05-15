@@ -73,6 +73,7 @@ def build_sidebar_data(
     for i in range(len(population)):
         p = population[i]
         parents = list(p.birth.parent_indices)
+        parent_dict = {f"parent{j+1}_id": parents[j] for j in range(len(parents))}
         sidebar[str(p.idx)] = {
             "program_id": p.idx,
             "display_label": p.name or f"P{p.idx}",
@@ -88,8 +89,7 @@ def build_sidebar_data(
             "mode": p.birth.mode,
             "temperature": p.birth.temperature,
             "llm_name": p.birth.llm_name,
-            "parent1_id": parents[0] if len(parents) > 0 else None,
-            "parent2_id": parents[1] if len(parents) > 1 else None,
+            **parent_dict,
             "n_params": p.n_params,
             "initial_loss": p.program_losses.discover.init,
             "train_loss": p.program_losses.discover.final,

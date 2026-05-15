@@ -178,7 +178,7 @@ function formatRemovalDetails(details) {
 }
 
 function labelFor(id) {
-  if (!id) return '<em>N/A</em>';
+  if (id === null || id === undefined) return '<em>N/A</em>';
   const rec = sidebarData[id];
   if (rec && rec.display_label) return escapeHtml(rec.display_label);
   return escapeHtml(id);
