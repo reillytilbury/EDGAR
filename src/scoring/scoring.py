@@ -58,8 +58,8 @@ def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
             best_loss, best_flat = float(loss_val), flat.copy() #store loss_i, parameters_i
         updates, opt_state = opt.update(grad, opt_state, flat)
         flat = optax.apply_updates(flat, updates) #update parameters to parameters_{i+1}
-        if step % 200 == 0 or step == gd_config["max_iter"]:
-            print(f"step {step:4d}  loss {loss_val:.4f}")
+        # if step % 200 == 0 or step == gd_config["max_iter"]:
+        #     print(f"step {step:4d}  loss {loss_val:.4f}")
 
     return unflatten(best_flat)
 
