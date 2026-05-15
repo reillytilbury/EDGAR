@@ -25,7 +25,7 @@ async def test_call_llm_with_fake_model():
     assert result.default_params == Program1.default_params
     #Try running the code and check it produces expected output
     output = run_model_code(result.code, {"x": np.array([0,1.0,2.0])}, result.default_params)
-    expected_output = np.array([0,3,8]) #y = x^2 +2x
+    expected_output = np.array([0,1.1,4.2]) #y = x^2 +0.1x
     assert np.allclose(output, expected_output)
 
 @pytest.mark.asyncio
@@ -60,5 +60,5 @@ async def test_call_llm_with_fake_model_translation():
     assert result.code.startswith(Program1.model_jax)
     #Try running the code and check it produces expected output
     output = run_model_code(result.code, {"x": np.array([0,1.0,2.0])}, Program1.default_params)
-    expected_output = np.array([0,3,8]) #y = x^2 +2x
+    expected_output = np.array([0,1.1,4.2]) #y = x^2 +0.1x
     assert np.allclose(output, expected_output)
