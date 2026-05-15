@@ -23,7 +23,7 @@ scoring:
   timeout_s: 120.0
 
   gradient_descent:
-    max_iter: 50
+    max_iter: 100
     learning_rate: 0.01
 
 project_params:
