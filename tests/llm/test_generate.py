@@ -1,10 +1,10 @@
 import pytest
-from src.llm.generate import _generate_one_model, _generate_one_param_est, generate_models, generate_param_ests, _translate_one_model, _translate_one_param_est, _translate_models, _translate_param_ests, translate_programs
+from src.llm.generate import _generate_one_model, _generate_one_param_est, generate_models, generate_param_ests, _translate_one_model, translate_programs
 from src.llm.prompt_schema import PromptSchema
 from tests.evolution.utils import make_empty_program
 from tests.llm.programs import Program1, InvalidProgram, ProgramSolution
 from tests.llm.fakellm import FakeLLM, CyclingModel
-from tests.llm.utils import generate_one_fake_model, generate_one_fake_param_est, generate_fake_models, generate_fake_param_ests
+from tests.llm.utils import generate_one_fake_model, generate_one_fake_param_est, generate_fake_models
 
 #Model generation
 @pytest.mark.asyncio
@@ -174,7 +174,7 @@ async def test_generate_param_est():
 @pytest.mark.asyncio
 async def test_translate_one_model():
     program = await generate_one_fake_param_est() #The output of _generate_one_param_est
-    assert program.code_jax.model is None
+    assert program.code.model_jax is None
     prompt_schema = PromptSchema(
         base="...",
         explore="...",
@@ -187,29 +187,8 @@ async def test_translate_one_model():
     llm_model = llm.gen_model_translation() #A TestModel with code.model_jax for Program1
     await _translate_one_model(program, prompt_schema, llm_model)
 
-    assert program.code_jax.model == Program1.model_jax + " + 0.000\n"
+    assert program.code.model_jax == Program1.model_jax + " + 0.000\n"
     assert program.code.model == '"""\nfake thought process\n\n' + Program1.latex_equation + '\n"""\n\n' + Program1.model + " + 0.000\n" #Check model code is unchanged
-    assert program.code.param_est == '"""\nfake thought process\n"""\n\n' + Program1.param_est #Check param est code is unchanged
-    assert program.code_jax.param_est is None #Check param est jax code is unset
-
-
-@pytest.mark.asyncio
-async def test_translate_one_param_est():
-    program = await generate_one_fake_param_est() #The output of _generate_one_param_est
-    assert program.code_jax.param_est is None
-    prompt_schema = PromptSchema(
-        base="...",
-        explore="...",
-        code_guidelines='...',
-        docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
-    )
-    llm = FakeLLM()
-    llm_model = llm.gen_param_est_translation() #A TestModel with code.param_est_jax for Program1
-    await _translate_one_param_est(program, prompt_schema, llm_model)
-
-    assert program.code_jax.param_est == Program1.param_est
     assert program.code.param_est == '"""\nfake thought process\n"""\n\n' + Program1.param_est #Check param est code is unchanged
 
 @pytest.mark.asyncio
@@ -229,11 +208,11 @@ async def test_translate_models():
     no_model = make_empty_program() #Needs model and param est
     models_no_jax = await generate_fake_models(3)
     model_jax = await generate_one_fake_model() #Already has model
-    model_jax.code_jax.model = "Existing jax model code" #Set existing jax model code to check it is unchanged
+    model_jax.code.model_jax = "Existing jax model code" #Set existing jax model code to check it is unchanged
     llm = FakeLLM()
     llm_models = CyclingModel([llm.gen_model_translation() for _ in range(3)])
     population = [no_model] + models_no_jax + [model_jax]
-    await _translate_models(population, prompt_schema, llm_models)
+    await translate_programs(population, prompt_schema, llm_models)
 
     #Check expected solutions
     programs = [None, Program1(), InvalidProgram(), ProgramSolution(), Program1()]
@@ -242,85 +221,4 @@ async def test_translate_models():
 
     #Check model jax code
     for i, program in enumerate(population):
-        assert program.code_jax.model == model_jaxes[i]
-
-
-@pytest.mark.asyncio
-async def test_translate_param_ests():
-    """
-        Generate param_est jax translations for programs without param_est code, with param_est code but no jax translation, and with both.
-        Check the programs which require it are suitably mutated.
-    """
-    prompt_schema = PromptSchema(
-        base="...",
-        explore="...",
-        code_guidelines='...',
-        docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
-    )
-    no_param_est = await generate_one_fake_model() #Has model but no param_est, should be skipped
-    param_ests_no_jax = await generate_fake_param_ests(3) #Has model+param_est, needs jax translation
-    param_est_jax = await generate_one_fake_param_est() #Already has param_est
-    param_est_jax.code_jax.param_est = "Existing jax param_est code" #Set existing jax to check it is unchanged
-    llm = FakeLLM()
-    llm_models = CyclingModel([llm.gen_param_est_translation() for _ in range(3)])
-    population = [no_param_est] + param_ests_no_jax + [param_est_jax]
-    await _translate_param_ests(population, prompt_schema, llm_models)
-
-    #Check expected solutions
-    programs = [None, Program1(), InvalidProgram(), ProgramSolution(), Program1()]
-    param_est_jaxes = [None] + [programs[i].param_est for i in range(1, 4)] + ["Existing jax param_est code"]
-
-    #Check param_est jax code
-    for i, program in enumerate(population):
-        assert program.code_jax.param_est == param_est_jaxes[i]
-
-@pytest.mark.asyncio
-async def test_translate_programs():
-    """
-        Translate both model and param_est code for programs which require it.
-        Use a single TestModel, as would be done with a usual LLM call
-    """
-    prompt_schema = PromptSchema(
-        base="...",
-        explore="...",
-        code_guidelines='...',
-        docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
-    )
-    population = await generate_fake_param_ests(3) #Has model+param_est, needs jax translation
-    llm = FakeLLM()
-    llm_model = llm.gen_translation()
-    await translate_programs(population, prompt_schema, prompt_schema, llm_model)
-    expected_jax = Program1.model_jax + "\n\n" + Program1.param_est
-    #Check jax code
-    for p in population:
-        assert p.code_jax.model == expected_jax
-        assert p.code_jax.param_est == expected_jax
-
-@pytest.mark.asyncio
-async def test_translate_programs_different_llms():
-    """
-        Translate both model and param_est code for programs which require it.
-        Use different lists of TestModels for model and param_est translation
-    """
-    prompt_schema = PromptSchema(
-        base="...",
-        explore="...",
-        code_guidelines='...',
-        docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
-    )
-    population = await generate_fake_param_ests(3) #Has model+param_est, needs jax translation
-    llm = FakeLLM()
-    llm_model = CyclingModel([llm.gen_model_translation() for _ in range(3)])
-    llm_param_est = CyclingModel([llm.gen_param_est_translation() for _ in range(3)])
-    await translate_programs(population, prompt_schema, prompt_schema, llm_model, llm_param_est)
-    programs = [Program1(), InvalidProgram(), ProgramSolution()]
-    #Check jax code
-    for i, p in enumerate(population):
-        assert p.code_jax.model == programs[i].model_jax + " + 0.000\n"
-        assert p.code_jax.param_est == programs[i].param_est
+        assert program.code.model_jax == model_jaxes[i]

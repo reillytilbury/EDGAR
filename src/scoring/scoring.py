@@ -97,7 +97,7 @@ def _worker(queue, program, data, loss_fn_bytes, config, X_eval):
         import traceback
         print(f"[scoring] program #{program.idx} failed during compile/optimize/eval: {e}")
         print(f"[scoring] traceback:\n{traceback.format_exc()}")
-        print(f"[scoring] code_jax.model:\n{program.code_jax.model}")
+        print(f"[scoring] code.model_jax:\n{program.code.model_jax}")
         print(f"[scoring] code.param_est:\n{program.code.param_est}")
         queue.put((float("inf"), float("inf"), None, None, None))
         return
@@ -154,7 +154,7 @@ def _score_one_model(
 
 def _has_jax_code(program: Program) -> bool:
     """Does this program have jax model code and a numpy param_est that can be scored?"""
-    return bool(program.code_jax.model and program.code.param_est)
+    return bool(program.code.model_jax and program.code.param_est)
 
 
 def _needs_scoring(population: Population, split: str) -> list[Program]:
@@ -162,7 +162,7 @@ def _needs_scoring(population: Population, split: str) -> list[Program]:
 
     Initialization behavior:
     - discover: initialized to None, so all programs with JAX code are scored
-    - validate: initialized to inf, only set to None for programs alive at loop end 
+    - validate: initialized to NotValidated, only set to None for programs alive at loop end 
       (via population.prepare_validation_scoring), allowing selective validation 
       scoring.
 

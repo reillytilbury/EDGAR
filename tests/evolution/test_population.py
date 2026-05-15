@@ -23,8 +23,7 @@ def initialize_program(i, model_code, param_est_code):
     """
     return Program(
         birth=BirthCertificate(generation=i, island=i, batch_index=i),
-        code=Code(model=model_code, param_est=param_est_code),
-        code_jax=Code(model=model_code, param_est=param_est_code),
+        code=Code(model=model_code, param_est=param_est_code, model_jax = model_code),
         name=f"Program {i}",
         program_losses=Losses(
             discover=LossPair(init=float(i), final=float(i) / 2),
@@ -66,7 +65,7 @@ class TestPopulation:
         for p_original, p_loaded in zip(pop._programs, loaded_pop._programs):
             assert p_original.birth == p_loaded.birth
             assert p_original.code == p_loaded.code
-            assert p_original.code_jax == p_loaded.code_jax
+            assert p_original.code.model_jax == p_loaded.code.model_jax
             assert p_original.name == p_loaded.name
             assert p_original.program_losses.discover.init == p_loaded.program_losses.discover.init
             assert p_original.program_losses.discover.final == p_loaded.program_losses.discover.final

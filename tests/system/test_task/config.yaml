@@ -15,7 +15,6 @@ llms:
   model_llm: gemini-2.0-flash
   param_est_llm: gemini-2.0-flash
   jax_model_translator_llm: gemini-2.0-flash-lite
-  jax_param_est_translator_llm: gemini-2.0-flash-lite
   max_lines: 50
   swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
 

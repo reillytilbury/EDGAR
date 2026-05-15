@@ -33,7 +33,6 @@ def fake_run(tmp_path_factory):
     spec.llms["model_llm"] = CyclingModel([fake.gen_model() for _ in range(n_gen * n_per_gen)])
     spec.llms["param_est_llm"] = CyclingModel([fake.gen_param_est() for _ in range(n_gen * n_per_gen)])
     spec.llms["jax_model_translator_llm"] = CyclingModel([seed_fake.gen_model_translation() for _ in range(n_seed)] + [fake.gen_model_translation() for _ in range(n_gen * n_per_gen)])
-    spec.llms["jax_param_est_translator_llm"] = CyclingModel([seed_fake.gen_param_est_translation() for _ in range(n_seed)] + [fake.gen_param_est_translation() for _ in range(n_gen * n_per_gen)])
 
     asyncio.run(run(spec))
     return spec.output_dir

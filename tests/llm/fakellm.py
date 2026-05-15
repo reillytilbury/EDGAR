@@ -33,7 +33,6 @@ class FakeLLM:
         self._model_counter = [0, 0, 0]
         self._model_jax_counter = [0, 0, 0]
         self._param_est_counter = [0, 0, 0]
-        self._param_est_jax_counter = [0, 0, 0]
         self.offset = offset
 
     @staticmethod
@@ -80,29 +79,12 @@ class FakeLLM:
         return TestModel(custom_output_args={
             "code": model_code,
         })
-    
-    def gen_param_est_translation(self) -> TestModel:
-        """Return a TestModel which outputs a jax-translated parameter estimator matching TranslationSchema for the next program in rotation."""
-        idx = self._param_est_jax_counter.index(min(self._param_est_jax_counter))
-        code = self._programs[idx].param_est
-        self._param_est_jax_counter[idx] += 1
-        return TestModel(custom_output_args={
-            "code": code,
-        })
-
-    def gen_translation(self) -> TestModel:
-        """Return a TestModel which outputs combined JAX model + param_est code for the next program in rotation."""
-        idx = self._model_jax_counter.index(min(self._model_jax_counter))
-        code = self._programs[idx].model_jax + "\n\n" + self._programs[idx].param_est
-        self._model_jax_counter[idx] += 1
-        return TestModel(custom_output_args={"code": code})
 
 
 class SeedFakeLLM:
     """Returns TestModel instances for JAX seeding, cycling through two simple models."""
 
     _seed_models = (Seed1.model_jax, Seed2.model_jax)
-    _seed_param_ests = (Seed1.param_est_jax, Seed2.param_est_jax)
 
     def __init__(self):
         self._model_counter = 0
@@ -114,14 +96,6 @@ class SeedFakeLLM:
         self._model_counter += 1
         return TestModel(custom_output_args={
             "code": model_code + "\n"
-        })
-    
-    def gen_param_est_translation(self) -> TestModel:
-        """Return a TestModel whose output matches TranslationSchema for the next seed model."""
-        param_est_code = self._seed_param_ests[self._param_est_counter%len(self._seed_param_ests)]
-        self._param_est_counter += 1
-        return TestModel(custom_output_args={
-            "code": param_est_code + "\n"
         })
 
 

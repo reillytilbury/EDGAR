@@ -69,9 +69,10 @@ def make_empty_population(num_programs: int = 2):
 def make_program(model_code = linear_model_code(), param_est_code = linear_param_est_code(), number = 0, default_params = None):
     return Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
-        code_jax=Code(
+        code=Code(
             model=model_code,
-            param_est=param_est_code
+            param_est=param_est_code,
+            model_jax=model_code
         ),
         name = f"Program{number}",
         _default_params = default_params
@@ -116,15 +117,13 @@ def make_fingerprint_population(specs: list[tuple]) -> Population:
 def make_seeds():
     seed1 = Program(
         birth = BirthCertificate(generation=-1, island=-1, batch_index=0),
-        code = Code(model=Seed1.model, param_est=Seed1.param_est),
-        code_jax = Code(model=Seed1.model_jax, param_est=Seed1.param_est_jax),
+        code = Code(model=Seed1.model, param_est=Seed1.param_est,model_jax=Seed1.model_jax),
         name = "Seed1",
         _default_params = Seed1.default_params,
     )
     seed2 = Program(
         birth = BirthCertificate(generation=-1, island=-1, batch_index=1),
-        code = Code(model=Seed2.model, param_est=Seed2.param_est),
-        code_jax = Code(model=Seed2.model_jax, param_est=Seed2.param_est_jax),
+        code = Code(model=Seed2.model, param_est=Seed2.param_est,model_jax=Seed2.model_jax),
         name = "Seed2",
         _default_params = Seed2.default_params,
     )
