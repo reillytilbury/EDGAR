@@ -50,15 +50,15 @@ def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
     opt_state = opt.init(flat)
     best_loss, best_flat = float("inf"), flat
 
-    for step in range(gd_config["max_iter"]):
-        loss_val, grad = loss_and_grad(flat)
+    for step in range(1, gd_config["max_iter"] + 1):
+        loss_val, grad = loss_and_grad(flat) #loss_i, grad_i for parameters_i
         if not jnp.isfinite(loss_val):
             break
         if float(loss_val) < best_loss:
-            best_loss, best_flat = float(loss_val), flat.copy()
+            best_loss, best_flat = float(loss_val), flat.copy() #store loss_i, parameters_i
         updates, opt_state = opt.update(grad, opt_state, flat)
-        flat = optax.apply_updates(flat, updates)
-        if step % 200 == 0 or step == gd_config["max_iter"] - 1:
+        flat = optax.apply_updates(flat, updates) #update parameters to parameters_{i+1}
+        if step % 200 == 0 or step == gd_config["max_iter"]:
             print(f"step {step:4d}  loss {loss_val:.4f}")
 
     return unflatten(best_flat)
@@ -90,7 +90,7 @@ def _worker(queue, program, data, loss_fn_bytes, config, X_eval):
         model_fn, param_est_fn = program.compile()
         penalty = config["param_penalty_weight"] * program.n_params
         params_init = _get_params(param_est_fn, program.default_params, data_train)
-        initial_loss = _eval_loss(model_fn, loss_fn, params_init, data_train) + penalty
+        initial_loss = _eval_loss(model_fn, loss_fn, params_init, data_test) + penalty
         params = _optimize(model_fn, loss_fn, params_init, data_train, config["gradient_descent"])
         final_loss = _eval_loss(model_fn, loss_fn, params, data_test) + penalty
     except Exception as e:
