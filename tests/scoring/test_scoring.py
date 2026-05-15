@@ -5,13 +5,15 @@ import pytest
 
 import jax.numpy as jnp
 
+from tests.llm.programs import Program1
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.evolution.program import Program, BirthCertificate, Code, NotValidated
 from src.evolution.population import Population
-from src.scoring.scoring import _score_one_model, score
+from src.scoring.scoring import _eval_loss, _optimize, _score_one_model, rank, score
 
 
 # --- shared fixtures ---
@@ -132,6 +134,28 @@ def test_score_one_model_falls_back_to_default_params():
     assert jnp.isfinite(final_loss)
     assert jnp.isfinite(initial_loss)
 
+# --- optimize and _eval_loss ---
+
+def test_optimize_before_convergence():
+    """ Do a few optimization steps but not enough to converge, checking against expected value which protects against optimization loop errors, e.g params used from wrong iteration."""
+    ns = {}
+    exec(Program1.model_jax, ns)
+    model_fn = ns['model']
+
+    data_train = _make_data()
+    n_samples = data_train['x'].shape[0]
+    params_init = {k: jnp.stack([jnp.asarray(v)] * n_samples) for k, v in Program1.default_params.items()}
+    gd_config = {"max_iter": 5, "learning_rate": 0.001}
+    best_params = _optimize(
+        model_fn=model_fn,
+        loss_fn=loss_fn,
+        params_init=params_init,
+        data_train=data_train,
+        gd_config=gd_config,
+    )
+    loss = _eval_loss(model_fn, loss_fn, best_params, data_train)
+    print(f"Final loss: {loss:.6f}")
+    assert round(loss, 6) == 0.008466
 
 # --- score (population) ---
 
@@ -170,3 +194,20 @@ def test_score_skips_programs_without_code():
     score(pop, (_make_data(), _make_data()), None, BASE_CONFIG, loss_fn, split="discover")
 
     assert pop[0].program_losses.discover.final is None
+
+# --- rank ---
+def test_rank():
+    pop = Population()
+    for i in range(5):
+        p = _make_program(FAST_MODEL_CODE)
+        p.idx = i
+        pop.add(p)
+
+    validate_losses = (NotValidated(), 0.1, 2.1, 0.5, float("inf"))
+    for i, loss in enumerate(validate_losses):
+        pop[i].program_losses.validate.final = loss
+
+    rank(pop)
+    expected_rank = (None, 1, 3, 2, 4)
+    for i in range(5):
+        assert pop[i].rank == expected_rank[i]
