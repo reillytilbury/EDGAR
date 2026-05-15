@@ -19,7 +19,7 @@ import optax
 from jax.flatten_util import ravel_pytree
 import warnings
 
-from ..evolution.program import Program
+from ..evolution.program import NotValidated, Program
 from ..evolution.population import Population
 
 
@@ -205,3 +205,17 @@ def score(
             program.params = params
         if sample_losses is not None and split == "discover":
             program.sample_losses = sample_losses
+
+def rank(
+        population: Population,
+) -> None:
+    """ 
+        Rank programs surviving at the end of the evolution by validate.final loss.
+        Only ranks those which have validate.final != NotValidated, which should be the ones alive at the end of the evolution.
+    """
+    validated_program_indices = [i for i in range(len(population)) if not isinstance(population[i].program_losses.validate.final, NotValidated)]
+    validated_program_indices.sort(key=lambda i: population[i].program_losses.validate.final)
+    print("Ranking of programs by validate.final loss:")
+    for rank, program in enumerate([population[i] for i in validated_program_indices], start=1):
+        program.rank = rank
+        print(f"Rank {rank}: Program #{program.idx} ({program.name}): {program.program_losses.validate.final:.4f}")

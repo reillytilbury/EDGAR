@@ -74,6 +74,7 @@ class Program:
     sample_losses:    np.ndarray | None = field(default=None, repr=False)
     image_path:       str | None = None
     idx:              int | None = field(default=None, init=False)
+    rank:             int | None = None
     _default_params:  dict | None = None
 
     #Called on initialization after default __init__ 

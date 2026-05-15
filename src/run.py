@@ -35,7 +35,7 @@ from .llm.generate import (
     translate_programs,
 )
 from .llm.llm_calling import RetryConfig
-from .scoring.scoring import score
+from .scoring.scoring import rank, score
 from .monitoring.family_tree import write_family_tree
 
 
@@ -108,6 +108,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
 
     population.prepare_validation_scoring(islands)
     score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
+    rank(population)
 
     population.save(os.path.join(spec.output_dir, "population.jsonl"))
     save_island_census(census, os.path.join(spec.output_dir, "island_census.jsonl"))
