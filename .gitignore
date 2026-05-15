@@ -5,9 +5,7 @@
 
 # programs database
 program_databases/
-# fig gen
-fig_generators/
-figs_vectorized/
+figures/
 
 # Python cache
 __pycache__/

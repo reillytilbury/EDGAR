@@ -929,16 +929,6 @@ def load_data(data_dir: Union[str, List[List[str]]],
             angles   = angles[perm]
 
     else:  # 'ali' data
-        # with open(data_dir, 'rb') as f:
-        #     neural_data = pickle.load(f)
-        # response = neural_data['resps'].T    # shape (n_cells, n_trials)
-        # angles = neural_data['stims'].astype(float) 
-        # angles = angles % 360  # ensure angles are in [0, 360)
-        # angles = np.deg2rad(angles)  # convert to radians
-        # angles = angles % (2 * np.pi)  # ensure angles are in [0, 2pi)
-        # # set each cell's 1th percentile response to 0
-        # response = response - np.percentile(response, 1, axis=1, keepdims=True)
-        # response[response < 0] = 0
         angles = np.load(data_dir[0])
         angles = np.deg2rad(angles)  # convert to radians
         response = np.load(data_dir[1])
