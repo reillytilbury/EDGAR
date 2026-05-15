@@ -95,7 +95,7 @@ def log_generation(
 
     n_model     = sum(1 for p in born if p.code.model is not None)
     n_param_est = sum(1 for p in born if p.code.param_est is not None)
-    n_jax       = sum(1 for p in born if p.code_jax.model is not None)
+    n_jax       = sum(1 for p in born if p.code.model_jax is not None)
     n_scored    = sum(1 for p in born if p.program_losses.discover.final not in (None, float("inf")))
 
     all_final   = [population[i].program_losses.discover.final for i in range(len(population))]
@@ -123,7 +123,7 @@ def log_generation(
         f.write(f"  --- Program #{p.idx} (island={p.birth.island}) ---\n")
         f.write(f"  [model]\n{p.code.model or '(none)'}\n")
         f.write(f"  [param_est]\n{p.code.param_est or '(none)'}\n")
-        f.write(f"  [model_jax]\n{p.code_jax.model or '(none)'}\n\n")
+        f.write(f"  [model_jax]\n{p.code.model_jax or '(none)'}\n\n")
 
     if log.level != "prompts":
         f.flush()

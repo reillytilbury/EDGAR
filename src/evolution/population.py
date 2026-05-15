@@ -111,7 +111,6 @@ class Population:
                 program = Program(
                     birth=BirthCertificate(**d["birth"]),
                     code=Code(**d["code"]),
-                    code_jax=Code(**d["code_jax"]),
                     name=d["name"],
                     program_losses=Losses(
                         discover=LossPair(**d["program_losses"]["discover"]),

@@ -62,20 +62,3 @@ async def test_call_llm_with_fake_model_translation():
     output = run_model_code(result.code, {"x": np.array([0,1.0,2.0])}, Program1.default_params)
     expected_output = np.array([0,3,8]) #y = x^2 +2x
     assert np.allclose(output, expected_output)
-
-@pytest.mark.asyncio
-async def test_call_llm_with_fake_param_est_translation():
-    llm = FakeLLM()
-    translation = llm.gen_param_est_translation()
-    result = await call_llm(
-        prompt = "Fake prompt",
-        llm_model = translation,
-        output_type = TranslationSchema
-    )
-
-    assert isinstance(result, TranslationSchema)
-    assert result.code == Program1.param_est
-    #Try running the code and check it produces expected output
-    output = run_param_est_code(result.code, {"x": np.array([0,1.0,2.0])})
-    expected_output = Program1.default_params #In the programs we just return the default params as the estimate
-    assert output == expected_output
