@@ -191,8 +191,8 @@ class Program:
             True if programs are behaviorally equivalent.
         """
         # Fast path 1: Same code hash → definitely duplicate
-        if self.code_string == other.code_string:
-            return True
+        # if self.code_string == other.code_string:
+        #     return True
         
         # Fast path 2: Different parameter count → structurally different programs
         # (e.g., linear vs quadratic model can't be the same)
@@ -1001,11 +1001,11 @@ def compare_programs(program1: pd.Series, program2: pd.Series,
         payload = {"is_duplicate": is_duplicate, "logic": logic, "details": details}
         return payload if return_details else is_duplicate
 
-    # Fast path 1: Same code → definitely duplicate
-    code1 = program1.get('program_code_string', '')
-    code2 = program2.get('program_code_string', '')
-    if code1 == code2:
-        return _result(True, "same_code")
+    # # Fast path 1: Same code → definitely duplicate
+    # code1 = program1.get('program_code_string', '')
+    # code2 = program2.get('program_code_string', '')
+    # if code1 == code2:
+    #     return _result(True, "same_code")
     
     # Fast path 2: Different param count → structurally different
     params1 = program1.get('params')

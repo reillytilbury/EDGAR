@@ -30,7 +30,7 @@ experiment_params:
   batch_size: 3
   n_islands: 2
   learning_rate: 1e-2
-  max_iter: 50
+  max_iter: 99
   critical_population_size: 3 #per island capacity, pruning performed prior to migration
   n_migrants: 1
   exploration_topology: [1, 0]
@@ -44,6 +44,7 @@ experiment_params:
   objective_timeout_s: 5.0
   model_llm: [gemini-2.5-flash, gemini-2.5-flash, gemini-2.5-flash]
   swear_words: []
+  param_penalty_weight: 0.01
  
 
 # ========================

@@ -1,6 +1,5 @@
 # Define programs which will be returned by the fake LLM call
 
-
 class Program1:
     model = (
         "import numpy as np\n\n"
@@ -23,7 +22,7 @@ class Program1:
     )
 
     param_est = (
-        'def parameter_estimator(data):\n\treturn {"a": float(1), "b": float(0)}\n'
+        'def parameter_estimator(data):\n\treturn {"a": float(1), "b": float(0.1)}\n'
     )
 
 
@@ -52,7 +51,7 @@ class Program2:
 
     param_est = (
         "def parameter_estimator(data):\n"
-        '\treturn {"a": float(1), "b": float(0), "c": float(0)}\n'
+        '\treturn {"a": float(1), "b": float(0.1), "c": float(0.2)}\n'
     )
 
 
@@ -85,7 +84,7 @@ class ProgramSolution:
 
     param_est = (
         "def parameter_estimator(data):\n"
-        '\treturn {"a": float(1), "b": float(0), "c": float(0), "k": float(6), "phi_0": float(0)}\n'
+        '\treturn {"a": float(1), "b": float(0.1), "c": float(0.2), "k": float(6), "phi_0": float(0)}\n'
     )
 
 class InvalidProgram:

@@ -94,7 +94,7 @@ def test_winning_loss(fake_run):
     programs = load_programs(fake_run)
     winning_program = [p for p in programs if p.get("is_winner")][0]
     #Check the loss on held out x values, used to score programs within evolution
-    assert round(winning_program["initial_loss"],4) == 0.6811, f"Expected winning program initial_loss (without gd) 0.6811, found {winning_program['initial_loss']:.4f}"
-    assert round(winning_program["train_loss"],4) == 0.2950, f"Expected winning program train_loss 0.2950, found {winning_program['train_loss']:.4f}"
+    assert round(winning_program["initial_loss"],4) == 0.8431, f"Expected winning program initial_loss (without gd) 0.8431, found {winning_program['initial_loss']:.4f}"
+    assert round(winning_program["train_loss"],4) == 0.1726, f"Expected winning program train_loss 0.1726, found {winning_program['train_loss']:.4f}"
     #Check the loss computed on held out samples (i.e parameter sets for the target function)
-    assert round(winning_program["test_loss"],4) == 3.0775, f"Expected winning program test_loss 3.0775, found {winning_program['test_loss']:.4f}"
+    assert round(winning_program["test_loss"],4) == 1.0737, f"Expected winning program test_loss 1.0737, found {winning_program['test_loss']:.4f}"

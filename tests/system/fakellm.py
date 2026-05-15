@@ -1,7 +1,6 @@
 # Define programs which will be returned by the fake LLM call
 from .programs import Program1, Program2, ProgramSolution, InvalidProgram
 
-
 class FakeLLM:
     """A fake LLM engine that returns pre-configured candidates and seed_jax outputs instead of making actual LLM calls."""
 
