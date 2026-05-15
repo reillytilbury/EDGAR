@@ -60,7 +60,7 @@ BASE_CONFIG_WITH_PARAM_PENALTY = {
 def _make_program(model_code, default_params = {"w": jnp.array(1.0)}):
     return Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
-        code_jax=Code(model=model_code, param_est=PARAM_EST_CODE),
+        code=Code(param_est=PARAM_EST_CODE, model_jax=model_code),
         _default_params = default_params
     )
 
@@ -123,7 +123,7 @@ def test_score_one_model_falls_back_to_default_params():
     """param_est_fn raises → _get_params falls back to default_params, loss still finite."""
     program = Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
-        code_jax=Code(model=FAST_MODEL_CODE, param_est=FAILING_PARAM_EST_CODE),
+        code=Code(param_est=FAILING_PARAM_EST_CODE, model_jax=FAST_MODEL_CODE),
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())

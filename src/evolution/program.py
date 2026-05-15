@@ -3,8 +3,7 @@ program.py
 
 A Program is one evolved candidate. Top-level fields:
 - birth: BirthCertificate — lineage and generation-time metadata
-- code: Code — numpy source for model and param_est
-- code_jax: Code — JAX-translated source for model and param_est
+- code: Code — numpy source for model, param_est and jax model code
 - name: descriptive model name from the LLM (e.g. "Double Gaussian Model")
 - program_losses: Losses — per-split init/final scalar losses (include complexity penalty)
 - sample_losses: per-sample cross-validated losses (no penalty), shape (n_samples,)
@@ -44,6 +43,7 @@ class BirthCertificate:
 class Code:
     model: str | None = None
     param_est: str | None = None
+    model_jax: str | None = None
 
 class NotValidated:
     """ Marker for programs that haven't been prepared for validation scoring.
@@ -66,7 +66,6 @@ class Losses:
 class Program:
     birth:            BirthCertificate
     code:             Code = field(default_factory=Code)
-    code_jax:         Code = field(default_factory=Code)
     name:             str | None = None
     program_losses:   Losses = field(default_factory=Losses)
     n_params:         int | None = None
@@ -84,7 +83,7 @@ class Program:
 
     def compile(self) -> tuple[Callable, Callable]:
         """Compile JAX model and numpy parameter_estimator into callables."""
-        model_fn = load_function_from_source(self.code_jax.model, MODEL_ENTRYPOINT)
+        model_fn = load_function_from_source(self.code.model_jax, MODEL_ENTRYPOINT)
         param_est_fn = load_function_from_source(self.code.param_est, PARAM_EST_ENTRYPOINT)
         if model_fn is None:
             raise ValueError(f"{self.birth}: could not load '{MODEL_ENTRYPOINT}'")

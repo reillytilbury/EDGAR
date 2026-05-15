@@ -95,7 +95,7 @@ def build_sidebar_data(
             "train_loss": p.program_losses.discover.final,
             "test_loss": p.program_losses.validate.final,
             "model_code": p.code.model,
-            "model_code_jax": p.code_jax.model,
+            "model_code_jax": p.code.model_jax,
             "param_est_code": p.code.param_est,
         }
     return sidebar

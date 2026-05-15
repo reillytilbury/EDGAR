@@ -33,19 +33,17 @@ if TYPE_CHECKING:
 def _needs_model_code(program: Program) -> bool:
     return program.code.model is None
 
-
 def _needs_param_est_code(program: Program) -> bool:
     return program.code.model is not None and program.code.param_est is None
 
 def _needs_model_translation(program: Program) -> bool:
-    return program.code.model is not None and program.code_jax.model is None
+    return program.code.model is not None and program.code.model_jax is None
 
 def _filter_programs(population: Population, filter_rule: Callable[[Program], bool]) -> list[Program]:
     return [p for p in population if filter_rule(p)]
 
 def _resolve_parents(population: Population, program: Program) -> list[Program]:
     return [population[i] for i in program.birth.parent_indices]
-
 
 def _prompt_image_bytes(spec: TaskSpec, data: dict, parents: list[Program], program: Program) -> bytes | None:
     if spec is None or spec.plot_fn is None or data is None:
@@ -186,7 +184,7 @@ async def _translate_one_model(
     model_prompt = model_prompt_schema.build_prompt("explore", [program])
     model_result = await call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0, retry_config=retry_config)
     if model_result is not None and load_function_from_source(model_result.code, "model") is not None:
-        program.code_jax.model = model_result.code
+        program.code.model_jax = model_result.code
 
 async def translate_programs(
     population: Population,
@@ -196,7 +194,7 @@ async def translate_programs(
 ) -> None:
     """Translate all untranslated model code from numpy to JAX.
 
-    Mutates: program.code_jax.model
+    Mutates: program.code.model_jax
     """
     programs = _filter_programs(population, _needs_model_translation)
     await asyncio.gather(*[

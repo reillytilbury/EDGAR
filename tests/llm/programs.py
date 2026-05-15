@@ -169,22 +169,6 @@ class Seed1:
         '\treturn {"a": float(best_params[0]), "b": float(best_params[1])}\n'
     )
 
-    param_est_jax = (
-        "import jax.numpy as jnp\n\n"
-        "def parameter_estimator(data):\n"
-        '\t"""Grid search parameter estimator for the ReLU model."""\n'
-        '\tx = data["x"]\n'
-        '\ty = jnp.asarray(data["y"])\n'
-        "\n"
-        '\tbest_loss, best_params = float("inf"), (1.0, 0.0)\n'
-        "\tfor a in jnp.linspace(0.1, 5.0, 20):\n"
-        "\t\tfor b in jnp.linspace(-1.0, 1.0, 20):\n"
-        "\t\t\tloss = jnp.mean((y - a * jnp.maximum(0, x - b)) ** 2)\n"
-        "\t\t\tif loss < best_loss:\n"
-        "\t\t\t\tbest_loss, best_params = loss, (a, b)\n"
-        '\treturn {"a": best_params[0].astype(float), "b": best_params[1].astype(float)}\n'
-    )
-
     default_params = {"a": 1.0, "b": 0.0}
 
     latex_equation = r'y = a \mathrm{relu}(x - b)'
@@ -218,18 +202,6 @@ class Seed2:
         "\tA = np.vstack([x, np.ones(len(x))]).T\n"
         "\ta, b = np.linalg.lstsq(A, y, rcond=None)[0]\n"
         '\treturn {"a": float(a), "b": float(b)}\n'
-    )
-
-    param_est_jax = (
-        "import jax.numpy as jnp\n\n"
-        "def parameter_estimator(data):\n"
-        '\t"""Least squares parameter estimator for the linear model."""\n'
-        '\tx = data["x"]\n'
-        '\ty = jnp.asarray(data["y"])\n'
-        "\n"
-        "\tA = jnp.vstack([x, jnp.ones(len(x))]).T\n"
-        "\ta, b = jnp.linalg.lstsq(A, y, rcond=None)[0]\n"
-        '\treturn {"a": a.astype(float), "b": b.astype(float)}\n'
     )
 
     default_params = {"a": 1.0, "b": 0.0}
