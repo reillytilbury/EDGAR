@@ -857,172 +857,221 @@ def load_data(data_dir: Union[str, List[List[str]]],
               return_indices: bool = False,
               return_raw: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
-    Load and preprocess neural data from a specified directory.
+    Load and preprocess neural data, returning normalised binned responses.
 
     Parameters
     ----------
-    data_dir : str
-        Path to the .npy file containing neural data (if 'stringer' or 'ali') or [[data_paths], [metadata_paths]] (if 'jacob').
+    data_dir : str or list
+        - 'stringer', 'hayley', 'hd': path to a single file (.npy or .pkl).
+        - 'jacob': [[data_paths], [metadata_paths]] (lists of .npy / .mat files).
+        - 'ali': [angles_path, response_path].
     data_type : str
-        Type of data to load ('stringer' or 'jacob' or 'ali')
+        One of 'stringer', 'jacob', 'ali', 'hayley', 'hd'.
     shuffle : bool
-        Whether to shuffle the repeats for each trial. Only relevant if we have exact repeats (i.e., Jacob's data).
+        Randomly permute trials before binning. Not applicable to 'hd'.
     conc_thresh : float
-        Concentration threshold for filtering neurons.
+        Minimum circular concentration for a cell to be kept.
+        For 'hd', uses the raw circular concentration (not doubled angle).
     activity_thresh : float
-        Activity threshold for filtering neurons.
+        Minimum fraction of trials with positive firing rate.
     signal_fraction_thresh : float
-        Signal fraction threshold for filtering neurons.
+        Minimum signal fraction (Sahani & Linden 2003) for a cell to be kept.
+        For 'hd' (no repeats), this threshold is applied to R² instead.
     n_bins : int
-        Number of bins for response averaging.
+        Number of stimulus bins. For 'hd', bins the pre-binned 180-bin data.
     min_repeats : int
-        Minimum number of repeats for response averaging.
+        Pseudo-repeats per bin used for downstream fitting. Not used for 'hd'.
 
-    Returns 
+    Returns
     -------
-    response : jnp.ndarray
-        Preprocessed neural response. (n_repeats, n_cells, n_bins)
-    angles : jnp.ndarray
-        Preprocessed stimulus angles. (n_bins,)
+    response : jnp.ndarray, shape (n_repeats, n_cells, n_bins)
+        Normalised binned responses. For 'hd', n_repeats=1.
+    angles : jnp.ndarray, shape (n_bins,)
+        Bin-centre stimulus angles in radians.
+    kept_indices : np.ndarray  [only if return_indices=True]
+    raw_response, raw_angles   [only if return_raw=True]
     """
-    assert data_type in ['stringer', 'jacob', 'ali', 'hayley'], "data_type must be either 'stringer', 'jacob', 'ali', or 'hayley'"
+    assert data_type in ['stringer', 'jacob', 'ali', 'hayley', 'hd'], \
+        "data_type must be one of: 'stringer', 'jacob', 'ali', 'hayley', 'hd'"
 
-    # load data matrix (n_cells, n_trials) and angles (n_trials,)
+    # ------------------------------------------------------------------
+    # 1. Load raw data → response (n_cells, n_trials), angles (n_trials,)
+    #    'hd' is pre-binned with no repeats and is handled with early return.
+    # ------------------------------------------------------------------
+
     if data_type == 'stringer':
         neural_data = np.load(data_dir, allow_pickle=True).item()
-        response = extract_stimulus_related_response(neural_data, n_pcs=0)
-        angles = neural_data['istim']
+        response    = extract_stimulus_related_response(neural_data, n_pcs=0)
+        angles      = neural_data['istim']
         if shuffle:
-            # shuffle responses for each trial
-            n_trials = angles.shape[0]
-            perm = np.random.permutation(n_trials)
+            perm     = np.random.permutation(len(angles))
             response = response[:, perm]
-            angles = angles[perm]
+            angles   = angles[perm]
 
     elif data_type == 'jacob':
-        assert isinstance(data_dir, list) and len(data_dir) == 2, "For 'jacob' data_type, data_dir must be a list of two lists: [[data_paths], [metadata_paths]]"
+        assert isinstance(data_dir, list) and len(data_dir) == 2, \
+            "jacob data_dir must be [[data_paths], [metadata_paths]]"
         data_dirs, metadata_dirs = data_dir
-        responses = []
-        for data_dir in data_dirs:
-            response = np.load(data_dir).T
-            responses.append(response)
-        angles = []
-        for metadata_dir in metadata_dirs:
-            mat_data = sc.io.loadmat(metadata_dir, simplify_cells=True)
-            # in the single block case the first and last angles should be removed
-            if 'BZ016' in str(metadata_dir):
-                angles.append(np.array([entry['gratingOrient'] for entry in mat_data['block']['paramsValues']])[1:-1])
-            else: 
-                angles.append(np.array([entry['gratingOrient'] for entry in mat_data['block']['paramsValues']]))
-        # remove responses where angle = 1
+        responses, angles_list = [], []
+        for d, m in zip(data_dirs, metadata_dirs):
+            resp = np.load(d).T
+            mat  = sc.io.loadmat(m, simplify_cells=True)
+            ang  = np.array([e['gratingOrient'] for e in mat['block']['paramsValues']])
+            if 'BZ016' in str(m):
+                ang = ang[1:-1]  # single-block case: strip sentinel entries
+            responses.append(resp)
+            angles_list.append(ang)
         for i in range(len(responses)):
-            responses[i] = responses[i][:, angles[i] != 1]
-            angles[i] = angles[i][angles[i] != 1]
-            angles[i] = np.deg2rad(angles[i])
-        # for each repeat, reorder angles and responses
-        for i in range(len(responses)):
-            responses[i] = responses[i][:, np.argsort(angles[i])]
-            angles[i] = np.sort(angles[i])
-        # now turn responses into an array and replace angles with any of its entries
-        response = np.array(responses)
+            mask           = angles_list[i] != 1
+            responses[i]   = responses[i][:, mask]
+            angles_list[i] = np.deg2rad(angles_list[i][mask])
+            order          = np.argsort(angles_list[i])
+            responses[i]   = responses[i][:, order]
+            angles_list[i] = angles_list[i][order]
+        response = np.array(responses)   # (n_blocks, n_cells, n_angles)
         n_blocks = response.shape[0]
-        angles = angles[0]
-        # optionally shuffle repeats for each trial
+        angles   = angles_list[0]
         if shuffle:
             for trial in range(len(angles)):
                 perm = np.random.permutation(n_blocks)
                 response[:, :, trial] = response[perm, :, trial]
-        # Jacob's data included 0 as well as 2pi, so shift any angles starting with 6.2831 to 2pi - small epsilon
-        angles[angles >= 6.2831] = 2 * np.pi - 1e-5
-        response_flat = np.transpose(response, (1, 2, 0))  # n_cells x n_trials x n_blocks
-        response_flat = response_flat.reshape(response_flat.shape[0], -1)  # n_cells x (n_trials*n_blocks)
-        angles_flat = np.repeat(angles, n_blocks)  # now angles is (n_trials*n_blocks)
-        response, angles = response_flat, angles_flat
-    
+        angles[angles >= 6.2831] = 2 * np.pi - 1e-5   # 0 and 2π are the same angle
+        response = np.transpose(response, (1, 2, 0)).reshape(response.shape[1], -1)
+        angles   = np.repeat(angles, n_blocks)
+
     elif data_type == 'hayley':
-        counts = np.load(data_dir)                     # (n_cells, 360, n_repeats)
-        n_cells, n_ori, n_rep = counts.shape
-        response = counts.reshape(n_cells, n_ori * n_rep)   # (n_cells, n_trials)
-        oris_rad = np.deg2rad(np.arange(n_ori))
-        angles   = np.repeat(oris_rad, n_rep)          # each orientation repeated n_rep times
+        counts = np.load(data_dir).astype(float)        # (n_cells, 360, n_repeats)
+        n_cells, _, n_rep = counts.shape
+        # Orientations 180° apart are equivalent — stack as extra repeats to double sample size
+        counts_folded = np.concatenate([counts[:, :180, :], counts[:, 180:, :]], axis=2)
+        n_rep_folded  = counts_folded.shape[2]
+        response      = counts_folded.reshape(n_cells, 180 * n_rep_folded)
+        angles        = np.repeat(np.deg2rad(np.arange(180)), n_rep_folded)
         if shuffle:
-            perm     = np.random.permutation(response.shape[1])
+            perm     = np.random.permutation(len(angles))
             response = response[:, perm]
             angles   = angles[perm]
 
-    else:  # 'ali' data
-        angles = np.load(data_dir[0])
-        angles = np.deg2rad(angles)  # convert to radians
-        response = np.load(data_dir[1])
-        response = response.mean(axis=-1)
-        response = response.T  # shape (n_cells, n_trials)
-        # optionally shuffle responses for each trial
+    elif data_type == 'hd':
+        # Pre-binned data: no trial-level repeats, handled entirely here with early return.
+        with open(data_dir, 'rb') as f:
+            hd_data = pickle.load(f)
+        response  = hd_data['response'].astype(float)    # (n_cells, 180)
+        sigma     = hd_data['rates_std'].astype(float)   # (n_cells, 180)
+        angles_hd = hd_data['bin_centres'].astype(float) # (180,) radians
+
+        firing_probs = np.mean(response > 0, axis=1)
+        r            = np.clip(response, 0, None)
+        conc_hd      = np.where(r.sum(axis=1) > 0,
+                                np.abs((r * np.exp(1j * angles_hd)).sum(axis=1)) / r.sum(axis=1), 0.0)
+        signal_var   = np.var(response, axis=1)
+        noise_var    = np.mean(sigma ** 2, axis=1)
+        r2           = np.clip(signal_var / (signal_var + noise_var + 1e-12), 0, 1)
+
+        good_cells = np.where(
+            (firing_probs > activity_thresh) & (conc_hd > conc_thresh) & (r2 > signal_fraction_thresh)
+        )[0]
+        print(f"HD: selected {len(good_cells)} / {response.shape[0]} cells "
+              f"(activity>{activity_thresh}, conc>{conc_thresh}, R²>{signal_fraction_thresh}).")
+
+        response     = response[good_cells]
+        kept_indices = good_cells
+
+        n_hd = response.shape[1]
+        if n_bins != n_hd:
+            bin_size   = n_hd // n_bins
+            response   = response[:, :bin_size * n_bins].reshape(response.shape[0], n_bins, bin_size).mean(axis=2)
+            angles_out = np.array([angles_hd[i * bin_size:(i + 1) * bin_size].mean() for i in range(n_bins)])
+        else:
+            angles_out = angles_hd
+
+        response_jax = jnp.asarray(response[None, :, :])   # (1, n_cells, n_bins)
+        angles_jax   = jnp.asarray(angles_out)
+        norms        = jnp.linalg.norm(response_jax, axis=-1) / jnp.sqrt(n_bins)
+        response_jax = response_jax / norms[:, :, None]
+
+        extras = ()
+        if return_indices:
+            extras += (kept_indices,)
+        if return_raw:
+            rms = np.sqrt(np.nanmean(response ** 2, axis=-1, keepdims=True))
+            extras += ((response / np.maximum(rms, 1e-12)).astype(np.float32),
+                       angles_out.astype(np.float32))
+        return (response_jax, angles_jax) + extras
+
+    else:  # ali
+        angles   = np.deg2rad(np.load(data_dir[0]))
+        response = np.load(data_dir[1]).mean(axis=-1).T   # (n_cells, n_trials)
         if shuffle:
-            n_trials = angles.shape[0]
-            perm = np.random.permutation(n_trials)
+            perm     = np.random.permutation(len(angles))
             response = response[:, perm]
-            angles = angles[perm]
+            angles   = angles[perm]
 
-    # Activity, concentration filtering
-    active = np.where(np.isnan(response), np.nan, (response > 0).astype(np.float32))
-    firing_probs = np.nanmean(active, axis=1)
-    conc = np.abs(np.nansum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.nansum(response, axis=1))
-    good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
-    n_good_cells = len(good_cells)
-    print(f"Selected {n_good_cells} / {response.shape[0]} cells with activity > {activity_thresh} and concentration > {conc_thresh}.")
+    # ------------------------------------------------------------------
+    # 2. Cell filtering: activity and circular concentration
+    # ------------------------------------------------------------------
 
-    # Keep only good cells
-    conc = conc[good_cells]
-    firing_probs = firing_probs[good_cells]
-    response = response[good_cells, :]
-    kept_indices = good_cells.copy()  # track global indices through filtering
+    firing_probs = np.nanmean(np.where(np.isnan(response), np.nan, (response > 0).astype(float)), axis=1)
+    conc         = np.abs(np.nansum(np.exp(2j * angles) * response, axis=1) / np.nansum(response, axis=1))
+    good_cells   = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
+    print(f"Selected {len(good_cells)} / {response.shape[0]} cells "
+          f"(activity>{activity_thresh}, conc>{conc_thresh}).")
 
-    # Capture raw (unbinned) filtered data before binning
+    response     = response[good_cells]
+    kept_indices = good_cells.copy()
+
+    # ------------------------------------------------------------------
+    # 3. Capture raw (unbinned) data if requested
+    # ------------------------------------------------------------------
+
     if return_raw:
-        _raw_response = np.array(response, dtype=np.float32)  # (n_good_cells, n_trials)
-        _raw_angles   = np.array(angles,   dtype=np.float32)  # (n_trials,)
+        _raw_response = response.astype(np.float32)
+        _raw_angles   = angles.astype(np.float32)
 
-    # bin responses
-    bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
+    # ------------------------------------------------------------------
+    # 4. Bin into (min_repeats, n_cells, n_bins) pseudo-repeats
+    # ------------------------------------------------------------------
+
+    bin_edges   = np.linspace(0, 2 * np.pi, n_bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-    # digitize angles
     bin_indices = np.digitize(angles, bin_edges) - 1
-    # raise error if any bin has fewer than min_repeats
     min_bin_counts = np.min(np.bincount(bin_indices, minlength=n_bins))
     if min_bin_counts < min_repeats:
-        raise ValueError(f"Not enough repeats in some bins. Minimum repeats: {min_bin_counts}, required: {min_repeats}")
+        raise ValueError(f"Not enough repeats in some bins: {min_bin_counts} < {min_repeats} required.")
+
+    n_good_cells    = len(good_cells)
     response_binned = np.zeros((min_repeats, n_good_cells, n_bins))
     for b in range(n_bins):
-        relevant_indices = np.where(bin_indices == b)[0]
-        n_responses = len(relevant_indices)
-        pool_size = n_responses // min_repeats
-        # take average of each pool
-        mean_responses = []
+        idx       = np.where(bin_indices == b)[0]
+        pool_size = len(idx) // min_repeats
         for r in range(min_repeats):
-            # this choice of pool indices mixes blocks
-            # pool_indices = relevant_indices[r * pool_size:(r + 1) * pool_size]
-            # this choice of indices keeps blocks separate
-            pool_indices = relevant_indices[r::min_repeats][:pool_size]
-            mean_responses.append(np.nanmean(response[:, pool_indices], axis=1))
-        response_binned[:, :, b] = np.array(mean_responses)
-    angles = bin_centers
+            pool = idx[r::min_repeats][:pool_size]   # stride keeps blocks separate
+            response_binned[r, :, b] = np.nanmean(response[:, pool], axis=1)
+
+    # Drop cells that are still NaN after binning (all repeats NaN for some bin)
+    valid = ~np.any(np.isnan(response_binned), axis=(0, 2))
+    if not np.all(valid):
+        print(f"Dropping {(~valid).sum()} cells with all-NaN bins after binning.")
+        response_binned = response_binned[:, valid, :]
+        kept_indices    = kept_indices[valid]
+
+    angles   = bin_centers
     response = response_binned
 
-    # Convert to JAX arrays
-    response, angles = jnp.asarray(response), jnp.asarray(angles)
+    # ------------------------------------------------------------------
+    # 5. Normalise (RMS across bins = 1) and signal-fraction filtering
+    # ------------------------------------------------------------------
 
-    # Normalize responses so that for each cell and repeat, the RMS across bins is 1
-    activity_norms = jnp.linalg.norm(response, axis=-1)
-    normalization_factors = activity_norms / jnp.sqrt(n_bins)
-    response = response / normalization_factors[:, :, None]
-    # compute signal fraction for each cell
-    signal_fraction = unbiased_signal_fraction(np.array(response))[0]
-    reliable_cells = jnp.where(signal_fraction > signal_fraction_thresh)[0]
+    response, angles = jnp.asarray(response), jnp.asarray(angles)
+    norms    = jnp.linalg.norm(response, axis=-1) / jnp.sqrt(n_bins)
+    response = response / norms[:, :, None]
+
+    signal_fraction  = unbiased_signal_fraction(np.array(response))[0]
+    reliable_cells   = jnp.where(signal_fraction > signal_fraction_thresh)[0]
     n_reliable_cells = len(reliable_cells)
-    print(f"Selected {n_reliable_cells} / {n_good_cells} cells with signal fraction > {signal_fraction_thresh}.")
-    # keep only reliable cells
-    response = response[:, reliable_cells, :]
-    kept_indices = kept_indices[np.array(reliable_cells)]  # final global indices
+    print(f"Selected {n_reliable_cells} / {len(good_cells)} cells with signal fraction > {signal_fraction_thresh}.")
+    response     = response[:, reliable_cells, :]
+    kept_indices = kept_indices[np.array(reliable_cells)]
 
     if return_raw:
         raw_response = _raw_response[np.array(reliable_cells), :]

@@ -6,6 +6,7 @@
 # programs database
 program_databases/
 figures/
+equation_formatting/
 
 # Python cache
 __pycache__/
