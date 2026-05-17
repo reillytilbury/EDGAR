@@ -825,6 +825,27 @@ def unbiased_signal_fraction(R, min_repeats=2):
         "var_angles": var_angles,
     }
 
+def bin_trials(R: np.ndarray, angles: np.ndarray, n_bins: int):
+    """Bin raw trial responses into per-bin means.
+
+    Args:
+        R:      (n_cells, n_trials) raw responses.
+        angles: (n_trials,) stimulus angles in radians.
+        n_bins: number of bins covering [0, 2π).
+    Returns:
+        R_binned:      (n_cells, n_bins) mean response per bin.
+        angles_binned: (n_bins,) bin centre angles.
+    """
+    bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
+    angles_binned = (bin_edges[:-1] + bin_edges[1:]) / 2
+    bin_idx = np.clip(np.digitize(angles, bin_edges) - 1, 0, n_bins - 1)
+    R_binned = np.stack(
+        [np.nanmean(R[:, bin_idx == b], axis=1) for b in range(n_bins)],
+        axis=1,
+    )
+    return R_binned, angles_binned
+
+
 def load_data(data_dir: Union[str, List[List[str]]],
               data_type: str = 'stringer',
               shuffle: bool = False,
@@ -833,7 +854,8 @@ def load_data(data_dir: Union[str, List[List[str]]],
               signal_fraction_thresh: float = 0.0,
               n_bins: int = 256,
               min_repeats: int = 6,
-              return_indices: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
+              return_indices: bool = False,
+              return_raw: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Load and preprocess neural data from a specified directory.
 
@@ -888,7 +910,7 @@ def load_data(data_dir: Union[str, List[List[str]]],
         for metadata_dir in metadata_dirs:
             mat_data = sc.io.loadmat(metadata_dir, simplify_cells=True)
             # in the single block case the first and last angles should be removed
-            if 'BZ016' in metadata_dir:
+            if 'BZ016' in str(metadata_dir):
                 angles.append(np.array([entry['gratingOrient'] for entry in mat_data['block']['paramsValues']])[1:-1])
             else: 
                 angles.append(np.array([entry['gratingOrient'] for entry in mat_data['block']['paramsValues']]))
@@ -955,6 +977,11 @@ def load_data(data_dir: Union[str, List[List[str]]],
     response = response[good_cells, :]
     kept_indices = good_cells.copy()  # track global indices through filtering
 
+    # Capture raw (unbinned) filtered data before binning
+    if return_raw:
+        _raw_response = np.array(response, dtype=np.float32)  # (n_good_cells, n_trials)
+        _raw_angles   = np.array(angles,   dtype=np.float32)  # (n_trials,)
+
     # bin responses
     bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
@@ -996,9 +1023,19 @@ def load_data(data_dir: Union[str, List[List[str]]],
     # keep only reliable cells
     response = response[:, reliable_cells, :]
     kept_indices = kept_indices[np.array(reliable_cells)]  # final global indices
+
+    if return_raw:
+        raw_response = _raw_response[np.array(reliable_cells), :]
+        rms = np.sqrt(np.nanmean(raw_response ** 2, axis=-1, keepdims=True))
+        raw_response = raw_response / np.maximum(rms, 1e-12)
+        raw_angles = _raw_angles
+
+    extras = ()
     if return_indices:
-        return response, angles, kept_indices
-    return response, angles
+        extras += (kept_indices,)
+    if return_raw:
+        extras += (raw_response, raw_angles)
+    return (response, angles) + extras
 
 def train_with_patience_optimization(
     x_data: jnp.ndarray,

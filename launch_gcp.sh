@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
-# Launch N GCP VMs, each running one config from RUN_CONFIGS in hypothesis_engine.py.
+# Launch N GCP VMs, each running one config from RUN_CONFIGS in run_configs.py.
 #
 # One-time setup (do this once before first launch):
 #   1. gcloud auth login && gcloud config set project YOUR_PROJECT_ID
 #   2. Create a GCS bucket and upload code + data + .env:
 #        gsutil mb -l us-central1 gs://YOUR_BUCKET
-#        gsutil -m rsync -r /home/reilly/Documents/code/EDGAR-main \
-#                          gs://YOUR_BUCKET/code \
-#                          -x 'program_databases/.*|__pycache__/.*|figures/.*|\.git/.*'
-#        gsutil -m rsync -r "/home/reilly/datasets/jacob data" \
-#                          "gs://YOUR_BUCKET/datasets/jacob data"
 #        gsutil cp /home/reilly/Documents/code/EDGAR-main/.env gs://YOUR_BUCKET/.env
+#      (datasets are uploaded separately — see README)
 #   3. Make sure your project has GPU quota in the chosen zone (Compute Engine API > Quotas).
 #
 # Usage:
-#   ./launch_gcp.sh                 # launches NUM_RUNS VMs
+#   ./launch_gcp.sh                 # launches one VM per entry in RUN_CONFIGS
 #   ./launch_gcp.sh teardown        # deletes all VMs created by this script
 #
-# When done, results are uploaded by each VM to gs://YOUR_BUCKET/results/run_<idx>/
+# Results are uploaded by each VM to gs://YOUR_BUCKET/results/<timestamp>_<dataset>_<idx>/
 # Pull them back with:
 #   gsutil -m rsync -r gs://YOUR_BUCKET/results ./program_databases_cloud
 #
@@ -31,21 +27,34 @@ PROJECT_ID="reilly-462416"
 BUCKET="edgar-revisions-reilly"
 ZONE="us-central1-a"
 START_IDX=0
-NUM_RUNS=8
 MACHINE_TYPE="n1-standard-4"
 GPU_TYPE="nvidia-tesla-t4"
 USE_SPOT=true
 # --------------------
 
-INSTANCE_PREFIX="edgar-run"
+INSTANCE_PREFIX="edgar"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+# Read NUM_RUNS and per-config run_names from run_configs.py (no heavy deps needed)
+SCRIPT_DIR="$(dirname "$0")"
+NUM_RUNS=$(python3 -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from run_configs import RUN_CONFIGS; print(len(RUN_CONFIGS))")
+mapfile -t RUN_NAMES < <(python3 -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from run_configs import RUN_CONFIGS; [print(cfg['run_name']) for cfg in RUN_CONFIGS]")
+echo "Detected ${NUM_RUNS} remote configs."
 
 if [[ "${1:-}" == "teardown" ]]; then
-  for i in $(seq 0 $((NUM_RUNS - 1))); do
-    gcloud compute instances delete "${INSTANCE_PREFIX}-${i}" \
-      --zone="${ZONE}" --quiet || true
+  echo "Tearing down all VMs for timestamp ${TIMESTAMP}..."
+  gcloud compute instances list \
+    --filter="name~^${INSTANCE_PREFIX}-" \
+    --format="value(name,zone)" | while read -r name zone; do
+      gcloud compute instances delete "${name}" --zone="${zone}" --quiet || true
   done
   exit 0
 fi
+
+# Sync local codebase to bucket before launching so VMs always get the latest code.
+echo "Syncing codebase to gs://${BUCKET}/code ..."
+gsutil -m rsync -r -x 'program_databases/.*|__pycache__/.*|figures/.*|\.git/.*' "${SCRIPT_DIR}" "gs://${BUCKET}/code"
+echo "Sync complete."
 
 # Startup script that runs on each VM at boot.
 # It downloads code+data, installs deps, runs one config, uploads results, then shuts down.
@@ -58,6 +67,7 @@ exec > >(tee /var/log/edgar-startup.log) 2>&1
 until nvidia-smi; do sleep 5; done
 
 RUN_IDX=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/run-idx" -H "Metadata-Flavor: Google")
+RUN_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/run-name" -H "Metadata-Flavor: Google")
 BUCKET=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/bucket" -H "Metadata-Flavor: Google")
 
 mkdir -p /opt/edgar
@@ -65,6 +75,12 @@ cd /opt/edgar
 gsutil -m rsync -r "gs://${BUCKET}/code" .
 mkdir -p "/home/reilly/datasets/jacob data"
 gsutil -m rsync -r "gs://${BUCKET}/datasets/jacob data" "/home/reilly/datasets/jacob data"
+mkdir -p "/home/reilly/datasets/stringer_2021"
+gsutil -m rsync -r "gs://${BUCKET}/datasets/stringer_2021" "/home/reilly/datasets/stringer_2021"
+mkdir -p "/home/reilly/datasets/ali data"
+gsutil -m rsync -r "gs://${BUCKET}/datasets/ali data" "/home/reilly/datasets/ali data"
+mkdir -p "/home/reilly/datasets/hayley_data"
+gsutil -m rsync -r "gs://${BUCKET}/datasets/hayley_data" "/home/reilly/datasets/hayley_data"
 gsutil cp "gs://${BUCKET}/.env" .env
 
 # Bootstrap pip if missing, then install all deps including JAX with CUDA support.
@@ -80,8 +96,8 @@ python3 -c "import jax; print('JAX_BACKEND:', jax.default_backend()); print('JAX
 python3 hypothesis_engine.py --run-idx "${RUN_IDX}" || true
 
 # Upload results and the full log no matter what, then self-terminate.
-gsutil -m rsync -r program_databases "gs://${BUCKET}/results/run_${RUN_IDX}" || true
-gsutil cp /var/log/edgar-startup.log "gs://${BUCKET}/logs/run_${RUN_IDX}.log" || true
+gsutil -m rsync -r program_databases "gs://${BUCKET}/results/${RUN_NAME}" || true
+gsutil cp /var/log/edgar-startup.log "gs://${BUCKET}/logs/${RUN_NAME}.log" || true
 NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/name" -H "Metadata-Flavor: Google")
 ZONE=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/zone" -H "Metadata-Flavor: Google" | awk -F/ '{print $NF}')
 gcloud compute instances delete "${NAME}" --zone="${ZONE}" --quiet
@@ -93,8 +109,11 @@ if $USE_SPOT; then
 fi
 
 for i in $(seq "${START_IDX}" $((NUM_RUNS - 1))); do
-  echo "Launching ${INSTANCE_PREFIX}-${i} for run-idx=${i}..."
-  gcloud compute instances create "${INSTANCE_PREFIX}-${i}" \
+  DATASET="${RUN_NAMES[$i]}"
+  RUN_NAME="${TIMESTAMP}_${DATASET}_${i}"
+  INSTANCE_NAME="${INSTANCE_PREFIX}-${TIMESTAMP}-${DATASET}-${i}"
+  echo "Launching ${INSTANCE_NAME} (run-idx=${i})..."
+  gcloud compute instances create "${INSTANCE_NAME}" \
     --project="${PROJECT_ID}" \
     --zone="${ZONE}" \
     --machine-type="${MACHINE_TYPE}" \
@@ -104,14 +123,14 @@ for i in $(seq "${START_IDX}" $((NUM_RUNS - 1))); do
     --maintenance-policy=TERMINATE \
     --boot-disk-size=100GB \
     --scopes=cloud-platform \
-    --metadata="run-idx=${i},bucket=${BUCKET},install-nvidia-driver=True" \
+    --metadata="run-idx=${i},run-name=${RUN_NAME},bucket=${BUCKET},install-nvidia-driver=True" \
     --metadata-from-file="startup-script=/dev/stdin" \
     "${SPOT_FLAGS[@]}" <<<"${STARTUP_SCRIPT}"
 done
 
 echo
 echo "Launched ${NUM_RUNS} VMs. Watch logs with:"
-echo "  gcloud compute ssh ${INSTANCE_PREFIX}-0 --zone=${ZONE} -- tail -f /var/log/edgar-startup.log"
+echo "  gcloud compute ssh ${INSTANCE_PREFIX}-${TIMESTAMP}-${RUN_NAMES[0]}-0 --zone=${ZONE} -- tail -f /var/log/edgar-startup.log"
 echo
 echo "VMs self-delete on completion. To force teardown: ./launch_gcp.sh teardown"
 echo "Pull results when done:"
