@@ -26,7 +26,6 @@ set -euo pipefail
 PROJECT_ID="reilly-462416"
 BUCKET="edgar-revisions-reilly"
 ZONE="us-central1-a"
-START_IDX=0
 MACHINE_TYPE="n1-standard-4"
 GPU_TYPE="nvidia-tesla-t4"
 USE_SPOT=true
@@ -108,7 +107,7 @@ if $USE_SPOT; then
   SPOT_FLAGS=(--provisioning-model=SPOT --instance-termination-action=DELETE)
 fi
 
-for i in $(seq "${START_IDX}" $((NUM_RUNS - 1))); do
+for i in $(seq 0 $((NUM_RUNS - 1))); do
   DATASET="${RUN_NAMES[$i]}"
   RUN_NAME="${TIMESTAMP}_${DATASET}_${i}"
   INSTANCE_NAME="${INSTANCE_PREFIX}-${TIMESTAMP}-${DATASET}-${i}"

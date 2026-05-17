@@ -33,7 +33,6 @@ The codebase is automatically synced to the bucket before VMs are launched.
 | `PROJECT_ID` | `reilly-462416` | GCP project ID |
 | `BUCKET` | `edgar-revisions-reilly` | GCS bucket name for code, data, and results |
 | `ZONE` | `us-central1-a` | GCP zone to launch VMs in — must have GPU quota |
-| `START_IDX` | `0` | Index of the first config to launch (useful for re-running a subset) |
 | `MACHINE_TYPE` | `n1-standard-4` | VM machine type |
 | `GPU_TYPE` | `nvidia-tesla-t4` | GPU type attached to each VM |
 | `USE_SPOT` | `true` | Use SPOT (preemptible) pricing — ~70% cheaper but VMs can be interrupted |
