@@ -855,7 +855,7 @@ def load_data(data_dir: Union[str, List[List[str]]],
               n_bins: int = 256,
               min_repeats: int = 6,
               return_indices: bool = False,
-              return_raw: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
+              return_raw: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, Optional[np.ndarray], Optional[Tuple[np.ndarray, np.ndarray]]]:
     """
     Load and preprocess neural data, returning normalised binned responses.
 
@@ -946,7 +946,7 @@ def load_data(data_dir: Union[str, List[List[str]]],
         counts_folded = np.concatenate([counts[:, :180, :], counts[:, 180:, :]], axis=2)
         n_rep_folded  = counts_folded.shape[2]
         response      = counts_folded.reshape(n_cells, 180 * n_rep_folded)
-        angles        = np.repeat(np.deg2rad(np.arange(180)), n_rep_folded)
+        angles        = np.repeat(np.deg2rad(2 * np.arange(180)), n_rep_folded)
         if shuffle:
             perm     = np.random.permutation(len(angles))
             response = response[:, perm]

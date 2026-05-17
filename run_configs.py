@@ -1,12 +1,9 @@
 """
 Run configurations for EDGAR. Each entry is passed as kwargs to main() in hypothesis_engine.py.
 
-Set RUN_MODE to 'remote' or 'local':
-  - 'remote': RUN_CONFIGS is used — one VM per entry, launched via launch_gcp.sh
-  - 'local':  LOCAL_CONFIG is used — runs sequentially on this machine
+To run locally:  python3 hypothesis_engine.py         (runs all configs sequentially)
+To run remotely: ./launch_gcp.sh                      (one VM per entry in RUN_CONFIGS)
 """
-
-RUN_MODE = 'remote'  # 'remote' or 'local'
 
 # ---- DATA PATHS ----
 data_path_bz15 = [
@@ -31,7 +28,10 @@ data_path_gt1 = '/home/reilly/datasets/stringer_2021/gratings_drifting_GT1_2019_
 data_path_gt2 = '/home/reilly/datasets/stringer_2021/gratings_drifting_GT2_2019_04_05_1.npy'
 data_path_gt3 = '/home/reilly/datasets/stringer_2021/gratings_drifting_GT3_2019_04_05_1.npy'
 
-data_path_ali = '/home/reilly/datasets/ali data/ali_data.npy'
+data_path_ali = [
+    '/home/reilly/datasets/ali data/stim_sequence.npy',
+    '/home/reilly/datasets/ali data/stim_resps.npy',
+]
 
 data_path_hayley = '/home/reilly/datasets/hayley_data/spike_counts.npy'
 
@@ -42,7 +42,8 @@ CONFIGS_BZ16 = [
          data_path=data_path_bz16, data_type='jacob',
          use_image_feedback=True, use_large_every=3,
          param_penalty_weight=0.01,
-         activity_thresh=0.0, signal_fraction_thresh=0.75, conc_thresh=0.35,
+         data_scale_factor=150,
+         activity_thresh=0.0, signal_fraction_thresh=0.7, conc_thresh=0.4,
          n_bins=256, min_repeats=6,
          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
 ] * 4
@@ -54,6 +55,7 @@ CONFIGS_GT2 = [
          data_type='stringer',
          use_image_feedback=True, use_large_every=3,
          param_penalty_weight=0.01,
+         data_scale_factor=170,
          activity_thresh=0.0, signal_fraction_thresh=0.9, conc_thresh=0.5,
          n_bins=256, min_repeats=6,
          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
@@ -65,16 +67,10 @@ CONFIGS_ALI = [
          data_path=data_path_ali, data_type='ali',
          use_image_feedback=True, use_large_every=3,
          param_penalty_weight=0.01,
+         data_scale_factor=120,
          activity_thresh=0.0, signal_fraction_thresh=0.85, conc_thresh=0.4,
          n_bins=90, min_repeats=6,
          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
 ] * 4
 
 RUN_CONFIGS = CONFIGS_BZ16 + CONFIGS_GT2 + CONFIGS_ALI
-
-# ---- LOCAL CONFIG (runs sequentially on this machine) ----
-LOCAL_CONFIG = [
-    dict(n_iterations=12, time_limit=60, use_image_feedback=True, use_large_every=3,
-         param_penalty_weight=0.01,
-         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
-]

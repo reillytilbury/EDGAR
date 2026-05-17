@@ -470,6 +470,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 signal_fraction_thresh = 0.9, 
                 n_bins=1024, 
                 min_repeats=3,
+                data_scale_factor=100,
                 tiny_lm_name = 'gemini-2.5-flash-lite',
                 little_lm_name = 'gemini-2.5-flash',
                 large_lm_name = 'gemini-2.5-pro',
@@ -505,18 +506,8 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     #     active_trials_idx = np.where(active_trials)[0][:n_trials_small]
     #     response_cropped[i] = response[cell, active_trials_idx]
     #     angles_cropped[i] = angles[active_trials_idx]
-        
     # # update response and angles to be the cropped versions and convert to JAX arrays, normalize and split into train/test
     # response, angles = jnp.asarray(response_cropped), jnp.asarray(angles_cropped)
-    # response = 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # normalize response
-    # key = jax.random.PRNGKey(42)
-    # training_size = n_good_cells // 2
-    # shuffled_indices = jax.random.permutation(key, jnp.arange(n_good_cells))
-    # training_cells, test_cells = shuffled_indices[:training_size], shuffled_indices[training_size:]
-    # response_train, response_test = response[training_cells, :], response[test_cells, :]
-    # angles_train, angles_test = angles[training_cells, :], angles[test_cells, :]
-    # print(f"Selected {len(good_cells)} cells with activity > {activity_thresh} and concentration > {conc_thresh}.")
-    # print(f"Using {len(training_cells)} cells for training and {len(test_cells)} cells for testing.")
 
     response, angles = utils.load_data(data_dir = data_path,
                                 data_type=data_type,
@@ -524,18 +515,27 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                                 activity_thresh=activity_thresh,
                                 signal_fraction_thresh=signal_fraction_thresh,
                                 n_bins=n_bins, min_repeats=min_repeats,
-                                shuffle=False)
+                                shuffle=False,
+                                return_raw=True)[2:]
 
-    # response is of shape (n_repeats, n_cells, n_bins) and angles (n_bins,), average over repeats to get response of shape (n_cells, n_bins)
-    n_repeats, n_cells, n_bins = response.shape
-    response = jnp.mean(response, axis=0)
-    # make angles the same shape as response, i.e. (n_cells, n_bins) by tiling angles once and repeating for each cell
+    # # response is of shape (n_repeats, n_cells, n_bins) and angles (n_bins,), 
+    # # concat repeats so response becomes (n_cells, n_bins x n_repeats) and angles becomes (n_bins x n_repeats,) 
+    # n_repeats, n_cells, n_bins = response.shape
+    # # response = jnp.mean(response, axis=0)
+    # response = response.transpose(1, 0, 2).reshape(n_cells, n_bins * n_repeats)
+    # # make angles (n_bins,) the same shape as response, i.e. (n_cells, n_bins x n_repeats)
+    # angles = jnp.tile(angles, n_repeats)
+    # angles = jnp.tile(angles, (n_cells, 1))
+
+    # response is of shape (n_cells, n_trials) and angles is of shape (n_trials,)
+    # repeat angles for each cell so that angles is also (n_cells, n_trials)
+    n_cells, n_trials = response.shape
     angles = jnp.tile(angles, (n_cells, 1))
 
     # print the shapes of response and angles
     print(f"Response shape: {response.shape}, Angles shape: {angles.shape}")
     # scale responses
-    response = np.sqrt(2) * 100 * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # normalize response
+    response = data_scale_factor * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # normalize response
 
     # split into training and test cells
     key = jax.random.PRNGKey(42)
@@ -545,6 +545,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     response_train, response_test = response[training_cells, :], response[test_cells, :]
     # split angles in the same way
     angles_train, angles_test = angles[training_cells, :], angles[test_cells, :]
+    print(f"Using {len(training_cells)} cells for training and {len(test_cells)} cells for testing.")
 
     # create a dataframe to store the programs in each island
     islands = []
@@ -640,7 +641,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                                labels=['seed_1', 'seed_2'],
                                colours=['tab:green', 'tab:red'],
                                dpi=100.0,
-                               title="Seed Programs",
+                               title=f"Seed Programs — Seed 1 loss: {seed_losses[0]:.2f}, Seed 2 loss: {seed_losses[1]:.2f}",
                                legend_fontsize=20,
                                line_alpha=0.9,
                                line_width=4,)
@@ -956,24 +957,21 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
             )
 
 if __name__ == "__main__":
-    from run_configs import RUN_CONFIGS, LOCAL_CONFIG, RUN_MODE
+    from run_configs import RUN_CONFIGS
 
-    configs = RUN_CONFIGS if RUN_MODE == 'remote' else LOCAL_CONFIG
+    configs = RUN_CONFIGS
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--run-idx', type=int, default=None,
-                        help='Run only this config index (for parallel cloud execution). '
-                             'If omitted, runs all configs sequentially as before.')
+                        help='Run only this config index (for parallel cloud execution).')
     args = parser.parse_args()
 
     # Strip metadata-only keys that are not main() parameters
     def to_main_kwargs(cfg):
         return {k: v for k, v in cfg.items() if k != 'run_name'}
 
-    if args.run_idx is None:
-        for cfg in configs:
-            asyncio.run(main(**to_main_kwargs(cfg)))
-    else:
-        asyncio.run(main(**to_main_kwargs(configs[args.run_idx])))
+    cfgs = [configs[args.run_idx]] if args.run_idx is not None else configs
+    for cfg in cfgs:
+        asyncio.run(main(**to_main_kwargs(cfg)))
         
 # WHEN SWITCHING BACK TO STRINGER DATA, REMEMBER TO CHANGE n_mean default in plot_model_fits back to 50
