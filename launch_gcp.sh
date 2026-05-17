@@ -52,7 +52,7 @@ fi
 
 # Sync local codebase to bucket before launching so VMs always get the latest code.
 echo "Syncing codebase to gs://${BUCKET}/code ..."
-gsutil -m rsync -r -x 'program_databases/.*|__pycache__/.*|figures/.*|\.git/.*' "${SCRIPT_DIR}" "gs://${BUCKET}/code"
+gsutil -m rsync -r -x 'program_databases/.*|program_databases_cloud/.*|logs_cloud/.*|__pycache__/.*|figures/.*|equation_formatting/.*|\.git/.*|\.env' "${SCRIPT_DIR}" "gs://${BUCKET}/code"
 echo "Sync complete."
 
 # Startup script that runs on each VM at boot.

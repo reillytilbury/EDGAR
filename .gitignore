@@ -8,6 +8,7 @@ program_databases/
 program_databases_cloud/
 figures/
 equation_formatting/
+logs_cloud/
 
 # Python cache
 __pycache__/

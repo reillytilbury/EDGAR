@@ -940,13 +940,20 @@ def load_data(data_dir: Union[str, List[List[str]]],
         angles   = np.repeat(angles, n_blocks)
 
     elif data_type == 'hayley':
-        counts = np.load(data_dir).astype(float)        # (n_cells, 360, n_repeats)
+        counts = np.load(data_dir).astype(float)        # (n_cells, 360, 6)
         n_cells, _, n_rep = counts.shape
+        assert n_rep == 6, f"expected 6 raw repeats for hayley data, got {n_rep}"
+        # Merge repeats 5 and 6 into one via nanmean → 5 repeats for all cells.
+        # Cells whose 6th repeat is NaN fall back to their 5th repeat value.
+        merged = np.nanmean(counts[:, :, 4:], axis=2, keepdims=True)  # (n_cells, 360, 1)
+        counts = np.concatenate([counts[:, :, :4], merged], axis=2)   # (n_cells, 360, 5)
         # Orientations 180° apart are equivalent — stack as extra repeats to double sample size
         counts_folded = np.concatenate([counts[:, :180, :], counts[:, 180:, :]], axis=2)
-        n_rep_folded  = counts_folded.shape[2]
+        n_rep_folded  = counts_folded.shape[2]                         # 10
         response      = counts_folded.reshape(n_cells, 180 * n_rep_folded)
         angles        = np.repeat(np.deg2rad(2 * np.arange(180)), n_rep_folded)
+        # response      = counts.reshape(n_cells, 360 * 5)
+        # angles        = np.repeat(np.deg2rad(np.arange(360)), 5)
         if shuffle:
             perm     = np.random.permutation(len(angles))
             response = response[:, perm]
@@ -956,9 +963,9 @@ def load_data(data_dir: Union[str, List[List[str]]],
         # Pre-binned data: no trial-level repeats, handled entirely here with early return.
         with open(data_dir, 'rb') as f:
             hd_data = pickle.load(f)
-        response  = hd_data['response'].astype(float)    # (n_cells, 180)
-        sigma     = hd_data['rates_std'].astype(float)   # (n_cells, 180)
-        angles_hd = hd_data['bin_centres'].astype(float) # (180,) radians
+        response     = hd_data['response'].astype(float)     # (n_cells, 180)
+        sigma        = hd_data['rates_std'].astype(float)     # (n_cells, 180)
+        angles_hd    = hd_data['bin_centres'].astype(float)   # (180,) radians
 
         firing_probs = np.mean(response > 0, axis=1)
         r            = np.clip(response, 0, None)

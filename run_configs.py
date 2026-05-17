@@ -35,6 +35,8 @@ data_path_ali = [
 
 data_path_hayley = '/home/reilly/datasets/hayley_data/spike_counts.npy'
 
+data_path_hd = '/home/reilly/datasets/hd_cells/head_direction_data.pkl'
+
 # ---- REMOTE CONFIGS (one VM per entry) ----
 CONFIGS_BZ16 = [
     dict(run_name='bz16',
@@ -72,5 +74,18 @@ CONFIGS_ALI = [
          n_bins=90, min_repeats=6,
          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
 ] * 4
+
+# CONFIGS_HD = [
+#     dict(run_name='hd',
+#          n_iterations=12, time_limit=60,
+#          data_path=data_path_hd, data_type='hd',
+#          use_image_feedback=True, use_large_every=3,
+#          param_penalty_weight=0.01,
+#          data_scale_factor=80,
+#          activity_thresh=0.0, signal_fraction_thresh=0.25, conc_thresh=0.4,
+#          n_bins=180, min_repeats=None,
+#          diag_kwargs={'point_alpha': 0.15, 'n_mean': 50},
+#          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
+# ] * 4
 
 RUN_CONFIGS = CONFIGS_BZ16 + CONFIGS_GT2 + CONFIGS_ALI

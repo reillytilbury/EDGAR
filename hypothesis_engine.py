@@ -264,7 +264,7 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
 async def generate_new_neuron_model(current_island, llm_name, client, 
                                     spike_matrix, stimuli,
                                     mode='explore', k_max=2, temp=1, 
-                                    thinking_budget=1, img_dir=None):
+                                    thinking_budget=1, img_dir=None, diag_kwargs=None):
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
@@ -292,7 +292,8 @@ async def generate_new_neuron_model(current_island, llm_name, client,
                                     title=sup_title,
                                     legend_fontsize=20,
                                     line_alpha=0.9,
-                                    line_width=4,)
+                                    line_width=4,
+                                    **diag_kwargs if diag_kwargs is not None else {})
             
             img_path = Path(img_dir)
             with img_path.open("rb") as f:
@@ -471,6 +472,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 n_bins=1024, 
                 min_repeats=3,
                 data_scale_factor=100,
+                diag_kwargs = {'point_alpha': 0.05, 'n_mean': 50},
                 tiny_lm_name = 'gemini-2.5-flash-lite',
                 little_lm_name = 'gemini-2.5-flash',
                 large_lm_name = 'gemini-2.5-pro',
@@ -644,7 +646,8 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                                title=f"Seed Programs — Seed 1 loss: {seed_losses[0]:.2f}, Seed 2 loss: {seed_losses[1]:.2f}",
                                legend_fontsize=20,
                                line_alpha=0.9,
-                               line_width=4,)
+                               line_width=4,
+                               **diag_kwargs if diag_kwargs is not None else {})
 
     # -----------------------------
     # HYPOTHESIS ENGINE
@@ -683,7 +686,8 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                                                                    thinking_budget=1 if llm_name == large_lm_name else 0.25,
                                                                    spike_matrix=response_train, 
                                                                    stimuli=angles_train,
-                                                                   img_dir=model_image_dirs[island_idx, j]) 
+                                                                   img_dir=model_image_dirs[island_idx, j],
+                                                                   diag_kwargs=diag_kwargs) 
                                          for island_idx in range(n_islands) for j in range(batch_size)]
         logging.info(f"Generating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
         print(f"Generating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
@@ -840,8 +844,9 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 cell_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
                 title=sup_title,
                 save_path=os.path.join(iteration_dir, f'island_{island_idx}_top_programs.png'),
-                dpi=300.0)
-        
+                dpi=300.0,
+                **(diag_kwargs if diag_kwargs is not None else {}))
+
         all_programs = pd.concat([islands[idx] for idx in range(n_islands)], ignore_index=True)
         top_programs = all_programs.sort_values(by='train_loss').head(3).reset_index(drop=True)
         top_programs = top_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
@@ -855,8 +860,9 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
             cell_selection=np.random.choice(response_train.shape[0], size=9, replace=False),
             title=sup_title,
             save_path=os.path.join(iteration_dir, 'top_programs_overall.png'),
-            dpi=300.0)
-        
+            dpi=300.0,
+            **(diag_kwargs if diag_kwargs is not None else {}))
+
         # save census
         census_path = os.path.join(iteration_dir, 'census.npy')
         census_np = np.array(census, dtype=object)
