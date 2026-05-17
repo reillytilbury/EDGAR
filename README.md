@@ -42,19 +42,19 @@ The codebase is automatically synced to the bucket before VMs are launched.
 ./launch_gcp.sh teardown
 ```
 
-To kill a single VM:
+To kill a single VM (use the full name from `gcloud compute instances list`):
 ```bash
-gcloud compute instances delete edgar-run-0 --zone=us-central1-a --quiet
+gcloud compute instances delete edgar-<timestamp>-<dataset>-<idx> --zone=us-central1-a --quiet
 ```
 
 ### Monitor a running VM
 ```bash
-gcloud compute ssh edgar-run-0 --zone=us-central1-a -- tail -f /var/log/edgar-startup.log
+gcloud compute ssh edgar-<timestamp>-<dataset>-<idx> --zone=us-central1-a -- tail -f /var/log/edgar-startup.log
 ```
 
 List all running VMs:
 ```bash
-gcloud compute instances list --filter="name~edgar-run"
+gcloud compute instances list --filter="name~^edgar-"
 ```
 
 ### Pull results when done
