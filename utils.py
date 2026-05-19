@@ -855,7 +855,8 @@ def load_data(data_dir: Union[str, List[List[str]]],
               n_bins: int = 256,
               min_repeats: int = 6,
               return_indices: bool = False,
-              return_raw: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, Optional[np.ndarray], Optional[Tuple[np.ndarray, np.ndarray]]]:
+              return_raw: bool = False,
+              nonzero_filter: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, Optional[np.ndarray], Optional[Tuple[np.ndarray, np.ndarray]]]:
     """
     Load and preprocess neural data, returning normalised binned responses.
 
@@ -960,50 +961,60 @@ def load_data(data_dir: Union[str, List[List[str]]],
             angles   = angles[perm]
 
     elif data_type == 'hd':
-        # Pre-binned data: no trial-level repeats, handled entirely here with early return.
-        with open(data_dir, 'rb') as f:
-            hd_data = pickle.load(f)
-        response     = hd_data['response'].astype(float)     # (n_cells, 180)
-        sigma        = hd_data['rates_std'].astype(float)     # (n_cells, 180)
-        angles_hd    = hd_data['bin_centres'].astype(float)   # (180,) radians
+        # Pre-binned data with explicit repeats. npz keys: R (n_rep, n_cells, 180), bin_centres (180,).
+        hd_data   = np.load(data_dir, allow_pickle=True)
+        R         = hd_data['R'].astype(float)            # (n_rep, n_cells, 180) firing rates Hz
+        angles_hd = hd_data['bin_centres'].astype(float)  # (180,) radians
+        n_rep_hd, n_cells_hd, _ = R.shape
 
-        firing_probs = np.mean(response > 0, axis=1)
-        r            = np.clip(response, 0, None)
-        conc_hd      = np.where(r.sum(axis=1) > 0,
-                                np.abs((r * np.exp(1j * angles_hd)).sum(axis=1)) / r.sum(axis=1), 0.0)
-        signal_var   = np.var(response, axis=1)
-        noise_var    = np.mean(sigma ** 2, axis=1)
-        r2           = np.clip(signal_var / (signal_var + noise_var + 1e-12), 0, 1)
+        R_mean = R.mean(axis=0)  # (n_cells, 180)
+
+        # Firing probability: fraction of bins with positive mean rate
+        firing_probs = np.mean(R_mean > 0, axis=1)
+
+        # Circular concentration on mean response
+        r_clip  = np.clip(R_mean, 0, None)
+        denom   = r_clip.sum(axis=1)
+        conc_hd = np.where(denom > 0,
+                           np.abs((r_clip * np.exp(1j * angles_hd)).sum(axis=1)) / denom,
+                           0.0)
+
+        # True unbiased signal fraction directly from repeats
+        sf_hd, _ = unbiased_signal_fraction(R)
 
         good_cells = np.where(
-            (firing_probs > activity_thresh) & (conc_hd > conc_thresh) & (r2 > signal_fraction_thresh)
+            (firing_probs > activity_thresh) & (conc_hd > conc_thresh) & (sf_hd > signal_fraction_thresh)
         )[0]
-        print(f"HD: selected {len(good_cells)} / {response.shape[0]} cells "
-              f"(activity>{activity_thresh}, conc>{conc_thresh}, R²>{signal_fraction_thresh}).")
+        print(f"HD: selected {len(good_cells)} / {n_cells_hd} cells "
+              f"(activity>{activity_thresh}, conc>{conc_thresh}, SF>{signal_fraction_thresh}).")
 
-        response     = response[good_cells]
+        R            = R[:, good_cells, :]   # (n_rep, n_good, 180)
         kept_indices = good_cells
 
-        n_hd = response.shape[1]
+        # Optional rebinning along the angle axis
+        n_hd = R.shape[2]
         if n_bins != n_hd:
             bin_size   = n_hd // n_bins
-            response   = response[:, :bin_size * n_bins].reshape(response.shape[0], n_bins, bin_size).mean(axis=2)
+            R          = R[:, :, :bin_size * n_bins].reshape(n_rep_hd, len(good_cells), n_bins, bin_size).mean(axis=3)
             angles_out = np.array([angles_hd[i * bin_size:(i + 1) * bin_size].mean() for i in range(n_bins)])
         else:
             angles_out = angles_hd
 
-        response_jax = jnp.asarray(response[None, :, :])   # (1, n_cells, n_bins)
+        # Normalise: RMS across bins = 1, per repeat per cell
+        response_jax = jnp.asarray(R)                                           # (n_rep, n_cells, n_bins)
         angles_jax   = jnp.asarray(angles_out)
-        norms        = jnp.linalg.norm(response_jax, axis=-1) / jnp.sqrt(n_bins)
-        response_jax = response_jax / norms[:, :, None]
+        norms        = jnp.linalg.norm(response_jax, axis=-1, keepdims=True) / jnp.sqrt(n_bins)
+        response_jax = response_jax / jnp.maximum(norms, 1e-12)
 
         extras = ()
         if return_indices:
             extras += (kept_indices,)
         if return_raw:
-            rms = np.sqrt(np.nanmean(response ** 2, axis=-1, keepdims=True))
-            extras += ((response / np.maximum(rms, 1e-12)).astype(np.float32),
-                       angles_out.astype(np.float32))
+            # Unroll repeats as extra trials: (n_cells, n_rep * n_bins), angles (n_rep * n_bins,)
+            R_norm = np.array(response_jax)                                      # (n_rep, n_cells, n_bins)
+            raw_response = R_norm.transpose(1, 0, 2).reshape(len(good_cells), -1).astype(np.float32)
+            raw_angles   = np.tile(angles_out, (len(good_cells), n_rep_hd)).astype(np.float32)
+            extras += (raw_response, raw_angles)
         return (response_jax, angles_jax) + extras
 
     else:  # ali
@@ -1084,7 +1095,18 @@ def load_data(data_dir: Union[str, List[List[str]]],
         raw_response = _raw_response[np.array(reliable_cells), :]
         rms = np.sqrt(np.nanmean(raw_response ** 2, axis=-1, keepdims=True))
         raw_response = raw_response / np.maximum(rms, 1e-12)
-        raw_angles = _raw_angles
+        if nonzero_filter:
+            n_trials_small = int(len(_raw_angles) * activity_thresh)
+            filtered_response = np.zeros((len(raw_response), n_trials_small), dtype=np.float32)
+            filtered_angles   = np.zeros((len(raw_response), n_trials_small), dtype=np.float32)
+            for i in range(len(raw_response)):
+                idx = np.where(raw_response[i] > 0)[0][:n_trials_small]
+                filtered_response[i] = raw_response[i, idx]
+                filtered_angles[i]   = _raw_angles[idx]
+            raw_response = filtered_response
+            raw_angles   = filtered_angles
+        else:
+            raw_angles = np.tile(_raw_angles, (len(raw_response), 1)).astype(np.float32)
 
     extras = ()
     if return_indices:

@@ -4,7 +4,79 @@ import matplotlib.pyplot as plt
 import jax.numpy as jnp
 from typing import Optional, Callable, Sequence
 
-def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable, 
+
+def select_cells_by_feve(programs_df: pd.DataFrame,
+                         x: np.ndarray,
+                         y: np.ndarray,
+                         n_top: int = 3,
+                         n_bottom: int = 3,
+                         n_random: int = 3,
+                         pool_size: int = 30,
+                         n_bins: int = 64) -> np.ndarray:
+    """
+    Select cells for plot_model_fits based on FEVE, stratified into three groups:
+      - n_top   cells sampled from the top-pool_size by FEVE gain (better - worse program)
+      - n_bottom cells sampled from the bottom-pool_size by FEVE of the best program
+      - n_random cells sampled uniformly at random from the remainder
+
+    FEVE is computed entirely in the raw trial space (same space the model was fit in),
+    binning y on the fly to estimate signal and noise variance.
+
+    programs_df must have 'program' and 'params' columns and at least 2 rows.
+    x, y: (n_cells, n_trials) — raw normalised stimulus angles and responses.
+    Returns an integer array of length n_top + n_bottom + n_random (a perfect square).
+    """
+    programs_df = programs_df.sort_values(by='train_loss').reset_index(drop=True)
+    programs = programs_df['program'].tolist()
+    params_list = [np.array(p) for p in programs_df['params'].tolist()]
+
+    n_cells, n_trials = np.array(y).shape
+    angles = np.array(x[0])  # same for every cell
+    bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
+    bin_idx = np.clip(np.digitize(angles, bin_edges) - 1, 0, n_bins - 1)
+
+    # Binned signal and noise variance — vectorised across cells
+    mu_bins     = np.zeros((n_cells, n_bins))
+    noise_bins  = np.zeros((n_cells, n_bins))
+    y_arr = np.array(y)
+    for b in range(n_bins):
+        mask = bin_idx == b
+        if mask.sum() > 0:
+            y_b = y_arr[:, mask]                        # (n_cells, k)
+            mu_bins[:, b]    = y_b.mean(axis=1)
+            noise_bins[:, b] = y_b.var(axis=1) if mask.sum() > 1 else 0.0
+    noise_var  = noise_bins.mean(axis=1)                # (n_cells,)
+    n_per_bin  = n_trials / n_bins
+    signal_var = np.var(mu_bins, axis=1) - noise_var / max(n_per_bin, 1)
+    signal_var = np.maximum(signal_var, 1e-12)
+
+    def _feve_for_program(program, params):
+        mse = np.zeros(n_cells)
+        for c in range(n_cells):
+            pred = np.array(program(x[c], *params[c]))
+            mse[c] = np.mean((pred - y_arr[c]) ** 2)
+        return 1.0 - (mse - noise_var) / signal_var
+
+    feve = [_feve_for_program(prog, par) for prog, par in zip(programs, params_list)]
+
+    feve_better = feve[0]                                               # best program (lowest loss)
+    feve_worse  = feve[-1] if len(feve) > 1 else feve[0]
+    feve_gain   = feve_better - feve_worse
+
+    pool = min(pool_size, n_cells)
+    top_pool    = np.argsort(feve_gain)[::-1][:pool]
+    bottom_pool = np.argsort(feve_better)[:pool]
+
+    top_sel    = np.random.choice(top_pool, size=min(n_top, len(top_pool)), replace=False)
+    bottom_pool = np.setdiff1d(bottom_pool, top_sel)
+    bottom_sel  = np.random.choice(bottom_pool, size=min(n_bottom, len(bottom_pool)), replace=False)
+    remaining   = np.setdiff1d(np.arange(n_cells), np.concatenate([top_sel, bottom_sel]))
+    rand_sel    = np.random.choice(remaining, size=min(n_random, len(remaining)), replace=False)
+
+    return np.concatenate([top_sel, bottom_sel, rand_sel]).astype(int)
+
+
+def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
                     x: jnp.ndarray, y: jnp.ndarray, 
                     cell_selection: Sequence[int],
                     n_eval: int = 100, 
@@ -86,7 +158,9 @@ def plot_model_fits(programs_df: pd.DataFrame, loss_function: Callable,
 
         # Plot running mean for cell c
         ax[row, col].plot(x_values_mean, binned_mean[c], 
-                          label='Mean', color="#3BD1FF", linewidth=line_width * 1.35)
+                          label='Mean', 
+                          color="#3BD1FF",
+                          linewidth=line_width * 1.35)
 
         # Plot model fits to cell c
         for i, model in enumerate(models):

@@ -261,10 +261,11 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
     return float(initial_loss), initial_params, float(final_loss), params
 
 
-async def generate_new_neuron_model(current_island, llm_name, client, 
+async def generate_new_neuron_model(current_island, llm_name, client,
                                     spike_matrix, stimuli,
-                                    mode='explore', k_max=2, temp=1, 
-                                    thinking_budget=1, img_dir=None, diag_kwargs=None):
+                                    mode='explore', k_max=2, temp=1,
+                                    thinking_budget=1, img_dir=None, diag_kwargs=None,
+                                    use_feve_selection=True):
     k = min(k_max, len(current_island))
     random_programs = current_island.sample(k, replace=False).reset_index(drop=True)
     random_programs = random_programs.sort_values(by='train_loss', ascending=False).reset_index(drop=True)
@@ -284,7 +285,7 @@ async def generate_new_neuron_model(current_island, llm_name, client,
             diagnostic.plot_model_fits(programs_df=random_programs,
                                     loss_function=loss_functions.quadratic_loss,
                                     x=stimuli, y=spike_matrix,
-                                    cell_selection=np.random.choice(spike_matrix.shape[0], size=9, replace=False),
+                                    cell_selection=diagnostic.select_cells_by_feve(random_programs, stimuli, spike_matrix) if use_feve_selection else np.random.choice(spike_matrix.shape[0], size=9, replace=False),
                                     save_path=img_dir,
                                     labels=['v_1', 'v_2'],
                                     colours=['tab:green', 'tab:red'],
@@ -292,7 +293,7 @@ async def generate_new_neuron_model(current_island, llm_name, client,
                                     title=sup_title,
                                     legend_fontsize=20,
                                     line_alpha=0.9,
-                                    line_width=4,
+                                    line_width=5,
                                     **diag_kwargs if diag_kwargs is not None else {})
             
             img_path = Path(img_dir)
@@ -364,7 +365,7 @@ async def generate_new_parameter_estimator(current_island,
         img_bytes = None
     
     llm_output = await utils.call_llm_async(prompt, model_name=llm_name, client=client, temperature=temp,
-                                            thinking_budget=0.25, img_bytes=img_bytes)
+                                            thinking_budget=0, img_bytes=img_bytes)
     # extract the code block from the LLM output
     code_string = utils.extract_code_block(llm_output)
     if code_string is None:
@@ -464,7 +465,8 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 critical_population_size=12, min_wise_population_size=0, 
                 n_migrants=2, fit_params=True, tol=1e-6, exploit_point=0.5,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
-                use_image_feedback=True, use_param_estimator=True,
+                use_image_feedback=True, use_param_estimator=True, 
+                use_feve_selection=True, nonzero_filter=False,
                 exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 data_type = 'stringer',
@@ -486,31 +488,6 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     load_dotenv()
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-    # # load and preprocess data
-    # neural_data = np.load(data_path, allow_pickle=True)
-    # neural_data = neural_data.item()
-    # response = utils.extract_stimulus_related_response(neural_data, n_pcs=0)
-    # angles = neural_data['istim']
-    # n_trials = response.shape[1]
-    # n_trials_small = int(n_trials * activity_thresh)
-
-    # # filter 
-    # active = (response > 0).astype(np.float32)
-    # firing_probs = np.mean(active, axis=1)
-    # conc = np.abs(np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1) / np.sum(response, axis=1))
-    # good_cells = np.where((firing_probs > activity_thresh) & (conc > conc_thresh))[0]
-    # n_good_cells = len(good_cells)
-
-    # # update angles and response to be (n_cells_small, n_trials_small) and (n_cells_small, n_trials_small)
-    # response_cropped, angles_cropped = np.zeros((len(good_cells), n_trials_small)), np.zeros((len(good_cells), n_trials_small))
-    # for i, cell in enumerate(good_cells):
-    #     active_trials = response[cell] > 0
-    #     active_trials_idx = np.where(active_trials)[0][:n_trials_small]
-    #     response_cropped[i] = response[cell, active_trials_idx]
-    #     angles_cropped[i] = angles[active_trials_idx]
-    # # update response and angles to be the cropped versions and convert to JAX arrays, normalize and split into train/test
-    # response, angles = jnp.asarray(response_cropped), jnp.asarray(angles_cropped)
-
     response, angles = utils.load_data(data_dir = data_path,
                                 data_type=data_type,
                                 conc_thresh=conc_thresh,
@@ -518,21 +495,11 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                                 signal_fraction_thresh=signal_fraction_thresh,
                                 n_bins=n_bins, min_repeats=min_repeats,
                                 shuffle=False,
-                                return_raw=True)[2:]
+                                return_raw=True,
+                                nonzero_filter=nonzero_filter)[2:]
 
-    # # response is of shape (n_repeats, n_cells, n_bins) and angles (n_bins,), 
-    # # concat repeats so response becomes (n_cells, n_bins x n_repeats) and angles becomes (n_bins x n_repeats,) 
-    # n_repeats, n_cells, n_bins = response.shape
-    # # response = jnp.mean(response, axis=0)
-    # response = response.transpose(1, 0, 2).reshape(n_cells, n_bins * n_repeats)
-    # # make angles (n_bins,) the same shape as response, i.e. (n_cells, n_bins x n_repeats)
-    # angles = jnp.tile(angles, n_repeats)
-    # angles = jnp.tile(angles, (n_cells, 1))
-
-    # response is of shape (n_cells, n_trials) and angles is of shape (n_trials,)
-    # repeat angles for each cell so that angles is also (n_cells, n_trials)
-    n_cells, n_trials = response.shape
-    angles = jnp.tile(angles, (n_cells, 1))
+    # response and angles are both (n_cells, n_trials) — tiling is handled inside load_data
+    n_cells, _ = response.shape
 
     # print the shapes of response and angles
     print(f"Response shape: {response.shape}, Angles shape: {angles.shape}")
@@ -683,11 +650,12 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                                                                    mode=mode, 
                                                                    k_max=k_max, 
                                                                    temp=temperature,
-                                                                   thinking_budget=1 if llm_name == large_lm_name else 0.25,
+                                                                   thinking_budget=1 if llm_name == large_lm_name else 0,
                                                                    spike_matrix=response_train, 
                                                                    stimuli=angles_train,
                                                                    img_dir=model_image_dirs[island_idx, j],
-                                                                   diag_kwargs=diag_kwargs) 
+                                                                   diag_kwargs=diag_kwargs,
+                                                                   use_feve_selection=use_feve_selection)
                                          for island_idx in range(n_islands) for j in range(batch_size)]
         logging.info(f"Generating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")
         print(f"Generating {n_islands * batch_size} new programs... Model: {llm_name}, mode: {mode}, temperature: {temperature:.2f}")

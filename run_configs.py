@@ -38,42 +38,59 @@ data_path_hayley = '/home/reilly/datasets/hayley_data/spike_counts.npy'
 data_path_hd = '/home/reilly/datasets/hd_cells/head_direction_data.pkl'
 
 # ---- REMOTE CONFIGS (one VM per entry) ----
-CONFIGS_BZ16 = [
-    dict(run_name='bz16',
+# CONFIGS_BZ16 = [
+#     dict(run_name='bz16',
+#          n_iterations=12, time_limit=60,
+#          data_path=data_path_bz16, data_type='jacob',
+#          use_image_feedback=True, use_large_every=3,
+#          param_penalty_weight=0.01 / 3,
+#          data_scale_factor=150,
+#          activity_thresh=0.2, signal_fraction_thresh=0.0, conc_thresh=0.4,
+#          n_bins=256, min_repeats=6,
+#          diag_kwargs={'point_alpha': 0.1, 'n_mean': 50},
+#          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
+# ] * 4
+
+CONFIGS_GT1 = [
+    dict(run_name='gt1',
          n_iterations=12, time_limit=60,
-         data_path=data_path_bz16, data_type='jacob',
+         data_path=data_path_gt1, data_type='stringer',
          use_image_feedback=True, use_large_every=3,
-         param_penalty_weight=0.01,
-         data_scale_factor=150,
-         activity_thresh=0.0, signal_fraction_thresh=0.7, conc_thresh=0.4,
+         param_penalty_weight=0,
+         data_scale_factor=100,
+         nonzero_filter=True,
+         activity_thresh=0.4, signal_fraction_thresh=0.0, conc_thresh=0.55,
+         diag_kwargs={'point_alpha': 0.1, 'n_mean': 50},
          n_bins=256, min_repeats=6,
          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
 ] * 4
 
-CONFIGS_GT2 = [
-    dict(run_name='gt2',
-         n_iterations=12, time_limit=60,
-         data_path=data_path_gt2,
-         data_type='stringer',
-         use_image_feedback=True, use_large_every=3,
-         param_penalty_weight=0.01,
-         data_scale_factor=170,
-         activity_thresh=0.0, signal_fraction_thresh=0.9, conc_thresh=0.5,
-         n_bins=256, min_repeats=6,
-         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
-] * 4
+# CONFIGS_GT2 = [
+#     dict(run_name='gt2',
+#          n_iterations=12, time_limit=60,
+#          data_path=data_path_gt2,
+#          data_type='stringer',
+#          use_image_feedback=True, use_large_every=3,
+#          param_penalty_weight=0.01 * 3,
+#          data_scale_factor=170,
+#          activity_thresh=0.4, signal_fraction_thresh=0.0, conc_thresh=0.55,
+#          diag_kwargs={'point_alpha': 0.1, 'n_mean': 50},
+#          n_bins=256, min_repeats=6,
+#          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
+# ] * 4
 
-CONFIGS_ALI = [
-    dict(run_name='ali',
-         n_iterations=12, time_limit=60,
-         data_path=data_path_ali, data_type='ali',
-         use_image_feedback=True, use_large_every=3,
-         param_penalty_weight=0.01,
-         data_scale_factor=120,
-         activity_thresh=0.0, signal_fraction_thresh=0.85, conc_thresh=0.4,
-         n_bins=90, min_repeats=6,
-         exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
-] * 4
+# CONFIGS_ALI = [
+#     dict(run_name='ali',
+#          n_iterations=12, time_limit=60,
+#          data_path=data_path_ali, data_type='ali',
+#          use_image_feedback=True, use_large_every=3,
+#          param_penalty_weight=0.01,
+#          data_scale_factor=120,
+#          activity_thresh=0.0, signal_fraction_thresh=0.85, conc_thresh=0.4,
+#          n_bins=90, min_repeats=6,
+#          diag_kwargs={'point_alpha': 0.1, 'n_mean': 50},
+#          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
+# ] * 4
 
 # CONFIGS_HD = [
 #     dict(run_name='hd',
@@ -88,4 +105,4 @@ CONFIGS_ALI = [
 #          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
 # ] * 4
 
-RUN_CONFIGS = CONFIGS_BZ16 + CONFIGS_GT2 + CONFIGS_ALI
+RUN_CONFIGS = CONFIGS_GT1
