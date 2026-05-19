@@ -3,6 +3,7 @@ import os
 import random
 import warnings
 from dataclasses import dataclass, field
+from typing import Union, TypeAlias
 
 from dotenv import load_dotenv
 from pydantic_ai import Agent, BinaryContent
@@ -14,6 +15,10 @@ from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import RunContext
+
+from .response_schema import ModelSchema, ParamEstSchema, TranslationSchema
+
+LLMOutputTypes: TypeAlias = Union[str, ModelSchema, ParamEstSchema, TranslationSchema]
 
 load_dotenv()
 
@@ -69,7 +74,7 @@ class _LogRawResponseCapability(AbstractCapability):
 async def call_llm(
     prompt: str,
     llm_model: str | Model,
-    output_type=str,
+    output_type: LLMOutputTypes = str,
     image_bytes: bytes | None = None,
     temperature: float = 1.0,
     thinking: bool | str | None = None,
