@@ -1,11 +1,16 @@
 import pytest
+from src.evolution.program import BirthCertificate, Code, LossPair, Losses, Program
 from src.llm.generate import _generate_one_model, _generate_one_param_est, generate_models, generate_param_ests, _translate_one_model, translate_programs
+from src.llm.code_loading import load_function_from_source
 from src.llm.prompt_schema import PromptSchema
 from tests.evolution.utils import make_empty_program
-from tests.llm.programs import Program1, InvalidProgram, ProgramSolution
+from tests.llm.programs import Program1, InvalidProgram, Program2, ProgramSolution
 from tests.llm.fakellm import FakeLLM, CyclingModel
-from tests.llm.utils import generate_one_fake_model, generate_one_fake_param_est, generate_fake_models
+from tests.llm.utils import generate_one_fake_model, generate_one_fake_param_est, generate_fake_models, make_fake_spec
 
+LLM_MODEL = "gemini-2.5-flash-lite" #used for real LLM calls 
+
+# --- Fake LLM tests --- 
 #Model generation
 @pytest.mark.asyncio
 async def test_generate_one_model():
@@ -22,14 +27,14 @@ async def test_generate_one_model():
     )
     llm = FakeLLM()
     llm_model = llm.gen_model() #A TestModel with code for Program1
-    await _generate_one_model(program, parents, prompt_schema, llm_model, "explore", 1.0)
+    await _generate_one_model(program, parents, prompt_schema, llm_model, "explore", 1.0, spec=make_fake_spec(output_dir="test_output"), data={})
 
     header = '"""\nfake thought process\n\n' + Program1.latex_equation + '\n"""\n\n'
     assert program.code.model == header + Program1.model + " + 0.000\n"
     assert program.default_params == Program1.default_params
     assert program.name == "Fake Model 0"
     assert program.birth == birth
-    #print(program)
+    assert program.image_path is not None
 
 @pytest.mark.asyncio
 async def test_generate_same_model():
@@ -222,3 +227,97 @@ async def test_translate_models():
     #Check model jax code
     for i, program in enumerate(population):
         assert program.code.model_jax == model_jaxes[i]
+
+# --- Real LLM tests ---
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_generate_one_model_with_real_llm():
+    program = make_empty_program()
+    birth = program.birth
+    prompt_schema = PromptSchema(
+        base="You are an AI Scientist. Below are 2 models describing a phenomenon, sorted from worst to best. Your task is to create a new model, that is better than the models below.",
+        exploit = "Focus on generating a model which executes, not too disimilar to the existing model",
+        code_guidelines = "Import any packages you use." \
+        "Model signature must be `def model(data, params):` where `data is a dict of named arrays and `params` is a dict of named scalars.",
+        docstring_guidelines = "Include a docstring, with a short descriptive name for the model",
+        image_analysis_instructions = "Add a short description in the docstring of the image you see",
+        program_detail_template="Model {parent_number}: {name}" \
+        "loss: {program_losses_discover_final}" \
+        "" \
+        "{code_model}",
+        program_vars = ["name", "program_losses.discover.final", "code.model"]
+    )
+    program1 = Program(
+        birth = BirthCertificate(generation=0, island=0, batch_index=0),
+        code = Code(model=Program1.model),
+        name = "Program1",
+        program_losses = Losses(discover=LossPair(final=0.5))
+    )
+    program2 = Program(
+        birth = BirthCertificate(generation=0, island=0, batch_index=1),
+        code = Code(model=Program2.model),
+        name = "Program2",
+        program_losses = Losses(discover=LossPair(final=0.1))
+    )
+    parents = [program1, program2]
+    await _generate_one_model(program, parents, prompt_schema, llm = LLM_MODEL,
+                              mode = "exploit", temperature = 1.0, spec = make_fake_spec(output_dir="test_output"), data  = {})
+    print("Generated model code:\n", program.code.model)
+    assert "def model(data, params):" in program.code.model
+    print("Generated default params:\n", program.default_params)
+    assert isinstance(program.default_params, dict)
+    print("Generated model name:\n", program.name)
+    assert isinstance(program.name, str)
+    print("Generated program birth info:\n", program.birth)
+    assert program.birth == birth
+    assert program.image_path is not None
+    assert load_function_from_source(program.code.model, "model") is not None
+
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_generate_one_param_est_with_real_llm():
+    program = Program(
+        birth=BirthCertificate(generation=0, island=0, batch_index=0),
+        code=Code(model=Program1.model),
+        name="Program1",
+        program_losses=Losses(discover=LossPair(final=0.5))
+    )
+    model_code = program.code.model
+    prompt_schema = PromptSchema(
+        base="You are an AI Scientist. Given the model below, write a parameter estimator for it.",
+        explore="The estimator should return a sensible initial guess for the model parameters.",
+        code_guidelines="Function signature must be `def parameter_estimator(data):` where `data` is a dict of named arrays. Return a dict of named scalar floats.",
+        docstring_guidelines="Include a short docstring describing the estimation strategy.",
+        program_detail_template="Model: {name}\n\n{code_model}",
+        program_vars=["name", "code.model"],
+    )
+    await _generate_one_param_est(program, prompt_schema, llm=LLM_MODEL)
+    print("Generated param est code:\n", program.code.param_est)
+    assert "def parameter_estimator(data):" in program.code.param_est
+    assert isinstance(program.code.param_est, str)
+    assert program.code.model == model_code
+    assert load_function_from_source(program.code.param_est, "parameter_estimator") is not None
+
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_translate_one_model_with_real_llm():
+    program = Program(
+        birth=BirthCertificate(generation=0, island=0, batch_index=0),
+        code=Code(model=Program1.model),
+        name="Program1",
+    )
+    model_code = program.code.model
+    prompt_schema = PromptSchema(
+        base="You are an AI Scientist. Translate the numpy model below into JAX.",
+        explore="Preserve the logic exactly; only replace numpy with jax.numpy.",
+        code_guidelines="Import jax.numpy as jnp. Function signature must be `def model(data, params):` identical to the original.",
+        docstring_guidelines="Keep the original docstring unchanged.",
+        program_detail_template="Model: {name}\n\n{code_model}",
+        program_vars=["name", "code.model"],
+    )
+    await _translate_one_model(program, prompt_schema, llm=LLM_MODEL)
+    print("Generated JAX model code:\n", program.code.model_jax)
+    assert "def model(data, params):" in program.code.model_jax
+    assert "jnp" in program.code.model_jax
+    assert program.code.model == model_code
+    assert load_function_from_source(program.code.model_jax, "model") is not None

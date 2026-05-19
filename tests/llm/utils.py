@@ -1,10 +1,22 @@
 import asyncio
+import tempfile
+from types import SimpleNamespace
+import numpy as np
+from PIL import Image
 from src.llm.code_loading import load_function_from_source
 from src.llm.generate import _generate_one_model, _generate_one_param_est, generate_models
 from src.llm.prompt_schema import PromptSchema
 from tests.evolution.utils import make_empty_program
 from tests.llm.fakellm import FakeLLM, CyclingModel
 from tests.llm.programs import InvalidProgram, Program1
+
+def make_fake_spec(output_dir: str | None = None) -> SimpleNamespace:
+    if output_dir is None:
+        output_dir = tempfile.mkdtemp()
+    def plot_fn(data, parents, save_path):
+        with open(save_path, "wb") as f:
+            f.write(generate_image_bytes())
+    return SimpleNamespace(plot_fn=plot_fn, output_dir=output_dir)
 
 def run_model_code(code: str, data: dict, params: dict):
     func = load_function_from_source(code, "model")
@@ -14,6 +26,15 @@ def run_param_est_code(code: str, data: dict):
     func = load_function_from_source(code, "parameter_estimator")
     return func(data)
 
+def generate_image_bytes(): 
+    matrix = np.array([
+        [0,   255, 0],
+        [255, 0,   255],
+        [0,   255, 0]
+    ], dtype=np.uint8)
+    img = Image.fromarray(matrix, mode='L')
+    img.save("test_image.png")
+    return open("test_image.png", "rb").read()
 
 async def generate_one_fake_model():
     program = make_empty_program()

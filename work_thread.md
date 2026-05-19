@@ -29,9 +29,9 @@ type: project
 ## TODO (priority order)
 
 ### Tests
-- [-] Tests for `src/evolution` (island operations, population, program): worth an integration test with an example evolution?
+- [x] Tests for `src/evolution`
 - [ ] Tests for `src/io` (config, task_spec)
-- [-] Tests for `src/llm`: done for fake LLM, need some for real LLM calls
+- [x] Tests for `src/llm`
 - [-] Integration test for `run.py` (small end-to-end run): work in progress
 - [ ] Wire tests to GitHub Actions CI with status badges in README
 
