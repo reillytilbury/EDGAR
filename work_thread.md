@@ -32,7 +32,7 @@ type: project
 - [x] Tests for `src/evolution`
 - [ ] Tests for `src/io` (config, task_spec)
 - [x] Tests for `src/llm`
-- [-] Integration test for `run.py` (small end-to-end run): work in progress
+- [x] Integration test for `run.py` (small end-to-end run)
 - [ ] Wire tests to GitHub Actions CI with status badges in README
 
 ### Evolution
