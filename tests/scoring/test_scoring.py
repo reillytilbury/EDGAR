@@ -203,7 +203,7 @@ def test_rank():
         p.idx = i
         pop.add(p)
 
-    validate_losses = (NotValidated(), 0.1, 2.1, 0.5, float("inf"))
+    validate_losses = (NotValidated(), 0.1, 2.1, 0.5, None)
     for i, loss in enumerate(validate_losses):
         pop[i].program_losses.validate.final = loss
 
