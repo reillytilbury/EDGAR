@@ -41,7 +41,6 @@ async def test_call_llm_with_fake_param_est():
     )
 
     assert isinstance(result, ParamEstSchema)
-    assert result.thought_process == "fake thought process"
     assert result.code == Program1.param_est
     #Try running the code and check it produces expected output
     output = run_param_est_code(result.code, {"x": np.array([0,1.0,2.0])})
@@ -147,7 +146,6 @@ async def test_call_llm_live_param_est_schema():
     print("LLM output: ", result)
     assert result is not None
     assert isinstance(result, ParamEstSchema)
-    assert isinstance(result.thought_process, str) and result.thought_process
     compile(result.code, "<ParamEstSchema.code>", "exec")
     output = run_param_est_code(result.code, {"x": np.array([0.0, 1.0, 2.0]), "y": np.array([0.0, 1.1, 4.2])})
     assert output is not None

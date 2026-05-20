@@ -133,8 +133,7 @@ async def test_generate_one_param_est():
     llm_model = llm.gen_param_est() #A TestModel with param_est for Program1
     await _generate_one_param_est(program, prompt_schema, llm_model)
 
-    header = '"""\nfake thought process\n"""\n\n'
-    assert program.code.param_est == header + Program1.param_est
+    assert program.code.param_est == Program1.param_est
     
     assert program.code.model == model_code #Check model code is unchanged
 
@@ -165,8 +164,7 @@ async def test_generate_param_est():
     model_headers = [None] + ['"""\nfake thought process\n\n' + programs[i].latex_equation + '\n"""\n\n' for i in range(1,5)]
     model_footers = [None]+ [" + 0.000\n" for i in range(1,5)]
     models = [None] + [model_headers[i] + programs[i].model + model_footers[i] for i in range(1,5)]
-    param_est_headers = [None] + ['"""\nfake thought process\n"""\n\n' for _ in range(1,5)]
-    param_ests = [None] + [param_est_headers[i] + programs[i].param_est for i in range(1,5)]
+    param_ests = [None] + [programs[i].param_est for i in range(1,5)]
     #Check model codes
     for i, program in enumerate(population):
         assert program.code.model == models[i]
@@ -194,7 +192,7 @@ async def test_translate_one_model():
 
     assert program.code.model_jax == Program1.model_jax + " + 0.000\n"
     assert program.code.model == '"""\nfake thought process\n\n' + Program1.latex_equation + '\n"""\n\n' + Program1.model + " + 0.000\n" #Check model code is unchanged
-    assert program.code.param_est == '"""\nfake thought process\n"""\n\n' + Program1.param_est #Check param est code is unchanged
+    assert program.code.param_est == Program1.param_est #Check param est code is unchanged
 
 @pytest.mark.asyncio
 async def test_translate_models():
