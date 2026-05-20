@@ -90,6 +90,7 @@ async def _generate_one_model(
         temperature=temperature,
         image_bytes=image_bytes,
         log_raw_llm_response=cfg.get("log_raw_llm_response", False),
+        max_tokens=cfg.get("max_tokens"),
         retry_config=cfg.get("retry_config"),
     )
     if result is None:
@@ -147,13 +148,13 @@ async def _generate_one_param_est(
         output_type=ParamEstSchema,
         temperature=1.0,
         log_raw_llm_response=cfg.get("log_raw_llm_response", False),
+        max_tokens=cfg.get("max_tokens"),
         retry_config=cfg.get("retry_config"),
     )
     if result is None:
         warnings.warn(f"[generate] Skipping param_est for program #{program.idx}: call_llm returned None")
         return
-    header = f'"""\n{result.thought_process}\n"""\n\n'
-    program.code.param_est = header + result.code
+    program.code.param_est = result.code
 
 
 async def generate_param_ests(
@@ -181,9 +182,10 @@ async def _translate_one_model(
     model_prompt_schema: PromptSchema,
     llm: str | Model,
     retry_config: RetryConfig | None = None,
+    max_tokens: int | None = None,
 ) -> None:
     model_prompt = model_prompt_schema.build_prompt("explore", [program])
-    model_result = await call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0, retry_config=retry_config)
+    model_result = await call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0, retry_config=retry_config, max_tokens=max_tokens)
     if model_result is not None and load_function_from_source(model_result.code, "model") is not None:
         program.code.model_jax = model_result.code
 
@@ -192,6 +194,7 @@ async def translate_programs(
     model_prompt_schema: PromptSchema,
     llm: str | Model,
     retry_config: RetryConfig | None = None,
+    max_tokens: int | None = None,
 ) -> None:
     """Translate all untranslated model code from numpy to JAX.
 
@@ -199,6 +202,6 @@ async def translate_programs(
     """
     programs = _filter_programs(population, _needs_model_translation)
     await asyncio.gather(*[
-        _translate_one_model(p, model_prompt_schema, llm, retry_config)
+        _translate_one_model(p, model_prompt_schema, llm, retry_config, max_tokens)
         for p in programs
     ])

@@ -146,8 +146,6 @@ jax_translator_model:
 
     * jnp.bincount requires a static `length` argument (note: numpy uses `minlength=` but JAX renamed it to `length=`). Always pass a concrete integer: jnp.bincount(x, length=n_bins). Never omit `length=`.
 
-    * Preserve the `model.DEFAULT_PARAMS = {{...}}` line exactly as-is from the original code.
-
     * Ensure all string values in function call arguments are properly JSON-escaped
 
     '
