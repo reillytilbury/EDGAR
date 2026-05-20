@@ -37,6 +37,7 @@ from pydantic_ai.models import Model
 from ..evolution.program import Program, BirthCertificate, Code
 from ..llm.code_loading import load_function_from_source
 from ..llm.prompt_schema import PromptSchema
+from .config import Config
 
 
 LLMs = namedtuple("LLMs", ["model", "param_est", "model_jax"])
@@ -90,7 +91,7 @@ class TaskSpec:
     # ── constructors ──
 
     @classmethod
-    def from_config(cls, config: "Config") -> TaskSpec:
+    def from_config(cls, config: Config) -> TaskSpec:
         """
         Build a TaskSpec from a Config object.
 
@@ -100,10 +101,9 @@ class TaskSpec:
         Args:
             config: A Config object built from Config.from_yaml or Config.from_taskspec.
         """
-        from .config import _git_state, PROJECT_ROOT
+        from .config import _git_state
 
         task_name = config.task_name
-        prompts = config.prompts
         data_loader_path = config.project_dir / "data_loader" / "load_data.py"
         load_data_fn = load_function_from_source(data_loader_path.read_text(), "load_data")
         if load_data_fn is None:
@@ -133,14 +133,14 @@ class TaskSpec:
             task_name=task_name,
             git_sha=git_sha,
             git_dirty=git_dirty,
-            io=config.io,
-            evolution=config.evolution,
-            llms=config.llms,
-            scoring=config.scoring,
+            io=config.io.model_dump(),
+            evolution=config.evolution.model_dump(),
+            llms=config.llms.model_dump(),
+            scoring=config.scoring.model_dump(),
             project_params=config.project_params,
-            model_prompt_schema=PromptSchema(**prompts["model"]),
-            param_est_prompt_schema=PromptSchema(**prompts["parameter_estimator"]),
-            jax_model_prompt_schema=PromptSchema(**prompts["jax_translator_model"]),
+            model_prompt_schema=config.prompts.model,
+            param_est_prompt_schema=config.prompts.parameter_estimator,
+            jax_model_prompt_schema=config.prompts.jax_translator_model,
             load_data_fn=load_data_fn,
             loss_fn=loss_fn,
             plot_fn=plot_fn,
@@ -150,7 +150,7 @@ class TaskSpec:
 
     # ── persistence ──
 
-    def save_task_spec(self, run_dir: Path) -> Path:
+    def save(self, run_dir: Path) -> Path:
         """
         Write task_spec.yaml for reproducibility.
 
@@ -196,6 +196,7 @@ class TaskSpec:
     def schedule(self, generation: int) -> tuple[str, float, LLMs]:
         """
         Return (mode, temperature, llms) for a given generation.
+        TODO: At the moment we use the same LLM at every generation, should add option to use lists. 
 
         Args:
             generation: Generation number (0-indexed)
@@ -204,7 +205,7 @@ class TaskSpec:
             tuple: (mode, temperature, llms) where:
                 - mode: "explore" for first half of generations, "exploit" for second half
                 - temperature: decays exponentially from ~2.0 to ~1.37
-                - llms: LLMs namedtuple with model, param_est, jax (cycles through configured sequences)
+                - llms: LLMs namedtuple with model, param_est, model_jax
         """
         import numpy as np
 
