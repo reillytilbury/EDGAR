@@ -118,7 +118,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     close_log(log)
 
     # generate family_tree
-    write_family_tree(population, census, spec.output_dir)
+    write_family_tree(population, census, spec.output_dir, param_penalty_weight=spec.scoring.get("param_penalty_weight"))
     msg = f"***** Run complete. Output directory: {spec.output_dir} *****"
     print(msg)
     return

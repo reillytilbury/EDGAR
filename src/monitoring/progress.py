@@ -288,12 +288,13 @@ def write_progress(
     census: list[list[set[int]]],
     out_dir: Path,
     task_name: str = "EDGAR",
+    param_penalty_weight: float = 0.0,
 ) -> tuple[Path, Path]:
     """Write loss_progress.html and gd_effect.html into out_dir."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     alive = compute_alive_set(census)
-    sidebar_data = build_sidebar_data(population, alive)
+    sidebar_data = build_sidebar_data(population, alive, param_penalty_weight)
     return (
         _render_loss_progress(population, sidebar_data, out_dir, task_name),
         _render_gd_effect(population, sidebar_data, out_dir, task_name),

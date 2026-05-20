@@ -203,6 +203,9 @@ function showSidebar(nodeId) {
   if (d.is_extinct) {
     h += '<div class="field"><span class="field-label">Status:</span> <span class="field-value">Extinct</span></div>';
   }
+  if (d.rank !== null && d.rank !== undefined) {
+    h += '<div class="field"><span class="field-label">Rank:</span> <span class="field-value">' + (d.rank === 1 ? '&#9733; ' : '') + escapeHtml(d.rank) + '</span></div>';
+  }
   h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
   h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
