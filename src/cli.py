@@ -381,6 +381,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Logging verbosity: compact (default), code, or prompts",
     )
 
+    sub.add_parser(
+        "test-fake",
+        help="Run a small end-to-end pipeline with fake LLM responses (no real API calls)",
+    )
+
     return parser
 
 
@@ -407,6 +412,14 @@ def run_cli(argv=None) -> int:
         if overrides:
             _apply_overrides(spec, overrides)
         asyncio.run(run(spec, log_level=args.log_level))
+        return 0
+    if args.command == "test-fake":
+        import sys
+        project_root = Path(__file__).resolve().parent.parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        from tests.system.fake_runner import run_test_fake
+        _ = run_test_fake()
         return 0
     parser.error("Unknown command")
     return 2
