@@ -9,7 +9,6 @@ Private helpers (_deep_merge, _git_state) are also used by TaskSpec.
 """
 from __future__ import annotations
 
-import subprocess
 import warnings
 from pathlib import Path
 from typing import Literal
@@ -36,44 +35,29 @@ def _deep_merge(base: dict, override: dict) -> dict:
             result[key] = value
     return result
 
-
-def _git_state() -> tuple[str, bool]:
-    """Return (sha, dirty) for the current git HEAD."""
-    try:
-        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True).strip()
-    except Exception:
-        sha = "unknown"
-    try:
-        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=PROJECT_ROOT, text=True).strip())
-    except Exception:
-        dirty = True
-    return sha, dirty
-
-
-# def _warn_unknown_keys(config: dict) -> None:
-#     default = yaml.safe_load((PROJECT_ROOT / "projects" / "config_default.yaml").read_text()) or {}
-#     for section, default_section in default.items():
-#         if section == "project_params" or not isinstance(default_section, dict):
-#             continue
-#         known = set(default_section.keys())
-#         for key in config.get(section, {}):
-#             if key not in known:
-#                 warnings.warn(
-#                     f"Unknown config key '{section}.{key}' — it will be ignored. "
-#                     f"Only project_params accepts arbitrary keys.",
-#                     stacklevel=4,
-#                 )
-
-
 # ── sub-models ──
 # Here we define the types of all expected config sections, and define any validation logic. Use this to ensure parameters have desired properties/types
 
-class IOConfig(BaseModel):
+class _LaxModel(BaseModel):
+    """ Pydantic BaseModel which raises a warning if there are unexpected fields.
+    """
+    model_config = ConfigDict(extra="ignore") #Doesnt raise an error if extra fields
+
+    @model_validator(mode="before")
+    @classmethod
+    def warn_extra_fields(cls, values: dict) -> dict:
+        """ Warn if there are any unexpected fields"""
+        if isinstance(values, dict):
+            extra = set(values.keys()) - set(cls.model_fields.keys())
+            if extra:
+                warnings.warn(f"Config section '{cls.__name__}' contains unknown fields that will be ignored: {sorted(extra)}. Valid fields are: {sorted(cls.model_fields.keys())}. Project-specific parameters should go under 'project_params'")
+        return values
+
+class IOConfig(_LaxModel):
     data_path: str
     save_path: str
 
-
-class EvolutionConfig(BaseModel):
+class EvolutionConfig(_LaxModel):
     n_generations: int
     time_limit: int | float
     n_islands: int
@@ -91,7 +75,7 @@ class EvolutionConfig(BaseModel):
         return self
     
 
-class RetryConfig(BaseModel):
+class RetryConfig(_LaxModel):
     max_retries: int
     initial_delay: float
     backoff_multiplier: float
@@ -99,7 +83,7 @@ class RetryConfig(BaseModel):
     retryable_status_codes: list[int]
 
 
-class LLMsConfig(BaseModel):
+class LLMsConfig(_LaxModel):
     num_parents: int
     retry: RetryConfig
     model_llm: ValidLLMs | list[ValidLLMs]
@@ -110,18 +94,18 @@ class LLMsConfig(BaseModel):
     swear_words: list[str]
 
 
-class GradientDescentConfig(BaseModel):
+class GradientDescentConfig(_LaxModel):
     max_iter: int
     learning_rate: float
 
 
-class ScoringConfig(BaseModel):
+class ScoringConfig(_LaxModel):
     param_penalty_weight: float
     timeout_s: float
     gradient_descent: GradientDescentConfig
 
 
-class PromptsConfig(BaseModel):
+class PromptsConfig(_LaxModel):
     model: PromptSchema
     parameter_estimator: PromptSchema
     jax_translator_model: PromptSchema
@@ -177,14 +161,23 @@ class Config(BaseModel):
         task_prompts = yaml.safe_load(task_prompt_path.read_text()) if task_prompt_path.exists() else {}
         prompts = _deep_merge(default_prompts, task_prompts)
 
+        # Warn about any unexpected top-level fields in config
+        io = config.pop("io", {})
+        evolution = config.pop("evolution", {})
+        llms = config.pop("llms", {})
+        scoring = config.pop("scoring", {})
+        project_params = config.pop("project_params", {})
+        if config:
+            warnings.warn(f"Config contains unknown keys: {list(config.keys())}, custom keys should be defined under field 'project_params', these keys will be ignored", stacklevel=2)
+
         return cls(
             task_name=task_name,
             project_dir=project_dir,
-            io=config.get("io", {}),
-            evolution=config.get("evolution", {}),
-            llms=config.get("llms", {}),
-            scoring=config.get("scoring", {}),
-            project_params=config.get("project_params", {}),
+            io=io,
+            evolution=evolution,
+            llms=llms,
+            scoring=scoring,
+            project_params=project_params,
             prompts=prompts,
         )
 

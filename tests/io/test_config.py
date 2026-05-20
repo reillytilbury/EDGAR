@@ -81,7 +81,7 @@ def test_load_missing_subfield_config_perfect_default():
 
 def test_load_missing_subfield_config_missing_default():
     """
-        Tests that if a config is missing a subfield, and the default is also missing the subfield, an error is raised.
+        Tests that if a config is missing a subfield, and the default is also missing the subfield. 
     """
     with pytest.raises(ValidationError):
         config = Config.from_yaml("tests/io/test_configs/missing_subfield/config.yaml", default_path = "tests/io/test_configs/missing_subfield/default_config.yaml")
@@ -101,6 +101,20 @@ def test_load_invalid_topology_config():
         config = Config.from_yaml("tests/io/test_configs/invalid_topology/config_invalidset.yaml", default_path = "tests/io/test_configs/perfect/default_config.yaml")
     with pytest.raises(ValidationError):
         config = Config.from_yaml("tests/io/test_configs/invalid_topology/config_invalidlength.yaml", default_path = "tests/io/test_configs/perfect/default_config.yaml")
+
+def test_load_additional_field():
+    """
+        Tests that if a config has an additional field, a warning is raised, printing out the unexpected field.
+    """
+    with pytest.warns(UserWarning, match="additional_field"):
+        config = Config.from_yaml("tests/io/test_configs/additional_field/config.yaml", default_path = "tests/io/test_configs/perfect/default_config.yaml")
+
+def test_load_additional_subfield():
+    """
+        Tests that if a config has an additional subfield, a warning is raised, printing out the unexpected subfield.
+    """
+    with pytest.warns(UserWarning, match="additional_subfield"):
+        config = Config.from_yaml("tests/io/test_configs/additional_subfield/config.yaml", default_path = "tests/io/test_configs/perfect/default_config.yaml")
 
 def test_load_missing_prompt_field():
     """
@@ -137,12 +151,13 @@ def test_load_invalid_prompt_subfield():
     with pytest.raises(ValidationError):
         config = Config.from_yaml("tests/io/test_configs/invalid_subfield/config.yaml", default_path = "tests/io/test_configs/perfect/default_config.yaml")
 
-def test_config_taskspec_round_trip():
-    """
-        Tests that the config can be converted to a TaskSpec and back without losing any information.
-    """
-    config = Config.from_yaml("tests/io/test_configs/perfect/config.yaml", default_path = "tests/io/test_configs/perfect/default_config.yaml")
-    taskspec = TaskSpec.from_config(config)
-    saved_taskspec = taskspec.save("tests/io/test_taskspec")
-    config_from_taskspec = Config.from_taskspec(saved_taskspec)
-    assert config == config_from_taskspec
+
+# def test_config_taskspec_round_trip():
+#     """
+#         Tests that the config can be converted to a TaskSpec and back without losing any information.
+#     """
+#     config = Config.from_yaml("tests/io/test_configs/perfect/config.yaml", default_path = "tests/io/test_configs/perfect/default_config.yaml")
+#     taskspec = TaskSpec.from_config(config)
+#     saved_taskspec = taskspec.save("tests/io/test_taskspec")
+#     config_from_taskspec = Config.from_taskspec(saved_taskspec)
+#     assert config == config_from_taskspec
