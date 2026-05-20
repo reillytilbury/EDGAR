@@ -19,7 +19,7 @@ import argparse
 from pathlib import Path
 
 from .io.task_spec import TaskSpec
-from .io.logging import open_log, log_generation
+from .io.logging import open_log, log_generation, close_log
 from .evolution.population import Population
 from .evolution.island import (
     seed,
@@ -64,7 +64,9 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     census = []
 
     for gen in range(spec.evolution["n_generations"]):
-        print(f"Generation {gen} / {spec.evolution['n_generations']}")
+        msg = f"Generation {gen} / {spec.evolution['n_generations']}"
+        print(msg)
+        log.file.write(msg + "\n")
         mode, temperature, llms = spec.schedule(gen)
         spawn(
             population,
@@ -113,12 +115,13 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
 
     population.save(os.path.join(spec.output_dir, "population.jsonl"))
     save_island_census(census, os.path.join(spec.output_dir, "island_census.jsonl"))
-    log.file.close()
+    close_log(log)
 
     # generate family_tree
     write_family_tree(population, census, spec.output_dir)
-    print(f"***** Run complete. Output directory: {spec.output_dir} *****")
-    return 
+    msg = f"***** Run complete. Output directory: {spec.output_dir} *****"
+    print(msg)
+    return
 
 
 if __name__ == "__main__":
