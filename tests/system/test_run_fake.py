@@ -4,21 +4,14 @@ System test using fake LLM responses.
 Covers: end-to-end run with fake LLM calls injected via TestModel instances.
 See fakellm.py and programs.py for the predetermined programs used.
 """
-import asyncio
 import json
 
 import yaml
 import pytest
 from pathlib import Path
-import shutil
-import os 
-from src.run import run
-from src.io.config import Config
-from src.io.task_spec import TaskSpec
-from tests.llm.fakellm import FakeLLM, SeedFakeLLM, CyclingModel
 from tests.llm.programs import ProgramSolution
+from tests.system.fake_runner import run_test_fake, CONFIG_PATH
 
-CONFIG_PATH = Path(__file__).parent / "test_task" / "config.yaml"
 TEST_OUTPUT_DIR = Path(__file__).parents[2] / "test_output"
 
 def load_programs(output_dir):
@@ -31,7 +24,7 @@ def load_programs(output_dir):
     return programs
 
 def load_config():
-    """ Helper to load config.yaml"""
+    """Helper to load config.yaml"""
     with open(CONFIG_PATH, "r") as f:
         config = yaml.safe_load(f)
     return config
@@ -40,24 +33,7 @@ def load_config():
 @pytest.fixture(scope="session")
 def fake_run():
     """Run the full pipeline with fake LLM responses once per test session."""
-    config = Config.from_yaml(CONFIG_PATH)
-    spec = TaskSpec.from_config(config)
-    shutil.rmtree(TEST_OUTPUT_DIR, ignore_errors=True) #delete any existing output
-    os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
-    spec.io["save_path"] = str(TEST_OUTPUT_DIR)
-
-    n_gen = spec.evolution["n_generations"]
-    n_per_gen = spec.evolution["batch_size"] * spec.evolution["n_islands"]
-    n_seed = len(spec.seed_programs)
-    fake = FakeLLM()
-    seed_fake = SeedFakeLLM()
-
-    spec.llms["model_llm"] = CyclingModel([fake.gen_model() for _ in range(n_gen * n_per_gen)])
-    spec.llms["param_est_llm"] = CyclingModel([fake.gen_param_est() for _ in range(n_gen * n_per_gen)])
-    spec.llms["jax_model_translator_llm"] = CyclingModel([seed_fake.gen_model_translation() for _ in range(n_seed)] + [fake.gen_model_translation() for _ in range(n_gen * n_per_gen)])
-
-    asyncio.run(run(spec))
-    return Path(spec.output_dir)
+    return run_test_fake(TEST_OUTPUT_DIR)
 
 def test_run_completes(fake_run):
     pass
