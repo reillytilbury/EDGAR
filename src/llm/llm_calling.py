@@ -2,7 +2,6 @@ import asyncio
 import os
 import random
 import warnings
-from dataclasses import dataclass, field
 from typing import Union, TypeAlias
 
 from dotenv import load_dotenv
@@ -16,31 +15,12 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import RunContext
 
+from ..io.config import RetryConfig
 from .response_schema import ModelSchema, ParamEstSchema, TranslationSchema
 
 LLMOutputTypes: TypeAlias = Union[str, ModelSchema, ParamEstSchema, TranslationSchema]
 
 load_dotenv()
-
-
-@dataclass
-class RetryConfig:
-    max_retries: int = 3
-    initial_delay: float = 1.0
-    backoff_multiplier: float = 2.0
-    max_delay: float = 60.0
-    retryable_status_codes: frozenset[int] = field(default_factory=lambda: frozenset({500, 503}))
-
-    @classmethod
-    def from_config(cls, config: dict) -> "RetryConfig":
-        codes = config.get("retryable_status_codes", [500, 503])
-        return cls(
-            max_retries=config.get("max_retries", 3),
-            initial_delay=config.get("initial_delay", 1.0),
-            backoff_multiplier=config.get("backoff_multiplier", 2.0),
-            max_delay=config.get("max_delay", 60.0),
-            retryable_status_codes=frozenset(codes),
-        )
 
 
 class _LogRawResponseCapability(AbstractCapability):

@@ -12,7 +12,7 @@ from __future__ import annotations
 import warnings
 from pathlib import Path
 from typing import Literal
-
+from dataclasses import field
 import yaml
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -76,11 +76,11 @@ class EvolutionConfig(_LaxModel):
     
 
 class RetryConfig(_LaxModel):
-    max_retries: int
-    initial_delay: float
-    backoff_multiplier: float
-    max_delay: float
-    retryable_status_codes: list[int]
+    max_retries: int = 3
+    initial_delay: float = 1.0
+    backoff_multiplier: float = 2.0
+    max_delay: float = 60.0
+    retryable_status_codes: list[int] = field(default_factory=lambda: [500, 503])
 
 
 class LLMsConfig(_LaxModel):
