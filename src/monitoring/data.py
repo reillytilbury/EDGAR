@@ -67,6 +67,7 @@ def compute_alive_set(census: list[list[set[int]]]) -> set[int]:
 def build_sidebar_data(
     population: Population,
     alive: set[int],
+    param_penalty_weight: float = 0.0,
 ) -> dict[str, dict[str, Any]]:
     """Build the click-to-inspect data dict, keyed by str(program.idx)."""
     sidebar = {}
@@ -91,6 +92,8 @@ def build_sidebar_data(
             "llm_name": p.birth.llm_name,
             **parent_dict,
             "n_params": p.n_params,
+            "complexity_penalty": param_penalty_weight * p.n_params if p.n_params is not None else None,
+            "rank": p.rank,
             "initial_loss": p.program_losses.discover.init,
             "train_loss": p.program_losses.discover.final,
             "test_loss": p.program_losses.validate.final,
