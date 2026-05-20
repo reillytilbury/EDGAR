@@ -34,20 +34,20 @@ from .llm.generate import (
     generate_param_ests,
     translate_programs,
 )
-from .llm.llm_calling import RetryConfig
+from .io.config import RetryConfig
 from .scoring.scoring import rank, score
 from .monitoring.family_tree import write_family_tree
 
 
 async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     os.makedirs(spec.output_dir, exist_ok=True)
-    spec.save_task_spec(spec.output_dir)
+    spec.save(spec.output_dir)
     log = open_log(spec.output_dir, log_level)
 
     X_discover, X_validate, X_eval = spec.load_data_fn(
         data_path=spec.io["data_path"], **spec.project_params
     )
-    retry_config = RetryConfig.from_config(spec.llms.get("retry", {}))
+    retry_config = RetryConfig(**spec.llms.get("retry", {}))
     config = {**spec.flat_config, "retry_config": retry_config}
 
     population = Population()
