@@ -64,7 +64,6 @@ class FakeLLM:
         code = self._programs[idx].param_est
         self._param_est_counter[idx] += 1
         return TestModel(custom_output_args={
-            "thought_process": "fake thought process",
             "code": code,
         })
 
