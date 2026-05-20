@@ -7,7 +7,7 @@ class ModelSchema(BaseModel):
             "Summary of reasoning: "
             "(1) what each parent model does and where it falls short, "
             "(2) what specific changes you are making and why they should reduce loss, "
-            "(3) the mathematical or algorithmic justification for your approach."
+            "(3) the mathematical and scientific justification for your approach."
         )
     )
     descriptive_name: str = Field(
