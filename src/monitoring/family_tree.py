@@ -78,10 +78,18 @@ def _build_nodes(population: Population, pos: dict) -> dict:
         ids.append(str(p.idx))
         label = p.name or f"P{p.idx}"
         labels.append(label)
-        hover.append(f"{label}<br>loss: {loss_str(p.program_losses.discover.final)}")
+        hover_label = f"★ {label}" if p.rank == 1 else label
+        hover.append(f"{hover_label}<br>loss: {loss_str(p.program_losses.discover.final)}")
         colors.append(_node_colour(p.program_losses.discover.final))
-        symbols.append("square" if is_seed(p) else "circle")
-        sizes.append(20 if is_seed(p) else 16)
+        if p.rank == 1:
+            symbols.append("star")
+            sizes.append(24)
+        elif is_seed(p):
+            symbols.append("square")
+            sizes.append(20)
+        else:
+            symbols.append("circle")
+            sizes.append(16)
     return {
         "x": x, "y": y, "ids": ids, "labels": labels, "hover": hover,
         "colors": colors, "symbols": symbols, "sizes": sizes,
@@ -104,13 +112,14 @@ def write_family_tree(
     census: list[list[set[int]]],
     out_dir: Path,
     task_name: str = "EDGAR",
+    param_penalty_weight: float = 0.0,
 ) -> Path:
     """Render family_tree.html into out_dir."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     alive = compute_alive_set(census)
-    sidebar_data = build_sidebar_data(population, alive)
+    sidebar_data = build_sidebar_data(population, alive, param_penalty_weight)
 
     pos = _layout_by_generation(population)
     edge_x, edge_y = _build_edges(population, pos)
