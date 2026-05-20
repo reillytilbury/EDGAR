@@ -19,7 +19,8 @@ from pydantic_ai.models import Model
 from ..evolution.program import Program
 from ..evolution.population import Population
 from ..llm.prompt_schema import PromptSchema
-from ..llm.llm_calling import call_llm, RetryConfig
+from ..llm.llm_calling import call_llm
+from ..io.config import RetryConfig
 from ..llm.response_schema import ModelSchema, ParamEstSchema, TranslationSchema
 from ..llm.code_loading import load_function_from_source
 

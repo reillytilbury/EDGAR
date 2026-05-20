@@ -17,7 +17,7 @@ Example usage:
     spec = TaskSpec.from_config(Config.from_taskspec("runs/03-15/10-30-45/task_spec.yaml"))
 
     mode, temp, llms = spec.schedule(generation=0)
-    spec.save_task_spec(run_dir)
+    spec.save(run_dir)
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from collections import namedtuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+import subprocess
 from typing import Callable
 
 import numpy as np
@@ -38,10 +39,23 @@ from ..evolution.program import Program, BirthCertificate, Code
 from ..llm.code_loading import load_function_from_source
 from ..llm.prompt_schema import PromptSchema
 from .config import Config
+from .config import PROJECT_ROOT
 
 
 LLMs = namedtuple("LLMs", ["model", "param_est", "model_jax"])
 PromptSchemas = namedtuple("PromptSchemas", ["model", "param_est", "jax_model"])
+
+def _git_state() -> tuple[str, bool]:
+    """Return (sha, dirty) for the current git HEAD."""
+    try:
+        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True).strip()
+    except Exception:
+        sha = "unknown"
+    try:
+        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=PROJECT_ROOT, text=True).strip())
+    except Exception:
+        dirty = True
+    return sha, dirty
 
 
 @dataclass
@@ -101,8 +115,6 @@ class TaskSpec:
         Args:
             config: A Config object built from Config.from_yaml or Config.from_taskspec.
         """
-        from .config import _git_state
-
         task_name = config.task_name
         data_loader_path = config.project_dir / "data_loader" / "load_data.py"
         load_data_fn = load_function_from_source(data_loader_path.read_text(), "load_data")
