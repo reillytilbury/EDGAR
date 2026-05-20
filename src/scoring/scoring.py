@@ -214,8 +214,12 @@ def rank(
         Only ranks those which have validate.final != NotValidated, which should be the ones alive at the end of the evolution.
     """
     validated_program_indices = [i for i in range(len(population)) if not isinstance(population[i].program_losses.validate.final, NotValidated)]
-    validated_program_indices.sort(key=lambda i: population[i].program_losses.validate.final)
+    validated_program_indices.sort(key=lambda i: population[i].program_losses.validate.final or float("inf"))
     print("Ranking of programs by validate.final loss:")
     for rank, program in enumerate([population[i] for i in validated_program_indices], start=1):
         program.rank = rank
-        print(f"Rank {rank}: Program #{program.idx} ({program.name}): {program.program_losses.validate.final:.4f}")
+        if program.program_losses.validate.final is None:
+            loss_display = float("inf")
+        else:
+            loss_display = program.program_losses.validate.final
+        print(f"Rank {rank}: Program #{program.idx} ({program.name}): {loss_display:.4f}")
