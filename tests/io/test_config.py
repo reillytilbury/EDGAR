@@ -28,6 +28,7 @@ def test_load_perfect_config():
     assert config.llms.param_est_llm == "gemini-2.5-flash"
     assert config.llms.jax_model_translator_llm == "gemini-2.5-flash-lite"
     assert not config.llms.log_raw_llm_response
+    assert config.llms.max_tokens == 10000
     assert config.llms.max_lines == 50
     assert config.llms.swear_words == ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
     assert config.scoring.param_penalty_weight == 0.01

@@ -51,6 +51,25 @@ class _LogRawResponseCapability(AbstractCapability):
 
 
 
+class _WarnOnMaxTokensCapability(AbstractCapability):
+    """Warns if the model stopped because it hit the max_tokens limit."""
+
+    async def after_model_request(
+        self,
+        ctx: RunContext,
+        *,
+        request_context: ModelRequestContext,
+        response: ModelResponse,
+    ) -> ModelResponse:
+        finish_reason = (response.provider_details or {}).get("finish_reason")
+        if finish_reason == "MAX_TOKENS":
+            warnings.warn(
+                f"[call_llm] Response truncated: model hit max_tokens limit "
+                f"(output_tokens={response.usage.output_tokens}, model={response.model_name}). "
+            )
+        return response
+
+
 async def call_llm(
     prompt: str,
     llm_model: str | Model,
@@ -102,7 +121,9 @@ async def call_llm(
         raise TypeError("llm_model must be a string or a PydanticAI Model instance.")
 
     rc = retry_config or RetryConfig()
-    capabilities = [_LogRawResponseCapability()] if log_raw_llm_response else []
+    capabilities = [_WarnOnMaxTokensCapability()]
+    if log_raw_llm_response:
+        capabilities.append(_LogRawResponseCapability())
     agent = Agent(model, output_type=output_type, output_retries=rc.max_retries, capabilities=capabilities)
 
     user_input = (

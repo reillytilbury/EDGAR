@@ -92,7 +92,7 @@ class LLMsConfig(_LaxModel):
     log_raw_llm_response: bool
     max_lines: int
     swear_words: list[str]
-
+    max_tokens: int
 
 class GradientDescentConfig(_LaxModel):
     max_iter: int
