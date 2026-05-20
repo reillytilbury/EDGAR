@@ -57,6 +57,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
         spec.prompt_schemas.jax_model,
         spec.llms["jax_model_translator_llm"],
         retry_config=retry_config,
+        max_tokens=config.get("max_tokens"),
     )
     score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
