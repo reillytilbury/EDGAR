@@ -13,6 +13,9 @@ Verbosity is controlled by the level argument:
 Prompts are reconstructed post-hoc from program birth metadata and the spec's
 prompt schemas, so no prompt state needs to be threaded through the main loop.
 
+Warnings emitted via warnings.warn() during a generation are buffered and
+appended to the end of that generation's block in the log.
+
 Example usage:
     log = open_log(spec.output_dir, level="compact")
 
@@ -21,14 +24,16 @@ Example usage:
         # ... run generation ...
         log_generation(log, gen, population, islands, spec)
 
-    log.file.close()
+    close_log(log)
 """
 from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
-from typing import TextIO, TYPE_CHECKING
+import warnings
+import datetime
+from dataclasses import dataclass, field
+from typing import Any, Callable, TextIO, TYPE_CHECKING
 from ..evolution.program import NotValidated
 
 if TYPE_CHECKING:
@@ -44,11 +49,16 @@ class RunLog:
     file: TextIO
     level: str
     start_time: float
+    warnings_buffer: list[str] = field(default_factory=list)
+    prev_showwarning: Any = None
 
 
 def open_log(output_dir: str, level: str = "compact") -> RunLog:
     """
     Create run.log in output_dir and return a RunLog handle.
+
+    Installs a warnings.showwarning hook that buffers warnings for inclusion
+    in each generation block. Call close_log() to restore the original hook.
 
     Args:
         output_dir: Run output directory (spec.output_dir).
@@ -60,7 +70,34 @@ def open_log(output_dir: str, level: str = "compact") -> RunLog:
     f = open(os.path.join(output_dir, "run.log"), "w")
     f.write(f"EDGAR run log  |  level={level}\n{'=' * 60}\n\n")
     f.flush()
-    return RunLog(file=f, level=level, start_time=time.monotonic())
+    log = RunLog(file=f, level=level, start_time=time.monotonic())
+
+    original: Callable = warnings.showwarning
+
+    def _hook(message, category, filename, lineno, file=None, line=None):
+        original(message, category, filename, lineno, file, line)
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        log.warnings_buffer.append(f"  [{ts}] {category.__name__}: {message}\n")
+
+    log.prev_showwarning = original
+    warnings.showwarning = _hook
+    return log
+
+
+def close_log(log: RunLog) -> None:
+    """Flush remaining buffered warnings, close the file, and restore the original showwarning hook."""
+    _flush_warnings(log)
+    log.file.close()
+    if log.prev_showwarning is not None:
+        warnings.showwarning = log.prev_showwarning
+
+
+def _flush_warnings(log: RunLog) -> None:
+    if log.warnings_buffer:
+        log.file.write("  --- Warnings ---\n")
+        log.file.writelines(log.warnings_buffer)
+        log.warnings_buffer.clear()
+        log.file.flush()
 
 
 def log_generation(
@@ -116,6 +153,7 @@ def log_generation(
     f.write("\n")
 
     if log.level not in ("code", "prompts"):
+        _flush_warnings(log)
         f.flush()
         return
 
@@ -126,6 +164,7 @@ def log_generation(
         f.write(f"  [model_jax]\n{p.code.model_jax or '(none)'}\n\n")
 
     if log.level != "prompts":
+        _flush_warnings(log)
         f.flush()
         return
 
@@ -140,4 +179,5 @@ def log_generation(
             f.write(f"  [image] {p.image_path}\n")
         f.write("\n")
 
+    _flush_warnings(log)
     f.flush()
