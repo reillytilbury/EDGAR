@@ -351,6 +351,44 @@ def _apply_overrides(spec, overrides: list[str]) -> None:
         getattr(spec, section)[key] = value
 
 
+TEST_OVERRIDES = [
+    "--io.save_path=./test_output",
+    "--evolution.n_generations=1",
+    "--evolution.n_islands=2",
+    "--evolution.batch_size=2",
+    "--evolution.num_parents=2",
+    "--evolution.topology=[1, 0]",
+    "--scoring.gradient_descent.max_iter=100",
+    "--scoring.timeout_s=120",
+    "--llms.model_llm=gemini-2.5-flash-lite",
+    "--llms.param_est_llm=gemini-2.5-flash-lite",
+    "--llms.jax_model_translator_llm=gemini-2.5-flash-lite",
+    "--llms.max_tokens=1000"
+]
+
+def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> None:
+    import asyncio
+    from .io.config import Config
+    from .io.task_spec import TaskSpec
+    from .run import run
+
+    path = Path(config_path)
+    config = Config.from_taskspec(path) if path.name == "task_spec.yaml" else Config.from_yaml(path)
+    spec = TaskSpec.from_config(config)
+    if overrides:
+        _apply_overrides(spec, overrides)
+    asyncio.run(run(spec, log_level=log_level))
+
+
+def _run_test_fake() -> None:
+    import sys
+    project_root = Path(__file__).resolve().parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from tests.system.fake_runner import run_test_fake
+    run_test_fake()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="EDGAR project scaffold, validation, and run CLI"
@@ -370,16 +408,19 @@ def build_parser() -> argparse.ArgumentParser:
         "task", type=str, help="Project name (folder under projects/)"
     )
 
-    p_run = sub.add_parser(
-        "run", help="Run an EDGAR experiment from a config.yaml or task_spec.yaml"
-    )
-    p_run.add_argument("config", type=str, help="Path to config.yaml or task_spec.yaml")
-    p_run.add_argument(
-        "--log-level",
-        choices=["compact", "code", "prompts"],
-        default="compact",
-        help="Logging verbosity: compact (default), code, or prompts",
-    )
+    #Helper for defining run args since run and test share most args 
+    def _add_run_args(p, help_str: str) -> None:
+        p = sub.add_parser(p, help=help_str)
+        p.add_argument("config", type=str, help="Path to config.yaml or task_spec.yaml")
+        p.add_argument(
+            "--log-level",
+            choices=["compact", "code", "prompts"],
+            default="compact",
+            help="Logging verbosity: compact (default), code, or prompts",
+        )
+
+    _add_run_args("run", "Run an EDGAR experiment from a config.yaml or task_spec.yaml")
+    _add_run_args("test", "Run a small test experiment with reduced evolution settings")
 
     sub.add_parser(
         "test-fake",
@@ -398,28 +439,17 @@ def run_cli(argv=None) -> int:
     if args.command == "validate":
         return validate_project(args.task)
     if args.command == "run":
-        import asyncio
-        from .io.config import Config
-        from .io.task_spec import TaskSpec
-        from .run import run
-
-        path = Path(args.config)
-        if path.name == "task_spec.yaml":
-            config = Config.from_taskspec(path)
-        else:
-            config = Config.from_yaml(path)
-        spec = TaskSpec.from_config(config)
-        if overrides:
-            _apply_overrides(spec, overrides)
-        asyncio.run(run(spec, log_level=args.log_level))
+        print("Running experiment...")
+        _build_and_run(args.config, overrides, args.log_level)
         return 0
+    if args.command == "test":
+        print("Running test run with real LLM calls...")
+        _build_and_run(args.config, TEST_OVERRIDES + overrides, args.log_level)
+        return 0
+
     if args.command == "test-fake":
-        import sys
-        project_root = Path(__file__).resolve().parent.parent
-        if str(project_root) not in sys.path:
-            sys.path.insert(0, str(project_root))
-        from tests.system.fake_runner import run_test_fake
-        _ = run_test_fake()
+        print("Running test run with fake LLM calls...")
+        _run_test_fake()
         return 0
     parser.error("Unknown command")
     return 2
