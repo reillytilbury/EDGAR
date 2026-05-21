@@ -32,7 +32,7 @@ USE_SPOT=true
 # --------------------
 
 INSTANCE_PREFIX="edgar"
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+TIMESTAMP=$(date +%Y-%m-%d-%H-%M-%S)
 
 # Read NUM_RUNS and per-config run_names from run_configs.py (no heavy deps needed)
 SCRIPT_DIR="$(dirname "$0")"
@@ -80,6 +80,8 @@ mkdir -p "/home/reilly/datasets/ali data"
 gsutil -m rsync -r "gs://${BUCKET}/datasets/ali data" "/home/reilly/datasets/ali data"
 mkdir -p "/home/reilly/datasets/hayley_data"
 gsutil -m rsync -r "gs://${BUCKET}/datasets/hayley_data" "/home/reilly/datasets/hayley_data"
+mkdir -p "/home/reilly/datasets/hd_cells"
+gsutil -m rsync -r "gs://${BUCKET}/datasets/hd_cells" "/home/reilly/datasets/hd_cells"
 gsutil cp "gs://${BUCKET}/.env" .env
 
 # Bootstrap pip if missing, then install all deps including JAX with CUDA support.

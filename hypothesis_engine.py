@@ -466,7 +466,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 n_migrants=2, fit_params=True, tol=1e-6, exploit_point=0.5,
                 param_penalty_weight=0.01, FAILED_PROGRAM_COST=np.inf,
                 use_image_feedback=True, use_param_estimator=True, 
-                use_feve_selection=True, nonzero_filter=False,
+                use_feve_selection=False, nonzero_filter=False,
                 exploration_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 data_type = 'stringer',
