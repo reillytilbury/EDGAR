@@ -16,6 +16,8 @@ if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
 
 import asyncio
 import argparse
+import traceback
+import sys
 from pathlib import Path
 
 from .io.task_spec import TaskSpec
@@ -113,11 +115,11 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
         rank(population)
 
         print_and_log(log, f"***** Run complete. Output directory: {spec.output_dir} *****")
-    except Exception as e:
-        print_and_log(log, f"***** Run failed with exception: {str(e)} *****\n***** Output directory: {spec.output_dir} *****")
-        raise  # re-raise the exception after logging
 
     finally: #runs whether or not an exception is raised, ensuring that results are saved
+        exc_info = sys.exc_info()
+        if exc_info[0] is not None:
+            print_and_log(log, f"***** Run failed with exception:\n{''.join(traceback.format_exception(*exc_info))}***** Output directory: {spec.output_dir} *****")
         population.save(os.path.join(spec.output_dir, "population.jsonl"))
         save_island_census(census, os.path.join(spec.output_dir, "island_census.jsonl"))
         close_log(log)
