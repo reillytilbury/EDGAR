@@ -67,6 +67,12 @@ class _WarnOnMaxTokensCapability(AbstractCapability):
                 f"[call_llm] Response truncated: model hit max_tokens limit "
                 f"(output_tokens={response.usage.output_tokens}, model={response.model_name}). "
             )
+        elif finish_reason == "MALFORMED_FUNCTION_CALL":
+            warnings.warn(
+                f"[call_llm] Malformed function call from {response.model_name} "
+                f"(output_tokens={response.usage.output_tokens}). "
+                f"The response was likely truncated — try increasing max_tokens."
+            )
         return response
 
 
