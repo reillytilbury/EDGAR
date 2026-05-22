@@ -112,6 +112,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
         score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
         rank(population)
 
+        print_and_log(log, f"***** Run complete. Output directory: {spec.output_dir} *****")
     except Exception as e:
         print_and_log(log, f"***** Run failed with exception: {str(e)} *****\n***** Output directory: {spec.output_dir} *****")
         raise  # re-raise the exception after logging
@@ -125,7 +126,6 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
         except Exception:
             pass  # don't mask the original exception
 
-    print_and_log(log, f"***** Run complete. Output directory: {spec.output_dir} *****")
     return
 
 
