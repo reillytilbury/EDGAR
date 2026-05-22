@@ -360,10 +360,10 @@ TEST_OVERRIDES = [
     "--evolution.topology=[1, 0]",
     "--scoring.gradient_descent.max_iter=100",
     "--scoring.timeout_s=120",
-    "--llms.model_llm=gemini-2.5-flash-lite",
-    "--llms.param_est_llm=gemini-2.5-flash-lite",
+    "--llms.model_llm=gemini-2.5-flash",
+    "--llms.param_est_llm=gemini-2.5-flash",
     "--llms.jax_model_translator_llm=gemini-2.5-flash-lite",
-    "--llms.max_tokens=1000"
+    #"--llms.log_raw_llm_response=True",
 ]
 
 def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> None:
