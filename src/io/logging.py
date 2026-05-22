@@ -54,6 +54,7 @@ class RunLog:
     file: TextIO
     level: str
     start_time: float
+    previous_gen_time: float = 0.0
     warnings_buffer: list[str] = field(default_factory=list)
     prev_showwarning: Any = None
 
@@ -144,9 +145,11 @@ def log_generation(
     valid       = [l for l in all_final if l is not None and not isinstance(l, NotValidated)]
     global_best = f"{min(valid):.6f}" if valid else "n/a"
     elapsed     = time.monotonic() - log.start_time
+    this_gen_time = elapsed - log.previous_gen_time
+    log.previous_gen_time = elapsed
 
     f.write(f"{'=' * 60}\n")
-    f.write(f"Gen {gen:3d}  |  {mode}  |  temp={temperature:.3f}  |  elapsed={elapsed:.1f}s\n")
+    f.write(f"Gen {gen:3d}  |  {mode}  |  temp={temperature:.3f}  | gen_time={this_gen_time:.1f}s | total time elapsed={elapsed:.1f}s\n")
     f.write(f"LLMs     model={llm}  param_est={llms.param_est}  model_jax={llms.model_jax}\n")
     f.write(f"Spawned  {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n")
     f.write(f"Global best discover loss: {global_best}\n\n")
