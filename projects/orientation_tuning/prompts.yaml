@@ -32,13 +32,23 @@ model:
     * Briefly describe what the model computes.
 
     '
-  image_analysis_instructions: null
+  image_analysis_instructions: "**Image Analysis Instructions:**\n\n
+      Attached is a scatter plot of the neuron models' performance on top of raw neural data. 
+      The binned mean is plotted in **sky-blue**, Model 1 is plotted in **red**, 
+      and Model 2 is plotted in **green**.\n
+
+      Analyse the models' fits to the data in the image below. Identify systematic weaknesses of the models by observing patterns across multiple cell plots. For instance, consider:\n
+      **Model Comparisons:** Which models are better for each cell? That is to say, which models track the blue curve better? Which features of the models are responsible for improving the fit?\n
+      **Model Fit:** How well do the models fit the binned data mean? Look for places where even the models (**green** curve for best model, **red** for second best model) deviate most from the binned data mean (**blue** curve). This is where the models are weakest, and where you should focus your improvements. \n
+      **Model Shape:** Do the models' shapes (e.g., peak sharpness, width, skewness, amplitude, etc.) align with the binned data mean (**blue**) and raw data scatter points (**black**)? If not, how do they differ? How can you change the model to better match the data shape? \n
+      **Parameter Flexibility:** Are there free parameters that could be introduced or modified to better capture the observed response profiles? Utilize your analysis of the shortcomings of the current models' shapes and add free parameters or modify existing ones to address these issues.\n
+
+      Use this analysis to inform the design of a new neuron model that improves upon the previous models.\n"
   program_detail_template: '**Model {parent_number}**
 
     {code_model}
 
     '
-  config_vars: []
   program_vars:
   - code.model
 parameter_estimator:

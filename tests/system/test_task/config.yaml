@@ -26,8 +26,10 @@ scoring:
     max_iter: 100
     learning_rate: 0.01
 
+run:
+  random_seed: 42
+
 project_params:
-  seed: 0
   n_samples: 4
   n_trials: 100
   noise_std: 0.0

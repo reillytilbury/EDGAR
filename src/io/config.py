@@ -52,6 +52,9 @@ class _LaxModel(BaseModel):
             if extra:
                 warnings.warn(f"Config section '{cls.__name__}' contains unknown fields that will be ignored: {sorted(extra)}. Valid fields are: {sorted(cls.model_fields.keys())}. Project-specific parameters should go under 'project_params'")
         return values
+    
+class RunConfig(_LaxModel):
+    random_seed: int | None
 
 class IOConfig(_LaxModel):
     data_path: str
@@ -59,7 +62,6 @@ class IOConfig(_LaxModel):
 
 class EvolutionConfig(_LaxModel):
     n_generations: int
-    time_limit: int | float
     n_islands: int
     batch_size: int
     critical_population_size: int
@@ -128,6 +130,7 @@ class Config(BaseModel):
     evolution: EvolutionConfig
     llms: LLMsConfig
     scoring: ScoringConfig
+    run: RunConfig
     project_params: dict #Not checked for types or otherwise as project-specific
     prompts: PromptsConfig
 
@@ -167,6 +170,7 @@ class Config(BaseModel):
         llms = config.pop("llms", {})
         scoring = config.pop("scoring", {})
         project_params = config.pop("project_params", {})
+        run = config.pop("run", {})
         if config:
             warnings.warn(f"Config contains unknown keys: {list(config.keys())}, custom keys should be defined under field 'project_params', these keys will be ignored", stacklevel=2)
 
@@ -177,6 +181,7 @@ class Config(BaseModel):
             evolution=evolution,
             llms=llms,
             scoring=scoring,
+            run=run,
             project_params=project_params,
             prompts=prompts,
         )
@@ -211,5 +216,6 @@ class Config(BaseModel):
             llms=record.get("llms", {}),
             scoring=record.get("scoring", {}),
             project_params=record.get("project_params", {}),
+            run=record.get("run", {}),
             prompts=prompts,
         )

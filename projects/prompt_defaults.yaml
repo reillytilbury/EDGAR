@@ -117,7 +117,8 @@ parameter_estimator:
   - code.model
   - code.param_est
 jax_translator_model:
-  base: 'Translate the following model function to JAX-compatible code.
+  base: '
+    Translate the following model function to JAX-compatible code.
 
     Ensure that keys of data and params dicts are preserved. 
     
@@ -149,9 +150,8 @@ jax_translator_model:
     * Ensure all string values in function call arguments are properly JSON-escaped
 
     '
-  docstring_guidelines: 'Do not include any text other than the code.
-    Use the docstrings in the original code to understand the intended behavior, but only add a minimal amount of docstrings in the JAX version to conserve tokens.
-
+  docstring_guidelines: '
+    Do not include any text in the docstring. The function should only contain the jax-translated code.
     '
   image_analysis_instructions: null
   program_detail_template: 'Model code:

@@ -1,10 +1,12 @@
+run:
+  random_seed: 42
+
 io:
   data_path: ""
   save_path: ""
 
 evolution:
   #missing n_generations
-  time_limit: 60
   n_islands: 8
   batch_size: 6
   critical_population_size: 12
