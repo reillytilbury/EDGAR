@@ -96,6 +96,12 @@ class Population:
                     d["birth"]["llm_name"] = getattr(llm, "model_name", repr(llm))
                 f.write(json.dumps(d) + "\n")
 
+    def get_sorted(self) -> Population:
+        """Return a copy of the population sorted by rank"""
+        if all(p.rank is None for p in self._programs):
+            raise RuntimeError("Population has not been ranked yet, call scoring.rank(population) first")
+        return sorted(self._programs, key=lambda p: p.rank if p.rank is not None else float('inf'))
+
     @classmethod
     def load(cls, path: str) -> Population:
         pop = cls()
@@ -121,6 +127,7 @@ class Population:
                     params=_params_from_json(raw_params) if raw_params is not None else None,
                     sample_losses=np.array(raw_sample_losses) if raw_sample_losses is not None else None,
                     image_path=d.get("image_path"),
+                    rank = d.get("rank")
                 )
                 pop.add(program)
         return pop
