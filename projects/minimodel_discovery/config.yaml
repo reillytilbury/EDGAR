@@ -3,7 +3,6 @@ io:
 
 evolution:
   n_generations: 3
-  time_limit: 45
   n_islands: 4
   batch_size: 4
 

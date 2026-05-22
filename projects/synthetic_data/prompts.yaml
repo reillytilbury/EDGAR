@@ -38,6 +38,7 @@ model:
     * Briefly describe what the model computes.
 
     '
+  #image_analysis_instructions: The image shows a scatter plot of the experimental data, with its binned mean in sky-blue, Model 1 predictions in red and Model 2 predictions in green. Analyze the plot and how the models compare to the data, use this analysis to inform your model generation.
   image_analysis_instructions: null
   program_detail_template: '**Model {parent_number}**
 
@@ -65,7 +66,7 @@ parameter_estimator:
 
     * Function signature must be `def parameter_estimator(data):`.
 
-    * Return a parameter dict with keys matching the model''s free parameters.
+    * Return a parameter dict with the same keys expected by the model.\n* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
 
     * Do not call the model function in your estimator code; this function must be self-contained.
 
