@@ -2,7 +2,6 @@
 
 evolution:
   n_generations: 12
-  time_limit: 60
   n_islands: 8
   batch_size: 6
   critical_population_size: 12

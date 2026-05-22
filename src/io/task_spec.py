@@ -79,6 +79,7 @@ class TaskSpec:
     evolution: dict
     llms: dict
     scoring: dict
+    run: dict
 
     # project-specific knobs — kwargs unpacked into load_data_fn, also visible to other project callables
     project_params: dict
@@ -149,6 +150,7 @@ class TaskSpec:
             evolution=config.evolution.model_dump(),
             llms=config.llms.model_dump(),
             scoring=config.scoring.model_dump(),
+            run=config.run.model_dump(),
             project_params=config.project_params,
             model_prompt_schema=config.prompts.model,
             param_est_prompt_schema=config.prompts.parameter_estimator,
@@ -157,7 +159,7 @@ class TaskSpec:
             loss_fn=loss_fn,
             plot_fn=plot_fn,
             seed_programs=seed_programs,
-            rng=np.random.default_rng(config.project_params.get("random_seed")),
+            rng=np.random.default_rng(config.run.random_seed),
         )
 
     # ── persistence ──
@@ -181,6 +183,7 @@ class TaskSpec:
             "evolution": self.evolution,
             "llms": self.llms,
             "scoring": self.scoring,
+            "run": self.run,
             "project_params": self.project_params,
             "seed_programs": [
                 {

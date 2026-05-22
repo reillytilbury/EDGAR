@@ -8,6 +8,7 @@ class ModelSchema(BaseModel):
             "(1) what each parent model does and where it falls short, "
             "(2) what specific changes you are making and why they should reduce loss, "
             "(3) the mathematical and scientific justification for your approach."
+            "Refer to the parent models by their descriptive names, not as Model 1 and Model 2."
         )
     )
     descriptive_name: str = Field(

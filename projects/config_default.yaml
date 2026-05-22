@@ -1,6 +1,9 @@
 # Base defaults for all projects.
 # Override only what you need in projects/<task>/config.yaml.
 
+run:
+  random_seed: null #Used for spawning and migration
+
 io:
   # Path to task data. Override in each project config.
   data_path: /home/USER/data.npy
@@ -11,9 +14,6 @@ io:
 evolution:
   # Number of generations per run.
   n_generations: 12
-
-  # Time limit per run in minutes.
-  time_limit: 60
 
   # Number of islands in the evolutionary system.
   n_islands: 8
@@ -34,16 +34,16 @@ llms:
   # Number of parent programs in each prompt
   num_parents: 2
 
-  # 500 - Unexpected error on Google's servers, 503 - service temporarily down — all transient per Google's retry guidance.
+  # 500 - Unexpected error on Google's servers, 503 - service temporarily down — all transient per Google's retry guidance, 504 - Request timed out (google gemini server-side 5 min timeout).
   # 429 Rate-limited - because the number of requests we send concurrently is fixed, we should not ignore this error
   # 400 Bad Request, 401 Unauthorized, 403 Forbidden → hard failures, do not retry.
   # Error guidelines : https://ai.google.dev/gemini-api/docs/troubleshooting
   retry:
     max_retries: 3
-    initial_delay: 1.0
+    initial_delay: 5
     backoff_multiplier: 2.0
     max_delay: 60.0
-    retryable_status_codes: [500, 503]
+    retryable_status_codes: [500, 503, 504]
 
   # LLMs for different tasks. Each can be a string or a list.
   # If a list is provided, it is traversed in order by generation (with cycling)

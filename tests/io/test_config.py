@@ -12,7 +12,6 @@ def test_load_perfect_config():
     assert config.io.data_path == ""
     assert config.io.save_path == ""
     assert config.evolution.n_generations == 12
-    assert config.evolution.time_limit == 60
     assert config.evolution.n_islands == 8
     assert config.evolution.batch_size == 6
     assert config.evolution.critical_population_size == 12
