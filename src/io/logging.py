@@ -43,6 +43,11 @@ if TYPE_CHECKING:
 
 LEVELS = ("compact", "code", "prompts")
 
+def print_and_log(log: RunLog, message: str) -> None:
+    """ Print message to console and appent to log file. """
+    print(message)
+    log.file.write(message + "\n")
+    log.file.flush()
 
 @dataclass
 class RunLog:
@@ -145,7 +150,7 @@ def log_generation(
     f.write(f"LLMs     model={llm}  param_est={llms.param_est}  model_jax={llms.model_jax}\n")
     f.write(f"Spawned  {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n")
     f.write(f"Global best discover loss: {global_best}\n\n")
-
+    f.write("Best programs on each island:\n")
     for idx, island in enumerate(islands):
         progs = [population[i] for i in island]
         best  = min(progs, key=lambda p: p.program_losses.discover.final or float("inf"))
@@ -157,6 +162,7 @@ def log_generation(
         f.flush()
         return
 
+    f.write("Newly-generated programs:\n")
     for p in born:
         f.write(f"  --- Program #{p.idx} (island={p.birth.island}) ---\n")
         f.write(f"  [model]\n{p.code.model or '(none)'}\n")
