@@ -19,7 +19,7 @@ import argparse
 from pathlib import Path
 
 from .io.task_spec import TaskSpec
-from .io.logging import open_log, log_generation, close_log
+from .io.logging import open_log, log_generation, close_log, print_and_log
 from .evolution.population import Population
 from .evolution.island import (
     seed,
@@ -51,76 +51,81 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     config = {**spec.flat_config, "retry_config": retry_config}
 
     population = Population()
-    islands = seed(population, spec.seed_programs, spec.evolution["n_islands"])
-    await translate_programs(
-        population,
-        spec.prompt_schemas.jax_model,
-        spec.llms["jax_model_translator_llm"],
-        retry_config=retry_config,
-        max_tokens=config.get("max_tokens"),
-    )
-    score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
-
     census = []
 
-    for gen in range(spec.evolution["n_generations"]):
-        msg = f"Generation {gen} / {spec.evolution['n_generations']}"
-        print(msg)
-        log.file.write(msg + "\n")
-        mode, temperature, llms = spec.schedule(gen)
-        spawn(
-            population,
-            islands,
-            gen,
-            mode,
-            temperature,
-            batch_size=spec.evolution["batch_size"],
-            num_parents=spec.llms["num_parents"],
-            rng=spec.rng,
-        )
-
-        await generate_models(
-            population,
-            spec.prompt_schemas.model,
-            llms.model[gen % len(llms.model)] if isinstance(llms.model, list) else llms.model,
-            mode,
-            temperature,
-            config=config,
-            spec=spec,
-            data=X_discover[1],
-        )  # use test data of X_discover for plotting
-        await generate_param_ests(
-            population, spec.prompt_schemas.param_est, llms.param_est, config,
-        )
+    try:
+        islands = seed(population, spec.seed_programs, spec.evolution["n_islands"])
         await translate_programs(
             population,
             spec.prompt_schemas.jax_model,
-            llms.model_jax,
+            spec.llms["jax_model_translator_llm"],
             retry_config=retry_config,
+            max_tokens=config.get("max_tokens"),
         )
+        score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
 
-        score(
-            population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover"
-        )
+        for gen in range(spec.evolution["n_generations"]):
+            print_and_log(log, f"Generation {gen} / {spec.evolution['n_generations']}")
+            mode, temperature, llms = spec.schedule(gen)
+            spawn(
+                population,
+                islands,
+                gen,
+                mode,
+                temperature,
+                batch_size=spec.evolution["batch_size"],
+                num_parents=spec.llms["num_parents"],
+                rng=spec.rng,
+            )
 
-        deduplicate(islands, population, spec.evolution)
-        prune(islands, population, spec.evolution)
-        migrate(islands, population, spec.evolution, temperature, rng=spec.rng)
-        census.append([set(island) for island in islands])
-        log_generation(log, gen, population, islands, spec)
+            await generate_models(
+                population,
+                spec.prompt_schemas.model,
+                llms.model[gen % len(llms.model)] if isinstance(llms.model, list) else llms.model,
+                mode,
+                temperature,
+                config=config,
+                spec=spec,
+                data=X_discover[1],
+            )  # use test data of X_discover for plotting
+            await generate_param_ests(
+                population, spec.prompt_schemas.param_est, llms.param_est, config,
+            )
+            await translate_programs(
+                population,
+                spec.prompt_schemas.jax_model,
+                llms.model_jax,
+                retry_config=retry_config,
+            )
 
-    population.prepare_validation_scoring(islands)
-    score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
-    rank(population)
+            score(
+                population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover"
+            )
 
-    population.save(os.path.join(spec.output_dir, "population.jsonl"))
-    save_island_census(census, os.path.join(spec.output_dir, "island_census.jsonl"))
-    close_log(log)
+            deduplicate(islands, population, spec.evolution)
+            prune(islands, population, spec.evolution)
+            migrate(islands, population, spec.evolution, temperature, rng=spec.rng)
+            census.append([set(island) for island in islands])
+            log_generation(log, gen, population, islands, spec)
 
-    # generate family_tree
-    write_family_tree(population, census, spec.output_dir, param_penalty_weight=spec.scoring.get("param_penalty_weight"))
-    msg = f"***** Run complete. Output directory: {spec.output_dir} *****"
-    print(msg)
+        population.prepare_validation_scoring(islands)
+        score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
+        rank(population)
+
+    except Exception as e:
+        print_and_log(log, f"***** Run failed with exception: {str(e)} *****\n***** Output directory: {spec.output_dir} *****")
+        raise  # re-raise the exception after logging
+
+    finally: #runs whether or not an exception is raised, ensuring that results are saved
+        population.save(os.path.join(spec.output_dir, "population.jsonl"))
+        save_island_census(census, os.path.join(spec.output_dir, "island_census.jsonl"))
+        close_log(log)
+        try: 
+            write_family_tree(population, census, spec.output_dir, param_penalty_weight=spec.scoring.get("param_penalty_weight"))
+        except Exception:
+            pass  # don't mask the original exception
+
+    print_and_log(log, f"***** Run complete. Output directory: {spec.output_dir} *****")
     return
 
 
