@@ -153,6 +153,27 @@ async def call_llm(
     else:
         raise TypeError("llm_model must be a string or a PydanticAI Model instance.")
 
+    # Provider temperature ranges differ: Google accepts [0, 2], Anthropic [0, 1].
+    # The schedule in task_spec.schedule() emits temp in [~1.37, 2.0] (Gemini-scale).
+    # For Anthropic, rescale by /2 to map [1.37, 2.0] -> [0.685, 1.0], preserving
+    # the schedule's relative decay shape inside Anthropic's valid range. Only
+    # rescales when the supplied temperature exceeds 1.0 — explicitly-passed
+    # in-range values (e.g. 0.7 from tests) are left alone.
+    if isinstance(model, AnthropicModel) and temperature > 1.0:
+        temperature = temperature / 2.0
+
+    # Anthropic's API treats max_tokens as REQUIRED (Google's allows None and uses
+    # its own server-side default). Caller bugs that leak None through here crash
+    # deep inside the anthropic SDK with a confusing TypeError. Fall back to the
+    # call_llm default rather than failing — log if we hit this path so the bug
+    # can be fixed upstream.
+    if isinstance(model, AnthropicModel) and max_tokens is None:
+        max_tokens = 10_000
+        warnings.warn(
+            "[call_llm] max_tokens was None for an Anthropic call; falling back to 10000. "
+            "Pass max_tokens explicitly upstream to silence this warning."
+        )
+
     rc = retry_config or RetryConfig()
     capabilities = [_WarnOnMaxTokensCapability()]
     if log_raw_llm_response:
