@@ -1,3 +1,4 @@
+import os
 import pytest
 import asyncio
 from tests.llm.fakellm import FakeLLM
@@ -7,7 +8,13 @@ from src.llm.llm_calling import call_llm
 from src.llm.response_schema import ModelSchema, ParamEstSchema, TranslationSchema
 import numpy as np
 
-LLM_MODEL = "gemini-2.5-flash-lite" #used for real LLM calls 
+LLM_MODEL = "gemini-2.5-flash-lite" #used for real LLM calls
+
+# (model_name, required_env_var). Used by the per-provider ping test below.
+PROVIDER_PING_MODELS = [
+    ("gemini-2.5-flash-lite", "GOOGLE_API_KEY"),
+    ("claude-haiku-4-5", "ANTHROPIC_API_KEY"),
+]
 
 @pytest.mark.asyncio
 async def test_call_llm_with_fake_model():
@@ -149,6 +156,27 @@ async def test_call_llm_live_param_est_schema():
     compile(result.code, "<ParamEstSchema.code>", "exec")
     output = run_param_est_code(result.code, {"x": np.array([0.0, 1.0, 2.0]), "y": np.array([0.0, 1.1, 4.2])})
     assert output is not None
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_name,env_var", PROVIDER_PING_MODELS)
+async def test_call_llm_provider_ping(model_name, env_var):
+    """Hits each provider with a tiny real call. Skips if the provider's key is unset.
+
+    This is the canonical "is the API key wired correctly" check — covers auth,
+    model name validity, and network path in one shot. Cheap (≤10 output tokens).
+    """
+    if not os.getenv(env_var):
+        pytest.skip(f"{env_var} not set; skipping {model_name} ping.")
+    result = await call_llm(
+        prompt="Reply with exactly the token 12345 and nothing else.",
+        llm_model=model_name,
+        output_type=str,
+        max_tokens=20,
+    )
+    assert result is not None, f"{model_name} returned None"
+    assert "12345" in result, f"{model_name} response missing 12345: {result!r}"
 
 
 @pytest.mark.live
