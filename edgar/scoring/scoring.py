@@ -1,16 +1,22 @@
 """
-Scoring. Mirrors the generate pattern in src/llm/generate.py:
+Scoring. Mirrors the generate pattern in edgar/llm/generate.py:
 
     _score_one_model(program, ...)   # single program, timeout baked in
     score(population, ...)           # finds programs needing scoring, fills losses
 
-Per-program work runs in a spawn subprocess so JAX initialises cleanly and
-runaway models can be killed on timeout.
+Per-program work runs in a subprocess so JAX initialises cleanly and runaway
+models can be killed on timeout. The subprocess start method defaults to
+"spawn" (safe with the macOS Objective-C runtime / JAX) but can be overridden
+to "fork" via the EDGAR_MP_START_METHOD env var. Fork is useful for scripts
+that don't use an `if __name__ == "__main__":` guard (e.g. interactive
+notebooks, tutorial scripts) because it doesn't re-import the parent module
+in each child.
 """
 
 from __future__ import annotations
 
 import multiprocessing as mp
+import os
 
 import traceback
 import cloudpickle
@@ -175,7 +181,7 @@ def _score_one_model(
         )
         return (float("inf"), float("inf"), None, None, None)
 
-    ctx = mp.get_context("spawn")
+    ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
     queue = ctx.Queue()
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
     program_bytes = cloudpickle.dumps(program)
