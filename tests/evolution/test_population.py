@@ -13,8 +13,8 @@ Covers:
 
 import json
 import numpy as np
-from src.evolution.population import Population, _params_to_json, _params_from_json
-from src.evolution.program import NotValidated, BirthCertificate, Program, Code, Losses, LossPair
+from edgar.evolution.population import Population, _params_to_json, _params_from_json
+from edgar.evolution.program import NotValidated, BirthCertificate, Program, Code, Losses, LossPair
 from tests.evolution.utils import make_program, linear_model_code, linear_param_est_code
 
 def initialize_program(i, model_code, param_est_code):

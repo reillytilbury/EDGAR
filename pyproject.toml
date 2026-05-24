@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edgar"
+version = "0.1.0"
+description = "Equation Discovery with Graphical AI Reasoning: an evolutionary framework for discovering scientific equations using LLM-generated programs."
+requires-python = ">=3.13"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+# `namespaces = true` is needed because most subpackages under `edgar/` have no
+# `__init__.py` (PEP 420 namespace packages). Only `edgar/monitoring/` has one.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["edgar*"]
+namespaces = true
+
+[tool.pytest.ini_options]
+# `auto` lets any `async def` test function be discovered without an explicit
+# @pytest.mark.asyncio decorator. The existing decorators in tests/ stay as
+# (now-redundant) documentation and continue to work.
+asyncio_mode = "auto"
+# Custom marks must be registered or pytest emits PytestUnknownMarkWarning.
+# `live` is opt-in: live tests still run by default; use `-m "not live"` to skip
+# them in CI or `-m live` to run only those.
+markers = [
+    "live: tests that hit a real LLM API (requires GOOGLE_API_KEY or ANTHROPIC_API_KEY)",
+]

@@ -13,8 +13,10 @@ Each run evolves a population of candidate models across multiple islands. The L
 ```bash
 conda create -n edgar python=3.13 -y
 conda activate edgar
-pip install -r requirements.txt
+pip install -e .
 ```
+
+This installs the `edgar` package in editable mode (deps are sourced from `requirements.txt` via `pyproject.toml`). `import edgar` then works from any cwd / IDE cell without `sys.path` hacks.
 
 ### 2. Set API key
 
@@ -33,27 +35,27 @@ export GEMINI_API_KEY=your_key_here
 ### 3. Run an experiment
 
 ```bash
-edgar run projects/orientation_tuning/config.yaml
+python -m edgar.cli run projects/orientation_tuning/config.yaml
 ```
 
 Control logging verbosity (default: `compact`):
 
 ```bash
-edgar run projects/orientation_tuning/config.yaml --log-level code
-edgar run projects/orientation_tuning/config.yaml --log-level prompts
+python -m edgar.cli run projects/orientation_tuning/config.yaml --log-level code
+python -m edgar.cli run projects/orientation_tuning/config.yaml --log-level prompts
 ```
 
 Override config values on the command line:
 
 ```bash
-edgar run projects/orientation_tuning/config.yaml --evolution.n_generations=5
-edgar run projects/orientation_tuning/config.yaml --llms.model_llm=gemini-2.5-pro
+python -m edgar.cli run projects/orientation_tuning/config.yaml --evolution.n_generations=5
+python -m edgar.cli run projects/orientation_tuning/config.yaml --llms.model_llm=gemini-2.5-pro
 ```
 
 Reproduce a previous run from its saved `task_spec.yaml`:
 
 ```bash
-edgar run program_databases/05-06/14-32-10/task_spec.yaml
+python -m edgar.cli run program_databases/05-06/14-32-10/task_spec.yaml
 ```
 
 ---
@@ -75,7 +77,7 @@ EDGAR-gamma/
 │       │   └── load_data.py         # Must define: load_data(), loss_fn()
 │       └── image_feedback/
 │           └── plot.py              # Optional: plot_model_fits()
-├── src/
+├── edgar/
 │   ├── run.py                       # Main entry point
 │   ├── cli.py                       # edgar CLI
 │   ├── evolution/
@@ -125,7 +127,7 @@ program_databases/
 ### 1. Scaffold
 
 ```bash
-edgar init-project my_task
+python -m edgar.cli init-project my_task
 ```
 
 This creates:
@@ -218,13 +220,13 @@ All other `model` fields (explore, exploit, docstring_guidelines, parent_detail_
 ### 6. Validate
 
 ```bash
-edgar validate my_task
+python -m edgar.cli validate my_task
 ```
 
 ### 7. Run
 
 ```bash
-edgar run projects/my_task/config.yaml
+python -m edgar.cli run projects/my_task/config.yaml
 ```
 
 ---
@@ -236,8 +238,8 @@ edgar run projects/my_task/config.yaml
 `Config` holds the plain-dict settings from YAML. `TaskSpec` wraps a `Config` plus loaded callables, seed programs, and git metadata.
 
 ```python
-from src.io.config import Config
-from src.io.task_spec import TaskSpec
+from edgar.io.config import Config
+from edgar.io.task_spec import TaskSpec
 
 # New run:
 spec = TaskSpec.from_config(Config.from_yaml("projects/my_task/config.yaml"))
@@ -276,11 +278,11 @@ population.save("population.jsonl")
 
 | Class | File | Purpose |
 |-------|------|---------|
-| `Config` | `src/io/config.py` | Plain-dict config bundle. `from_yaml` / `from_taskspec`. |
-| `TaskSpec` | `src/io/task_spec.py` | Frozen run bundle. Adds callables, seeds, git state. |
-| `Program` | `src/evolution/program.py` | One evolved candidate: code, losses, params, lineage. |
-| `Population` | `src/evolution/population.py` | Append-only list with JSONL save/load. |
-| `PromptSchema` | `src/llm/prompt_schema.py` | Prompt template. `build_prompt(mode, parents, config)`. |
+| `Config` | `edgar/io/config.py` | Plain-dict config bundle. `from_yaml` / `from_taskspec`. |
+| `TaskSpec` | `edgar/io/task_spec.py` | Frozen run bundle. Adds callables, seeds, git state. |
+| `Program` | `edgar/evolution/program.py` | One evolved candidate: code, losses, params, lineage. |
+| `Population` | `edgar/evolution/population.py` | Append-only list with JSONL save/load. |
+| `PromptSchema` | `edgar/llm/prompt_schema.py` | Prompt template. `build_prompt(mode, parents, config)`. |
 
 ---
 
@@ -318,7 +320,7 @@ In the prompt context, *parent* means the programs currently shown to the LLM as
 
 ### Structured LLM output
 
-Each prompt type expects a structured JSON response, enforced by pydantic-ai. The schemas are in `src/llm/response_schema.py`:
+Each prompt type expects a structured JSON response, enforced by pydantic-ai. The schemas are in `edgar/llm/response_schema.py`:
 
 **Model generation → `ModelSchema`**
 - `thought_process` — step-by-step reasoning about what the parent models do and what change is being made
@@ -407,9 +409,9 @@ Each program is scored in a fresh subprocess (`scoring.py`). This is intentional
 ## Remaining work
 
 ### Tests (highest priority)
-- Tests for `src/evolution` — island operations, population, program
-- Tests for `src/io` — config, task_spec
-- Tests for `src/llm`
+- Tests for `edgar/evolution` — island operations, population, program
+- Tests for `edgar/io` — config, task_spec
+- Tests for `edgar/llm`
 - Integration test for `run.py` (small end-to-end run)
 - Wire tests to GitHub Actions CI
 
@@ -429,4 +431,4 @@ Each program is scored in a fresh subprocess (`scoring.py`). This is intentional
 python -m pytest tests -q
 ```
 
-Currently only scoring tests exist (`src/scoring/tests/test_scoring.py`).
+Currently only scoring tests exist (`edgar/scoring/tests/test_scoring.py`).

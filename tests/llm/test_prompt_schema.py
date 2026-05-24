@@ -1,4 +1,4 @@
-from src.llm.prompt_schema import PromptSchema
+from edgar.llm.prompt_schema import PromptSchema
 from tests.llm.programs import Program1, Program2
 
 

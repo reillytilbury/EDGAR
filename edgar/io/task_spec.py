@@ -42,11 +42,18 @@ from .config import Config
 from .config import PROJECT_ROOT
 
 
+# Lightweight ergonomic wrappers: callers can write `llms.model` and
+# `schemas.param_est` instead of `dict["model_llm"]` / attribute soup.
 LLMs = namedtuple("LLMs", ["model", "param_est", "model_jax"])
 PromptSchemas = namedtuple("PromptSchemas", ["model", "param_est", "jax_model"])
 
 def _git_state() -> tuple[str, bool]:
-    """Return (sha, dirty) for the current git HEAD."""
+    """Return (sha, dirty) for the current git HEAD.
+
+    Captured at TaskSpec construction so saved task_spec.yaml records exactly
+    which commit produced a run. `dirty=True` means there were uncommitted
+    changes, so the sha alone is not enough to reproduce the run.
+    """
     try:
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True).strip()
     except Exception:
@@ -69,38 +76,84 @@ class TaskSpec:
     Constructed via from_config (live run) or from_record (reproduce a past run).
     """
 
-    # identity
+    # ── identity ──
+    # Human-readable name of the project (e.g. "orientation_tuning"). Derived
+    # from the project directory; surfaces in the output dir and in prompts.
     task_name: str
+
+    # Full SHA of the git HEAD commit at TaskSpec construction time. Saved into
+    # task_spec.yaml so a stored run can later be traced back to exact source code.
     git_sha: str
+
+    # True if the worktree had uncommitted changes when the TaskSpec was built.
+    # When True, `git_sha` is not sufficient to reproduce the run — there were
+    # edits that no commit captured. Acts as a "not fully reproducible" flag.
     git_dirty: bool
 
-    # config subsections — plain dicts, passed through to the functions that need them
+    # ── config subsections — plain dicts, passed through to the functions that need them ──
+    # I/O paths: `data_path` (where to load training data) + `save_path` (where
+    # run outputs land, under <save_path>/MM-DD/HH-MM-SS/).
     io: dict
+
+    # Evolution-loop knobs: n_generations, n_islands, batch_size,
+    # critical_population_size, n_migrants, topology. Shape of the search.
     evolution: dict
+
+    # LLM-call knobs: model name per role (model_llm / param_est_llm /
+    # jax_model_translator_llm), num_parents, max_tokens, retry policy,
+    # banned phrases (swear_words), max code length.
     llms: dict
+
+    # Scoring knobs: timeout_s, param_penalty_weight, gradient_descent settings.
+    # Controls how a candidate program is evaluated in the sandbox.
     scoring: dict
+
+    # Run-level knobs: random_seed (used to seed `rng` below for spawning + migration).
     run: dict
 
-    # project-specific knobs — kwargs unpacked into load_data_fn, also visible to other project callables
+    # Project-specific knobs (e.g. activity_threshold, conc_threshold, n_eval_samples).
+    # Unpacked as **kwargs into `load_data_fn`; also accessible to other project callables.
     project_params: dict
 
-    # prompt schemas — one per LLM task, built from merged prompt yamls
+    # ── prompt schemas — one per LLM role, built from merged prompt yamls ──
+    # Schema for the "generate a new candidate model" prompt.
     model_prompt_schema: PromptSchema
+
+    # Schema for the "generate a parameter estimator function" prompt.
     param_est_prompt_schema: PromptSchema
+
+    # Schema for the "translate a numpy model to JAX" prompt.
     jax_model_prompt_schema: PromptSchema
 
-    # project callables
+    # ── project callables — loaded from <project_dir>/data_loader/ and image_feedback/ ──
+    # Loads training/validation/eval data for this project.
+    # Signature: load_data(data_path, **project_params) ->
+    #   ((X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval)
     load_data_fn: Callable
+
+    # Project-specific loss function used by the scoring sandbox to score
+    # predictions against held-out data.
     loss_fn: Callable
+
+    # Optional: renders model-fit images for image-feedback prompts. None if the
+    # project has no `image_feedback/plot.py`.
     plot_fn: Callable | None
 
-    # timestamp set at construction — used to derive output_dir
+    # ── runtime state ──
+    # Timestamp set at construction. The embedded "/" is intentional: when joined
+    # with save_path it produces the on-disk layout `<save_path>/MM-DD/HH-MM-SS/`.
     creation_timestamp: str = field(default_factory=lambda: datetime.now().strftime("%m-%d/%H-%M-%S"))
 
-    # seed programs — 2 Programs with numpy model_code + param_est_code
+    # Hand-written seed programs (typically 2) that bootstrap the population.
+    # Loaded from <project_dir>/seed_programs/modelN.py + param_estN.py pairs.
+    # Each carries a sentinel BirthCertificate (generation=-1, island=-1) so
+    # downstream code can tell them apart from LLM-evolved descendants.
     seed_programs: list[Program] = field(default_factory=list)
 
-    # seeded RNG — use this instead of np.random directly for reproducibility
+    # Single seeded RNG for the whole run. Use this instead of `np.random` so
+    # spawning, migration, and Boltzmann sampling are reproducible from the
+    # `run.random_seed` config value. Sharing one Generator across the pipeline
+    # avoids the "many independent RNGs, all default-seeded" foot-gun.
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
 
     # ── constructors ──
@@ -117,6 +170,11 @@ class TaskSpec:
             config: A Config object built from Config.from_yaml or Config.from_taskspec.
         """
         task_name = config.task_name
+
+        # Project callables are loaded from .py source rather than imported, so the
+        # same machinery (load_function_from_source) handles seed code, LLM-generated
+        # code, and project code on one path. The cost is that import errors surface
+        # as `None` returns instead of ImportError, hence the explicit None checks.
         data_loader_path = config.project_dir / "data_loader" / "load_data.py"
         load_data_fn = load_function_from_source(data_loader_path.read_text(), "load_data")
         if load_data_fn is None:
@@ -130,6 +188,10 @@ class TaskSpec:
 
         git_sha, git_dirty = _git_state()
 
+        # Seed programs are paired by filename suffix: model1.py with param_est1.py,
+        # model2.py with param_est2.py, ... sorted alphanumerically. They get
+        # sentinel birth fields (generation=-1, island=-1) so downstream code can
+        # cheaply distinguish hand-written seeds from LLM-evolved descendants.
         seed_dir = config.project_dir / "seed_programs"
         seed_programs = []
         for batch_idx, model_path in enumerate(sorted(seed_dir.glob("model*.py"))):
@@ -203,6 +265,9 @@ class TaskSpec:
         path = Path(os.path.join(run_dir, "task_spec.yaml"))
         with open(path, "w") as f:
             yaml.dump(record, f, default_flow_style=False, sort_keys=False)
+        # Strip write permission so the saved spec can't drift from the run that
+        # actually produced it. Anyone trying to "fix up" a stored spec will hit
+        # a PermissionError instead of silently breaking reproducibility.
         os.chmod(path, stat.S_IREAD)
         return path
 
@@ -211,7 +276,23 @@ class TaskSpec:
     def schedule(self, generation: int) -> tuple[str, float, LLMs]:
         """
         Return (mode, temperature, llms) for a given generation.
-        TODO: At the moment we use the same LLM at every generation, should add option to use lists. 
+        TODO: At the moment we use the same LLM at every generation, should add option to use lists.
+
+        Design intent of the schedule:
+            - mode: "explore" first half, "exploit" second half. A sharp switch
+              rather than a gradient, because the prompt blocks for the two modes
+              are qualitatively different and a continuous interpolation is
+              ill-defined.
+            - temperature: `1 + exp(-generation / n_generations)`. Anchored at
+              2.0 at generation 0 (maximum exploration entropy on the
+              Gemini scale), decaying to 1 + exp(-1) ≈ 1.37 at the final
+              generation. Never reaches 1.0, so even late generations still
+              sample above the raw distribution.
+
+        Important: the [1.37, 2.0] range is the **Gemini scale** (range [0, 2]).
+        Anthropic only accepts [0, 1]; when the resolved model is an
+        AnthropicModel, call_llm rescales by /2 to map [1.37, 2.0] → [0.685, 1.0].
+        See `src/llm/llm_calling.py:_build_model` + the rescale guard right after.
 
         Args:
             generation: Generation number (0-indexed)
@@ -219,7 +300,7 @@ class TaskSpec:
         Returns:
             tuple: (mode, temperature, llms) where:
                 - mode: "explore" for first half of generations, "exploit" for second half
-                - temperature: decays exponentially from ~2.0 to ~1.37
+                - temperature: Gemini-scale [1.37, 2.0]; rescaled at the call site for Anthropic
                 - llms: LLMs namedtuple with model, param_est, model_jax
         """
         import numpy as np
@@ -248,6 +329,11 @@ class TaskSpec:
         """
         Merge all config sections into a single dict for prompt variable lookup.
 
+        Prompts declare their `config_vars` by name (e.g. `num_parents`, `max_lines`,
+        `swear_words`) without specifying which section the var lives in. Returning a
+        flat merged dict lets the prompt-building code look up any var without
+        plumbing the section through.
+
         Returns:
             dict combining evolution, llms, and scoring config sections
         """
@@ -269,9 +355,16 @@ class TaskSpec:
             jax_model=self.jax_model_prompt_schema,
         )
 
-    # Load default_params from model code
     @staticmethod
     def _extract_default_params(model_code: str) -> dict:
+        """Read DEFAULT_PARAMS attached to a model function.
+
+        By convention, seed model files attach a DEFAULT_PARAMS dict to the `model`
+        function (typically via a decorator). The pipeline uses these as the
+        starting point for gradient-descent parameter fitting before scoring; if
+        the attribute is missing, returns None and the program is treated as
+        having no provided defaults.
+        """
         func = load_function_from_source(model_code, "model")
         default_params = getattr(func, "DEFAULT_PARAMS", None)
         return default_params

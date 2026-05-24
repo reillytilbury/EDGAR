@@ -11,7 +11,7 @@ import pytest
 from pathlib import Path
 from tests.system.fake_runner import run_test_fake, CONFIG_PATH, build_fake_spec
 from unittest.mock import patch
-from src.run import run
+from edgar.run import run
 import asyncio
 
 TEST_OUTPUT_DIR = Path(__file__).parents[2] / "test_output"
@@ -100,7 +100,7 @@ def test_winning_losses(fake_run):
 def test_saves_on_error(tmp_path):
     spec = build_fake_spec(tmp_path)
     call_count = {"n": 0}
-    from src.scoring.scoring import score as original_score
+    from edgar.scoring.scoring import score as original_score
 
     def failing_score(*args, **kwargs):
         call_count["n"] += 1
@@ -109,7 +109,7 @@ def test_saves_on_error(tmp_path):
         return original_score(*args, **kwargs)
 
     output_dir = Path(spec.output_dir)
-    with patch("src.run.score", side_effect=failing_score):
+    with patch("edgar.run.score", side_effect=failing_score):
         with pytest.raises(RuntimeError, match="injected failure"):
             asyncio.run(run(spec))
 

@@ -3,8 +3,8 @@ import asyncio
 from tests.llm.fakellm import FakeLLM
 from tests.llm.programs import Program1
 from tests.llm.utils import run_model_code, run_param_est_code, generate_image_bytes
-from src.llm.llm_calling import call_llm
-from src.llm.response_schema import ModelSchema, ParamEstSchema, TranslationSchema
+from edgar.llm.llm_calling import call_llm
+from edgar.llm.response_schema import ModelSchema, ParamEstSchema, TranslationSchema
 import numpy as np
 
 LLM_MODEL = "gemini-2.5-flash-lite" #used for real LLM calls 

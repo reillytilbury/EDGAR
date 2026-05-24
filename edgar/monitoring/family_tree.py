@@ -155,7 +155,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python -m src.monitoring.family_tree <path/to/population.jsonl>")
+        print("Usage: python -m edgar.monitoring.family_tree <path/to/population.jsonl>")
         sys.exit(1)
 
     pop_path = Path(sys.argv[1])

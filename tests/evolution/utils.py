@@ -1,6 +1,6 @@
 import numpy as np
-from src.evolution.population import Population
-from src.evolution.program import BirthCertificate, Code, Program
+from edgar.evolution.population import Population
+from edgar.evolution.program import BirthCertificate, Code, Program
 from tests.llm.programs import Seed1, Seed2, Program1, Program2, ProgramSolution, InvalidProgram
 
 def linear_model_code():

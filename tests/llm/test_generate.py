@@ -1,8 +1,8 @@
 import pytest
-from src.evolution.program import BirthCertificate, Code, LossPair, Losses, Program
-from src.llm.generate import _generate_one_model, _generate_one_param_est, generate_models, generate_param_ests, _translate_one_model, translate_programs
-from src.llm.code_loading import load_function_from_source
-from src.llm.prompt_schema import PromptSchema
+from edgar.evolution.program import BirthCertificate, Code, LossPair, Losses, Program
+from edgar.llm.generate import _generate_one_model, _generate_one_param_est, generate_models, generate_param_ests, _translate_one_model, translate_programs
+from edgar.llm.code_loading import load_function_from_source
+from edgar.llm.prompt_schema import PromptSchema
 from tests.evolution.utils import make_empty_program
 from tests.llm.programs import Program1, InvalidProgram, Program2, ProgramSolution
 from tests.llm.fakellm import FakeLLM, CyclingModel
