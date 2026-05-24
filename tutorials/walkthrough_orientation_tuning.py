@@ -1,3 +1,4 @@
+#%%
 """Cell-based walkthrough of an EDGAR run on `orientation_tuning`.
 
 This script breaks `edgar.run.run(spec)` into ~24 inspectable `# %%` cells so
@@ -53,6 +54,18 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+
+# Cursor / Jupyter cells run inside an already-active asyncio event loop, so the
+# `asyncio.run(...)` calls in later cells would raise "cannot be called from a
+# running event loop". `nest_asyncio.apply()` patches asyncio to allow nesting.
+# In CLI script mode no loop is active and this is a harmless no-op. The import
+# is wrapped because nest_asyncio is only needed for the interactive use case;
+# someone running this as a pure script doesn't need to install it.
+try:
+    import nest_asyncio
+    nest_asyncio.apply()
+except ImportError:
+    pass
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
