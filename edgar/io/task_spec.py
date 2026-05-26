@@ -276,8 +276,6 @@ class TaskSpec:
     def schedule(self, generation: int) -> tuple[str, float, LLMs]:
         """
         Return (mode, temperature, llms) for a given generation.
-        TODO: At the moment we use the same LLM at every generation, should add option to use lists.
-
         Design intent of the schedule:
             - mode: "explore" first half, "exploit" second half. A sharp switch
               rather than a gradient, because the prompt blocks for the two modes
