@@ -17,3 +17,10 @@ __pycache__/
 *.pyd
 
 *scratchpad.ipynb
+*.txt
+*.png
+*.html
+
+**test_output/**
+**data_test/**
+**scrap**
