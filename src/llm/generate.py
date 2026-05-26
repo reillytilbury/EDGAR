@@ -44,7 +44,14 @@ def _filter_programs(population: Population, filter_rule: Callable[[Program], bo
     return [p for p in population if filter_rule(p)]
 
 def _resolve_parents(population: Population, program: Program) -> list[Program]:
-    return [population[i] for i in program.birth.parent_indices]
+    """
+    Resolve the parent programs for a given program, sorted by discover.final loss from highest to lowest.
+    """
+    parents = [population[i] for i in program.birth.parent_indices]
+    def _loss(p: Program) -> float:
+        v = p.program_losses.discover.final
+        return float('inf') if (v is None or not isinstance(v, float)) else v
+    return sorted(parents, key=_loss, reverse=True)
 
 def _prompt_image_bytes(spec: TaskSpec, data: dict, parents: list[Program], program: Program) -> bytes | None:
     if spec is None or spec.plot_fn is None or data is None:

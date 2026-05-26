@@ -34,7 +34,7 @@ model:
     '
   image_analysis_instructions: "**Image Analysis Instructions:**\n\n
       Attached is a scatter plot of the neuron models' performance on top of raw neural data. 
-      The binned mean of the experimental data is plotted in **sky-blue**, the model with lower average loss in **red** and model with higher average loss in **green**.\n
+      The binned mean of the experimental data is plotted in **sky-blue**, the model with higher average loss in **red** and model with lower average loss in **green**.\n
 
       Analyse the models' fits to the data in the image below. Identify systematic weaknesses of the models by observing patterns across multiple cell plots. For instance, consider:\n
       **Model Comparisons:** Which models are better for each cell? That is to say, which models track the blue curve better? Which features of the models are responsible for improving the fit?\n
