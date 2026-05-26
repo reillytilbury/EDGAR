@@ -40,10 +40,10 @@ llms:
   # Error guidelines : https://ai.google.dev/gemini-api/docs/troubleshooting
   retry:
     max_retries: 3
-    initial_delay: 5
+    initial_delay: 10.0
     backoff_multiplier: 2.0
     max_delay: 60.0
-    retryable_status_codes: [500, 503, 504]
+    retryable_status_codes: [500, 502, 503, 504]
 
   # LLMs for different tasks. Each can be a string or a list.
   # If a list is provided, it is traversed in order by generation (with cycling)
