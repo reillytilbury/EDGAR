@@ -50,6 +50,12 @@ edgar run projects/orientation_tuning/config.yaml --evolution.n_generations=5
 edgar run projects/orientation_tuning/config.yaml --llms.model_llm=gemini-2.5-pro
 ```
 
+Run a quick smoke test with reduced settings (1 generation, 2 islands, batch size 2) to verify the pipeline is wired correctly:
+
+```bash
+edgar test projects/orientation_tuning/config.yaml
+```
+
 Reproduce a previous run from its saved `task_spec.yaml`:
 
 ```bash
