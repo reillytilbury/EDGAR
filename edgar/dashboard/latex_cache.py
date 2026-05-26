@@ -71,7 +71,15 @@ async def get_or_generate_latex(
 
     try:
         from ..llm.llm_calling import call_llm
+    except ModuleNotFoundError as e:
+        import sys
 
+        raise RuntimeError(
+            f"LLM dependencies are missing in {sys.executable!r} "
+            f"(failed to import {e.name!r}). Activate the 'edgar' conda env "
+            "(or `pip install -e .` from this repo) and restart the dashboard."
+        ) from e
+    try:
         retry_config = RetryConfig()
         latex = await call_llm(
             prompt=prompt,
