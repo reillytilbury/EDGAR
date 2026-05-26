@@ -125,8 +125,8 @@ def plot_model_fits(
         n_cells_plot = y_sorted.shape[0]
         ax.axhline(n_cells_plot - 0.5, color="white", linewidth=1.0, alpha=0.95)
         ax.set_yticks([n_cells_plot / 2.0, n_cells_plot + n_cells_plot / 2.0])
-        ax.set_yticklabels([f"Y_obs (gray)", f"pred Model {row+1} ({colours[row]})"])
-        ax.set_title(f"Model {row+1}: observed + prediction")
+        ax.set_yticklabels([f"Y_obs (gray)", f"pred {parent_programs[row].name} ({colours[row]})"])
+        ax.set_title(f"{parent_programs[row].name}: observed + prediction")
         if row == 1:
             ax.set_xlabel("time (sec)")
         else:
@@ -144,8 +144,8 @@ def plot_model_fits(
         n_cells_plot = y_sorted.shape[0]
         ax.axhline(n_cells_plot - 0.5, color="white", linewidth=1.0, alpha=0.95)
         ax.set_yticks([n_cells_plot / 2.0, n_cells_plot + n_cells_plot / 2.0])
-        ax.set_yticklabels(["Y_obs (gray)", f"resid (Y_obs - Model {row+1})"])
-        ax.set_title(f"Observed + residual (Y_obs - Model {row+1})")
+        ax.set_yticklabels(["Y_obs (gray)", f"resid (Y_obs - {parent_programs[row].name})"])
+        ax.set_title(f"Observed + residual (Y_obs - {parent_programs[row].name})")
         if row == 1:
             ax.set_xlabel("time (sec)")
         else:
@@ -169,8 +169,8 @@ def plot_model_fits(
                 lo -= pad; hi += pad
             ax_scatter.plot([lo, hi], [lo, hi], linestyle="--", color="gray", linewidth=1.5)
             ax_scatter.set_xlim(lo, hi); ax_scatter.set_ylim(lo, hi)
-        ax_scatter.set_xlabel("Model 1 per-cell MSE")
-        ax_scatter.set_ylabel("Model 2 per-cell MSE")
+        ax_scatter.set_xlabel(f"{parent_programs[0].name} per-cell MSE")
+        ax_scatter.set_ylabel(f"{parent_programs[1].name} per-cell MSE")
         ax_scatter.set_title("Per-cell loss comparison")
     else:
         ax_scatter.text(0.5, 0.5, "need two models", ha="center", va="center")
@@ -180,8 +180,8 @@ def plot_model_fits(
     if len(pred_blocks) >= 2:
         t = np.arange(y_block.shape[1])
         ax_trace.plot(t, np.mean(y_block, axis=0), color="black", linewidth=2, label="Population mean (Y_obs)")
-        ax_trace.plot(t, np.mean(y_block - pred_blocks[0], axis=0), color="red", linewidth=2, alpha=0.9, label="Residual mean (Y_obs - Model 1)")
-        ax_trace.plot(t, np.mean(y_block - pred_blocks[1], axis=0), color="blue", linewidth=2, alpha=0.9, label="Residual mean (Y_obs - Model 2)")
+        ax_trace.plot(t, np.mean(y_block - pred_blocks[0], axis=0), color="red", linewidth=2, alpha=0.9, label=f"Residual mean (Y_obs - {parent_programs[0].name})")
+        ax_trace.plot(t, np.mean(y_block - pred_blocks[1], axis=0), color="blue", linewidth=2, alpha=0.9, label=f"Residual mean (Y_obs - {parent_programs[1].name})")
         ax_trace.axhline(0.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.7)
         ax_trace.set_title("Population mean and residual means")
         ax_trace.set_xlabel("trial index")
@@ -206,7 +206,7 @@ def plot_model_fits(
             for j, (pred_block, colour) in enumerate(zip(pred_blocks, colours)):
                 mse = float(np.mean((y_true - pred_block[cell_idx]) ** 2))
                 ax.plot(t, pred_block[cell_idx], color=colour, linewidth=1.6, alpha=0.9,
-                        label=f"Model {j+1} (mse={mse:.2f})")
+                        label=f"{parent_programs[j].name} (mse={mse:.2f})")
             ax.axhline(0.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.6)
             ax.set_title(f"Random cell {cell_idx}")
             ax.set_xlabel("trial index")
@@ -221,7 +221,7 @@ def plot_model_fits(
     title_parts = [title_prefix] if title_prefix else []
     for j, (program, loss) in enumerate(zip(parent_programs, model_losses)):
         loss_str = f"{loss:.3f}" if loss is not None else "n/a"
-        title_parts.append(f"Model {j+1}: loss={loss_str}")
+        title_parts.append(f"{program.name}: loss={loss_str}")
     if title_parts:
         plt.suptitle(" | ".join(title_parts), fontsize=14)
 

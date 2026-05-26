@@ -1,11 +1,11 @@
 model:
-  base: 'You are an AI scientist. The programs below are biological models of neurons. The models are sorted from highest to lowest loss.
+  base: 'You are an AI scientist. The {num_parents} programs below are biological models of neurons. The models are sorted from highest to lowest loss.
 
-    Your task is to create a new neuron model that has a lower loss than the models below.
+    Your task is to create a new neuron model that has a lower loss than these models.
 
     All models take stimulus orientation (theta) in radians as input.
 
-    Analyze the progression of the models, generalize the improvements, and create a new model that is better than all previous models.
+    Analyze the performance of the models, generalize the improvements, and create a new model that is better than these models.
 
     '
   explore: Use the models below as *inspiration*, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
@@ -34,8 +34,7 @@ model:
     '
   image_analysis_instructions: "**Image Analysis Instructions:**\n\n
       Attached is a scatter plot of the neuron models' performance on top of raw neural data. 
-      The binned mean is plotted in **sky-blue**, Model 1 is plotted in **red**, 
-      and Model 2 is plotted in **green**.\n
+      The binned mean of the experimental data is plotted in **sky-blue**, the model with lower average loss in **red** and model with higher average loss in **green**.\n
 
       Analyse the models' fits to the data in the image below. Identify systematic weaknesses of the models by observing patterns across multiple cell plots. For instance, consider:\n
       **Model Comparisons:** Which models are better for each cell? That is to say, which models track the blue curve better? Which features of the models are responsible for improving the fit?\n
@@ -44,12 +43,16 @@ model:
       **Parameter Flexibility:** Are there free parameters that could be introduced or modified to better capture the observed response profiles? Utilize your analysis of the shortcomings of the current models' shapes and add free parameters or modify existing ones to address these issues.\n
 
       Use this analysis to inform the design of a new neuron model that improves upon the previous models.\n"
-  program_detail_template: '**Model {parent_number}**
+  program_detail_template: '**Model: {name}**
+
+    loss: {program_losses_discover_final}
 
     {code_model}
 
     '
   program_vars:
+  - name
+  - program_losses.discover.final
   - code.model
 parameter_estimator:
   base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest neuron model.
@@ -84,10 +87,11 @@ parameter_estimator:
 
     '
   image_analysis_instructions: null
-  program_detail_template: '**Model {parent_number}**
+  program_detail_template: '**Model {name}**
 
     {code_model}
 
     '
   program_vars:
+  - name
   - code.model

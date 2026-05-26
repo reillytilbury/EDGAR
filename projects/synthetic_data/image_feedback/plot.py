@@ -39,7 +39,7 @@ def plot_model_fits(data, parent_programs, save_path=""):
             params_s = {k: np.asarray(v[s]) for k, v in program.params.items()}
             y_pred = np.asarray(model_fn({'x': jnp.asarray(x_grid)}, params_s)).flatten()
             sample_loss = program.sample_losses[s] if program.sample_losses is not None else None
-            label = f"Model {j+1} (loss={sample_loss:.3f})" if sample_loss is not None else f"Model {j+1}"
+            label = f"{program.name} (loss={sample_loss:.3f})" if sample_loss is not None else f"{program.name}"
             ax.plot(x_grid, y_pred, color=colours[j % len(colours)], linewidth=2.5,
                     label=label, alpha=0.85)
 
@@ -54,7 +54,7 @@ def plot_model_fits(data, parent_programs, save_path=""):
     title_parts = []
     for j, program in enumerate(parent_programs):
         loss = program.program_losses.discover.final
-        title_parts.append(f"Model {j+1}: loss={loss:.3f}" if loss is not None else f"Model {j+1}: loss=n/a")
+        title_parts.append(f"{program.name}: loss={loss:.3f}" if loss is not None else f"{program.name}: loss=n/a")
     plt.suptitle("Model Fits\n" + "  |  ".join(title_parts), fontsize=16)
 
     plt.tight_layout()

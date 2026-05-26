@@ -57,7 +57,7 @@ def plot_model_fits(
             )).flatten()
             rm_pred  = _bin_to_rate_map(x, y, y_pred, n_bins, x_domain, y_domain)
             sample_loss = program.sample_losses[s] if program.sample_losses is not None else None
-            title    = f"Model {j+1} (loss={sample_loss:.3f})" if sample_loss is not None else f"Model {j+1}"
+            title    = f"{program.name} (loss={sample_loss:.3f})" if sample_loss is not None else program.name
             im = axes[row, j + 1].imshow(rm_pred.T, origin="lower",
                                          extent=[*x_domain, *y_domain], cmap="viridis")
             axes[row, j + 1].set_title(title)
@@ -66,7 +66,7 @@ def plot_model_fits(
     title_parts = []
     for j, program in enumerate(parent_programs):
         loss = program.program_losses.discover.final
-        title_parts.append(f"Model {j+1}: loss={loss:.3f}" if loss is not None else f"Model {j+1}: loss=n/a")
+        title_parts.append(f"{program.name}: loss={loss:.3f}" if loss is not None else f"{program.name}: loss=n/a")
     plt.suptitle("Rate Maps\n" + "  |  ".join(title_parts), fontsize=16)
 
     plt.tight_layout()
