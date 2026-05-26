@@ -13,11 +13,15 @@ dynamic = ["dependencies"]
 dependencies = {file = ["requirements.txt"]}
 
 # `namespaces = true` is needed because most subpackages under `edgar/` have no
-# `__init__.py` (PEP 420 namespace packages). Only `edgar/monitoring/` has one.
+# `__init__.py` (PEP 420 namespace packages). Only `edgar/dashboard/` has one.
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["edgar*"]
 namespaces = true
+
+# Ship the dashboard's static frontend with the wheel.
+[tool.setuptools.package-data]
+"edgar.dashboard" = ["static/*", "static/**/*"]
 
 [tool.pytest.ini_options]
 # `auto` lets any `async def` test function be discovered without an explicit

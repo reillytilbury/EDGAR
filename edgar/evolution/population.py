@@ -80,21 +80,30 @@ class Population:
             self[i].program_losses.validate.final = None
 
     def save(self, path: str) -> None:
-        with open(path, "w") as f:
-            for p in self._programs:
-                d = asdict(p)
-                if d["eval_fingerprint"] is not None:
-                    d["eval_fingerprint"] = p.eval_fingerprint.tolist()
-                if d["params"] is not None:
-                    d["params"] = _params_to_json(p.params)
-                if d["sample_losses"] is not None:
-                    d["sample_losses"] = p.sample_losses.tolist()
-                if isinstance(d["program_losses"]["validate"]["final"], NotValidated):
-                    d["program_losses"]["validate"]["final"] = "NOTVALIDATED"
-                llm = d["birth"]["llm_name"]
-                if llm is not None and not isinstance(llm, str):
-                    d["birth"]["llm_name"] = getattr(llm, "model_name", repr(llm))
-                f.write(json.dumps(d) + "\n")
+        """Atomically write the population to a JSONL file.
+
+        Uses write-to-tmp-then-rename so a live dashboard polling this file
+        never observes a partially-written state.
+        """
+        from io import StringIO
+        from ..io.status import atomic_write_text
+
+        buf = StringIO()
+        for p in self._programs:
+            d = asdict(p)
+            if d["eval_fingerprint"] is not None:
+                d["eval_fingerprint"] = p.eval_fingerprint.tolist()
+            if d["params"] is not None:
+                d["params"] = _params_to_json(p.params)
+            if d["sample_losses"] is not None:
+                d["sample_losses"] = p.sample_losses.tolist()
+            if isinstance(d["program_losses"]["validate"]["final"], NotValidated):
+                d["program_losses"]["validate"]["final"] = "NOTVALIDATED"
+            llm = d["birth"]["llm_name"]
+            if llm is not None and not isinstance(llm, str):
+                d["birth"]["llm_name"] = getattr(llm, "model_name", repr(llm))
+            buf.write(json.dumps(d) + "\n")
+        atomic_write_text(path, buf.getvalue())
 
     def get_sorted(self) -> Population:
         """Return a copy of the population sorted by rank"""

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-zinc-950 text-zinc-100">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EDGAR Dashboard</title>
+
+  <!-- Tailwind via Play CDN (no build step) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['JetBrains Mono', 'SF Mono', 'ui-monospace', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- Plotly -->
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+
+  <!-- KaTeX for LaTeX rendering -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+
+  <!-- highlight.js -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/styles/atom-one-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/highlight.min.js"></script>
+
+  <!-- Marked for collapsible markdown rendering of the prompt -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="/static/styles.css" />
+
+  <!-- IMPORTANT: app.js must be defined BEFORE Alpine starts, otherwise Alpine
+       evaluates `x-data="dashboard()"` before the function exists and the
+       whole UI renders blank. Both are `defer`, which guarantees ordered
+       execution after DOMContentLoaded. -->
+  <script src="/static/app.js" defer></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body
+  x-data="dashboard()"
+  x-init="init()"
+  class="min-h-screen flex flex-col font-sans antialiased text-[14px]"
+>
+  <!-- top bar -->
+  <header class="border-b border-zinc-800 bg-zinc-900/70 backdrop-blur px-5 py-3 flex items-center gap-6 sticky top-0 z-30">
+    <div class="flex items-center gap-3">
+      <div class="w-7 h-7 rounded bg-emerald-500/90 text-zinc-900 grid place-items-center font-bold">E</div>
+      <div class="text-base font-semibold tracking-wide">EDGAR</div>
+      <span class="text-zinc-500">/</span>
+      <div class="flex items-center gap-1">
+        <button @click="view = 'live'"
+          :class="view === 'live' ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:text-zinc-100'"
+          class="px-3 py-1 rounded text-sm">Live</button>
+        <button @click="view = 'inspect'"
+          :class="view === 'inspect' ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:text-zinc-100'"
+          class="px-3 py-1 rounded text-sm">Inspect</button>
+      </div>
+    </div>
+
+    <!-- run picker -->
+    <div class="flex-1 flex items-center gap-3">
+      <label class="text-xs text-zinc-500 uppercase tracking-wider">Run</label>
+      <select
+        x-model="runId"
+        @change="onRunChange()"
+        class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm min-w-[260px] max-w-[420px]"
+      >
+        <option value="" disabled>Select a run…</option>
+        <template x-for="r in runs" :key="r.run_id">
+          <option
+            :value="r.run_id"
+            x-text="`${r.task_name}  ·  ${r.run_id}  ·  ${r.status}  ·  ${r.n_programs} progs`"
+          ></option>
+        </template>
+      </select>
+      <button @click="reloadRuns()" class="text-xs text-zinc-500 hover:text-zinc-200" title="rescan program_databases">refresh</button>
+    </div>
+
+    <div class="flex items-center gap-3 text-xs text-zinc-400">
+      <span x-show="autoPoll && view === 'live'" class="text-emerald-400">⏵ live</span>
+      <span x-show="!autoPoll || view !== 'live'" class="text-zinc-500">paused</span>
+    </div>
+  </header>
+
+  <!-- ── LIVE VIEW ── -->
+  <main x-show="view === 'live'" class="flex-1 flex">
+    <section class="flex-1 p-5 space-y-5 min-w-0">
+      <!-- top tiles -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+          <div class="text-xs text-zinc-500 uppercase">Status</div>
+          <div class="mt-1 flex items-center gap-2">
+            <span :class="statusPillClass(state.status)" class="px-2 py-0.5 rounded text-xs font-medium"
+              x-text="state.status || 'unknown'"></span>
+          </div>
+          <div class="mt-1 text-xs text-zinc-400" x-text="state.error || ''"></div>
+        </div>
+        <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+          <div class="text-xs text-zinc-500 uppercase">Generation</div>
+          <div class="mt-1 text-xl font-mono">
+            <span x-text="(state.current_gen ?? '-') + 1"></span>
+            <span class="text-zinc-500">/</span>
+            <span x-text="state.n_gens ?? '-'"></span>
+          </div>
+        </div>
+        <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+          <div class="text-xs text-zinc-500 uppercase">Best loss</div>
+          <div class="mt-1 text-xl font-mono" x-text="fmt(state.best?.loss)"></div>
+          <div class="text-xs text-zinc-500 truncate" x-text="state.best?.name || ''"></div>
+        </div>
+        <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+          <div class="text-xs text-zinc-500 uppercase">Elapsed · ETA</div>
+          <div class="mt-1 text-xl font-mono">
+            <span x-text="fmtDuration(state.elapsed_s)"></span>
+            <span class="text-zinc-500 text-sm"> · </span>
+            <span class="text-zinc-400 text-sm" x-text="state.eta_s ? fmtDuration(state.eta_s) : '-'"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- success rates strip + sparkline -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+          <div class="text-xs text-zinc-500 uppercase">Per-gen best discover loss</div>
+          <div id="spark-chart" class="h-24 mt-1"></div>
+        </div>
+        <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+          <div class="text-xs text-zinc-500 uppercase">Stage success rates (gen <span x-text="state.success_rates?.gen ?? '-'"></span>)</div>
+          <div class="grid grid-cols-4 gap-2 mt-2 text-center">
+            <template x-for="k in ['model','param_est','jax','scored']" :key="k">
+              <div>
+                <div class="text-xs text-zinc-500" x-text="k"></div>
+                <div class="text-lg font-mono"
+                  :class="rateClass(state.success_rates?.[k])"
+                  x-text="rateStr(state.success_rates?.[k])"></div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- swimlanes -->
+      <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+        <div class="flex items-center justify-between">
+          <div class="text-xs text-zinc-500 uppercase">Islands · programs over generations</div>
+          <div class="text-xs text-zinc-500">click a node for details · hover for tooltip</div>
+        </div>
+        <div id="swimlanes-chart" class="mt-2" style="min-height: 360px;"></div>
+      </div>
+
+      <!-- log tail -->
+      <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+        <div class="text-xs text-zinc-500 uppercase">run.log (tail)</div>
+        <pre class="mt-2 max-h-56 overflow-auto text-[11px] leading-snug font-mono whitespace-pre text-zinc-300"
+          x-text="(state.recent_log || []).join('\n')"></pre>
+      </div>
+    </section>
+  </main>
+
+  <!-- ── INSPECT VIEW ── -->
+  <main x-show="view === 'inspect'" class="flex-1 flex flex-col" style="display:none">
+    <section class="p-5 space-y-4">
+      <!-- summary header -->
+      <div class="border border-zinc-800 rounded-lg p-4 bg-zinc-900/40">
+        <div class="flex items-baseline gap-3">
+          <h1 class="text-xl font-semibold" x-text="summary.task_name || 'unknown task'"></h1>
+          <span :class="statusPillClass(summary.status)" class="px-2 py-0.5 rounded text-xs font-medium"
+            x-text="summary.status || ''"></span>
+          <span class="text-xs text-zinc-500 font-mono" x-text="summary.run_id"></span>
+        </div>
+        <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-2 text-sm">
+          <div><span class="text-zinc-500">islands</span> <span class="font-mono ml-1" x-text="summary.n_islands ?? '-'"></span></div>
+          <div><span class="text-zinc-500">generations</span> <span class="font-mono ml-1" x-text="summary.n_generations ?? '-'"></span></div>
+          <div><span class="text-zinc-500">batch</span> <span class="font-mono ml-1" x-text="summary.batch_size ?? '-'"></span></div>
+          <div><span class="text-zinc-500">programs</span> <span class="font-mono ml-1" x-text="summary.n_programs ?? 0"></span></div>
+          <div><span class="text-zinc-500">alive at end</span> <span class="font-mono ml-1" x-text="summary.n_alive ?? 0"></span></div>
+          <div><span class="text-zinc-500">scored (disc.)</span> <span class="font-mono ml-1" x-text="summary.n_scored_discover ?? 0"></span></div>
+          <div><span class="text-zinc-500">best discover</span> <span class="font-mono ml-1" x-text="fmt(summary.best_discover_loss)"></span></div>
+          <div><span class="text-zinc-500">best validate</span> <span class="font-mono ml-1" x-text="fmt(summary.best_validate_loss)"></span></div>
+          <div><span class="text-zinc-500">model LLM</span> <span class="font-mono ml-1 text-xs" x-text="summary.llms?.model ?? '-'"></span></div>
+          <div><span class="text-zinc-500">param_est LLM</span> <span class="font-mono ml-1 text-xs" x-text="summary.llms?.param_est ?? '-'"></span></div>
+          <div><span class="text-zinc-500">jax LLM</span> <span class="font-mono ml-1 text-xs" x-text="summary.llms?.jax_translator ?? '-'"></span></div>
+          <div><span class="text-zinc-500">git</span> <span class="font-mono ml-1 text-xs"
+            x-text="(summary.git_sha || '').slice(0, 8) + (summary.git_dirty ? ' (dirty)' : '')"></span></div>
+        </div>
+
+        <!-- the "request" / prompt -->
+        <details class="mt-4 group">
+          <summary class="cursor-pointer text-sm text-zinc-400 hover:text-zinc-100 select-none">
+            <span class="group-open:hidden">Show the prompt the LLM was asked</span>
+            <span class="hidden group-open:inline">Hide prompt</span>
+          </summary>
+          <div class="mt-2 border-l-2 border-zinc-700 pl-3 prose-prompt"
+            x-html="renderPromptMarkdown(summary.prompt?.base || '')"></div>
+          <details class="mt-2">
+            <summary class="cursor-pointer text-xs text-zinc-500 hover:text-zinc-300 select-none">+ explore / exploit branch + code guidelines</summary>
+            <div class="mt-2 grid md:grid-cols-2 gap-3 text-xs font-mono whitespace-pre-wrap">
+              <div>
+                <div class="text-zinc-400 mb-1">explore branch</div>
+                <div class="text-zinc-300" x-text="summary.prompt?.explore || ''"></div>
+              </div>
+              <div>
+                <div class="text-zinc-400 mb-1">exploit branch</div>
+                <div class="text-zinc-300" x-text="summary.prompt?.exploit || ''"></div>
+              </div>
+              <div class="md:col-span-2">
+                <div class="text-zinc-400 mb-1">code_guidelines</div>
+                <div class="text-zinc-300" x-text="summary.prompt?.code_guidelines || ''"></div>
+              </div>
+            </div>
+          </details>
+        </details>
+      </div>
+
+      <!-- table -->
+      <div class="border border-zinc-800 rounded-lg overflow-hidden bg-zinc-900/40">
+        <div class="px-3 py-2 flex items-center justify-between border-b border-zinc-800">
+          <div class="text-xs text-zinc-500 uppercase">Programs (<span x-text="programs.length"></span>)</div>
+          <div class="text-xs text-zinc-500">click a row to inspect</div>
+        </div>
+        <div class="max-h-[68vh] overflow-auto">
+          <table class="w-full text-[13px]">
+            <thead class="bg-zinc-900 sticky top-0">
+              <tr class="text-left text-zinc-400">
+                <th class="px-3 py-2 cursor-pointer" @click="sortBy('rank')">rank</th>
+                <th class="px-3 py-2 cursor-pointer" @click="sortBy('idx')">#</th>
+                <th class="px-3 py-2 cursor-pointer min-w-[260px]" @click="sortBy('name')">name</th>
+                <th class="px-3 py-2 cursor-pointer" @click="sortBy('loss_validate')">validate</th>
+                <th class="px-3 py-2 cursor-pointer" @click="sortBy('loss_discover')">discover</th>
+                <th class="px-3 py-2 cursor-pointer" @click="sortBy('n_params')">params</th>
+                <th class="px-3 py-2 cursor-pointer" @click="sortBy('gen')">gen</th>
+                <th class="px-3 py-2 cursor-pointer" @click="sortBy('island')">island</th>
+                <th class="px-3 py-2 cursor-pointer" @click="sortBy('mode')">mode</th>
+                <th class="px-3 py-2">parents</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="p in sortedPrograms" :key="p.idx">
+                <tr
+                  @click="openProgram(p.idx)"
+                  class="border-t border-zinc-800/80 hover:bg-zinc-800/50 cursor-pointer"
+                  :class="p.rank === 1 ? 'bg-emerald-900/10' : ''"
+                >
+                  <td class="px-3 py-1.5 font-mono" x-text="p.rank ?? '-'"></td>
+                  <td class="px-3 py-1.5 font-mono text-zinc-400" x-text="p.idx"></td>
+                  <td class="px-3 py-1.5 truncate" x-text="p.name"></td>
+                  <td class="px-3 py-1.5 font-mono" :class="lossClass(p.loss_validate)" x-text="fmt(p.loss_validate)"></td>
+                  <td class="px-3 py-1.5 font-mono" :class="lossClass(p.loss_discover)" x-text="fmt(p.loss_discover)"></td>
+                  <td class="px-3 py-1.5 font-mono" x-text="p.n_params ?? '-'"></td>
+                  <td class="px-3 py-1.5 font-mono" x-text="p.gen"></td>
+                  <td class="px-3 py-1.5 font-mono" x-text="p.island"></td>
+                  <td class="px-3 py-1.5 text-zinc-400" x-text="p.mode || '-'"></td>
+                  <td class="px-3 py-1.5 font-mono text-zinc-400"
+                    x-text="(p.parents || []).map(x => '#'+x).join(', ') || '-'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ── PROGRAM PANEL (drawer) ── -->
+  <div
+    x-show="panelOpen"
+    @keydown.escape.window="closePanel()"
+    class="fixed inset-0 z-40"
+    style="display:none"
+  >
+    <div class="absolute inset-0 bg-black/60" @click="closePanel()"></div>
+    <aside
+      class="absolute top-0 right-0 h-full w-full md:w-[820px] max-w-full bg-zinc-950 border-l border-zinc-800 shadow-2xl flex flex-col"
+      @click.stop
+    >
+      <header class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+        <div class="flex items-baseline gap-3 min-w-0">
+          <div class="text-xs text-zinc-500 font-mono">#<span x-text="programDetail.idx ?? '-'"></span></div>
+          <div class="font-semibold truncate" x-text="programDetail.name || '...'"></div>
+          <div x-show="programDetail.rank" class="text-xs text-emerald-400 font-mono">rank&nbsp;<span x-text="programDetail.rank"></span></div>
+        </div>
+        <button @click="closePanel()" class="text-zinc-400 hover:text-zinc-100">✕</button>
+      </header>
+
+      <!-- tabs -->
+      <div class="flex border-b border-zinc-800 text-sm bg-zinc-900/50">
+        <template x-for="t in ['code','latex','specs','lineage','fit']" :key="t">
+          <button
+            @click="panelTab = t"
+            :class="panelTab === t ? 'bg-zinc-800 text-zinc-50 border-b border-emerald-500' : 'text-zinc-400 hover:text-zinc-100'"
+            class="px-4 py-2 capitalize"
+            x-text="t"></button>
+        </template>
+      </div>
+
+      <div class="flex-1 overflow-auto p-4 space-y-3">
+
+        <!-- Code tab -->
+        <div x-show="panelTab === 'code'">
+          <div class="flex gap-2 mb-2 text-xs">
+            <template x-for="k in ['model','param_est','model_jax']" :key="k">
+              <button
+                @click="codeTab = k"
+                :class="codeTab === k ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-100'"
+                class="px-3 py-1 rounded font-mono">
+                <span x-text="k"></span>
+              </button>
+            </template>
+          </div>
+          <pre class="text-xs leading-relaxed overflow-auto rounded border border-zinc-800"
+            ><code class="language-python hljs"
+              x-text="(programDetail.code && programDetail.code[codeTab]) || '(empty)'"
+              x-effect="if (programDetail.code) hljsRender($el)"></code></pre>
+        </div>
+
+        <!-- LaTeX tab -->
+        <div x-show="panelTab === 'latex'">
+          <div class="mb-3 flex items-center gap-3">
+            <button
+              @click="loadLatex()"
+              :disabled="latexLoading"
+              class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-zinc-900 font-medium rounded disabled:opacity-50">
+              <span x-show="!latexLoading">Re-derive equations via LLM</span>
+              <span x-show="latexLoading">Asking the LLM…</span>
+            </button>
+            <span x-show="latexResult.cached" class="text-xs text-zinc-500">(cached)</span>
+            <button x-show="latexResult.latex" @click="loadLatex(true)" class="text-xs text-zinc-500 hover:text-zinc-200">force regenerate</button>
+          </div>
+          <div x-show="latexError" class="text-sm text-rose-400" x-text="latexError"></div>
+          <div x-show="!latexResult.latex && !latexLoading && !latexError" class="text-zinc-500 text-sm">
+            Click the button above to ask the LLM (<span class="font-mono" x-text="summary.llms?.model"></span>)
+            to derive the LaTeX equations this program implements. Result is cached on disk.
+          </div>
+          <div x-show="latexResult.latex" id="latex-render" class="text-sm leading-relaxed"
+            x-html="latexHtml(latexResult.latex)"
+            x-effect="if (latexResult.latex) renderMath()"></div>
+        </div>
+
+        <!-- Specs tab -->
+        <div x-show="panelTab === 'specs'" class="space-y-3 text-sm">
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1.5">
+            <div><span class="text-zinc-500">gen</span> <span class="font-mono ml-1" x-text="programDetail.gen"></span></div>
+            <div><span class="text-zinc-500">island</span> <span class="font-mono ml-1" x-text="programDetail.island"></span></div>
+            <div><span class="text-zinc-500">mode</span> <span class="font-mono ml-1" x-text="programDetail.mode || '-'"></span></div>
+            <div><span class="text-zinc-500">LLM</span> <span class="font-mono ml-1 text-xs" x-text="programDetail.llm || '-'"></span></div>
+            <div><span class="text-zinc-500">n_params</span> <span class="font-mono ml-1" x-text="programDetail.n_params ?? '-'"></span></div>
+            <div><span class="text-zinc-500">alive at end</span> <span class="font-mono ml-1" x-text="programDetail.alive ? 'yes' : 'no'"></span></div>
+            <div><span class="text-zinc-500">fingerprint</span> <span class="font-mono ml-1 text-xs"
+              x-text="programDetail.fingerprint_shape ? programDetail.fingerprint_shape.join('×') : '-'"></span></div>
+          </div>
+
+          <div class="border border-zinc-800 rounded">
+            <div class="px-3 py-2 text-xs text-zinc-500 uppercase border-b border-zinc-800">Losses</div>
+            <div class="p-3 grid grid-cols-3 gap-2 text-sm">
+              <div></div>
+              <div class="text-zinc-500 text-xs">init</div>
+              <div class="text-zinc-500 text-xs">final (post-GD)</div>
+              <template x-for="split in ['discover','validate']" :key="split">
+                <template>
+                  <div class="contents">
+                    <div class="text-zinc-400" x-text="split"></div>
+                    <div class="font-mono" :class="lossClass(programDetail.losses?.[split]?.init)" x-text="fmt(programDetail.losses?.[split]?.init)"></div>
+                    <div class="font-mono" :class="lossClass(programDetail.losses?.[split]?.final)" x-text="fmt(programDetail.losses?.[split]?.final)"></div>
+                  </div>
+                </template>
+              </template>
+            </div>
+          </div>
+
+          <div x-show="programDetail.sample_losses_summary" class="border border-zinc-800 rounded">
+            <div class="px-3 py-2 text-xs text-zinc-500 uppercase border-b border-zinc-800">Sample-loss distribution</div>
+            <div class="p-3 grid grid-cols-5 gap-2 text-center">
+              <template x-for="k in ['n','min','median','mean','max']" :key="k">
+                <div>
+                  <div class="text-xs text-zinc-500" x-text="k"></div>
+                  <div class="font-mono text-sm" x-text="fmt(programDetail.sample_losses_summary?.[k])"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div x-show="programDetail.params" class="border border-zinc-800 rounded">
+            <div class="px-3 py-2 text-xs text-zinc-500 uppercase border-b border-zinc-800">Fitted parameters (means across samples)</div>
+            <pre class="p-3 text-[11px] font-mono whitespace-pre overflow-auto max-h-72"
+              x-text="paramsPretty(programDetail.params)"></pre>
+          </div>
+        </div>
+
+        <!-- Lineage tab -->
+        <div x-show="panelTab === 'lineage'" class="space-y-3">
+          <div>
+            <div class="text-xs text-zinc-500 uppercase mb-2">Parents</div>
+            <div x-show="!programDetail.parents_detail?.length" class="text-zinc-500 text-sm italic">none (this is a seed)</div>
+            <div class="space-y-1">
+              <template x-for="p in programDetail.parents_detail || []" :key="p.idx">
+                <button @click="openProgram(p.idx)"
+                  class="block w-full text-left border border-zinc-800 rounded px-3 py-2 hover:bg-zinc-800/60">
+                  <div class="flex items-baseline justify-between gap-3">
+                    <div class="text-sm"><span class="font-mono text-zinc-400">#<span x-text="p.idx"></span></span> <span x-text="p.name"></span></div>
+                    <div class="text-xs font-mono" :class="lossClass(p.loss_discover)" x-text="fmt(p.loss_discover)"></div>
+                  </div>
+                  <div class="text-[11px] text-zinc-500">gen <span x-text="p.gen"></span> · island <span x-text="p.island"></span></div>
+                </button>
+              </template>
+            </div>
+          </div>
+          <div>
+            <div class="text-xs text-zinc-500 uppercase mb-2">Children (<span x-text="programDetail.children_detail?.length || 0"></span>)</div>
+            <div x-show="!programDetail.children_detail?.length" class="text-zinc-500 text-sm italic">no descendants</div>
+            <div class="space-y-1">
+              <template x-for="c in programDetail.children_detail || []" :key="c.idx">
+                <button @click="openProgram(c.idx)"
+                  class="block w-full text-left border border-zinc-800 rounded px-3 py-2 hover:bg-zinc-800/60">
+                  <div class="flex items-baseline justify-between gap-3">
+                    <div class="text-sm"><span class="font-mono text-zinc-400">#<span x-text="c.idx"></span></span> <span x-text="c.name"></span></div>
+                    <div class="text-xs font-mono" :class="lossClass(c.loss_discover)" x-text="fmt(c.loss_discover)"></div>
+                  </div>
+                  <div class="text-[11px] text-zinc-500">gen <span x-text="c.gen"></span> · island <span x-text="c.island"></span></div>
+                </button>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fit tab -->
+        <div x-show="panelTab === 'fit'">
+          <div x-show="programDetail.image_url">
+            <img :src="`/api/runs/${runId}/${programDetail.image_url}`" alt="model fit"
+              class="rounded border border-zinc-800 max-w-full" />
+          </div>
+          <div x-show="!programDetail.image_url" class="text-zinc-500 italic text-sm">
+            No image_feedback was generated for this program (image_path is null).
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- empty state -->
+  <div x-show="!loading && runs.length === 0"
+    class="absolute inset-0 grid place-items-center pointer-events-none" style="display:none">
+    <div class="text-center pointer-events-auto">
+      <div class="text-zinc-400 mb-2">No runs found under <span class="font-mono" x-text="roots.join(', ')"></span></div>
+      <div class="text-xs text-zinc-500">
+        Kick one off: <code class="font-mono bg-zinc-900 px-2 py-1 rounded">python -m edgar.cli test projects/orientation_tuning/config.yaml</code>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

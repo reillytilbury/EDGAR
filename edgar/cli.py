@@ -389,6 +389,59 @@ def _run_test_fake() -> None:
     run_test_fake()
 
 
+def _run_dashboard(target: str | None, port: int, host: str, no_open: bool) -> int:
+    """Start the dashboard server, optionally opening a browser window.
+
+    target may be:
+        - None: scan ./program_databases for runs and let the user pick.
+        - A path to a single run directory (contains task_spec.yaml).
+        - A path to program_databases/ itself.
+    """
+    import webbrowser
+    import uvicorn
+
+    project_root = _find_project_root()
+    pdb_default = project_root / "program_databases"
+
+    roots: list[Path] = []
+    default_run_dir: Path | None = None
+
+    if target:
+        target_path = Path(target).expanduser().resolve()
+        if not target_path.exists():
+            print(f"error: path does not exist: {target_path}")
+            return 1
+        if (target_path / "task_spec.yaml").exists():
+            default_run_dir = target_path
+            roots.append(target_path.parent.parent)  # program_databases/
+            roots.append(target_path)                # also accept the run dir directly
+        else:
+            roots.append(target_path)
+    else:
+        roots.append(pdb_default)
+
+    # always include the canonical program_databases/ if present
+    if pdb_default.exists() and pdb_default not in roots:
+        roots.append(pdb_default)
+
+    from .dashboard.server import build_app
+    app = build_app(roots, default_run_dir=default_run_dir)
+
+    url = f"http://{host}:{port}/"
+    if default_run_dir is not None:
+        from .dashboard import data as dd
+        url += f"#/inspect?run={dd._run_id(default_run_dir)}"
+    print(f"EDGAR dashboard running at  {url}")
+    print(f"  roots: {[str(r) for r in roots]}")
+    if not no_open:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+    uvicorn.run(app, host=host, port=port, log_level="warning")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="EDGAR project scaffold, validation, and run CLI"
@@ -427,6 +480,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run a small end-to-end pipeline with fake LLM responses (no real API calls)",
     )
 
+    p_dash = sub.add_parser(
+        "dashboard",
+        help="Launch the live + inspect dashboard for an EDGAR run",
+    )
+    p_dash.add_argument(
+        "target",
+        type=str,
+        nargs="?",
+        default=None,
+        help="Path to a run dir (containing task_spec.yaml) or to program_databases/. "
+             "Omit to scan ./program_databases.",
+    )
+    p_dash.add_argument("--port", type=int, default=8765)
+    p_dash.add_argument("--host", type=str, default="127.0.0.1")
+    p_dash.add_argument("--no-open", action="store_true", help="don't auto-open the browser")
+
     return parser
 
 
@@ -451,6 +520,13 @@ def run_cli(argv=None) -> int:
         print("Running test run with fake LLM calls...")
         _run_test_fake()
         return 0
+    if args.command == "dashboard":
+        return _run_dashboard(
+            target=args.target,
+            port=args.port,
+            host=args.host,
+            no_open=args.no_open,
+        )
     parser.error("Unknown command")
     return 2
 

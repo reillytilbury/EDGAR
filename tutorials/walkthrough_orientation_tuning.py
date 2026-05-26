@@ -94,7 +94,6 @@ from edgar.llm.generate import (  # noqa: E402
     translate_programs,
 )
 from edgar.scoring.scoring import rank, score  # noqa: E402
-from edgar.monitoring.family_tree import write_family_tree  # noqa: E402
 
 
 # %%
@@ -566,21 +565,16 @@ if __name__ == "__main__":
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────
-# Cell E24: Save population, census, family tree
+# Cell E24: Save population + census
 # ─────────────────────────────────────────────────────────────────────────
-# These are the three artifacts a full run leaves behind:
+# These are the two artifacts a full run leaves behind:
 #   - population.jsonl: one Program per line (code, losses, lineage, etc.)
 #   - island_census.jsonl: per-island, per-generation roster
-#   - family_tree.html: standalone interactive HTML for browsing the run
 # In `edgar/run.py` these live inside the `finally:` so they get written even
 # on crash. We mirror that intent here but with a plain straight-line write.
 if __name__ == "__main__":
     population.save(os.path.join(spec.output_dir, "population.jsonl"))
     save_island_census(census, os.path.join(spec.output_dir, "island_census.jsonl"))
-    write_family_tree(
-        population, census, spec.output_dir,
-        param_penalty_weight=spec.scoring.get("param_penalty_weight"),
-    )
 
     print(f"Saved to: {spec.output_dir}")
     print("Files:")
@@ -588,8 +582,8 @@ if __name__ == "__main__":
         size = f.stat().st_size
         print(f"  {f.name:<25} {size:>10} bytes")
 
-    print("\nTo view the family tree (Mac):")
-    print(f"  open {spec.output_dir}/family_tree.html")
+    print("\nTo view this run in the dashboard:")
+    print(f"  python -m edgar.cli dashboard {spec.output_dir}")
 
 
 # %%

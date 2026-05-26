@@ -27,7 +27,7 @@ What you'll learn (one concept per cell):
     9.  Inspecting a single program's code + fitted params
     10. Finding failed / NaN programs
     11. island_census.jsonl — who was on which island when
-    12. Monitoring helpers (family_tree + progress reports)
+    12. The dashboard (programmatic data layer)
     13. Reading run.log
     14. Where to go next
 """
@@ -384,46 +384,47 @@ if dead_at_end:
 
 
 # %% [markdown]
-# # 12. Monitoring helpers
+# # 12. The dashboard
 #
-# `edgar/monitoring/` writes three standalone HTML reports straight from a
-# `Population` + `census`. They have no run-time dependency, so you can
-# regenerate them post-hoc whenever you've tweaked the visualisation code or
-# inherited a run that's missing one of them.
+# `edgar.dashboard` is the canonical way to visualise a run end-to-end. It
+# exposes a FastAPI server with a Live view (real-time progress as the
+# algorithm evolves) and an Inspect view (post-hoc analysis: ranked programs,
+# code, LLM-derived LaTeX equations, fits). From this notebook, you'd
+# typically launch it in a terminal:
+#
+# ```bash
+# python -m edgar.cli dashboard program_databases/05-24/17-17-45/
+# ```
+#
+# But you can also call the data layer directly for programmatic analysis,
+# which is what the cells below demonstrate.
 
 # %%
-import tempfile  # noqa: E402
-
-from edgar import monitoring  # noqa: E402
-from edgar.monitoring.family_tree import write_family_tree  # noqa: E402
-from edgar.monitoring.progress import write_progress  # noqa: E402
-
-print("Public monitoring helpers:")
-for name in monitoring.__all__:
-    print(f"  monitoring.{name}")
-
-# Write to a tempdir rather than mutating RUN_DIR itself, so the canonical
-# run output stays pristine. Replace with any path of your choice if you
-# want to keep the regenerated HTML around.
-regen_dir = Path(tempfile.mkdtemp(prefix="edgar_regen_html_"))
-
-family_tree_path = write_family_tree(
-    population, census, regen_dir,
-    task_name=spec.task_name,
-    param_penalty_weight=spec.scoring.get("param_penalty_weight", 0.0),
-)
-loss_progress_path, gd_effect_path = write_progress(
-    population, census, regen_dir,
-    task_name=spec.task_name,
-    param_penalty_weight=spec.scoring.get("param_penalty_weight", 0.0),
+from edgar.dashboard import (  # noqa: E402
+    load_run_summary,
+    load_live_state,
+    load_program_list,
+    load_program_detail,
 )
 
-print(f"\nRegenerated into {regen_dir}/:")
-print(f"  family_tree.html   ({family_tree_path.stat().st_size} bytes)")
-print(f"  loss_progress.html ({loss_progress_path.stat().st_size} bytes)")
-print(f"  gd_effect.html     ({gd_effect_path.stat().st_size} bytes)")
-print(f"\nTo open the original family tree in a browser:")
-print(f"  open {RUN_DIR / 'family_tree.html'}")
+dash_summary = load_run_summary(RUN_DIR)
+print(
+    f"summary: task={dash_summary['task_name']}  "
+    f"status={dash_summary['status']}  "
+    f"best_validate={dash_summary['best_validate_loss']}"
+)
+
+ranked = load_program_list(RUN_DIR)
+print(f"\nranked programs ({len(ranked)}):")
+for p in ranked[:5]:
+    print(f"  rank={p['rank']}  #{p['idx']}  {p['name']!r:50s}  "
+          f"validate={p['loss_validate']}")
+
+if ranked:
+    detail = load_program_detail(RUN_DIR, ranked[0]['idx'])
+    print(f"\nwinner detail: parents={detail['parents']}  "
+          f"children={detail['children']}  "
+          f"fingerprint_shape={detail['fingerprint_shape']}")
 
 
 # %% [markdown]

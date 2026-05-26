@@ -16,12 +16,14 @@ if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
 
 import asyncio
 import argparse
+import time
 import traceback
 import sys
 from pathlib import Path
 
 from .io.task_spec import TaskSpec
 from .io.logging import open_log, log_generation, close_log, print_and_log
+from .io.status import write_status
 from .evolution.population import Population
 from .evolution.island import (
     seed,
@@ -38,13 +40,18 @@ from .llm.generate import (
 )
 from .io.config import RetryConfig
 from .scoring.scoring import rank, score
-from .monitoring.family_tree import write_family_tree
 
 
 async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     os.makedirs(spec.output_dir, exist_ok=True)
     spec.save(spec.output_dir)
     log = open_log(spec.output_dir, log_level)
+
+    n_gens = spec.evolution["n_generations"]
+    started_at = time.time()
+    write_status(spec.output_dir, state="starting", n_gens=n_gens, started_at=started_at)
+    pop_path = os.path.join(spec.output_dir, "population.jsonl")
+    census_path = os.path.join(spec.output_dir, "island_census.jsonl")
 
     X_discover, X_validate, X_eval = spec.load_data_fn(
         data_path=spec.io["data_path"], **spec.project_params
@@ -65,6 +72,9 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
             max_tokens=config.get("max_tokens"),
         )
         score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
+        population.save(pop_path)  # snapshot of seed phase so the dashboard has data before gen 0 finishes
+        save_island_census(census, census_path)
+        write_status(spec.output_dir, state="running", n_gens=n_gens, current_gen=-1, started_at=started_at)
 
         for gen in range(spec.evolution["n_generations"]):
             print_and_log(log, f"Generation {gen} / {spec.evolution['n_generations']}")
@@ -110,6 +120,12 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
             census.append([set(island) for island in islands])
             log_generation(log, gen, population, islands, spec)
 
+            # Per-generation persistence for the live dashboard. Atomic writes
+            # protect a polling reader from observing torn files.
+            population.save(pop_path)
+            save_island_census(census, census_path)
+            write_status(spec.output_dir, state="running", n_gens=n_gens, current_gen=gen, started_at=started_at)
+
         population.prepare_validation_scoring(islands)
         score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
         rank(population)
@@ -118,15 +134,20 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
 
     finally: #runs whether or not an exception is raised, ensuring that results are saved
         exc_info = sys.exc_info()
-        if exc_info[0] is not None:
+        failed = exc_info[0] is not None
+        if failed:
             print_and_log(log, f"***** Run failed with exception:\n{''.join(traceback.format_exception(*exc_info))}***** Output directory: {spec.output_dir} *****")
-        population.save(os.path.join(spec.output_dir, "population.jsonl"))
-        save_island_census(census, os.path.join(spec.output_dir, "island_census.jsonl"))
+        population.save(pop_path)
+        save_island_census(census, census_path)
+        write_status(
+            spec.output_dir,
+            state="failed" if failed else "complete",
+            n_gens=n_gens,
+            current_gen=(len(census) - 1) if census else None,
+            started_at=started_at,
+            error=(f"{exc_info[0].__name__}: {exc_info[1]}" if failed else None),
+        )
         close_log(log)
-        try: 
-            write_family_tree(population, census, spec.output_dir, param_penalty_weight=spec.scoring.get("param_penalty_weight"))
-        except Exception:
-            pass  # don't mask the original exception
 
     return
 
