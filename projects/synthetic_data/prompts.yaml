@@ -39,7 +39,7 @@ model:
 
     '
   image_analysis_instructions: "**Image Analysis Instructions:**\n 
-    The image shows a scatter plot of the observed experimental data, with its binned mean in sky-blue, and model fits. The better model fit with lower loss is plotted in red and the worse model fit in green. Analyze the plot and how the models compare to the data, use this analysis to inform your model generation, in order to create a new model that improves upon these models\n"
+    The image shows a scatter plot of the observed experimental data, with its binned mean in sky-blue, and model fits. The model with better lower average loss is plotted in green and the model with higher average loss is plotted in red. Analyze the plot and how the models compare to the data, use this analysis to inform your model generation, in order to create a new model that improves upon these models\n"
   #image_analysis_instructions: null
   program_detail_template: '**Model: {name}**
 
