@@ -47,13 +47,14 @@ model:
 
     '
   image_analysis_instructions: null
-  program_detail_template: '**Model {parent_number}**
+  program_detail_template: '**{name}**
 
     {code_model}
 
     '
   config_vars: []
   program_vars:
+  - name
   - code.model
 parameter_estimator:
   base: 'You are an AI scientist. Your task is to create a parameter estimator to estimate the free parameters of the latest model.
@@ -92,10 +93,11 @@ parameter_estimator:
 
     '
   image_analysis_instructions: null
-  program_detail_template: '**Model {parent_number}**
+  program_detail_template: '**{name}**
 
     {code_model}
 
     '
   program_vars:
+  - name
   - code.model

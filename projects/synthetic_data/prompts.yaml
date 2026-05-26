@@ -38,15 +38,19 @@ model:
     * Briefly describe what the model computes.
 
     '
-  #image_analysis_instructions: The image shows a scatter plot of the experimental data, with its binned mean in sky-blue, Model 1 predictions in red and Model 2 predictions in green. Analyze the plot and how the models compare to the data, use this analysis to inform your model generation.
-  image_analysis_instructions: null
-  program_detail_template: '**Model {parent_number}**
+  image_analysis_instructions: "**Image Analysis Instructions:**\n 
+    The image shows a scatter plot of the observed experimental data, with its binned mean in sky-blue, and model fits. The better model fit with lower loss is plotted in red and the worse model fit in green. Analyze the plot and how the models compare to the data, use this analysis to inform your model generation, in order to create a new model that improves upon these models\n"
+  #image_analysis_instructions: null
+  program_detail_template: '**Model: {name}**
+
+    loss: {program_losses_discover_final}
 
     {code_model}
 
     '
-  config_vars: []
   program_vars:
+  - name
+  - program_losses_discover_final
   - code.model
 parameter_estimator:
   base: 'You are an AI scientist. Your task is to create a simple parameter estimator to estimate the free parameters of the latest model.
@@ -79,10 +83,11 @@ parameter_estimator:
 
     '
   image_analysis_instructions: null
-  program_detail_template: '**Model {parent_number}**
+  program_detail_template: '**Model: {name}**
 
     {code_model}
 
     '
   program_vars:
+  - name
   - code.model

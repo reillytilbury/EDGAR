@@ -361,7 +361,7 @@ def plot_model_fits(
     title_parts = [title_prefix] if title_prefix else []
     for j, program in enumerate(parent_programs):
         loss = program.program_losses.discover.final
-        title_parts.append(f"Model {j + 1}: loss={loss:.3f}" if loss is not None else f"Model {j + 1}: loss=n/a")
+        title_parts.append(f"{program.name}: loss={loss:.3f}" if loss is not None else f"{program.name}: loss=n/a")
     if title_parts:
         fig.suptitle(" | ".join([p for p in title_parts if p]), fontsize=13)
     fig.subplots_adjust(left=0.02, right=0.98, bottom=0.03, top=0.92, wspace=0.25, hspace=0.4)
