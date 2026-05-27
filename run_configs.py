@@ -80,7 +80,7 @@ data_path_hd = '/home/reilly/datasets/hd_cells/hd_with_repeats.npz'
 
 CONFIGS_HD = [
     dict(run_name='hd',
-         n_iterations=8, time_limit=90,
+         n_iterations=8, time_limit=60,
          data_path=data_path_hd, data_type='hd',
          use_image_feedback=True, use_large_every=3,
          param_penalty_weight=0.01,
@@ -89,19 +89,19 @@ CONFIGS_HD = [
          n_bins=180, min_repeats=None,
          diag_kwargs={'point_alpha': 0.15, 'n_mean': 50},
          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
-] * 4
+] * 6
 
 CONFIGS_BZ15 = [
     dict(run_name='bz15',
-         n_iterations=12, time_limit=45,
+         n_iterations=12, time_limit=30,
          data_path=data_path_bz15, data_type='jacob',
          use_image_feedback=True, use_large_every=3,
          param_penalty_weight=0.01,
          data_scale_factor=100,
          activity_thresh=0.0, signal_fraction_thresh=0.85, conc_thresh=0.4,
-         n_bins=256, min_repeats=6,
+         n_bins=256, min_repeats=12,
          diag_kwargs={'point_alpha': 0.1, 'n_mean': 60},
          exploration_topology=[1, 2, 3, 4, 5, 6, 7, 0], exploit_point=0.5)
-] * 4
+] * 6
 
-RUN_CONFIGS = CONFIGS_BZ15 + CONFIGS_HD
+RUN_CONFIGS = CONFIGS_BZ15

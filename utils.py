@@ -218,7 +218,8 @@ async def call_llm_async(
     model_name: str = "gemini-2.5-flash",
     temperature: float = 1.0,
     thinking_budget: float = 1,
-    img_bytes: Union[bytes, None] = None
+    img_bytes: Union[bytes, None] = None,
+    timeout: Union[float, None] = 180
     ) -> Union[str, None]:
     """
     Send one prompt to the GenAI client and return the text result.
@@ -237,10 +238,10 @@ async def call_llm_async(
             # Send the request to the GenAI client
             if img_bytes is not None:
                 # If image bytes are provided, include them in the request
-                resp = await client.aio.models.generate_content(model=model_name, contents=[prompt_text, types.Part.from_bytes(data=img_bytes, mime_type="image/png")], config=config)
+                resp = await asyncio.wait_for(client.aio.models.generate_content(model=model_name, contents=[prompt_text, types.Part.from_bytes(data=img_bytes, mime_type="image/png")], config=config), timeout=timeout)
             else:
                 # Otherwise, just send the text prompt
-                resp = await client.aio.models.generate_content(model=model_name, contents=[prompt_text], config=config)
+                resp = await asyncio.wait_for(client.aio.models.generate_content(model=model_name, contents=[prompt_text], config=config), timeout=timeout)
             
             return resp.text
         except Exception as e:
@@ -248,12 +249,12 @@ async def call_llm_async(
             return None
     else:
         try:
-            resp = await client.messages.create(
+            resp = await asyncio.wait_for(client.messages.create(
                 model=model_name,
                 temperature=temperature,
                 max_tokens=5_000,
                 messages=[{"role": "user", "content": prompt_text}]
-            )
+            ), timeout=timeout)
             # Correct way to access Claude's response text
             return resp.content[0].text
         except Exception as e:
