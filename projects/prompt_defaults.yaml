@@ -36,8 +36,6 @@ model:
 
     * Ensure all free parameters (values in `params`) are numeric, not strings or functions.
 
-    * Cast to `int()` when using a numeric value as an array size, slice index, or `range()` argument (e.g. `n_bins = int(np.sqrt(len(x)))`). numpy float scalars raise `TypeError: ''numpy.float32'' object cannot be interpreted as an integer` in these contexts.
-
     * Ensure all string values in function call arguments are properly JSON-escaped
 
     * You must also provide `default_params`: a dict of sensible initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be floats.
@@ -84,7 +82,6 @@ parameter_estimator:
     * Return a parameter dict with the same keys expected by the model.\n* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
     * Do not attempt to fit the parameters using complex fitting functions like {swear_words}. We only need a simple, fast initial estimate of the parameters.
     * Do not call the model function in your parameter_estimator code, as you will not have access to it!
-    * Cast to `int()` when using a numeric value as an array size, slice index, or `range()` argument (e.g. `n_bins = int(np.sqrt(len(x)))`). numpy float scalars raise `TypeError: ''numpy.float32'' object cannot be interpreted as an integer` in these contexts.
     * Ensure all string values in function call arguments are properly JSON-escaped
     * It is VERY IMPORTANT that the returned params dictionary has keys that exactly match the keys expected by the model, and that all values are floats. If the keys do not match, or if any value is not a float, your parameter_estimator will be rejected.
     '

@@ -1,56 +1,35 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "edgar"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "Equation Discovery with Graphical AI Reasoning: an evolutionary framework for discovering scientific equations using LLM-generated programs."
 requires-python = ">=3.13"
-dependencies = [
-    "anthropic>=0.61.0",
-    "cloudpickle>=3.1.2",
-    "google-genai>=2.3.0",
-    "ipython>=9.13.0",
-    "jax[cuda12]>=0.4.38",
-    "jaxopt>=0.8.5",
-    "matplotlib>=3.10.3",
-    "networkx>=3.2",
-    "numpy>=2.2.6",
-    "optax>=0.2.5",
-    "pandas>=2.2.3",
-    "pillow>=11.2.1",
-    "protobuf>=5.29.5",
-    "pydantic>=2.13.4",
-    "pydantic-ai>=1.96.1",
-    "pytest>=9.0.2",
-    "pytest-asyncio>=1.3.0",
-    "python-dotenv>=1.2.1",
-    "pyyaml>=6.0.2",
-    "scipy>=1.15.2",
-    "timeout-decorator>=0.5.0",
-    "tqdm>=4.67.1",
-]
+dynamic = ["dependencies"]
 
 [project.scripts]
-edgar = "src.cli:run_cli"
+edgar = "edgar.cli:run_cli"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+# `namespaces = true` is needed because most subpackages under `edgar/` have no
+# `__init__.py` (PEP 420 namespace packages). Only `edgar/monitoring/` has one.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["edgar*"]
+namespaces = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+asyncio_mode = "auto"
 addopts = "-m 'not live and not slow'" #By default do not use live API calls or run slow tests
 markers = [
     "live: tests that make real LLM API calls",
     "slow: tests that take a long time"
-]  
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[dependency-groups]
-dev = [
-    "ipykernel>=7.2.0",
 ]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src"]
 
 [tool.uv]
 package = true

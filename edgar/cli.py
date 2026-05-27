@@ -358,8 +358,12 @@ TEST_OVERRIDES = [
     "--evolution.batch_size=2",
     "--evolution.num_parents=2",
     "--evolution.topology=[1, 0]",
-    "--scoring.gradient_descent.max_iter=50",
-    "--scoring.timeout_s=60",
+    "--scoring.gradient_descent.max_iter=100",
+    "--scoring.timeout_s=120",
+    "--llms.model_llm=gemini-2.5-flash",
+    "--llms.param_est_llm=gemini-2.5-flash",
+    "--llms.jax_model_translator_llm=gemini-2.5-flash-lite",
+    #"--llms.log_raw_llm_response=True",
 ]
 
 def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> None:

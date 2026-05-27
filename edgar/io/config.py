@@ -19,9 +19,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from ..llm.prompt_schema import PromptSchema
 
 ValidLLMs = Literal["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro",
-                    "gemini-3-pro-preview", "gemini-3-flash-preview","gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
-                    "claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-6",
-                    "claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7"] #List of supported LLMs, update as needed. Provider is inferred from the prefix ('gemini-' → Google, 'claude-' → Anthropic).
+                    "gemini-3-pro-preview", "gemini-3-flash-preview","gemini-3.1-flash-lite", "gemini-3.1-pro-preview"] #List of supported LLMs, update as needed
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent

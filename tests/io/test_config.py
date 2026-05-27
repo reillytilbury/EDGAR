@@ -1,7 +1,7 @@
 import pytest
-from src.io.config import Config
+from edgar.io.config import Config
 from pydantic import ValidationError
-from src.io.task_spec import TaskSpec
+from edgar.io.task_spec import TaskSpec
 
 def test_load_perfect_config():
     """

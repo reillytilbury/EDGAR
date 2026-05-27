@@ -1,8 +1,8 @@
 import pytest
-from src.evolution.program import BirthCertificate, Code, LossPair, Losses, NotValidated, Program
-from src.llm.generate import _generate_one_model, _generate_one_param_est, _resolve_parents, generate_models, generate_param_ests, _translate_one_model, translate_programs
-from src.llm.code_loading import load_function_from_source
-from src.llm.prompt_schema import PromptSchema
+from edgar.evolution.program import BirthCertificate, Code, LossPair, Losses, Program
+from edgar.llm.generate import _generate_one_model, _generate_one_param_est, generate_models, generate_param_ests, _translate_one_model, translate_programs
+from edgar.llm.code_loading import load_function_from_source
+from edgar.llm.prompt_schema import PromptSchema
 from tests.evolution.utils import make_empty_program
 from tests.llm.programs import Program1, InvalidProgram, Program2, ProgramSolution
 from tests.llm.fakellm import FakeLLM, CyclingModel
@@ -295,56 +295,6 @@ async def test_generate_one_param_est_with_real_llm():
     assert isinstance(program.code.param_est, str)
     assert program.code.model == model_code
     assert load_function_from_source(program.code.param_est, "parameter_estimator") is not None
-
-# --- _resolve_parents ordering tests ---
-
-def _make_parent_with_loss(loss, number: int) -> Program:
-    p = make_empty_program(number)
-    p.program_losses.discover.final = loss
-    return p
-
-def _make_child(population, parent_indices: list[int]) -> Program:
-    child = make_empty_program(number=99)
-    child.birth.parent_indices = parent_indices
-    return child
-
-def test_resolve_parents_sorted_worst_to_best():
-    """Parents are returned worst-first (highest loss first)."""
-    from src.evolution.population import Population
-    pop = Population()
-    p_best = _make_parent_with_loss(1.0, 0)
-    p_mid = _make_parent_with_loss(5.0, 1)
-    p_worst = _make_parent_with_loss(10.0, 2)
-    for p in [p_best, p_mid, p_worst]:
-        pop.add(p)
-    child = _make_child(pop, [p_best.idx, p_worst.idx, p_mid.idx])
-    result = _resolve_parents(pop, child)
-    assert [p.idx for p in result] == [p_worst.idx, p_mid.idx, p_best.idx]
-
-def test_resolve_parents_none_loss_sorts_to_front():
-    """A parent with None loss is treated as worst (sorts before finite losses)."""
-    from src.evolution.population import Population
-    pop = Population()
-    p_finite = _make_parent_with_loss(3.0, 0)
-    p_none = _make_parent_with_loss(None, 1)
-    for p in [p_finite, p_none]:
-        pop.add(p)
-    child = _make_child(pop, [p_finite.idx, p_none.idx])
-    result = _resolve_parents(pop, child)
-    assert result[0].idx == p_none.idx
-
-def test_resolve_parents_not_validated_loss_sorts_to_front():
-    """A parent with NotValidated loss is treated as worst (sorts before finite losses)."""
-    from src.evolution.population import Population
-    pop = Population()
-    p_finite = _make_parent_with_loss(3.0, 0)
-    p_nv = _make_parent_with_loss(NotValidated(), 1)
-    for p in [p_finite, p_nv]:
-        pop.add(p)
-    child = _make_child(pop, [p_finite.idx, p_nv.idx])
-    result = _resolve_parents(pop, child)
-    assert result[0].idx == p_nv.idx
-
 
 @pytest.mark.live
 @pytest.mark.asyncio

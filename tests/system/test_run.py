@@ -6,9 +6,9 @@ import pytest
 from pathlib import Path
 import json
 import yaml
-from src.io.config import Config
-from src.io.task_spec import TaskSpec
-from src.run import run
+from edgar.io.config import Config
+from edgar.io.task_spec import TaskSpec
+from edgar.run import run
 
 CONFIG_PATH = Path(__file__).parent / "test_task" / "config.yaml"
 TEST_OUTPUT_DIR = Path(__file__).parents[2] / "test_output"

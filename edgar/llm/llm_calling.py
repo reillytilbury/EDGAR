@@ -10,9 +10,7 @@ from pydantic_ai.capabilities.abstract import AbstractCapability
 from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior, UserError, ModelAPIError, UsageLimitExceeded
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models import Model, ModelRequestContext
-from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import RunContext
@@ -23,39 +21,6 @@ from .response_schema import ModelSchema, ParamEstSchema, TranslationSchema
 LLMOutputTypes: TypeAlias = Union[str, ModelSchema, ParamEstSchema, TranslationSchema]
 
 load_dotenv()
-
-
-# Provider dispatch is by model-name prefix. The model string is the single source
-# of truth for which API gets called; no separate `provider:` field in config. Add
-# a new prefix here when adding a new provider.
-_PROVIDER_PREFIXES = ("gemini-", "claude-")
-
-
-def _build_model(model_name: str) -> Model:
-    """Construct a PydanticAI Model from a model-name string, dispatching by prefix.
-
-    Reads the matching provider's API key from the environment; raises UserError
-    with a clear message if it's missing or the prefix is unknown.
-    """
-    if model_name.startswith("gemini-"):
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise UserError(
-                "GOOGLE_API_KEY is not set. Export it in your shell or place it in the repo .env file."
-            )
-        return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
-
-    if model_name.startswith("claude-"):
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise UserError(
-                "ANTHROPIC_API_KEY is not set. Export it in your shell or place it in the repo .env file."
-            )
-        return AnthropicModel(model_name, provider=AnthropicProvider(api_key=api_key))
-
-    raise UserError(
-        f"Unknown LLM model {model_name!r}; expected a name starting with one of {_PROVIDER_PREFIXES}."
-    )
 
 
 class _LogRawResponseCapability(AbstractCapability):
@@ -146,33 +111,20 @@ async def call_llm(
         Other AgentRunError subclasses (UsageLimitExceeded, ModelAPIError, etc.) propagate
             immediately as they indicate persistent configuration or quota problems.
     """
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise UserError(
+            "GOOGLE_API_KEY is not set. Export it in your shell or place it in the repo .env file."
+        )
     if isinstance(llm_model, str):
-        model = _build_model(llm_model)
+        model = GoogleModel(
+            llm_model,
+            provider=GoogleProvider(api_key=api_key),
+        )
     elif isinstance(llm_model, Model):
         model = llm_model
     else:
         raise TypeError("llm_model must be a string or a PydanticAI Model instance.")
-
-    # Provider temperature ranges differ: Google accepts [0, 2], Anthropic [0, 1].
-    # The schedule in task_spec.schedule() emits temp in [~1.37, 2.0] (Gemini-scale).
-    # For Anthropic, rescale by /2 to map [1.37, 2.0] -> [0.685, 1.0], preserving
-    # the schedule's relative decay shape inside Anthropic's valid range. Only
-    # rescales when the supplied temperature exceeds 1.0 — explicitly-passed
-    # in-range values (e.g. 0.7 from tests) are left alone.
-    if isinstance(model, AnthropicModel) and temperature > 1.0:
-        temperature = temperature / 2.0
-
-    # Anthropic's API treats max_tokens as REQUIRED (Google's allows None and uses
-    # its own server-side default). Caller bugs that leak None through here crash
-    # deep inside the anthropic SDK with a confusing TypeError. Fall back to the
-    # call_llm default rather than failing — log if we hit this path so the bug
-    # can be fixed upstream.
-    if isinstance(model, AnthropicModel) and max_tokens is None:
-        max_tokens = 10_000
-        warnings.warn(
-            "[call_llm] max_tokens was None for an Anthropic call; falling back to 10000. "
-            "Pass max_tokens explicitly upstream to silence this warning."
-        )
 
     rc = retry_config or RetryConfig()
     capabilities = [_WarnOnMaxTokensCapability()]

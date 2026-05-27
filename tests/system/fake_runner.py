@@ -13,9 +13,9 @@ import os
 import shutil
 from pathlib import Path
 
-from src.io.config import Config
-from src.io.task_spec import TaskSpec
-from src.run import run
+from edgar.io.config import Config
+from edgar.io.task_spec import TaskSpec
+from edgar.run import run
 from tests.llm.fakellm import CyclingModel, FakeLLM, SeedFakeLLM
 
 CONFIG_PATH = Path(__file__).parent / "test_task" / "config.yaml"

@@ -98,7 +98,6 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
                 spec.prompt_schemas.jax_model,
                 llms.model_jax,
                 retry_config=retry_config,
-                max_tokens=config.get("max_tokens"),
             )
 
             score(

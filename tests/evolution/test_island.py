@@ -1,8 +1,8 @@
 import pytest
 import numpy as np
 from scipy.stats import chisquare
-from src.evolution.island import boltzmann_sample, migrate, prune, seed, spawn, uniform_sample, _are_duplicates, deduplicate_inner, deduplicate_outer, deduplicate
-from src.evolution.population import Population
+from edgar.evolution.island import boltzmann_sample, migrate, prune, seed, spawn, uniform_sample, _are_duplicates, deduplicate_inner, deduplicate_outer, deduplicate
+from edgar.evolution.population import Population
 from tests.evolution.utils import make_empty_population, make_seeds, make_fingerprint_population, make_fingerprint_program
 
 def test_seed():
@@ -517,7 +517,7 @@ def test_island_census_round_trip(tmp_path):
         [{0, 1}, {0, 1, 3}, {0, 1, 3, 5}],
     ]
     path = str(tmp_path / "census.json")
-    from src.evolution.island import save_island_census, load_island_census
+    from edgar.evolution.island import save_island_census, load_island_census
     save_island_census(census, path)
     loaded = load_island_census(path)
     assert loaded == census

@@ -12,7 +12,7 @@ Covers:
 import numpy as np
 import pytest
 
-from src.evolution.program import NotValidated
+from edgar.evolution.program import NotValidated
 from tests.evolution.utils import make_program, wrong_entrypoint_code
 
 class TestCompile:

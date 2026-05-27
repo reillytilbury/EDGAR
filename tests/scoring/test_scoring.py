@@ -11,9 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.evolution.program import Program, BirthCertificate, Code, NotValidated
-from src.evolution.population import Population
-from src.scoring.scoring import _eval_loss, _optimize, _score_one_model, rank, score
+from edgar.evolution.program import Program, BirthCertificate, Code, NotValidated
+from edgar.evolution.population import Population
+from edgar.scoring.scoring import _eval_loss, _optimize, _score_one_model, rank, score
 
 
 # --- shared fixtures ---

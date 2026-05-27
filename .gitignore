@@ -9,6 +9,7 @@ CLAUDE.md
 git rm --cached -r program_databases
 program_databases/
 figures/gradopt_tests/
+test_output/
 
 # Python cache
 __pycache__/
@@ -16,11 +17,7 @@ __pycache__/
 *.pyo
 *.pyd
 
-*scratchpad.ipynb
-*.txt
-*.png
-*.html
+# Editable-install metadata (`pip install -e .`)
+*.egg-info/
 
-**test_output/**
-**data_test/**
-**scrap**
+*scratchpad.ipynb
