@@ -1,6 +1,6 @@
 io:
-  data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
-
+  #data_path: /home/dabin/data/stringer_2020/gratings_drifting_GT1_2019_04_12_1.npy
+  data_path: /home/rajah/datasets/stringer_2021/gratings_drifting_GT1_2019_04_12_1.npy
 project_params:
   activity_threshold: 0.4
   conc_threshold: 0.55

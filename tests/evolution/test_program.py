@@ -2,9 +2,10 @@
 Tests for Program in src/evolution/program.py.
 
 Covers:
-- compile(): returns callable (model_fn, param_est_fn) for valid code strings (not using JAX for simplicty)
-- compile(): checks outputs of compiled functions against expected outputs
-- compile(): raises ValueError when model or param_est code is missing or has the wrong entrypoint name
+- compile_model() / compile_param_est(): return callables for valid code strings
+- compile_model() / compile_param_est(): check outputs against expected values
+- compile_model(): raises ModelLoadingError when model code is missing or has wrong entrypoint
+- compile_param_est(): raises ParamEstLoadingError when param_est code is missing or has wrong entrypoint
 - count_params(): counts number of parameters in the program's param_est output and caches it in n_params
 """
 
@@ -18,14 +19,16 @@ from tests.evolution.utils import make_program, wrong_entrypoint_code
 class TestCompile:
     def test_compile_returns_callables(self):
         program = make_program()
-        model_fn, param_est_fn = program.compile()
+        model_fn = program.compile_model()
+        param_est_fn = program.compile_param_est()
         assert callable(model_fn)
         assert callable(param_est_fn)
 
     def test_compiled_model_produces_correct_numeric_output(self):
         data = {"x": np.array([1.0, 2.0])}
         program = make_program()
-        model_fn, param_est_fn = program.compile()
+        model_fn = program.compile_model()
+        param_est_fn = program.compile_param_est()
         params = param_est_fn(data)
         assert list(params.values()) == pytest.approx(
             [1.0, 2.0]
@@ -34,28 +37,24 @@ class TestCompile:
         assert result.tolist() == pytest.approx([3.0, 4.0])  # y = x + 2
 
     def test_compile_raises_when_model_code_missing(self):
-        program = make_program(model_code = None)
-        with pytest.raises(ValueError, match="model"):
-            program.compile()
+        program = make_program(model_code=None)
+        with pytest.raises(ModelLoadingError, match="model"):
+            program.compile_model()
 
     def test_compile_raises_when_param_est_code_missing(self):
         program = make_program(param_est_code=None)
-        with pytest.raises(ValueError, match="parameter_estimator"):
-            program.compile()
+        with pytest.raises(ParamEstLoadingError, match="parameter_estimator"):
+            program.compile_param_est()
 
-    def test_compile_raises_when_model_entrypoint_wrong(
-        self
-    ):
+    def test_compile_raises_when_model_entrypoint_wrong(self):
         program = make_program(model_code=wrong_entrypoint_code())
-        with pytest.raises(ValueError, match="model"):
-            program.compile()
+        with pytest.raises(ModelLoadingError, match="model"):
+            program.compile_model()
 
-    def test_compile_raises_when_param_est_entrypoint_wrong(
-        self
-    ):
+    def test_compile_raises_when_param_est_entrypoint_wrong(self):
         program = make_program(param_est_code=wrong_entrypoint_code())
-        with pytest.raises(ValueError, match="parameter_estimator"):
-            program.compile()
+        with pytest.raises(ParamEstLoadingError, match="parameter_estimator"):
+            program.compile_param_est()
 
 def test_no_default_params():
     program = make_program()

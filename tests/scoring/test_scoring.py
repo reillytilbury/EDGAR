@@ -120,7 +120,6 @@ def test_score_one_model_kills_slow_model():
     assert elapsed < 10.0  # subprocess was killed; didn't wait for the loop
 
 
-
 def test_score_one_model_falls_back_to_default_params():
     """param_est_fn raises → _get_params falls back to default_params, loss still finite."""
     program = Program(
@@ -128,6 +127,54 @@ def test_score_one_model_falls_back_to_default_params():
         code=Code(param_est=FAILING_PARAM_EST_CODE, model_jax=FAST_MODEL_CODE),
         _default_params={"w": jnp.array(1.0)},
     )
+    data = (_make_data(), _make_data())
+    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+
+    assert jnp.isfinite(final_loss)
+    assert jnp.isfinite(initial_loss)
+
+
+BROKEN_PARAM_EST_CODE = """
+def parameter_estimator(data):
+    return {'w': 1.0
+"""
+
+BROKEN_MODEL_CODE = """
+def model(data, params):
+    return params['w'] * data['x'
+"""
+
+def test_score_one_model_gives_infinite_loss_for_broken_model_syntax():
+    """model_jax with syntax error → ModelLoadingError → infinite loss."""
+    program = Program(
+        birth=BirthCertificate(generation=0, island=0, batch_index=0),
+        code=Code(param_est=PARAM_EST_CODE, model_jax=BROKEN_MODEL_CODE),
+        _default_params={"w": jnp.array(1.0)},
+    )
+    data = (_make_data(), _make_data())
+    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+
+    assert final_loss == float("inf")
+    assert initial_loss == float("inf")
+
+def test_score_one_model_falls_back_when_param_est_syntax_error():
+    """param_est with syntax error → falls back to default_params, loss still finite."""
+    program = Program(
+        birth=BirthCertificate(generation=0, island=0, batch_index=0),
+        code=Code(param_est=BROKEN_PARAM_EST_CODE, model_jax=FAST_MODEL_CODE),
+        _default_params={"w": jnp.array(1.0)},
+    )
+    data = (_make_data(), _make_data())
+    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+
+    assert jnp.isfinite(final_loss)
+    assert jnp.isfinite(initial_loss)
+
+
+def test_score_one_model_with_notvalidated_loss():
+    """Program with NotValidated validate loss (default state) scores without BrokenPipeError."""
+    program = _make_program(FAST_MODEL_CODE)
+    assert type(program.program_losses.validate.final).__name__ == "NotValidated"
     data = (_make_data(), _make_data())
     final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
 

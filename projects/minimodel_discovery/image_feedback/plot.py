@@ -286,7 +286,7 @@ def plot_model_fits(
         raise ValueError("No anchor neurons available for plotting.")
 
     n_models = len(parent_programs)
-    model_fns = [program.compile()[0] for program in parent_programs]
+    model_fns = [program.compile_model() for program in parent_programs]
 
     fig = plt.figure(figsize=(4.2 * (1 + n_models), 3.0 * len(anchors)))
     outer = fig.add_gridspec(len(anchors), 1 + n_models, wspace=0.25, hspace=0.35)

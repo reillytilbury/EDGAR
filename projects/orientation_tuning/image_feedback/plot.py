@@ -9,7 +9,7 @@ def plot_model_fits(data, parent_programs, save_path=""):
 
     Args:
         data: X_disc_train dict with keys 'stimulus', 'response' — shape (n_cells, n_trials).
-        parent_programs: list of Program objects with .params and .compile() methods.
+        parent_programs: list of Program objects with .params and .compile_model() methods.
         save_path: file path to save the figure.
     """
     if not save_path:
@@ -22,7 +22,7 @@ def plot_model_fits(data, parent_programs, save_path=""):
 
     n_show         = min(9, n_cells)
     sample_indices = np.random.choice(n_cells, size=n_show, replace=False)
-    model_fns      = [program.compile()[0] for program in parent_programs]
+    model_fns      = [program.compile_model() for program in parent_programs]
 
     fig, axes = plt.subplots(3, 3, figsize=(18, 18))
 

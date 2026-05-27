@@ -14,7 +14,7 @@ def plot_model_fits(
 
     Args:
         data: X_disc_train dict with keys 'source', 'target' — shape (n_samples, n_features, n_trials).
-        parent_programs: list of Program objects with .params and .compile() methods.
+        parent_programs: list of Program objects with .params and .compile_model() methods.
         save_path: file path to save the figure.
         title_prefix: optional string prepended to the suptitle.
     """
@@ -48,7 +48,7 @@ def plot_model_fits(
         gridspec_kw={"width_ratios": [1.25, 1.25, 1.0], "height_ratios": [1.0, 1.0, 0.8]},
     )
 
-    model_fns   = [program.compile()[0] for program in parent_programs]
+    model_fns   = [program.compile_model() for program in parent_programs]
     preds_by_model = []
     model_losses   = []
     for j, (program, model_fn) in enumerate(zip(parent_programs, model_fns)):

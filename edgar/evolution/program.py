@@ -28,6 +28,9 @@ from ..llm.code_loading import load_function_from_source
 MODEL_ENTRYPOINT     = "model"
 PARAM_EST_ENTRYPOINT = "parameter_estimator"
 
+class ModelLoadingError(Exception): pass
+class ParamEstLoadingError(Exception): pass
+
 @dataclass
 class BirthCertificate:
     generation: int
@@ -82,15 +85,19 @@ class Program:
         if self._default_params is not None:
             self.default_params = self._default_params #use the setter to validate and set n_params
 
-    def compile(self) -> tuple[Callable, Callable]:
-        """Compile JAX model and numpy parameter_estimator into callables."""
+    def compile_model(self) -> Callable:
+        """Load JAX model callable. Raises ModelLoadingError if source is missing or invalid."""
         model_fn = load_function_from_source(self.code.model_jax, MODEL_ENTRYPOINT)
-        param_est_fn = load_function_from_source(self.code.param_est, PARAM_EST_ENTRYPOINT)
         if model_fn is None:
-            raise ValueError(f"{self.birth}: could not load '{MODEL_ENTRYPOINT}'")
+            raise ModelLoadingError(f"{self.birth}: could not load '{MODEL_ENTRYPOINT}'")
+        return model_fn
+
+    def compile_param_est(self) -> Callable:
+        """Load parameter_estimator callable. Raises ParamEstLoadingError if source is missing or invalid."""
+        param_est_fn = load_function_from_source(self.code.param_est, PARAM_EST_ENTRYPOINT)
         if param_est_fn is None:
-            raise ValueError(f"{self.birth}: could not load '{PARAM_EST_ENTRYPOINT}'")
-        return model_fn, param_est_fn
+            raise ParamEstLoadingError(f"{self.birth}: could not load '{PARAM_EST_ENTRYPOINT}'")
+        return param_est_fn
 
     # ── prompt template properties ──
     # These match the program_vars used in prompt_defaults.yaml so that

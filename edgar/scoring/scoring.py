@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 
+import traceback
 import cloudpickle
 import numpy as np
 import jax
@@ -19,7 +20,7 @@ import optax
 from jax.flatten_util import ravel_pytree
 import warnings
 
-from ..evolution.program import NotValidated, Program
+from ..evolution.program import ModelLoadingError, NotValidated, ParamEstLoadingError, Program
 from ..evolution.population import Population
 
 
@@ -32,7 +33,7 @@ def _get_params(param_est_fn, default_params, data_train):
         per_sample = [param_est_fn({k: v[i] for k, v in data_np.items()}) for i in range(n)]
         return {k: jnp.stack([jnp.asarray(s[k]) for s in per_sample]) for k in per_sample[0]}
     except Exception as e:
-        warnings.warn(f"[scoring] param_est_fn failed, falling back to default params: {e}")
+        warnings.warn(f"[scoring] param_est_fn failed at runtime, falling back to default params: {e}")
         n = next(iter(data_train.values())).shape[0]
         return jax.tree_util.tree_map(lambda x: jnp.stack([x] * n), default_params)
 
@@ -82,23 +83,35 @@ def _eval_fingerprint(model_fn, params, X_eval):
     return jax.vmap(model_fn, in_axes=(0, 0))(X_eval, params_matched)
 
 
-def _worker(queue, program, data, loss_fn_bytes, config, X_eval):
-    """Score one program inside a subprocess. Always puts a 3-tuple on the queue."""
+def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval):
+    """Score one program inside a subprocess. Always puts a 5-tuple on the queue."""
+    program = cloudpickle.loads(program_bytes)
+    loss_fn = cloudpickle.loads(loss_fn_bytes)
+    data_train, data_test = data
+
     try:
-        loss_fn = cloudpickle.loads(loss_fn_bytes)
-        data_train, data_test = data
-        model_fn, param_est_fn = program.compile()
+        model_fn = program.compile_model()
+    except ModelLoadingError as e:
+        print(f"[scoring] program #{program.idx} model failed to load: {e}")
+        queue.put((float("inf"), float("inf"), None, None, None))
+        return
+
+    try:
+        param_est_fn = program.compile_param_est()
+    except ParamEstLoadingError as e:
+        warnings.warn(f"[scoring] program #{program.idx} param_est failed to load, falling back to default_params: {e}")
+        param_est_fn = None
+
+    try:
         penalty = config["param_penalty_weight"] * program.n_params
         params_init = _get_params(param_est_fn, program.default_params, data_train)
         initial_loss = _eval_loss(model_fn, loss_fn, params_init, data_test) + penalty
         params = _optimize(model_fn, loss_fn, params_init, data_train, config["gradient_descent"])
         final_loss = _eval_loss(model_fn, loss_fn, params, data_test) + penalty
     except Exception as e:
-        import traceback
-        print(f"[scoring] program #{program.idx} failed during compile/optimize/eval: {e}")
+        print(f"[scoring] program #{program.idx} failed during optimize/eval: {e}")
         print(f"[scoring] traceback:\n{traceback.format_exc()}")
         print(f"[scoring] code.model_jax:\n{program.code.model_jax}")
-        print(f"[scoring] code.param_est:\n{program.code.param_est}")
         queue.put((float("inf"), float("inf"), None, None, None))
         return
 
@@ -134,11 +147,13 @@ def _score_one_model(
     if program.n_params is None:
         warnings.warn(f"Program #{program.idx} has n_params=None, applying infinite loss, verify that its default_params were set prior to scoring")
         return (float("inf"), float("inf"), None, None, None)
+    
 
     ctx = mp.get_context("spawn")
     queue = ctx.Queue()
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
-    proc = ctx.Process(target=_worker, args=(queue, program, data, loss_fn_bytes, config, X_eval))
+    program_bytes = cloudpickle.dumps(program)
+    proc = ctx.Process(target=_worker, args=(queue, program_bytes, data, loss_fn_bytes, config, X_eval))
     proc.start()
     try:
         result = queue.get(timeout=config["timeout_s"])

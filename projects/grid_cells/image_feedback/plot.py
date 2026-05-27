@@ -17,7 +17,7 @@ def plot_model_fits(
 
     Args:
         data: X_disc_train dict with keys 'pos_x', 'pos_y', 'response' — shape (n_cells, n_trials).
-        parent_programs: list of Program objects with .params and .compile() methods.
+        parent_programs: list of Program objects with .params and .compile_model() methods.
         save_path: file path to save the figure.
         n_bins: number of spatial bins per axis for rate maps.
         smoothing_sigma: gaussian smoothing sigma applied to rate maps.
@@ -34,7 +34,7 @@ def plot_model_fits(
 
     n_show         = min(max_show, n_cells)
     sample_indices = np.random.choice(n_cells, size=n_show, replace=False)
-    model_fns      = [program.compile()[0] for program in parent_programs]
+    model_fns      = [program.compile_model() for program in parent_programs]
 
     x_domain = (float(pos_x.min()), float(pos_x.max()))
     y_domain = (float(pos_y.min()), float(pos_y.max()))

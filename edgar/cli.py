@@ -161,7 +161,7 @@ SPEC_TEMPLATE_PLOT = dedent(
         Args:
             data: X_disc_train dict of JAX arrays, shape (n_samples, n_trials).
             parent_programs: list of Program objects. Each has:
-                - .compile() -> (model_fn, param_est_fn)
+                - .compile_model() -> model_fn
                 - .params: dict of per-sample params, each value shape (n_samples, ...)
                 - .sample_losses: per-sample losses, shape (n_samples,), or None
                 - .program_losses.discover.final: scalar overall loss
