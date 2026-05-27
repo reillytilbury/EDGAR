@@ -25,6 +25,7 @@ No install needed, just run commands with `uv run` from the repo root, e.g
 uv run edgar test projects/orientation_tuning/config.yaml
 ```
 will automatically setup the environment in the root folder.
+(TODO: check issues with uv add?)
 
 ### 2. Set API key
 
@@ -43,27 +44,34 @@ export GEMINI_API_KEY=your_key_here
 ### 3. Run an experiment
 
 ```bash
-python -m edgar.cli run projects/orientation_tuning/config.yaml
+edgar run projects/orientation_tuning/config.yaml
 ```
 
 Control logging verbosity (default: `compact`):
 
 ```bash
-python -m edgar.cli run projects/orientation_tuning/config.yaml --log-level code
-python -m edgar.cli run projects/orientation_tuning/config.yaml --log-level prompts
+edgar run projects/orientation_tuning/config.yaml --log-level code
+edgar run projects/orientation_tuning/config.yaml --log-level prompts
 ```
 
 Override config values on the command line:
 
 ```bash
-python -m edgar.cli run projects/orientation_tuning/config.yaml --evolution.n_generations=5
-python -m edgar.cli run projects/orientation_tuning/config.yaml --llms.model_llm=gemini-2.5-pro
+edgar run projects/orientation_tuning/config.yaml --evolution.n_generations=5
+edgar projects/orientation_tuning/config.yaml --llms.model_llm=gemini-2.5-pro
 ```
+
+Run a quick test with reduced settings (1 generation, 2 islands, batch size 2) to verify the pipeline is wired correctly
+
+```bash
+edgar test projects/orientation_tuning/config.yaml
+```
+
 
 Reproduce a previous run from its saved `task_spec.yaml`:
 
 ```bash
-python -m edgar.cli run program_databases/05-06/14-32-10/task_spec.yaml
+edgar run program_databases/05-06/14-32-10/task_spec.yaml
 ```
 
 ---
