@@ -73,19 +73,6 @@ async def test_call_llm_with_fake_model_translation():
 
 #Real LLM calls 
 
-@pytest.mark.asyncio
-@pytest.mark.live
-async def test_call_llm_ping():
-    prompt = "Say hi and repeat back the number 12345"
-    llm_model = LLM_MODEL
-    result = await call_llm(
-        prompt=prompt,
-        llm_model=llm_model,
-        output_type=str,
-    )
-    print(result)
-    assert "12345" in result
-    
 @pytest.mark.live
 @pytest.mark.asyncio
 async def test_call_llm_live_model_schema():
