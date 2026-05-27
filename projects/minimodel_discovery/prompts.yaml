@@ -1,0 +1,78 @@
+model:
+  base: 'You are an AI scientist building compact analytic image-response models for mouse V1 neurons.
+
+    The parent models below are shared-family single-neuron models trained on natural-image data.
+
+    Your task is to create a new model that lowers loss.
+
+    The model must remain end-to-end from image to response and stay within the primitive structural prior: fixed features -> localized spatial readout -> nonlinear channel combination -> positive firing-rate output.
+
+    '
+  explore: 'Be creative inside the primitive library rather than inventing new large learned feature extractors.
+
+    Good directions include different combinations of pooled/unpooled channels, low-dimensional interactions, normalization, and different ways to weight scales and orientations.
+
+    '
+  exploit: 'Stay close to the strongest parent model and simplify where possible.
+
+    Prefer clearer nonlinear combinations of existing primitive features over adding parameters.
+
+    '
+  code_guidelines: "**Code Generation Guidelines:**\n* Import only lightweight modules.\n* Do not include any text other than code.\n* Model signature must be `def model(data, params):`.\n* The image input is `data[\"image\"]`.\n* You must build the model using primitives imported from `projects.minimodel_discovery.primitives`.\n* Do not introduce learned convolution kernels, FFT filter banks, or CNN layers.\n* Keep the parameterization compact: scalar readout parameters plus low-dimensional channel weights.\n* Your response must be under {max_lines} lines.\n* You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).\n"
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Name this model by its mechanism, not a version number.
+
+    * Briefly describe what the model computes.
+
+    '
+  image_analysis_instructions: null
+  program_detail_template: '**{name}**
+
+    {code_model}
+
+    '
+  config_vars:
+  - max_lines
+  program_vars:
+  - name
+  - code.model
+parameter_estimator:
+  base: 'You are creating a compact parameter estimator for the current model.
+
+    The estimator should infer a localized readout and low-dimensional channel weights directly from image-response statistics.
+
+    Analyze parent estimators, generalize what improves loss, and create a better estimator.
+
+    '
+  explore: null
+  exploit: null
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import only lightweight modules.
+
+    * Return a parameter dict with the same keys expected by the model.
+
+    * The estimator signature must be `def parameter_estimator(data):`.
+
+    * Use direct statistics such as STA moments, masked projections, and simple eigendecompositions.
+
+    * Do not run optimization, least squares solvers, or curve fitting.
+
+    * Keep the code under {max_lines} lines.
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Briefly describe the estimation method.
+
+    '
+  image_analysis_instructions: null
+  program_detail_template: '**{name}**
+
+    {code_model}
+
+    '
+  program_vars:
+  - name
+  - code.model

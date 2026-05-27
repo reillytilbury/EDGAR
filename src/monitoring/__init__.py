@@ -1,10 +1,9 @@
-"""Progress report package for EDGAR.
+"""Monitoring: family tree + loss/gd-effect HTML reports built from a Population.
 
-Provides family tree visualisation and dynamic progress monitoring
-from JSONL generation logs.
+    write_family_tree(population, census, out_dir, task_name="...")
+    write_progress(population, census, out_dir, task_name="...")
 """
+from .family_tree import write_family_tree
+from .progress import write_progress
 
-from .family_tree import create_family_tree
-from .progress_monitor import create_dynamic_progress_update
-
-__all__ = ["create_family_tree", "create_dynamic_progress_update"]
+__all__ = ["write_family_tree", "write_progress"]

@@ -1,0 +1,97 @@
+model:
+  base: 'You are an AI scientist. The {num_parents} programs below are biological models of neurons. The models are sorted from highest to lowest loss.
+
+    Your task is to create a new neuron model that has a lower loss than these models.
+
+    All models take stimulus orientation (theta) in radians as input.
+
+    Analyze the progression of the models, generalize the improvements, and create a new model that is better than these models.
+
+    '
+  explore: Use the models below as *inspiration*, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
+  exploit: Use the models below as a *template* to create a new model. Which features correlate with lower loss? Find these features and *extrapolate* them. Focus on *exploiting* strengths and *eliminating* weaknesses or *redundancies*. You will be *penalized* for complexity.
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do NOT include any text other than the code.
+
+    * Model signature must be `def model(data, params):` where `data` is a dict with keys "stimulus" and "response" and `params` is a dict of named arrays/scalars.
+
+    * Ensure all free parameters are numeric, not strings.
+
+    * At the beginning of the code, clip the free parameters to a biologically plausible range.
+
+    * You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Use a descriptive name for this model, not a version number.
+
+    * Briefly describe what the model computes.
+
+    '
+  image_analysis_instructions: "**Image Analysis Instructions:**\n\n
+      Attached is a scatter plot of the neuron models' performance on top of raw neural data. 
+      The binned mean of the experimental data is plotted in **sky-blue**, the model with higher average loss in **red** and model with lower average loss in **green**.\n
+
+      Analyse the models' fits to the data in the image below. Identify systematic weaknesses of the models by observing patterns across multiple cell plots. For instance, consider:\n
+      **Model Comparisons:** Which models are better for each cell? That is to say, which models track the blue curve better? Which features of the models are responsible for improving the fit?\n
+      **Model Fit:** How well do the models fit the binned data mean? Look for places where even the models (**green** curve for best model, **red** for second best model) deviate most from the binned data mean (**blue** curve). This is where the models are weakest, and where you should focus your improvements. \n
+      **Model Shape:** Do the models' shapes (e.g., peak sharpness, width, skewness, amplitude, etc.) align with the binned data mean (**blue**) and raw data scatter points (**black**)? If not, how do they differ? How can you change the model to better match the data shape? \n
+      **Parameter Flexibility:** Are there free parameters that could be introduced or modified to better capture the observed response profiles? Utilize your analysis of the shortcomings of the current models' shapes and add free parameters or modify existing ones to address these issues.\n
+
+      Use this analysis to inform the design of a new neuron model that improves upon the previous models.\n"
+  program_detail_template: '**Model: {name}**
+
+    loss: {program_losses_discover_final}
+
+    {code_model}
+
+    '
+  program_vars:
+  - name
+  - program_losses.discover.final
+  - code.model
+parameter_estimator:
+  base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest neuron model.
+
+    The parameter should be estimated directly, using statistical principles and knowledge of what the parameters represent biologically.
+
+    Analyze the progression of the parameter estimators, generalize the improvements, and create a new parameter estimator that is better than all previous estimators.
+
+    '
+  explore: null
+  exploit: null
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do not include any text other than the code.
+
+    * Return a parameter dict with the same keys expected by the model.
+
+    * Function signature must be `def parameter_estimator(data):`.
+
+    * data is a dictionary with only two keys : "stimulus" and "response". 
+    
+    * Your response **must** be less than {max_lines} lines. If it is longer, it will be immediately rejected.
+
+    * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point.
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Briefly describe the estimation method.
+
+    '
+  image_analysis_instructions: null
+  program_detail_template: '**Model {name}**
+
+    {code_model}
+
+    '
+  program_vars:
+  - name
+  - code.model

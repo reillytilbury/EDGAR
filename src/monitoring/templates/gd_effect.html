@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>__TITLE_HTML__</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+__SIDEBAR_CSS__
+</style>
+</head>
+<body>
+<div id="graph-container">
+  <div class="controls" id="controls">
+    <div class="section-title">Colouring</div>
+    <label><input type="radio" name="colour-mode" value="island" onchange="onColourModeToggle()"> By island</label>
+    <label><input type="radio" name="colour-mode" value="dead_llm" checked onchange="onColourModeToggle()"> Dead vs alive (alive by LLM)</label>
+    <label><input type="radio" name="colour-mode" value="dead_mode" onchange="onColourModeToggle()"> Dead vs alive (alive by mode)</label>
+  </div>
+  <div id="graph" style="width:100%;height:100vh;"></div>
+</div>
+<div id="sidebar">
+  <button id="close-btn" onclick="closeSidebar()">&times;</button>
+  <div id="sidebar-content"></div>
+</div>
+
+<script>
+const sidebarData = __SIDEBAR_DATA__;
+const allTraces = __TRACES__;
+const seedX = __SEED_X__;
+const seedY = __SEED_Y__;
+const seedCustom = __SEED_CUSTOM__;
+const seedHover = __SEED_HOVER__;
+const diagRange = __DIAG_RANGE__;
+const TRACE_OFFSET = 1;
+__COLOUR_MODE_JS__
+
+// Diagonal y=x reference (no improvement line)
+// Points above diagonal: P(train) > P(initial) => GD improved the loss
+const diagTrace = {
+  x: diagRange,
+  y: diagRange,
+  mode: 'lines',
+  line: {color: '#999', width: 1.5, dash: 'dash'},
+  hoverinfo: 'none',
+  name: 'y = x (no improvement)',
+  showlegend: true,
+  type: 'scatter'
+};
+
+const seedTrace = {
+  x: seedX,
+  y: seedY,
+  customdata: seedCustom,
+  hovertext: seedHover,
+  mode: 'markers',
+  hoverinfo: 'text',
+  name: 'Seeds',
+  marker: {
+    symbol: 'square',
+    color: seedCustom.map(function(idx) { return getNodeColour(idx, currentColourMode); }),
+    size: 18,
+    line: {width: 1.5, color: '#fff'}
+  },
+  type: 'scatter'
+};
+
+const plotlyTraces = [diagTrace].concat(allTraces.map(function(t) {
+  return {
+    x: t.x,
+    y: t.y,
+    customdata: t.custom,
+    hovertext: t.hover,
+    mode: 'markers',
+    hoverinfo: 'text',
+    name: 'Island ' + t.island_idx,
+    marker: {
+      color: t.custom.map(function(idx) { return getNodeColour(idx, currentColourMode); }),
+      size: 14,
+      line: {width: 1, color: '#333'}
+    },
+    type: 'scatter'
+  };
+})).concat([seedTrace]);
+
+const layout = {
+  title: __TITLE_JSON__,
+  showlegend: true,
+  hovermode: 'closest',
+  xaxis: {
+    title: 'Relative perplexity P(initial loss) — param estimator only',
+    showgrid: true
+  },
+  yaxis: {
+    title: 'Relative perplexity P(train loss) — after GD  [above diagonal = GD improved]',
+    showgrid: true
+  },
+  margin: {l: 60, r: 20, t: 60, b: 50},
+  plot_bgcolor: '#fff',
+  paper_bgcolor: '#fff'
+};
+
+const graphDiv = document.getElementById('graph');
+Plotly.newPlot(graphDiv, plotlyTraces, layout, {responsive: true});
+
+// Click handler (trace 0 is diagonal — skip it; seeds have customdata too)
+graphDiv.on('plotly_click', function(data) {
+  if (data.points.length > 0) {
+    const pt = data.points[data.points.length - 1];
+    if (pt.customdata !== undefined && pt.customdata !== null) {
+      showSidebar(pt.customdata);
+    }
+  }
+});
+
+__SIDEBAR_JS__
+</script>
+</body>
+</html>

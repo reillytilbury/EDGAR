@@ -1,0 +1,19 @@
+model:
+  base: 'default_base1'
+  explore: 'default_explore1'
+  exploit: 'default_exploit1'
+  code_guidelines: 'default_code_guidelines1'
+  docstring_guidelines: 'default_docstring_guidelines1'
+  image_analysis_instructions: null
+  program_detail_template: 'default_program_detail_template1'
+  program_vars: []
+parameter_estimator:
+  base: 'default_param_est_base1'
+  explore: null
+  exploit: null
+  code_guidelines: 'default_param_est_code_guidelines1'
+  docstring_guidelines: 'default_param_est_docstring_guidelines1'
+  image_analysis_instructions: null
+  program_detail_template: 'default_param_est_program_detail_template1'
+  program_vars: []
+#missing jax translator model

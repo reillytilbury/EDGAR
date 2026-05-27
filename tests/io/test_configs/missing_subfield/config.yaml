@@ -1,0 +1,36 @@
+io:
+  data_path: ""
+  save_path: ""
+
+evolution:
+  #missing n_generations
+  n_islands: 8
+  batch_size: 6
+  critical_population_size: 12
+  n_migrants: 2
+  topology: [1, 2, 3, 4, 5, 6, 7, 0]
+
+llms:
+  num_parents: 2
+  retry:
+    max_retries: 3
+    initial_delay: 1.0
+    backoff_multiplier: 2.0
+    max_delay: 60.0
+    retryable_status_codes: [500, 503]
+
+  model_llm: [gemini-2.5-flash, gemini-2.5-flash, gemini-2.5-flash]
+  param_est_llm: gemini-2.5-flash
+  jax_model_translator_llm: gemini-2.5-flash-lite
+  log_raw_llm_response: false
+  max_tokens: 10000
+  max_lines: 50
+  swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
+
+scoring:
+  param_penalty_weight: 0.01
+  timeout_s: 120.0
+
+  gradient_descent:
+    max_iter: 1000
+    learning_rate: 1e-2

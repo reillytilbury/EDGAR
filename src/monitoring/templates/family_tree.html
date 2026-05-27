@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>__TITLE_HTML__</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+  body { margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; display: flex; height: 100vh; overflow: hidden; }
+  #graph-container { flex: 1; position: relative; }
+  #sidebar { width: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; background: #f8f9fa; border-left: 2px solid #dee2e6;
+              transition: width 0.3s ease, min-width 0.3s ease, padding 0.3s ease; padding: 0; box-sizing: border-box; }
+  #sidebar.open { width: 33.33vw; min-width: 33.33vw; padding: 20px; }
+  #sidebar h2 { margin-top: 0; color: #333; font-size: 18px; }
+  #sidebar .field { margin-bottom: 12px; }
+  #sidebar .field-label { font-weight: 600; color: #555; font-size: 13px; margin-bottom: 2px; }
+  #sidebar .field-value { font-size: 13px; color: #222; }
+  #sidebar pre { background: #272822; color: #f8f8f2; padding: 10px; border-radius: 4px;
+                  font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; max-height: 300px; overflow-y: auto; }
+  #sidebar details { margin-bottom: 8px; }
+  #sidebar summary { cursor: pointer; font-weight: 600; color: #555; font-size: 13px; padding: 4px 0; }
+  #sidebar summary:hover { color: #007bff; }
+  #close-btn { position: absolute; top: 8px; right: 8px; background: none; border: none; font-size: 20px;
+                cursor: pointer; color: #666; z-index: 10; }
+  #close-btn:hover { color: #333; }
+  .loss-good { color: #28a745; font-weight: 600; }
+  .loss-bad { color: #dc3545; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="graph-container">
+  <div id="graph" style="width:100%;height:100%;"></div>
+</div>
+<div id="sidebar">
+  <button id="close-btn" onclick="closeSidebar()">&times;</button>
+  <div id="sidebar-content"></div>
+</div>
+
+<script>
+const sidebarData = __SIDEBAR_DATA__;
+const parentMap = __PARENT_MAP__;
+const posMap = __POS_MAP__;
+
+const edgeTrace = {
+  x: __EDGE_X__,
+  y: __EDGE_Y__,
+  mode: 'lines',
+  line: { color: '#aaa', width: 1.5 },
+  hoverinfo: 'none',
+  type: 'scatter'
+};
+
+const nodeTrace = {
+  x: __NODE_X__,
+  y: __NODE_Y__,
+  customdata: __NODE_IDS__,
+  text: __NODE_LABELS__,
+  hovertext: __NODE_HOVER__,
+  mode: 'markers+text',
+  textposition: 'middle center',
+  textfont: { size: 12, color: '#fff' },
+  hoverinfo: 'text',
+  marker: {
+    color: __NODE_COLORS__,
+    symbol: __NODE_SYMBOLS__,
+    size: __NODE_SIZES__,
+    line: { width: 1.5, color: '#333' }
+  },
+  type: 'scatter'
+};
+
+const highlightTrace = {
+  x: [],
+  y: [],
+  mode: 'lines',
+  line: { color: '#e8a020', width: 3 },
+  hoverinfo: 'none',
+  type: 'scatter'
+};
+
+const layout = {
+  title: __TITLE_JSON__,
+  showlegend: false,
+  hovermode: 'closest',
+  xaxis: { showgrid: false, zeroline: false, showticklabels: false },
+  yaxis: { showgrid: false, zeroline: false, showticklabels: false },
+  margin: { l: 20, r: 20, t: 50, b: 20 },
+  plot_bgcolor: '#fff',
+  paper_bgcolor: '#fff'
+};
+
+const graphDiv = document.getElementById('graph');
+Plotly.newPlot(graphDiv, [edgeTrace, highlightTrace, nodeTrace], layout, {responsive: true});
+
+function getAncestorEdgeCoords(nodeId) {
+  const hx = [], hy = [];
+  const visited = new Set();
+  const queue = [nodeId];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (visited.has(current)) continue;
+    visited.add(current);
+    const parents = parentMap[current] || [];
+    for (const parent of parents) {
+      if (posMap[parent] && posMap[current]) {
+        hx.push(posMap[parent][0], posMap[current][0], null);
+        hy.push(posMap[parent][1], posMap[current][1], null);
+        queue.push(parent);
+      }
+    }
+  }
+  return { hx, hy };
+}
+
+graphDiv.on('plotly_hover', function(data) {
+  if (data.points.length > 0) {
+    const pt = data.points[data.points.length - 1];
+    if (pt.customdata) {
+      const { hx, hy } = getAncestorEdgeCoords(pt.customdata);
+      Plotly.restyle(graphDiv, { x: [hx], y: [hy] }, [1]);
+    }
+  }
+});
+
+graphDiv.on('plotly_unhover', function() {
+  Plotly.restyle(graphDiv, { x: [[]], y: [[]] }, [1]);
+});
+
+graphDiv.on('plotly_click', function(data) {
+  if (data.points.length > 0) {
+    const pt = data.points[data.points.length - 1];
+    if (pt.customdata) {
+      showSidebar(pt.customdata);
+    }
+  }
+});
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '<em>N/A</em>';
+  const div = document.createElement('div');
+  div.textContent = String(s);
+  return div.innerHTML;
+}
+
+function formatLoss(v) {
+  if (v === null || v === undefined) return '<em>N/A</em>';
+  const cls = v < 10 ? 'loss-good' : 'loss-bad';
+  return '<span class="' + cls + '">' + Number(v).toFixed(4) + '</span>';
+}
+
+function formatTemp(v) {
+  if (v === null || v === undefined) return '<em>N/A</em>';
+  const num = Number(v);
+  if (Number.isNaN(num)) return escapeHtml(v);
+  return num.toFixed(2);
+}
+
+function formatRemovalDetailValue(value) {
+  if (value === null || value === undefined) return '<em>N/A</em>';
+  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) {
+    return '<code>' + escapeHtml(JSON.stringify(value)) + '</code>';
+  }
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? String(value) : Number(value).toFixed(4);
+  }
+  return escapeHtml(value);
+}
+
+function formatRemovalDetails(details) {
+  if (!details || typeof details !== 'object' || Object.keys(details).length === 0) return '';
+  let html = '<div class="field" style="margin-top:6px;">';
+  html += '<span class="field-label" style="color:#856404;">Details:</span>';
+  html += '<div class="field-value" style="margin-top:4px;">';
+  Object.entries(details).forEach(function([key, value]) {
+    html += '<div><strong>' + escapeHtml(key) + ':</strong> ' + formatRemovalDetailValue(value) + '</div>';
+  });
+  html += '</div></div>';
+  return html;
+}
+
+function labelFor(id) {
+  if (id === null || id === undefined) return '<em>N/A</em>';
+  const rec = sidebarData[id];
+  if (rec && rec.display_label) return escapeHtml(rec.display_label);
+  return escapeHtml(id);
+}
+
+function showSidebar(nodeId) {
+  const d = sidebarData[nodeId];
+  if (!d) return;
+  const sb = document.getElementById('sidebar');
+  const sc = document.getElementById('sidebar-content');
+
+  const displayLabel = d.display_label || nodeId;
+  let h = '<h2>' + escapeHtml(d.is_seed ? ('Seed ' + displayLabel) : ('Program ' + displayLabel)) + '</h2>';
+
+  // Basic info
+  h += '<div class="field"><span class="field-label">ID:</span> <span class="field-value">' + escapeHtml(d.program_id) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Generation:</span> <span class="field-value">' + escapeHtml(d.iteration) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Island:</span> <span class="field-value">' + escapeHtml(d.island_label || d.island) + '</span></div>';
+  if (d.is_migrant) {
+    h += '<div class="field"><span class="field-label">Migrant From:</span> <span class="field-value">' + escapeHtml(d.migrant_from_label || d.migrant_from_id) + '</span></div>';
+  }
+  if (d.is_extinct) {
+    h += '<div class="field"><span class="field-label">Status:</span> <span class="field-value">Extinct</span></div>';
+  }
+  if (d.rank !== null && d.rank !== undefined) {
+    h += '<div class="field"><span class="field-label">Rank:</span> <span class="field-value">' + (d.rank === 1 ? '&#9733; ' : '') + escapeHtml(d.rank) + '</span></div>';
+  }
+  h += '<div class="field"><span class="field-label">Initial Loss:</span> <span class="field-value">' + formatLoss(d.initial_loss) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Train Loss:</span> <span class="field-value">' + formatLoss(d.train_loss) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Test Loss:</span> <span class="field-value">' + formatLoss(d.test_loss) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Complexity Penalty:</span> <span class="field-value">' + escapeHtml(d.complexity_penalty !== null && d.complexity_penalty !== undefined ? Number(d.complexity_penalty).toFixed(4) : null) + '</span></div>';
+  h += '<div class="field"><span class="field-label">N Params:</span> <span class="field-value">' + escapeHtml(d.n_params) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Mode:</span> <span class="field-value">' + escapeHtml(d.mode) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Temperature:</span> <span class="field-value">' + formatTemp(d.temperature) + '</span></div>';
+  h += '<div class="field"><span class="field-label">LLM:</span> <span class="field-value">' + escapeHtml(d.llm_name) + '</span></div>';
+  h += '<div class="field"><span class="field-label">Parents:</span> <span class="field-value">' + labelFor(d.parent1_id) + ', ' + labelFor(d.parent2_id) + '</span></div>';
+
+  if (d.removal_reason) {
+    h += '<div class="field" style="background:#fff3cd;padding:6px;border-radius:4px;margin-bottom:8px;">';
+    h += '<span class="field-label" style="color:#856404;">Removed:</span> ';
+    h += '<span class="field-value">' + escapeHtml(d.removal_reason.event_type) + ' (' + escapeHtml(d.removal_reason.rule) + ')</span>';
+    h += formatRemovalDetails(d.removal_reason.details);
+    h += '</div>';
+  }
+
+  // Model code
+  if (d.model_code) {
+    h += '<details><summary>Model Code</summary><pre>' + escapeHtml(d.model_code) + '</pre></details>';
+  }
+  if (d.model_code_jax) {
+    h += '<details><summary>Model Code (JAX)</summary><pre>' + escapeHtml(d.model_code_jax) + '</pre></details>';
+  }
+
+  // Param estimator code
+  if (d.param_est_code) {
+    h += '<details><summary>Parameter Estimator Code</summary><pre>' + escapeHtml(d.param_est_code) + '</pre></details>';
+  }
+
+  // Model prompt (collapsible)
+  if (d.model_prompt) {
+    h += '<details><summary>Model Prompt</summary><pre>' + escapeHtml(d.model_prompt) + '</pre></details>';
+  }
+
+  // LLM response (collapsible)
+  if (d.model_llm_response) {
+    h += '<details><summary>LLM Response</summary><pre>' + escapeHtml(d.model_llm_response) + '</pre></details>';
+  }
+
+  // Param est prompt (collapsible)
+  if (d.param_est_prompt) {
+    h += '<details><summary>Param Estimator Prompt</summary><pre>' + escapeHtml(d.param_est_prompt) + '</pre></details>';
+  }
+
+  // Param est LLM response (collapsible)
+  if (d.param_est_llm_response) {
+    h += '<details><summary>Param Estimator LLM Response</summary><pre>' + escapeHtml(d.param_est_llm_response) + '</pre></details>';
+  }
+
+  // Images
+  if (d.image_prompt_path) {
+    h += '<details><summary>Prompt Image (Parents)</summary><img src="' + d.image_prompt_path + '" style="max-width:100%;margin-top:8px;"></details>';
+  }
+  if (d.train_fit_image_path) {
+    h += '<details><summary>Train Fit</summary><img src="' + d.train_fit_image_path + '" style="max-width:100%;margin-top:8px;"></details>';
+  }
+  if (d.test_fit_image_path) {
+    h += '<details><summary>Test Fit</summary><img src="' + d.test_fit_image_path + '" style="max-width:100%;margin-top:8px;"></details>';
+  }
+
+  sc.innerHTML = h;
+  sb.classList.add('open');
+  resizeGraph();
+}
+
+function resizeGraph() {
+  setTimeout(function() { Plotly.Plots.resize(graphDiv); }, 350);
+}
+
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  resizeGraph();
+}
+</script>
+</body>
+</html>

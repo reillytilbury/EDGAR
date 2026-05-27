@@ -1,0 +1,27 @@
+model:
+  base: 'default_base'
+  explore: 'default_explore'
+  exploit: 'default_exploit'
+  #missing code guidelines 
+  docstring_guidelines: 'default_docstring_guidelines'
+  image_analysis_instructions: null
+  program_detail_template: 'default_program_detail_template'
+  program_vars: []
+parameter_estimator:
+  base: 'default_param_est_base'
+  explore: null
+  exploit: null
+  code_guidelines: 'default_param_est_code_guidelines'
+  docstring_guidelines: 'default_param_est_docstring_guidelines'
+  image_analysis_instructions: null
+  program_detail_template: 'default_param_est_program_detail_template'
+  program_vars: []
+jax_translator_model:
+  base: 'default_jax_base'
+  explore: null
+  exploit: null
+  code_guidelines: 'default_jax_code_guidelines'
+  docstring_guidelines: 'default_jax_docstring_guidelines'
+  image_analysis_instructions: null
+  program_detail_template: 'default_jax_program_detail_template'
+  program_vars: []

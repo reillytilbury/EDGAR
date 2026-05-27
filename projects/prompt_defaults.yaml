@@ -1,0 +1,155 @@
+# Prompt defaults for all projects.
+# Override in projects/<task>/prompts.yaml.
+#
+# Two kinds of template variables:
+#   - config_vars: come from config/spec, passed explicitly (e.g. k, max_lines, swear_words)
+#   - program_vars: dotted paths into Program fields (e.g. "name", "code.model", "program_losses.discover.final")
+
+model:
+  base: 'You are an AI scientist. Below are {num_parents} models describing a phenomenon, sorted from worst to best.
+
+    Your task is to create a new model, that is better than all the models below.
+
+
+    *Analyze* the progression of the models, *generalize* the improvements, and *create* a new model that is better than *all* previous models.
+
+    '
+  explore: 'Use the models below as inspiration, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss?
+
+    Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
+
+    '
+  exploit: 'Use the models below as a *template* to create a new model.
+
+    Which features in the models below correlate with lower loss? Find these features and *extrapolate* them.
+
+    Focus on *exploiting* the strengths of the existing models and *eliminating* their weaknesses or *redundancies*.
+
+    You will be *penalized* for complexity, so make the new model as *simple* as possible while still being better than the previous models.
+
+    '
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Model signature must be `def model(data, params):` where `data` is a dict of named arrays (e.g. data[''temperature''], data[''pressure'']) where `params` is a dict of named arrays/scalars (e.g. params[''decay_rate''], params[''amplitude'']).
+
+    * Ensure all free parameters (values in `params`) are numeric, not strings or functions.
+
+    * Ensure all string values in function call arguments are properly JSON-escaped
+
+    * You must also provide `default_params`: a dict of sensible initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be floats.
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Use a descriptive name for this model, not a version number.
+
+    * Briefly describe what the model computes.
+
+    '
+  image_analysis_instructions: null
+  program_detail_template: 'Model: {name}
+
+    loss: {program_losses_discover_final}
+
+    {code_model}
+
+    ----------------------------
+
+    '
+  config_vars:
+  - num_parents
+  program_vars:
+  - name
+  - program_losses.discover.final
+  - code.model
+parameter_estimator:
+  base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest model (shown last below).
+
+    The parameter should be estimated directly, using statistical principles.
+
+
+    *Analyze* the progression of the parameter estimators, *generalize* the improvements, and *create* a new parameter estimator that is better than *all* previous estimators.
+
+    '
+  explore: null
+  exploit: null
+  code_guidelines: '**Code Generation Guidelines:**
+    * Import any packages you use.
+    * Do not include any text other than the code.
+    * Function signature must be `def parameter_estimator(data):`, where `data` is the single-sample data dict used by `model`.
+    * Return a parameter dict with the same keys expected by the model.\n* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
+    * Do not attempt to fit the parameters using complex fitting functions like {swear_words}. We only need a simple, fast initial estimate of the parameters.
+    * Do not call the model function in your parameter_estimator code, as you will not have access to it!
+    * Ensure all string values in function call arguments are properly JSON-escaped
+    * It is VERY IMPORTANT that the returned params dictionary has keys that exactly match the keys expected by the model, and that all values are floats. If the keys do not match, or if any value is not a float, your parameter_estimator will be rejected.
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Briefly describe the estimation method.
+
+    '
+  image_analysis_instructions: null
+  program_detail_template: 'Model: {name}
+
+    loss: {program_losses_discover_final}
+
+    {code_model}
+
+    ----------------------------
+
+    '
+  program_vars:
+  - name
+  - program_losses.discover.final
+  - code.model
+jax_translator_model:
+  base: '
+    Translate the following model function to JAX-compatible code.
+
+    Ensure that keys of data and params dicts are preserved. 
+    
+    Ensure that the input and output behavior of the function is preserved.
+
+    Include all necessary imports (jax, jax.numpy as jnp).
+
+    Ensure compatibility with jax.jit, jax.grad, and jax.vmap.
+
+    '
+  explore: null
+  exploit: null
+  code_guidelines: 'CRITICAL JAX compatibility requirements:
+
+    * Ensure compatibility with jax version 0.4.38.
+
+    * Replace all boolean indexing with `jnp.where`.
+
+    * Use `jnp` everywhere (no `np`).
+
+    * Use `jnp.clip` for clipping values — do NOT use `jax.lax.clip` (removed in JAX v0.6.0).
+
+    * Avoid Python control flow (if/for) that depends on array values.
+
+    * Do not use dynamic array shapes.
+
+    * Never call Python `int()` / `float()` on JAX values. Use x.astype(float) instead.
+
+    * jnp.bincount requires a static `length` argument (note: numpy uses `minlength=` but JAX renamed it to `length=`). Always pass a concrete integer: jnp.bincount(x, length=n_bins). Never omit `length=`.
+
+    * Ensure all string values in function call arguments are properly JSON-escaped
+
+    '
+  docstring_guidelines: '
+    Do not include any text in the docstring. The function should only contain the jax-translated code.
+    '
+  image_analysis_instructions: null
+  program_detail_template: 'Model code:
+
+    {code_model}
+
+    '
+  config_vars: []
+  program_vars:
+  - code.model
+

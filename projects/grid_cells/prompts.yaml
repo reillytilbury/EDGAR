@@ -1,0 +1,79 @@
+model:
+  base: 'You are an AI scientist. The programs below are biological models. The models are sorted from highest to lowest loss.
+
+    Your task is to create a new model that has a lower loss than the models below.
+
+    Analyze the progression of the models, generalize the improvements, and create a new model that is better than all previous models.
+
+    '
+  explore: Use the models below as *inspiration*, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find these features and *extrapolate* them.
+  exploit: Use the models below as a *template* to create a new model. Which features correlate with lower loss? Find these features and *extrapolate* them. Focus on *exploiting* strengths and *eliminating* weaknesses or *redundancies*. You will be *penalized* for complexity.
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do not include any text other than the code.
+
+    * Model signature must be `def model(data, params):` where `data` is a dict with keys "pos_x", "pos_y" and `params` is a dict of named arrays/scalars.
+
+    * Ensure all free parameters are numeric, not strings.
+
+    * You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Use a descriptive name for this model, not a version number.
+
+    * Briefly describe what the model computes.
+
+    '
+  image_analysis_instructions: null
+  program_detail_template: '**{name}**
+
+    {code_model}
+
+    '
+  config_vars: []
+  program_vars:
+  - name
+  - code.model
+parameter_estimator:
+  base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest model.
+
+    The parameter should be estimated directly, using statistical principles and knowledge of what the parameters represent biologically.
+
+    Analyze the progression of the parameter estimators, generalize the improvements, and create a new parameter estimator that is better than all previous estimators.
+
+    '
+  explore: null
+  exploit: null
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do not include any text other than the code.
+
+    * Return a parameter dict with the same keys expected by the model.
+
+    * Function signature must be `def parameter_estimator(data):`.
+
+    * Your response must be less than {max_lines} lines.
+
+    * Do not use complex fitting functions like `curve_fit`, `least_squares` or `minimize`.
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Briefly describe the estimation method.
+
+    '
+  image_analysis_instructions: null
+  program_detail_template: '**{name}**
+
+    {code_model}
+
+    '
+  program_vars:
+  - name
+  - code.model
