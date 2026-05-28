@@ -26,12 +26,14 @@ import yaml
 from ..evolution.island import load_island_census
 from ..evolution.population import Population
 from ..evolution.program import NotValidated, Program
+from ..io.metrics import METRICS_FILENAME, read_metrics
 from ..io.status import read_status
 
 
 # ── Population cache (path, mtime) → Population ──
 _POP_CACHE: dict[str, tuple[float, Population]] = {}
 _CENSUS_CACHE: dict[str, tuple[float, list[list[set[int]]]]] = {}
+_METRICS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
 
 def _load_population(run_dir: Path) -> Population | None:
@@ -82,6 +84,72 @@ def _load_census(run_dir: Path) -> list[list[set[int]]]:
     return census
 
 
+def _load_metrics(run_dir: Path) -> list[dict]:
+    """Cached metrics.jsonl loader. [] if not yet written."""
+    path = run_dir / METRICS_FILENAME
+    if not path.exists():
+        return []
+    try:
+        mtime = path.stat().st_mtime
+    except FileNotFoundError:
+        return []
+    key = str(path)
+    cached = _METRICS_CACHE.get(key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    rows = read_metrics(run_dir)
+    _METRICS_CACHE[key] = (mtime, rows)
+    return rows
+
+
+def _summarise_metrics(rows: list[dict]) -> dict:
+    """Cumulative totals across all generation rows. Cheap reduction."""
+    totals = {
+        "in_tokens": 0,
+        "out_tokens": 0,
+        "n_llm_calls": 0,
+        "n_llm_retried": 0,
+        "llm_seconds": 0.0,
+        "score_seconds": 0.0,
+        "n_scored": 0,
+        "n_ok": 0,
+        "n_timeout": 0,
+        "n_inf": 0,
+        "by_role": {},
+    }
+    for r in rows:
+        for role, st in (r.get("llm_calls") or {}).items():
+            totals["in_tokens"] += st.get("in_tokens_total", 0) or 0
+            totals["out_tokens"] += st.get("out_tokens_total", 0) or 0
+            totals["n_llm_calls"] += st.get("n", 0) or 0
+            totals["n_llm_retried"] += st.get("retried", 0) or 0
+            mean = (st.get("latency_ms") or {}).get("mean") or 0
+            totals["llm_seconds"] += (mean * (st.get("n", 0) or 0)) / 1000.0
+            by_role = totals["by_role"].setdefault(
+                role,
+                {
+                    "in_tokens": 0,
+                    "out_tokens": 0,
+                    "n": 0,
+                    "retried": 0,
+                    "seconds": 0.0,
+                },
+            )
+            by_role["in_tokens"] += st.get("in_tokens_total", 0) or 0
+            by_role["out_tokens"] += st.get("out_tokens_total", 0) or 0
+            by_role["n"] += st.get("n", 0) or 0
+            by_role["retried"] += st.get("retried", 0) or 0
+            by_role["seconds"] += (mean * (st.get("n", 0) or 0)) / 1000.0
+        sc = r.get("scoring") or {}
+        totals["n_scored"] += sc.get("n", 0) or 0
+        totals["n_ok"] += sc.get("ok", 0) or 0
+        totals["n_timeout"] += sc.get("timeout", 0) or 0
+        totals["n_inf"] += sc.get("inf", 0) or 0
+        mean = (sc.get("latency_ms") or {}).get("mean") or 0
+        totals["score_seconds"] += (mean * (sc.get("n", 0) or 0)) / 1000.0
+    return totals
+
+
 def _load_task_spec(run_dir: Path) -> dict:
     """Load task_spec.yaml. Trust boundary is local-only: this file was written
     by the same machine running the dashboard, so we tolerate Python-object
@@ -102,7 +170,7 @@ def _load_task_spec(run_dir: Path) -> dict:
             return {}
 
 
-def _read_log_tail(run_dir: Path, max_lines: int = 80) -> list[str]:
+def _read_log_tail(run_dir: Path, max_lines: int = 200) -> list[str]:
     path = run_dir / "run.log"
     if not path.exists():
         return []
@@ -315,6 +383,7 @@ def load_run_summary(run_dir: Path) -> dict:
         "n_scored_discover": discover_n,
         "best_discover_loss": best_discover,
         "best_validate_loss": best_validate,
+        "totals": _summarise_metrics(_load_metrics(run_dir)),
     }
 
 
@@ -327,6 +396,8 @@ def load_live_state(run_dir: Path) -> dict:
     derived, is_stale = _derived_state(status_doc)
     pop = _load_population(run_dir)
     census = _load_census(run_dir)
+    metrics_rows = _load_metrics(run_dir)
+    totals = _summarise_metrics(metrics_rows)
 
     evolution = spec.get("evolution") or {}
     n_gens = evolution.get("n_generations") or 0
@@ -348,6 +419,7 @@ def load_live_state(run_dir: Path) -> dict:
         "raw_status": status_doc.get("state", "complete"),
         "is_stale": is_stale,
         "current_gen": current_gen,
+        "current_stage": status_doc.get("current_stage"),
         "n_gens": n_gens,
         "elapsed_s": elapsed_s,
         "eta_s": eta_s,
@@ -359,7 +431,10 @@ def load_live_state(run_dir: Path) -> dict:
         "best_per_gen": best_per_gen,
         "best": best,
         "success_rates": success_rates,
-        "recent_log": _read_log_tail(run_dir, max_lines=14),
+        "metrics": metrics_rows,
+        "totals": totals,
+        "last_metrics": status_doc.get("last_metrics"),
+        "recent_log": _read_log_tail(run_dir, max_lines=60),
         "error": status_doc.get("error")
         or ("run appears stalled (no status update for >60s)" if is_stale else None),
     }

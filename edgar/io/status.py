@@ -6,12 +6,14 @@ so a polling reader can never observe a torn file.
 
 Schema (status.json):
     {
-        "state":       "starting" | "running" | "complete" | "failed",
-        "current_gen": int | None,
-        "n_gens":      int,
-        "started_at":  float (unix epoch seconds),
-        "updated_at":  float (unix epoch seconds),
-        "error":       str | None
+        "state":         "starting" | "running" | "complete" | "failed",
+        "current_gen":   int | None,
+        "current_stage": str | None,   # e.g. "generate_models (32/48)" or "score (23/48)"
+        "n_gens":        int,
+        "started_at":    float (unix epoch seconds),
+        "updated_at":    float (unix epoch seconds),
+        "error":         str | None,
+        "last_metrics":  dict | None,  # last completed gen's metrics row (see io/metrics.py)
     }
 """
 
@@ -36,17 +38,26 @@ def write_status(
     current_gen: int | None = None,
     started_at: float | None = None,
     error: str | None = None,
+    current_stage: str | None = None,
+    last_metrics: dict | None = None,
 ) -> None:
-    """Atomically write status.json into out_dir."""
+    """Atomically write status.json into out_dir.
+
+    ``current_stage`` and ``last_metrics`` are optional live-progress fields
+    populated by ``edgar.io.metrics``. Existing callers that pass only the
+    coarser fields remain backward-compatible.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "state": state,
         "current_gen": current_gen,
+        "current_stage": current_stage,
         "n_gens": int(n_gens),
         "started_at": float(started_at) if started_at is not None else time.time(),
         "updated_at": time.time(),
         "error": error,
+        "last_metrics": last_metrics,
     }
     _atomic_write_json(out_dir / STATUS_FILENAME, payload)
 

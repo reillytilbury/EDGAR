@@ -3,10 +3,13 @@ src/io/logging.py
 
 Human-readable run logging for EDGAR experiments.
 
-Creates a single run.log file and appends one summary block per generation.
+Creates a single run.log file. The runner emits a streaming generation banner
++ per-stage start/end lines (via ``edgar.io.metrics.stage_timer``) and one
+summary block at the END of each generation via ``log_generation``.
+
 Verbosity is controlled by the level argument:
 
-  compact  — one summary block per generation (success rates, island state, global best)
+  compact  — streaming progress + end-of-gen summary
   code     — compact + generated code for each program born this generation
   prompts  — code + reconstructed LLM prompts and image paths
 
@@ -15,16 +18,6 @@ prompt schemas, so no prompt state needs to be threaded through the main loop.
 
 Warnings emitted via warnings.warn() during a generation are buffered and
 appended to the end of that generation's block in the log.
-
-Example usage:
-    log = open_log(spec.output_dir, level="compact")
-
-    for gen in range(spec.evolution["n_generations"]):
-        mode, temperature, llms = spec.schedule(i)
-        # ... run generation ...
-        log_generation(log, gen, population, islands, spec)
-
-    close_log(log)
 """
 
 from __future__ import annotations
@@ -40,16 +33,58 @@ from ..evolution.program import NotValidated
 if TYPE_CHECKING:
     from ..evolution.population import Population
     from ..io.task_spec import TaskSpec
+    from ..io.metrics import RunMetrics
 
 
 LEVELS = ("compact", "code", "prompts")
 
 
 def print_and_log(log: RunLog, message: str) -> None:
-    """Print message to console and appent to log file."""
-    print(message)
+    """Print message to console and append to log file."""
+    print(message, flush=True)
     log.file.write(message + "\n")
     log.file.flush()
+
+
+def _llm_display(v: Any) -> str:
+    """Coerce an LLM field (string name OR a pydantic-ai Model instance) into
+    a short display string. Falls back to the type name for opaque objects."""
+    if isinstance(v, str):
+        return v
+    name = getattr(v, "model_name", None)
+    if name:
+        return str(name)
+    return type(v).__name__
+
+
+def gen_banner(
+    log: RunLog,
+    gen: int,
+    n_gens: int,
+    mode: str,
+    temperature: float,
+    llms: Any,
+    n_spawn: int,
+) -> None:
+    """Banner written at the START of each generation. Includes the schedule
+    so the user can correlate behaviour shifts (explore→exploit, temp decay,
+    LLM rotation) with what they see in the log.
+    """
+    model_llm = (
+        llms.model[gen % len(llms.model)]
+        if isinstance(llms.model, list)
+        else llms.model
+    )
+    print_and_log(log, "")
+    print_and_log(
+        log,
+        f"┌── Generation {gen}/{n_gens - 1}  "
+        f"mode={mode}  temp={temperature:.3f}  "
+        f"spawn={n_spawn}  "
+        f"llms[model={_llm_display(model_llm)} "
+        f"param_est={_llm_display(llms.param_est)} "
+        f"jax={_llm_display(llms.model_jax)}]",
+    )
 
 
 @dataclass
@@ -115,6 +150,7 @@ def log_generation(
     population: Population,
     islands: list[set[int]],
     spec: TaskSpec,
+    metrics: "RunMetrics | None" = None,
 ) -> None:
     """
     Append one generation's summary block to the log.
@@ -124,20 +160,19 @@ def log_generation(
     from spec.schedule(gen). Prompts are reconstructed from each program's
     birth metadata and the spec's prompt schemas.
 
+    If ``metrics`` is provided, also surfaces per-stage timing, per-role LLM
+    token totals + retry counts, and scoring outcome breakdown from the
+    active accumulator's bucket for this generation.
+
     Args:
         log: RunLog handle from open_log().
         gen: Generation index (0-based).
         population: Current Population.
         islands: Current island sets (post-prune and deduplicate).
         spec: TaskSpec.
+        metrics: optional RunMetrics — used to surface live per-gen stats.
     """
     f = log.file
-    mode, temperature, llms = spec.schedule(gen)
-    llm = (
-        llms.model[gen % len(llms.model)]
-        if isinstance(llms.model, list)
-        else llms.model
-    )
     born = [
         population[i]
         for i in range(len(population))
@@ -164,23 +199,51 @@ def log_generation(
     this_gen_time = elapsed - log.previous_gen_time
     log.previous_gen_time = elapsed
 
-    f.write(f"{'=' * 60}\n")
+    f.write(f"└── Gen {gen:3d} summary  ({this_gen_time:.1f}s, total {elapsed:.1f}s)\n")
     f.write(
-        f"Gen {gen:3d}  |  {mode}  |  temp={temperature:.3f}  | gen_time={this_gen_time:.1f}s | total time elapsed={elapsed:.1f}s\n"
+        f"    Spawn   {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n"
     )
-    f.write(
-        f"LLMs     model={llm}  param_est={llms.param_est}  model_jax={llms.model_jax}\n"
-    )
-    f.write(
-        f"Spawned  {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n"
-    )
-    f.write(f"Global best discover loss: {global_best}\n\n")
-    f.write("Best programs on each island:\n")
+    f.write(f"    Global best discover loss: {global_best}\n")
+
+    if metrics is not None:
+        row = metrics._build_gen_row()
+        stage_times = row.get("stage_times") or {}
+        if stage_times:
+            parts = [f"{name}={t:.1f}s" for name, t in stage_times.items()]
+            f.write(f"    Stages  {'  '.join(parts)}\n")
+        llm_calls = row.get("llm_calls") or {}
+        if llm_calls:
+            for role, st in llm_calls.items():
+                lat = st.get("latency_ms") or {}
+                p50 = lat.get("p50")
+                p90 = lat.get("p90")
+                p50_s = f"{p50 / 1000:.1f}s" if p50 is not None else "-"
+                p90_s = f"{p90 / 1000:.1f}s" if p90 is not None else "-"
+                f.write(
+                    f"    LLM[{role:<9}] n={st['n']} ok={st['ok']} retried={st['retried']}  "
+                    f"tokens in={st['in_tokens_total']} out={st['out_tokens_total']}  "
+                    f"latency p50={p50_s} p90={p90_s}\n"
+                )
+        sc = row.get("scoring") or {}
+        if sc.get("n"):
+            lat = sc.get("latency_ms") or {}
+            p50 = lat.get("p50")
+            p90 = lat.get("p90")
+            mx = lat.get("max")
+            p50_s = f"{p50 / 1000:.1f}s" if p50 is not None else "-"
+            p90_s = f"{p90 / 1000:.1f}s" if p90 is not None else "-"
+            mx_s = f"{mx / 1000:.1f}s" if mx is not None else "-"
+            f.write(
+                f"    Scoring n={sc['n']} ok={sc['ok']} timeout={sc['timeout']} inf={sc['inf']}  "
+                f"latency p50={p50_s} p90={p90_s} max={mx_s}\n"
+            )
+
+    f.write("    Best per island:\n")
     for idx, island in enumerate(islands):
         progs = [population[i] for i in island]
         best = min(progs, key=lambda p: p.program_losses.discover.final or float("inf"))
         f.write(
-            f"  Island {idx}  size={len(island)}  best=#{best.idx} {best.name!r}  loss={best.program_losses.discover.final:.6f}\n"
+            f"      Island {idx}  size={len(island)}  best=#{best.idx} {best.name!r}  loss={best.program_losses.discover.final:.6f}\n"
         )
     f.write("\n")
 

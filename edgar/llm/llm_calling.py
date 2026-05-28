@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import time
 import warnings
 from typing import Union, TypeAlias
 
@@ -24,6 +25,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import RunContext
 
 from ..io.config import RetryConfig
+from ..io.metrics import get_active_metrics
 from .response_schema import ModelSchema, ParamEstSchema, TranslationSchema
 
 LLMOutputTypes: TypeAlias = Union[str, ModelSchema, ParamEstSchema, TranslationSchema]
@@ -120,6 +122,36 @@ class _WarnOnMaxTokensCapability(AbstractCapability):
         return response
 
 
+class _RecordCallCapability(AbstractCapability):
+    """Stash usage + finish_reason + model name from each HTTP model response.
+
+    Always installed by call_llm so we can hand the numbers to ``RunMetrics``
+    after the agent run completes (success or failure). Updates per-response —
+    on retry, the values reflect the most recent HTTP exchange.
+    """
+
+    def __init__(self) -> None:
+        self.input_tokens: int = 0
+        self.output_tokens: int = 0
+        self.finish_reason: str | None = None
+        self.model_name: str | None = None
+
+    async def after_model_request(
+        self,
+        ctx: RunContext,
+        *,
+        request_context: ModelRequestContext,
+        response: ModelResponse,
+    ) -> ModelResponse:
+        usage = response.usage
+        if usage is not None:
+            self.input_tokens = int(usage.input_tokens or 0)
+            self.output_tokens = int(usage.output_tokens or 0)
+        self.finish_reason = (response.provider_details or {}).get("finish_reason")
+        self.model_name = response.model_name
+        return response
+
+
 async def call_llm(
     prompt: str,
     llm_model: str | Model,
@@ -130,6 +162,7 @@ async def call_llm(
     max_tokens: int | None = 10_000,
     log_raw_llm_response: bool = False,
     retry_config: RetryConfig | None = None,
+    role: str | None = None,
 ):
     """
     Call an LLM through PydanticAI and return the parsed output.
@@ -184,7 +217,8 @@ async def call_llm(
         )
 
     rc = retry_config or RetryConfig()
-    capabilities = [_WarnOnMaxTokensCapability()]
+    recorder = _RecordCallCapability()
+    capabilities = [_WarnOnMaxTokensCapability(), recorder]
     if log_raw_llm_response:
         capabilities.append(_LogRawResponseCapability())
     agent = Agent(
@@ -206,41 +240,72 @@ async def call_llm(
         max_tokens=max_tokens,
     )
 
-    delay = rc.initial_delay
-    for attempt in range(rc.max_retries):
-        try:
-            result = await agent.run(user_input, model_settings=model_settings)
-            return result.output
+    # Track per-call_llm wall clock + attempt count for the metrics recorder.
+    # Wall clock includes sleep-between-retries on purpose: that time is what
+    # the run loop actually waits for.
+    t_call_start = time.monotonic()
+    attempt_count = 0
+    ok = False
+    try:
+        delay = rc.initial_delay
+        for attempt in range(rc.max_retries):
+            attempt_count = attempt + 1
+            try:
+                result = await agent.run(user_input, model_settings=model_settings)
+                ok = True
+                return result.output
 
-        except UnexpectedModelBehavior as e:
-            type_name = getattr(output_type, "__name__", repr(output_type))
-            warnings.warn(
-                f"[call_llm] LLM output could not be parsed as {type_name!r} after exhausting retries — skipping. "
-                f"{e.message}"
-            )
-            return None
-
-        except ModelHTTPError as e:
-            if e.status_code not in rc.retryable_status_codes:
+            except UnexpectedModelBehavior as e:
+                type_name = getattr(output_type, "__name__", repr(output_type))
                 warnings.warn(
-                    f"[call_llm] Non-retryable HTTP {e.status_code} error: {e}"
-                )
-                raise
-            if attempt == rc.max_retries - 1:
-                warnings.warn(
-                    f"[call_llm] HTTP {e.status_code} on final attempt {attempt + 1}/{rc.max_retries}. No more retries left. Returning None."
+                    f"[call_llm] LLM output could not be parsed as {type_name!r} after exhausting retries — skipping. "
+                    f"{e.message}"
                 )
                 return None
-            jitter = random.uniform(0, 1)
-            wait = min(delay + jitter, rc.max_delay)
-            warnings.warn(
-                f"[call_llm] HTTP {e.status_code} on attempt {attempt + 1}/{rc.max_retries}, "
-                f"retrying in {wait:.1f}s."
-            )
-            await asyncio.sleep(wait)
-            delay = min(delay * rc.backoff_multiplier, rc.max_delay)
 
-        # ModelAPIError (non-HTTP network failure), UsageLimitExceeded, UserError → propagate immediately
-        except (ModelAPIError, UsageLimitExceeded, UserError) as e:
-            warnings.warn(f"[call_llm] {type(e).__name__} encountered: {e}")
-            raise
+            except ModelHTTPError as e:
+                if e.status_code not in rc.retryable_status_codes:
+                    warnings.warn(
+                        f"[call_llm] Non-retryable HTTP {e.status_code} error: {e}"
+                    )
+                    raise
+                if attempt == rc.max_retries - 1:
+                    warnings.warn(
+                        f"[call_llm] HTTP {e.status_code} on final attempt {attempt + 1}/{rc.max_retries}. No more retries left. Returning None."
+                    )
+                    return None
+                jitter = random.uniform(0, 1)
+                wait = min(delay + jitter, rc.max_delay)
+                warnings.warn(
+                    f"[call_llm] HTTP {e.status_code} on attempt {attempt + 1}/{rc.max_retries}, "
+                    f"retrying in {wait:.1f}s."
+                )
+                await asyncio.sleep(wait)
+                delay = min(delay * rc.backoff_multiplier, rc.max_delay)
+
+            # ModelAPIError (non-HTTP network failure), UsageLimitExceeded, UserError → propagate immediately
+            except (ModelAPIError, UsageLimitExceeded, UserError) as e:
+                warnings.warn(f"[call_llm] {type(e).__name__} encountered: {e}")
+                raise
+    finally:
+        # Record once per call_llm invocation, success or failure. If the run
+        # has no active RunMetrics (tests calling call_llm directly), this is a
+        # no-op.
+        metrics = get_active_metrics()
+        if metrics is not None:
+            latency_ms = (time.monotonic() - t_call_start) * 1000.0
+            resolved_model = recorder.model_name or (
+                llm_model
+                if isinstance(llm_model, str)
+                else getattr(llm_model, "model_name", "unknown")
+            )
+            metrics.record_llm_call(
+                role=role or "unknown",
+                model=str(resolved_model),
+                latency_ms=latency_ms,
+                in_tokens=recorder.input_tokens,
+                out_tokens=recorder.output_tokens,
+                finish_reason=recorder.finish_reason,
+                retries=max(0, attempt_count - 1),
+                ok=ok,
+            )

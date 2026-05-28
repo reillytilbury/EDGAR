@@ -23,8 +23,9 @@ import sys
 from pathlib import Path
 
 from .io.task_spec import TaskSpec
-from .io.logging import open_log, log_generation, close_log, print_and_log
+from .io.logging import open_log, log_generation, close_log, print_and_log, gen_banner
 from .io.status import write_status
+from .io.metrics import RunMetrics, stage_timer
 from .evolution.population import Population
 from .evolution.island import (
     seed,
@@ -63,130 +64,198 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     retry_config = RetryConfig(**spec.llms.get("retry", {}))
     config = {**spec.flat_config, "retry_config": retry_config}
 
+    n_islands = spec.evolution["n_islands"]
+    batch_size = spec.evolution["batch_size"]
+
     population = Population()
     census = []
 
-    try:
-        islands = seed(population, spec.seed_programs, spec.evolution["n_islands"])
-        await translate_programs(
-            population,
-            spec.prompt_schemas.jax_model,
-            spec.llms["jax_model_translator_llm"],
-            retry_config=retry_config,
-            max_tokens=config.get("max_tokens"),
-        )
-        score(
-            population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover"
-        )
-        generate_program_fits(spec, X_discover[1], population)
-        population.save(
-            pop_path
-        )  # snapshot of seed phase so the dashboard has data before gen 0 finishes
-        save_island_census(census, census_path)
-        write_status(
-            spec.output_dir,
-            state="running",
-            n_gens=n_gens,
-            current_gen=-1,
-            started_at=started_at,
-        )
-
-        for gen in range(spec.evolution["n_generations"]):
-            print_and_log(log, f"Generation {gen} / {spec.evolution['n_generations']}")
-            mode, temperature, llms = spec.schedule(gen)
-            spawn(
-                population,
-                islands,
-                gen,
-                mode,
-                temperature,
-                batch_size=spec.evolution["batch_size"],
-                num_parents=spec.llms["num_parents"],
-                rng=spec.rng,
+    with RunMetrics(
+        output_dir=Path(spec.output_dir),
+        run_log=log,
+        n_gens=n_gens,
+        started_at=started_at,
+    ) as metrics:
+        try:
+            print_and_log(log, f"Run started. Output: {spec.output_dir}")
+            print_and_log(
+                log,
+                f"Config: n_gens={n_gens} n_islands={n_islands} "
+                f"batch_size={batch_size} "
+                f"num_parents={spec.llms['num_parents']} "
+                f"critical_pop={spec.evolution['critical_population_size']}",
             )
 
-            await generate_models(
-                population,
-                spec.prompt_schemas.model,
-                llms.model[gen % len(llms.model)]
-                if isinstance(llms.model, list)
-                else llms.model,
-                mode,
-                temperature,
-                config=config,
-                spec=spec,
-                data=X_discover[1],
-            )  # use test data of X_discover for plotting
-            await generate_param_ests(
-                population,
-                spec.prompt_schemas.param_est,
-                llms.param_est,
-                config,
-            )
-            await translate_programs(
-                population,
-                spec.prompt_schemas.jax_model,
-                llms.model_jax,
-                retry_config=retry_config,
-            )
-
-            score(
-                population,
-                X_discover,
-                X_eval,
-                spec.scoring,
-                spec.loss_fn,
-                split="discover",
-            )
-            generate_program_fits(spec, X_discover[1], population)
-
-            deduplicate(islands, population, spec.evolution)
-            prune(islands, population, spec.evolution)
-            migrate(islands, population, spec.evolution, temperature, rng=spec.rng)
-            census.append([set(island) for island in islands])
-            log_generation(log, gen, population, islands, spec)
-
-            # Per-generation persistence for the live dashboard. Atomic writes
-            # protect a polling reader from observing torn files.
+            # ── Seed phase ──
+            metrics.start_generation(-1)
+            with stage_timer(metrics, "seed", quiet=True):
+                islands = seed(population, spec.seed_programs, n_islands)
+            with stage_timer(
+                metrics, "translate_seeds", n_items=len(spec.seed_programs)
+            ):
+                await translate_programs(
+                    population,
+                    spec.prompt_schemas.jax_model,
+                    spec.llms["jax_model_translator_llm"],
+                    retry_config=retry_config,
+                    max_tokens=config.get("max_tokens"),
+                )
+            with stage_timer(metrics, "score_seeds", n_items=len(spec.seed_programs)):
+                score(
+                    population,
+                    X_discover,
+                    X_eval,
+                    spec.scoring,
+                    spec.loss_fn,
+                    split="discover",
+                )
+            with stage_timer(metrics, "generate_program_fits_seeds", quiet=True):
+                generate_program_fits(spec, X_discover[1], population)
             population.save(pop_path)
             save_island_census(census, census_path)
+            metrics.finish_generation()
             write_status(
                 spec.output_dir,
                 state="running",
                 n_gens=n_gens,
-                current_gen=gen,
+                current_gen=-1,
                 started_at=started_at,
+                current_stage=None,
+                last_metrics=metrics._gen_rows[-1] if metrics._gen_rows else None,
             )
 
-        population.prepare_validation_scoring(islands)
-        score(
-            population, X_validate, None, spec.scoring, spec.loss_fn, split="validate"
-        )
-        rank(population)
+            # ── Evolution loop ──
+            for gen in range(n_gens):
+                metrics.start_generation(gen)
+                mode, temperature, llms = spec.schedule(gen)
+                n_spawn = n_islands * batch_size
+                gen_banner(log, gen, n_gens, mode, temperature, llms, n_spawn=n_spawn)
 
-        print_and_log(
-            log, f"***** Run complete. Output directory: {spec.output_dir} *****"
-        )
+                with stage_timer(metrics, "spawn", quiet=True):
+                    spawn(
+                        population,
+                        islands,
+                        gen,
+                        mode,
+                        temperature,
+                        batch_size=batch_size,
+                        num_parents=spec.llms["num_parents"],
+                        rng=spec.rng,
+                    )
 
-    finally:  # runs whether or not an exception is raised, ensuring that results are saved
-        exc_info = sys.exc_info()
-        failed = exc_info[0] is not None
-        if failed:
+                with stage_timer(metrics, "generate_models", n_items=n_spawn):
+                    await generate_models(
+                        population,
+                        spec.prompt_schemas.model,
+                        llms.model[gen % len(llms.model)]
+                        if isinstance(llms.model, list)
+                        else llms.model,
+                        mode,
+                        temperature,
+                        config=config,
+                        spec=spec,
+                        data=X_discover[1],
+                    )
+                with stage_timer(metrics, "generate_param_ests", n_items=n_spawn):
+                    await generate_param_ests(
+                        population,
+                        spec.prompt_schemas.param_est,
+                        llms.param_est,
+                        config,
+                    )
+                with stage_timer(metrics, "translate_programs", n_items=n_spawn):
+                    await translate_programs(
+                        population,
+                        spec.prompt_schemas.jax_model,
+                        llms.model_jax,
+                        retry_config=retry_config,
+                        max_tokens=config.get("max_tokens"),
+                    )
+                with stage_timer(metrics, "score", n_items=n_spawn):
+                    score(
+                        population,
+                        X_discover,
+                        X_eval,
+                        spec.scoring,
+                        spec.loss_fn,
+                        split="discover",
+                    )
+                with stage_timer(metrics, "generate_program_fits", quiet=True):
+                    generate_program_fits(spec, X_discover[1], population)
+
+                with stage_timer(metrics, "deduplicate", quiet=True):
+                    deduplicate(islands, population, spec.evolution)
+                with stage_timer(metrics, "prune", quiet=True):
+                    prune(islands, population, spec.evolution)
+                with stage_timer(metrics, "migrate", quiet=True):
+                    migrate(
+                        islands,
+                        population,
+                        spec.evolution,
+                        temperature,
+                        rng=spec.rng,
+                    )
+                census.append([set(island) for island in islands])
+
+                log_generation(log, gen, population, islands, spec, metrics=metrics)
+
+                # Per-generation persistence for the live dashboard. Atomic writes
+                # protect a polling reader from observing torn files.
+                population.save(pop_path)
+                save_island_census(census, census_path)
+                metrics.finish_generation()
+                write_status(
+                    spec.output_dir,
+                    state="running",
+                    n_gens=n_gens,
+                    current_gen=gen,
+                    started_at=started_at,
+                    current_stage=None,
+                    last_metrics=metrics._gen_rows[-1] if metrics._gen_rows else None,
+                )
+
+            # ── Validation ──
+            metrics.start_generation(n_gens)
+            population.prepare_validation_scoring(islands)
+            with stage_timer(metrics, "score_validate"):
+                score(
+                    population,
+                    X_validate,
+                    None,
+                    spec.scoring,
+                    spec.loss_fn,
+                    split="validate",
+                )
+            rank(population)
+            metrics.finish_generation()
+
             print_and_log(
-                log,
-                f"***** Run failed with exception:\n{''.join(traceback.format_exception(*exc_info))}***** Output directory: {spec.output_dir} *****",
+                log, f"***** Run complete. Output directory: {spec.output_dir} *****"
             )
-        population.save(pop_path)
-        save_island_census(census, census_path)
-        write_status(
-            spec.output_dir,
-            state="failed" if failed else "complete",
-            n_gens=n_gens,
-            current_gen=(len(census) - 1) if census else None,
-            started_at=started_at,
-            error=(f"{exc_info[0].__name__}: {exc_info[1]}" if failed else None),
-        )
-        close_log(log)
+
+        finally:  # runs whether or not an exception is raised
+            exc_info = sys.exc_info()
+            failed = exc_info[0] is not None
+            if failed:
+                print_and_log(
+                    log,
+                    f"***** Run failed with exception:\n"
+                    f"{''.join(traceback.format_exception(*exc_info))}"
+                    f"***** Output directory: {spec.output_dir} *****",
+                )
+            population.save(pop_path)
+            save_island_census(census, census_path)
+            write_status(
+                spec.output_dir,
+                state="failed" if failed else "complete",
+                n_gens=n_gens,
+                current_gen=(len(census) - 1) if census else None,
+                started_at=started_at,
+                error=(f"{exc_info[0].__name__}: {exc_info[1]}" if failed else None),
+                current_stage=None,
+                last_metrics=metrics._gen_rows[-1] if metrics._gen_rows else None,
+            )
+            close_log(log)
 
     return
 

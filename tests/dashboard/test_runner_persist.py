@@ -12,6 +12,7 @@ from typing import Iterator
 
 import pytest
 
+from edgar.io.metrics import METRICS_FILENAME, read_metrics
 from edgar.io.status import read_status
 from edgar.run import run
 from tests.system.fake_runner import build_fake_spec
@@ -98,6 +99,30 @@ def test_fake_run_writes_status_and_per_gen_snapshots(fake_output_dir: Path):
     assert (run_dir / "population.jsonl").exists()
     assert (run_dir / "island_census.jsonl").exists()
     assert (run_dir / "task_spec.yaml").exists()
+
+    # metrics.jsonl: one row per phase. Layout = seed (gen=-1) +
+    # one per evolution gen (gen=0..n-1) + one for validate (gen=n_gens).
+    assert (run_dir / METRICS_FILENAME).exists()
+    metric_rows = read_metrics(run_dir)
+    n_gens_cfg = spec.evolution["n_generations"]
+    gens_seen = {r["gen"] for r in metric_rows}
+    assert -1 in gens_seen, "seed phase should be recorded as gen=-1"
+    for g in range(n_gens_cfg):
+        assert g in gens_seen, f"missing gen={g} in metrics.jsonl"
+
+    # Evolution-loop rows: score + all the LLM stages must be timed.
+    loop_rows = [r for r in metric_rows if 0 <= r["gen"] < n_gens_cfg]
+    assert loop_rows, "no generation-loop rows recorded"
+    for r in loop_rows:
+        st = r["stage_times"]
+        assert st, f"gen {r['gen']} has empty stage_times"
+        assert "score" in st, f"gen {r['gen']} missing score timing"
+        assert "generate_models" in st, f"gen {r['gen']} missing generate_models timing"
+        # The fake LLMs all flow through call_llm, so llm_calls is populated.
+        assert r["llm_calls"], f"gen {r['gen']} has empty llm_calls bucket"
+
+    # Final status.json carries the last completed gen's metrics row.
+    assert final_status.get("last_metrics") is not None
 
 
 def test_runner_failure_marks_status_failed(fake_output_dir: Path, monkeypatch):
