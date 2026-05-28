@@ -1,0 +1,27 @@
+model:
+  base: 'test_base'
+  explore: 'test_explore'
+  exploit: 'test_exploit'
+  code_guidelines: 'test_code_guidelines'
+  docstring_guidelines: 'test_docstring_guidelines'
+  image_analysis_instructions: null
+  program_detail_template: 'test_program_detail_template'
+  program_vars: []
+parameter_estimator:
+  base: 'test_param_est_base'
+  explore: null
+  exploit: null
+  code_guidelines: 'test_param_est_code_guidelines'
+  docstring_guidelines: 'test_param_est_docstring_guidelines'
+  image_analysis_instructions: null
+  program_detail_template: 'test_param_est_program_detail_template'
+  program_vars: []
+jax_translator_model:
+  base: 'test_jax_base'
+  explore: null
+  exploit: null
+  code_guidelines: 'test_jax_code_guidelines'
+  docstring_guidelines: 'test_jax_docstring_guidelines'
+  image_analysis_instructions: null
+  program_detail_template: 'test_jax_program_detail_template'
+  program_vars: []

@@ -77,42 +77,30 @@ class TaskSpec:
     """
 
     # ── identity ──
-    # Human-readable name of the project (e.g. "orientation_tuning"). Derived
-    # from the project directory; surfaces in the output dir and in prompts.
+    # Human-readable name of the project (e.g. "orientation_tuning").
     task_name: str
 
-    # Full SHA of the git HEAD commit at TaskSpec construction time. Saved into
-    # task_spec.yaml so a stored run can later be traced back to exact source code.
+    # Full SHA of the git HEAD commit at TaskSpec construction time.
     git_sha: str
 
     # True if the worktree had uncommitted changes when the TaskSpec was built.
-    # When True, `git_sha` is not sufficient to reproduce the run — there were
-    # edits that no commit captured. Acts as a "not fully reproducible" flag.
     git_dirty: bool
 
-    # ── config subsections — plain dicts, passed through to the functions that need them ──
-    # I/O paths: `data_path` (where to load training data) + `save_path` (where
-    # run outputs land, under <save_path>/MM-DD/HH-MM-SS/).
+    # Absolute path to the project directory (source of callables and seed programs).
+    project_dir: Path
+
+    # ── config subsections — plain dicts, passed through to the functions that need them
+    # TODO: Put documentation for these in io/config.py
     io: dict
 
-    # Evolution-loop knobs: n_generations, n_islands, batch_size,
-    # critical_population_size, n_migrants, topology. Shape of the search.
     evolution: dict
 
-    # LLM-call knobs: model name per role (model_llm / param_est_llm /
-    # jax_model_translator_llm), num_parents, max_tokens, retry policy,
-    # banned phrases (swear_words), max code length.
     llms: dict
 
-    # Scoring knobs: timeout_s, param_penalty_weight, gradient_descent settings.
-    # Controls how a candidate program is evaluated in the sandbox.
     scoring: dict
 
-    # Run-level knobs: random_seed (used to seed `rng` below for spawning + migration).
     run: dict
 
-    # Project-specific knobs (e.g. activity_threshold, conc_threshold, n_eval_samples).
-    # Unpacked as **kwargs into `load_data_fn`; also accessible to other project callables.
     project_params: dict
 
     # ── prompt schemas — one per LLM role, built from merged prompt yamls ──
@@ -140,20 +128,16 @@ class TaskSpec:
     plot_fn: Callable | None
 
     # ── runtime state ──
-    # Timestamp set at construction. The embedded "/" is intentional: when joined
-    # with save_path it produces the on-disk layout `<save_path>/MM-DD/HH-MM-SS/`.
+    # Timestamp set at construction, produces on-disk layout `<save_path>/MM-DD/HH-MM-SS/`.
     creation_timestamp: str = field(default_factory=lambda: datetime.now().strftime("%m-%d/%H-%M-%S"))
 
     # Hand-written seed programs (typically 2) that bootstrap the population.
     # Loaded from <project_dir>/seed_programs/modelN.py + param_estN.py pairs.
-    # Each carries a sentinel BirthCertificate (generation=-1, island=-1) so
-    # downstream code can tell them apart from LLM-evolved descendants.
     seed_programs: list[Program] = field(default_factory=list)
 
     # Single seeded RNG for the whole run. Use this instead of `np.random` so
     # spawning, migration, and Boltzmann sampling are reproducible from the
-    # `run.random_seed` config value. Sharing one Generator across the pipeline
-    # avoids the "many independent RNGs, all default-seeded" foot-gun.
+    # `run.random_seed` config value.
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
 
     # ── constructors ──
@@ -208,6 +192,7 @@ class TaskSpec:
             task_name=task_name,
             git_sha=git_sha,
             git_dirty=git_dirty,
+            project_dir=config.project_dir,
             io=config.io.model_dump(),
             evolution=config.evolution.model_dump(),
             llms=config.llms.model_dump(),
@@ -241,6 +226,7 @@ class TaskSpec:
             "git_sha": self.git_sha,
             "git_dirty": self.git_dirty,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "project_dir": str(self.project_dir),
             "io": self.io,
             "evolution": self.evolution,
             "llms": self.llms,
@@ -276,18 +262,9 @@ class TaskSpec:
     def schedule(self, generation: int) -> tuple[str, float, LLMs]:
         """
         Return (mode, temperature, llms) for a given generation.
-        Design intent of the schedule:
-            - mode: "explore" first half, "exploit" second half. A sharp switch
-              rather than a gradient, because the prompt blocks for the two modes
-              are qualitatively different and a continuous interpolation is
-              ill-defined.
-            - temperature: `1 + exp(-generation / n_generations)`. Anchored at
-              2.0 at generation 0 (maximum exploration entropy on the
-              Gemini scale), decaying to 1 + exp(-1) ≈ 1.37 at the final
-              generation. Never reaches 1.0, so even late generations still
-              sample above the raw distribution.
 
-        Important: the [1.37, 2.0] range is the **Gemini scale** (range [0, 2]).
+        temperature = `1 + exp(-generation / n_generations)`, so decay is from 2 -> 1.37.
+        The [1.37, 2.0] range is the **Gemini scale** (range [0, 2]).
         Anthropic only accepts [0, 1]; when the resolved model is an
         AnthropicModel, call_llm rescales by /2 to map [1.37, 2.0] → [0.685, 1.0].
         See `src/llm/llm_calling.py:_build_model` + the rescale guard right after.
@@ -299,7 +276,7 @@ class TaskSpec:
             tuple: (mode, temperature, llms) where:
                 - mode: "explore" for first half of generations, "exploit" for second half
                 - temperature: Gemini-scale [1.37, 2.0]; rescaled at the call site for Anthropic
-                - llms: LLMs namedtuple with model, param_est, model_jax
+                - llms: namedtuple with llm.model, llm.param_est and llm.model_jax specifying the LLM to be used this generation
         """
         import numpy as np
 
@@ -308,8 +285,10 @@ class TaskSpec:
         mode = "explore" if generation < n_generations // 2 else "exploit"
         temperature = 1 + np.exp(-generation / n_generations)
 
+        model_llm = self.llms["model_llm"][generation % len(self.llms["model_llm"])] if isinstance(self.llms["model_llm"], list) else self.llms["model_llm"]
+
         llms = LLMs(
-            model=self.llms["model_llm"],
+            model=model_llm,
             param_est=self.llms["param_est_llm"],
             model_jax=self.llms["jax_model_translator_llm"],
         )

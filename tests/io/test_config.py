@@ -152,12 +152,15 @@ def test_load_invalid_prompt_subfield():
         config = Config.from_yaml("tests/io/test_configs/invalid_subfield/config.yaml", default_path = "tests/io/test_configs/perfect/default_config.yaml")
 
 
-# def test_config_taskspec_round_trip():
-#     """
-#         Tests that the config can be converted to a TaskSpec and back without losing any information.
-#     """
-#     config = Config.from_yaml("tests/io/test_configs/perfect/config.yaml", default_path = "tests/io/test_configs/perfect/default_config.yaml")
-#     taskspec = TaskSpec.from_config(config)
-#     saved_taskspec = taskspec.save("tests/io/test_taskspec")
-#     config_from_taskspec = Config.from_taskspec(saved_taskspec)
-#     assert config == config_from_taskspec
+def test_config_taskspec_round_trip(tmp_path):
+    """
+        Tests that the config can be converted to a TaskSpec and back without losing any information.
+    """
+    config = Config.from_yaml("tests/io/test_task/config.yaml")
+    taskspec = TaskSpec.from_config(config)
+    saved_taskspec = taskspec.save(tmp_path)
+    config_from_taskspec = Config.from_taskspec(saved_taskspec)
+    a, b = config.model_dump(), config_from_taskspec.model_dump()
+    assert a == b, "\n".join(
+        f"  {k}: {a[k]!r} != {b[k]!r}" for k in a if a[k] != b[k]
+    )

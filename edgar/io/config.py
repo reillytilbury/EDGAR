@@ -210,7 +210,7 @@ class Config(BaseModel):
         }
         return cls(
             task_name=record["task_name"],
-            project_dir=PROJECT_ROOT / "projects" / record["task_name"],
+            project_dir=Path(record["project_dir"]) if "project_dir" in record else PROJECT_ROOT / "projects" / record["task_name"],
             io=record.get("io", {}),
             evolution=record.get("evolution", {}),
             llms=record.get("llms", {}),

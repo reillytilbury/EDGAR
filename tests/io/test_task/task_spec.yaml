@@ -1,0 +1,107 @@
+task_name: test_task
+git_sha: 7ca97058a94dfe9886640b7e02e3cce2608364b9
+git_dirty: true
+created_at: '2026-05-28T13:29:03.171762+00:00'
+io:
+  data_path: ''
+  save_path: ''
+evolution:
+  n_generations: 4
+  n_islands: 2
+  batch_size: 3
+  critical_population_size: 3
+  n_migrants: 1
+  topology:
+  - 1
+  - 0
+llms:
+  num_parents: 2
+  retry:
+    max_retries: 3
+    initial_delay: 10.0
+    backoff_multiplier: 2.0
+    max_delay: 60.0
+    retryable_status_codes:
+    - 500
+    - 502
+    - 503
+    - 504
+  model_llm:
+  - gemini-2.5-flash-lite
+  - gemini-2.5-flash
+  - gemini-2.5-pro
+  param_est_llm: gemini-2.5-flash-lite
+  jax_model_translator_llm: gemini-2.5-flash-lite
+  log_raw_llm_response: false
+  max_lines: 50
+  swear_words:
+  - lstsq
+  - scipy.optimize
+  - optimize.minimize
+  - curve_fit
+  - sklearn
+  max_tokens: 10000
+scoring:
+  param_penalty_weight: 0.01
+  timeout_s: 120.0
+  gradient_descent:
+    max_iter: 100
+    learning_rate: 0.01
+run:
+  random_seed: 42
+project_params:
+  n_samples: 4
+  n_trials: 100
+  noise_std: 0.0
+  n_eval_samples: 2
+seed_programs:
+- batch_index: 0
+  model_code: "import numpy as np\n\n\ndef model(data, params):\n    \"\"\"y = a *\
+    \ relu(x - b)\"\"\"\n    x = data[\"x\"]\n    a = params[\"a\"]\n    b = params[\"\
+    b\"]\n    return a * np.maximum(0, x - b)\n\n\nmodel.DEFAULT_PARAMS = {\"a\":\
+    \ float(1.0), \"b\": float(0.0)}\n"
+  param_est_code: "import numpy as np\n\n\ndef parameter_estimator(data):\n    \"\"\
+    \"Grid search parameter estimator for the ReLU model.\"\"\"\n    x = data['x']\n\
+    \    y = np.asarray(data['y'])\n\n    best_loss, best_params = float(\"inf\"),\
+    \ (1.0, 0.0)\n    for a in np.linspace(0.1, 5.0, 20):\n        for b in np.linspace(-1.0,\
+    \ 1.0, 20):\n            loss = np.mean((y - a * np.maximum(0, x - b)) ** 2)\n\
+    \            if loss < best_loss:\n                best_loss, best_params = loss,\
+    \ (a, b)\n\n    return {\"a\": float(best_params[0]), \"b\": float(best_params[1])}\n"
+- batch_index: 1
+  model_code: "import numpy as np\n\n\ndef model(data, params):\n    \"\"\"y = a *\
+    \ x + b\"\"\"\n    x = data[\"x\"]\n    a = params[\"a\"]\n    b = params[\"b\"\
+    ]\n    return a * x + b\n\n\nmodel.DEFAULT_PARAMS = {\"a\": float(1.0), \"b\"\
+    : float(0.0)}\n"
+  param_est_code: "import numpy as np\n\n\ndef parameter_estimator(data):\n    \"\"\
+    \"Least squares parameter estimator for the linear model.\"\"\"\n    x = data['x']\n\
+    \    y = np.asarray(data['y'])\n\n    A = np.vstack([x, np.ones(len(x))]).T\n\
+    \    a, b = np.linalg.lstsq(A, y, rcond=None)[0]\n    return {\"a\": float(a),\
+    \ \"b\": float(b)}\n"
+prompt_schemas:
+  model:
+    base: test_base
+    explore: test_explore
+    exploit: test_exploit
+    code_guidelines: test_code_guidelines
+    docstring_guidelines: test_docstring_guidelines
+    image_analysis_instructions: null
+    program_detail_template: test_program_detail_template
+    program_vars: []
+  param_est:
+    base: test_param_est_base
+    explore: null
+    exploit: null
+    code_guidelines: test_param_est_code_guidelines
+    docstring_guidelines: test_param_est_docstring_guidelines
+    image_analysis_instructions: null
+    program_detail_template: test_param_est_program_detail_template
+    program_vars: []
+  jax_model:
+    base: test_jax_base
+    explore: null
+    exploit: null
+    code_guidelines: test_jax_code_guidelines
+    docstring_guidelines: test_jax_docstring_guidelines
+    image_analysis_instructions: null
+    program_detail_template: test_jax_program_detail_template
+    program_vars: []

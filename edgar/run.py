@@ -83,7 +83,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
             await generate_models(
                 population,
                 spec.prompt_schemas.model,
-                llms.model[gen % len(llms.model)] if isinstance(llms.model, list) else llms.model,
+                llms.model,
                 mode,
                 temperature,
                 config=config,
