@@ -24,8 +24,8 @@ from pathlib import Path
 
 from .io.task_spec import TaskSpec
 from .io.logging import open_log, log_generation, close_log, print_and_log, gen_banner
-from .io.status import write_status
-from .io.metrics import RunMetrics, timed
+from .io.status import write_status, read_status
+from .io.metrics import RunMetrics, timed, read_metrics
 from .evolution.population import Population
 from .evolution.island import (
     seed,
@@ -34,6 +34,7 @@ from .evolution.island import (
     prune,
     migrate,
     save_island_census,
+    load_island_census,
 )
 from .llm.generate import (
     generate_models,
@@ -67,18 +68,53 @@ t_migrate = timed("migrate", quiet=True)(migrate)
 t_score_validate = timed("score_validate")(score)
 
 
-async def run(spec: TaskSpec, log_level: str = "compact") -> str:
+async def run(
+    spec: TaskSpec,
+    log_level: str = "compact",
+    resume_from: str | Path | None = None,
+) -> str:
+    """Run an EDGAR experiment, optionally resuming a crashed run.
+
+    Args:
+        spec: TaskSpec built from a config or task_spec.yaml.
+        log_level: Logging verbosity (compact/code/prompts).
+        resume_from: Path to a run directory (containing population.jsonl +
+            island_census.jsonl + task_spec.yaml). When set:
+              - The seed phase is skipped; state is loaded from disk.
+              - Output is written back into ``resume_from`` (spec is restamped).
+              - The loop continues at ``len(census)``.
+              - run.log is opened in append mode with a RESUMED banner.
+              - started_at is preserved from the original status.json so total
+                wall time across resumes is recoverable from gen timings.
+
+            Caveats:
+              - ``spec.rng`` state is lost. With a fixed run.random_seed the
+                resumed spawning/migration draws differ from a continuous run.
+                LLM responses are non-deterministic anyway.
+              - The original task_spec.yaml is reused as-is (chmod read-only).
+    """
+    resume = resume_from is not None
+    if resume:
+        resume_from = Path(resume_from).resolve()
+        _prepare_resume(spec, resume_from)
+
     os.makedirs(spec.output_dir, exist_ok=True)
-    spec.save(spec.output_dir)
-    log = open_log(spec.output_dir, log_level)
+    if not resume:
+        spec.save(spec.output_dir)
+    log = open_log(spec.output_dir, log_level, append=resume)
 
     n_gens = spec.evolution["n_generations"]
-    started_at = time.time()
-    write_status(
-        spec.output_dir, state="starting", n_gens=n_gens, started_at=started_at
-    )
     pop_path = os.path.join(spec.output_dir, "population.jsonl")
     census_path = os.path.join(spec.output_dir, "island_census.jsonl")
+
+    if resume:
+        prior_status = read_status(spec.output_dir) or {}
+        started_at = float(prior_status.get("started_at", time.time()))
+    else:
+        started_at = time.time()
+        write_status(
+            spec.output_dir, state="starting", n_gens=n_gens, started_at=started_at
+        )
 
     X_discover, X_validate, X_eval = spec.load_data_fn(
         data_path=spec.io["data_path"], **spec.project_params
@@ -89,8 +125,19 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
     n_islands = spec.evolution["n_islands"]
     batch_size = spec.evolution["batch_size"]
 
-    population = Population()
-    census = []
+    if resume:
+        population = Population.load(pop_path)
+        census = load_island_census(census_path)
+        _validate_resume_state(population, census, n_gens)
+        n_dropped = _drop_trailing_unscored(population)
+        islands = [set(s) for s in census[-1]]
+        start_gen = len(census)
+    else:
+        population = Population()
+        census = []
+        islands = None  # populated in seed phase below
+        start_gen = 0
+        n_dropped = 0
 
     with RunMetrics(
         output_dir=Path(spec.output_dir),
@@ -99,7 +146,24 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
         started_at=started_at,
     ) as metrics:
         try:
-            print_and_log(log, f"Run started. Output: {spec.output_dir}")
+            if resume:
+                # Restore historical per-gen metrics so the dashboard's
+                # last_metrics reflects the full timeline, not just the resume.
+                metrics._gen_rows.extend(read_metrics(Path(spec.output_dir)))
+                print_and_log(log, f"Run RESUMED from {spec.output_dir}")
+                if n_dropped:
+                    print_and_log(
+                        log,
+                        f"Resume: dropped {n_dropped} trailing unscored programs "
+                        f"(stale spawn shells from the crashed generation).",
+                    )
+                print_and_log(
+                    log,
+                    f"Loaded population={len(population)} programs, "
+                    f"census={len(census)} completed gens. Resuming at gen={start_gen}.",
+                )
+            else:
+                print_and_log(log, f"Run started. Output: {spec.output_dir}")
             print_and_log(
                 log,
                 f"Config: n_gens={n_gens} n_islands={n_islands} "
@@ -108,42 +172,43 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
                 f"critical_pop={spec.evolution['critical_population_size']}",
             )
 
-            # ── Seed phase ──
-            metrics.start_generation(-1)
-            islands = t_seed(population, spec.seed_programs, n_islands)
-            await t_translate_seeds(
-                population,
-                spec.prompt_schemas.jax_model,
-                spec.llms["jax_model_translator_llm"],
-                retry_config=retry_config,
-                max_tokens=config.get("max_tokens"),
-                n_items=len(spec.seed_programs),
-            )
-            t_score_seeds(
-                population,
-                X_discover,
-                X_eval,
-                spec.scoring,
-                spec.loss_fn,
-                split="discover",
-                n_items=len(spec.seed_programs),
-            )
-            t_fits_seeds(spec, X_discover[1], population)
-            population.save(pop_path)
-            save_island_census(census, census_path)
-            metrics.finish_generation()
-            write_status(
-                spec.output_dir,
-                state="running",
-                n_gens=n_gens,
-                current_gen=-1,
-                started_at=started_at,
-                current_stage=None,
-                last_metrics=metrics._gen_rows[-1] if metrics._gen_rows else None,
-            )
+            if not resume:
+                # ── Seed phase ──
+                metrics.start_generation(-1)
+                islands = t_seed(population, spec.seed_programs, n_islands)
+                await t_translate_seeds(
+                    population,
+                    spec.prompt_schemas.jax_model,
+                    spec.llms["jax_model_translator_llm"],
+                    retry_config=retry_config,
+                    max_tokens=config.get("max_tokens"),
+                    n_items=len(spec.seed_programs),
+                )
+                t_score_seeds(
+                    population,
+                    X_discover,
+                    X_eval,
+                    spec.scoring,
+                    spec.loss_fn,
+                    split="discover",
+                    n_items=len(spec.seed_programs),
+                )
+                t_fits_seeds(spec, X_discover[1], population)
+                population.save(pop_path)
+                save_island_census(census, census_path)
+                metrics.finish_generation()
+                write_status(
+                    spec.output_dir,
+                    state="running",
+                    n_gens=n_gens,
+                    current_gen=-1,
+                    started_at=started_at,
+                    current_stage=None,
+                    last_metrics=metrics._gen_rows[-1] if metrics._gen_rows else None,
+                )
 
             # ── Evolution loop ──
-            for gen in range(n_gens):
+            for gen in range(start_gen, n_gens):
                 metrics.start_generation(gen)
                 mode, temperature, llms = spec.schedule(gen)
                 n_spawn = n_islands * batch_size
@@ -270,6 +335,69 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
             close_log(log)
 
     return
+
+
+def _prepare_resume(spec: TaskSpec, run_dir: Path) -> None:
+    """Restamp ``spec`` so its output_dir resolves to ``run_dir``.
+
+    ``spec.output_dir`` is computed as ``os.path.join(io["save_path"],
+    creation_timestamp)``. Setting save_path to "" and creation_timestamp to
+    the absolute run_dir produces output_dir == str(run_dir).
+    """
+    if not run_dir.exists():
+        raise FileNotFoundError(f"resume_from directory does not exist: {run_dir}")
+    if not (run_dir / "task_spec.yaml").exists():
+        raise FileNotFoundError(
+            f"resume_from is missing task_spec.yaml: {run_dir}. "
+            "This doesn't look like an EDGAR run directory."
+        )
+    spec.io["save_path"] = ""
+    spec.creation_timestamp = str(run_dir)
+
+
+def _drop_trailing_unscored(population: Population) -> int:
+    """Drop programs from the end of population whose discover.final loss is None.
+
+    These are stale spawn shells from a crashed generation: spawn() added them
+    but score() never got the chance to set their loss. Dropping them keeps
+    population.jsonl free of ghost entries after resume. Pruned-but-completed
+    programs from earlier gens are preserved because they have a non-None
+    final loss (or inf if scoring failed cleanly).
+
+    Returns the number of programs dropped.
+    """
+    progs = population._programs
+    n_before = len(progs)
+    while progs and progs[-1].program_losses.discover.final is None:
+        progs.pop()
+    return n_before - len(progs)
+
+
+def _validate_resume_state(population: Population, census: list, n_gens: int) -> None:
+    """Refuse to resume if on-disk state is incomplete, inconsistent, or done."""
+    if len(population) == 0:
+        raise ValueError(
+            "Cannot resume: population.jsonl is empty. The original run did "
+            "not complete its seed phase. Re-run from scratch instead."
+        )
+    if len(census) == 0:
+        raise ValueError(
+            "Cannot resume: island_census.jsonl has no completed generations "
+            "(seed phase saves an empty census). The original run crashed "
+            "before gen 0 finished. Re-run from scratch instead."
+        )
+    if len(census) >= n_gens:
+        raise ValueError(
+            f"Cannot resume: census already has {len(census)} completed gens "
+            f"(target n_generations={n_gens}). The original run reached the "
+            "validation phase; nothing to resume."
+        )
+    max_idx = max((idx for island in census[-1] for idx in island), default=-1)
+    if max_idx >= len(population):
+        raise ValueError(
+            f"Corrupt run dir: census references program idx {max_idx} but "
+            f"population only has {len(population)} programs."
+        )
 
 
 if __name__ == "__main__":

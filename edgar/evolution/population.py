@@ -133,13 +133,20 @@ class Population:
                 raw_params_init = d.get("params_init")
                 raw_sample_losses = d.get("sample_losses")
                 raw_sample_losses_init = d.get("sample_losses_init")
+                # save() serializes the NotValidated sentinel as "NOTVALIDATED";
+                # restore the sentinel so rank() / prepare_validation_scoring
+                # see a real NotValidated() instance, not a bare string (which
+                # would crash sorts and break the validate-eligible filter).
+                validate_raw = d["program_losses"]["validate"]
+                if validate_raw.get("final") == "NOTVALIDATED":
+                    validate_raw = {**validate_raw, "final": NotValidated()}
                 program = Program(
                     birth=BirthCertificate(**d["birth"]),
                     code=Code(**d["code"]),
                     name=d["name"],
                     program_losses=Losses(
                         discover=LossPair(**d["program_losses"]["discover"]),
-                        validate=LossPair(**d["program_losses"]["validate"]),
+                        validate=LossPair(**validate_raw),
                     ),
                     n_params=d["n_params"],
                     eval_fingerprint=fingerprint,

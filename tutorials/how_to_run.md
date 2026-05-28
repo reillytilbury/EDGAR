@@ -65,6 +65,7 @@ The reduced settings are hard-coded in `edgar/cli.py:TEST_OVERRIDES`. You can
 still pass `--section.key=value` overrides on top of them.
 
 This catches:
+
 - API key works
 - Seed programs compile and score on real data
 - `plot_fn` runs without errors (images appear under `test_output/image_feedback/`)
@@ -96,19 +97,58 @@ edgar run projects/orientation_tuning/config.yaml \
   --io.data_path=/data/other_recording.npy
 ```
 
-### Resume from a saved task_spec
+### Re-run from a saved task_spec
 
-A finished run writes `task_spec.yaml` to its output dir. Passing that file
-instead of `config.yaml` reproduces the run **exactly** — same config, same
-seeds, same LLM names:
+Every run writes `task_spec.yaml` to its output dir **at run start** (right
+after the dir is created), so the file exists for *finished, killed, and
+crashed runs alike*. Passing that file instead of `config.yaml` reproduces the
+run **exactly** — same config, same seeds, same LLM names:
 
 ```bash
 edgar run program_databases/05-24/17-17-45/task_spec.yaml
 ```
 
-Useful for reproducibility checks. Note: this is "re-run from scratch using
-the same recipe", not "continue where we left off". There is no incremental
-resume.
+The relaunch gets a fresh `creation_timestamp`, so it lands in a new dir
+(`program_databases/MM-DD/HH-MM-SS/`); the original run dir is never
+overwritten.
+
+**Important:** this is "re-run from scratch using the same recipe", not
+"continue where we left off". The killed run's `population.jsonl`,
+`island_census.jsonl`, and `image_feedback/` are **not** loaded; generation 0
+starts over. If you want to keep the evolved programs from a killed run, use
+`edgar resume` instead (see next section).
+
+#### Use cases
+
+- **Reproducibility check.** Re-run a finished experiment against the same
+config to confirm determinism, or against a new code version to see if a
+refactor changed the result.
+- **Cold relaunch when you don't want the prior population.** Useful if you
+want to retry a config with a different random seed or different LLM choice
+and start fresh.
+
+### Resume from a checkpoint (continue an interrupted run)
+
+If a run was killed mid-flight (Ctrl-C, network drop, process crashed, laptop
+closed) and you want to **continue from where it stopped**, use:
+
+```bash
+python -m edgar.cli resume program_databases/05-26/14-54-15/
+```
+
+This reads the run's `task_spec.yaml`, restores the population and island
+membership from disk, skips the seed phase (already done), and picks up at
+the next unfinished generation. Outputs are appended back into the same
+directory; `run.log` gets a `──── RESUMED ────` banner so you can tell where
+the original run ended and the resumed work began.
+
+Refuses to resume in a few obvious cases (with clear error messages):
+already-completed runs, empty populations (seed phase never finished), and
+runs that already reached the validation phase.
+
+Caveat: `spec.rng` state is not restored across resume, so spawning/migration
+draws diverge from what a continuous run would have produced. LLM responses
+are non-deterministic anyway, so bit-reproducibility was never on offer.
 
 ### Logging verbosity
 
@@ -164,30 +204,32 @@ edgar run projects/orientation_tuning/config.yaml \
 
 ### Notes on individual keys
 
-| Section | Key | What it controls |
-|---|---|---|
-| `run` | `random_seed` | Seeds spawn/migration RNG; `null` for non-deterministic |
-| `io` | `data_path` | Input data file (`.npy`) consumed by `load_data` |
-| `io` | `save_path` | Output base dir; runs land in `<save_path>/MM-DD/HH-MM-SS/` |
-| `evolution` | `n_generations` | Outer loop iterations |
-| `evolution` | `n_islands` | Independent populations evolving in parallel |
-| `evolution` | `batch_size` | Children per island per generation (= LLM call fan-out) |
-| `evolution` | `critical_population_size` | Hard cap per island; pruned down to this minus `n_migrants` |
-| `evolution` | `n_migrants` | Programs swapped between islands each generation |
-| `evolution` | `topology` | List defining migration graph; must be a permutation of `0..n_islands-1` |
-| `llms` | `num_parents` | Parents shown to LLM per prompt |
-| `llms` | `model_llm` | Model that writes the numpy `model()` code. `claude-*` → Anthropic, `gemini-*` → Google (provider inferred from prefix). Can be a list (cycled per generation). |
-| `llms` | `param_est_llm` | Model that writes `parameter_estimator()` code. Same naming rules as `model_llm`. |
-| `llms` | `jax_model_translator_llm` | Model that translates numpy → JAX. Translation is mechanical — keep this on a small/cheap model (Haiku, Flash-Lite). |
-| `llms` | `max_tokens` | Per-call output limit (Anthropic requires this; Google uses server default if `None`) |
-| `llms` | `log_raw_llm_response` | Print raw model response parts after every call (debug only) |
-| `llms` | `max_lines` | Max lines allowed in a parameter estimator response |
-| `llms` | `retry.*` | HTTP retry policy — best edited in the project's YAML, not on the CLI |
-| `scoring` | `param_penalty_weight` | Complexity penalty: `final_loss += weight * n_params` |
-| `scoring` | `timeout_s` | Wall-clock kill for each scoring subprocess |
-| `scoring` | `gradient_descent.max_iter` | Max optimizer steps when fitting parameters |
-| `scoring` | `gradient_descent.learning_rate` | Adam LR for parameter fitting |
-| `project_params` | (any) | Forwarded as `**kwargs` to `load_data` — keys are project-specific |
+
+| Section          | Key                              | What it controls                                                                                                                                                |
+| ---------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`            | `random_seed`                    | Seeds spawn/migration RNG; `null` for non-deterministic                                                                                                         |
+| `io`             | `data_path`                      | Input data file (`.npy`) consumed by `load_data`                                                                                                                |
+| `io`             | `save_path`                      | Output base dir; runs land in `<save_path>/MM-DD/HH-MM-SS/`                                                                                                     |
+| `evolution`      | `n_generations`                  | Outer loop iterations                                                                                                                                           |
+| `evolution`      | `n_islands`                      | Independent populations evolving in parallel                                                                                                                    |
+| `evolution`      | `batch_size`                     | Children per island per generation (= LLM call fan-out)                                                                                                         |
+| `evolution`      | `critical_population_size`       | Hard cap per island; pruned down to this minus `n_migrants`                                                                                                     |
+| `evolution`      | `n_migrants`                     | Programs swapped between islands each generation                                                                                                                |
+| `evolution`      | `topology`                       | List defining migration graph; must be a permutation of `0..n_islands-1`                                                                                        |
+| `llms`           | `num_parents`                    | Parents shown to LLM per prompt                                                                                                                                 |
+| `llms`           | `model_llm`                      | Model that writes the numpy `model()` code. `claude-*` → Anthropic, `gemini-*` → Google (provider inferred from prefix). Can be a list (cycled per generation). |
+| `llms`           | `param_est_llm`                  | Model that writes `parameter_estimator()` code. Same naming rules as `model_llm`.                                                                               |
+| `llms`           | `jax_model_translator_llm`       | Model that translates numpy → JAX. Translation is mechanical — keep this on a small/cheap model (Haiku, Flash-Lite).                                            |
+| `llms`           | `max_tokens`                     | Per-call output limit (Anthropic requires this; Google uses server default if `None`)                                                                           |
+| `llms`           | `log_raw_llm_response`           | Print raw model response parts after every call (debug only)                                                                                                    |
+| `llms`           | `max_lines`                      | Max lines allowed in a parameter estimator response                                                                                                             |
+| `llms`           | `retry.*`                        | HTTP retry policy — best edited in the project's YAML, not on the CLI                                                                                           |
+| `scoring`        | `param_penalty_weight`           | Complexity penalty: `final_loss += weight * n_params`                                                                                                           |
+| `scoring`        | `timeout_s`                      | Wall-clock kill for each scoring subprocess                                                                                                                     |
+| `scoring`        | `gradient_descent.max_iter`      | Max optimizer steps when fitting parameters                                                                                                                     |
+| `scoring`        | `gradient_descent.learning_rate` | Adam LR for parameter fitting                                                                                                                                   |
+| `project_params` | (any)                            | Forwarded as `**kwargs` to `load_data` — keys are project-specific                                                                                              |
+
 
 `llms.retry` is a nested dict (`max_retries`, `initial_delay`, `backoff_multiplier`,
 `max_delay`, `retryable_status_codes`). The CLI override format flattens awkwardly
@@ -269,11 +311,14 @@ run Mode 3 → Mode 2 → Mode 1.
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `UserError: ANTHROPIC_API_KEY is not set` / `GOOGLE_API_KEY is not set` | Missing key in `.env` for the provider implied by your model name | Add to `.env`; `load_dotenv()` reads it on `call_llm` import |
-| `[call_llm] HTTP 429` repeatedly on `gemini-*` | Free-tier Gemini rate limit (5 req/min on flash) | Stay on Claude (default), enable Gemini billing, or reduce `n_islands * batch_size` |
-| Scoring hangs then `inf` loss | LLM-generated code hit `scoring.timeout_s` | Expected for pathological programs; check `code.model_jax` in the offender |
-| `RuntimeError: asyncio.run() cannot be called from a running event loop` | You called the CLI from a Jupyter cell | Run from a terminal, or use the notebook-mode walkthrough |
-| `ValueError: topology length (...) must equal n_islands (...)` | `topology` and `n_islands` out of sync after override | Pass both or neither |
-| Output goes to wrong dir | Forgot `--io.save_path` override | Defaults to `program_databases/`; for tests use Mode 2 (lands in `./test_output/`) |
+
+| Symptom                                                                  | Likely cause                                                      | Fix                                                                                 |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `UserError: ANTHROPIC_API_KEY is not set` / `GOOGLE_API_KEY is not set`  | Missing key in `.env` for the provider implied by your model name | Add to `.env`; `load_dotenv()` reads it on `call_llm` import                        |
+| `[call_llm] HTTP 429` repeatedly on `gemini-*`                           | Free-tier Gemini rate limit (5 req/min on flash)                  | Stay on Claude (default), enable Gemini billing, or reduce `n_islands * batch_size` |
+| Scoring hangs then `inf` loss                                            | LLM-generated code hit `scoring.timeout_s`                        | Expected for pathological programs; check `code.model_jax` in the offender          |
+| `RuntimeError: asyncio.run() cannot be called from a running event loop` | You called the CLI from a Jupyter cell                            | Run from a terminal, or use the notebook-mode walkthrough                           |
+| `ValueError: topology length (...) must equal n_islands (...)`           | `topology` and `n_islands` out of sync after override             | Pass both or neither                                                                |
+| Output goes to wrong dir                                                 | Forgot `--io.save_path` override                                  | Defaults to `program_databases/`; for tests use Mode 2 (lands in `./test_output/`)  |
+
+
