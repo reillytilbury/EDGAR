@@ -7,6 +7,7 @@ Two constructors:
 
 Private helpers (_deep_merge, _git_state) are also used by TaskSpec.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -18,8 +19,21 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from ..llm.prompt_schema import PromptSchema
 
-ValidLLMs = Literal["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro",
-                    "gemini-3-pro-preview", "gemini-3-flash-preview","gemini-3.1-flash-lite", "gemini-3.1-pro-preview"] #List of supported LLMs, update as needed
+ValidLLMs = Literal[
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-3-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-pro-preview",
+    "claude-haiku-4-5",
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
+    "claude-opus-4-5",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+]  # List of supported LLMs, update as needed. Provider is inferred from the prefix ('gemini-' → Google, 'claude-' → Anthropic).
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -35,30 +49,37 @@ def _deep_merge(base: dict, override: dict) -> dict:
             result[key] = value
     return result
 
+
 # ── sub-models ──
 # Here we define the types of all expected config sections, and define any validation logic. Use this to ensure parameters have desired properties/types
 
+
 class _LaxModel(BaseModel):
-    """ Pydantic BaseModel which raises a warning if there are unexpected fields.
-    """
-    model_config = ConfigDict(extra="ignore") #Doesnt raise an error if extra fields
+    """Pydantic BaseModel which raises a warning if there are unexpected fields."""
+
+    model_config = ConfigDict(extra="ignore")  # Doesnt raise an error if extra fields
 
     @model_validator(mode="before")
     @classmethod
     def warn_extra_fields(cls, values: dict) -> dict:
-        """ Warn if there are any unexpected fields"""
+        """Warn if there are any unexpected fields"""
         if isinstance(values, dict):
             extra = set(values.keys()) - set(cls.model_fields.keys())
             if extra:
-                warnings.warn(f"Config section '{cls.__name__}' contains unknown fields that will be ignored: {sorted(extra)}. Valid fields are: {sorted(cls.model_fields.keys())}. Project-specific parameters should go under 'project_params'")
+                warnings.warn(
+                    f"Config section '{cls.__name__}' contains unknown fields that will be ignored: {sorted(extra)}. Valid fields are: {sorted(cls.model_fields.keys())}. Project-specific parameters should go under 'project_params'"
+                )
         return values
-    
+
+
 class RunConfig(_LaxModel):
     random_seed: int | None
+
 
 class IOConfig(_LaxModel):
     data_path: str
     save_path: str
+
 
 class EvolutionConfig(_LaxModel):
     n_generations: int
@@ -71,11 +92,15 @@ class EvolutionConfig(_LaxModel):
     @model_validator(mode="after")
     def check_args(self) -> EvolutionConfig:
         if len(self.topology) != self.n_islands:
-            raise ValueError(f"topology length ({len(self.topology)}) must equal n_islands ({self.n_islands})")
+            raise ValueError(
+                f"topology length ({len(self.topology)}) must equal n_islands ({self.n_islands})"
+            )
         if set(self.topology) != set(range(self.n_islands)):
-            raise ValueError(f"topology must contain exactly the indices 0 to {self.n_islands - 1}")
+            raise ValueError(
+                f"topology must contain exactly the indices 0 to {self.n_islands - 1}"
+            )
         return self
-    
+
 
 class RetryConfig(_LaxModel):
     max_retries: int = 3
@@ -96,6 +121,7 @@ class LLMsConfig(_LaxModel):
     swear_words: list[str]
     max_tokens: int
 
+
 class GradientDescentConfig(_LaxModel):
     max_iter: int
     learning_rate: float
@@ -115,6 +141,7 @@ class PromptsConfig(_LaxModel):
 
 # ── Config ──
 
+
 class Config(BaseModel):
     """
     All settings needed to construct a TaskSpec, in plain-dict form.
@@ -122,6 +149,7 @@ class Config(BaseModel):
     Constructed via from_yaml (live run) or from_taskspec (reproduce a past run).
     TaskSpec.from_config(config) turns this into a fully-loaded TaskSpec.
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     task_name: str
@@ -131,11 +159,13 @@ class Config(BaseModel):
     llms: LLMsConfig
     scoring: ScoringConfig
     run: RunConfig
-    project_params: dict #Not checked for types or otherwise as project-specific
+    project_params: dict  # Not checked for types or otherwise as project-specific
     prompts: PromptsConfig
 
     @classmethod
-    def from_yaml(cls, path: Path | str, default_path: Path | str | None = None) -> Config:
+    def from_yaml(
+        cls, path: Path | str, default_path: Path | str | None = None
+    ) -> Config:
         """
         Load a config.yaml and merge with project defaults.
 
@@ -159,9 +189,15 @@ class Config(BaseModel):
         default_config = yaml.safe_load(default_path.read_text()) or {}
         config = _deep_merge(default_config, yaml.safe_load(path.read_text()) or {})
 
-        default_prompts = yaml.safe_load((default_dir / "prompt_defaults.yaml").read_text()) or {}
+        default_prompts = (
+            yaml.safe_load((default_dir / "prompt_defaults.yaml").read_text()) or {}
+        )
         task_prompt_path = project_dir / "prompts.yaml"
-        task_prompts = yaml.safe_load(task_prompt_path.read_text()) if task_prompt_path.exists() else {}
+        task_prompts = (
+            yaml.safe_load(task_prompt_path.read_text())
+            if task_prompt_path.exists()
+            else {}
+        )
         prompts = _deep_merge(default_prompts, task_prompts)
 
         # Warn about any unexpected top-level fields in config
@@ -172,7 +208,10 @@ class Config(BaseModel):
         project_params = config.pop("project_params", {})
         run = config.pop("run", {})
         if config:
-            warnings.warn(f"Config contains unknown keys: {list(config.keys())}, custom keys should be defined under field 'project_params', these keys will be ignored", stacklevel=2)
+            warnings.warn(
+                f"Config contains unknown keys: {list(config.keys())}, custom keys should be defined under field 'project_params', these keys will be ignored",
+                stacklevel=2,
+            )
 
         return cls(
             task_name=task_name,
@@ -210,7 +249,9 @@ class Config(BaseModel):
         }
         return cls(
             task_name=record["task_name"],
-            project_dir=Path(record["project_dir"]) if "project_dir" in record else PROJECT_ROOT / "projects" / record["task_name"],
+            project_dir=Path(record["project_dir"])
+            if "project_dir" in record
+            else PROJECT_ROOT / "projects" / record["task_name"],
             io=record.get("io", {}),
             evolution=record.get("evolution", {}),
             llms=record.get("llms", {}),

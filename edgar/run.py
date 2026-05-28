@@ -64,7 +64,9 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
             retry_config=retry_config,
             max_tokens=config.get("max_tokens"),
         )
-        score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
+        score(
+            population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover"
+        )
 
         for gen in range(spec.evolution["n_generations"]):
             print_and_log(log, f"Generation {gen} / {spec.evolution['n_generations']}")
@@ -91,17 +93,26 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
                 data=X_discover[1],
             )  # use test data of X_discover for plotting
             await generate_param_ests(
-                population, spec.prompt_schemas.param_est, llms.param_est, config,
+                population,
+                spec.prompt_schemas.param_est,
+                llms.param_est,
+                config,
             )
             await translate_programs(
                 population,
                 spec.prompt_schemas.jax_model,
                 llms.model_jax,
                 retry_config=retry_config,
+                max_tokens=config.get("max_tokens"),
             )
 
             score(
-                population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover"
+                population,
+                X_discover,
+                X_eval,
+                spec.scoring,
+                spec.loss_fn,
+                split="discover",
             )
 
             deduplicate(islands, population, spec.evolution)
@@ -111,20 +122,32 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
             log_generation(log, gen, population, islands, spec)
 
         population.prepare_validation_scoring(islands)
-        score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
+        score(
+            population, X_validate, None, spec.scoring, spec.loss_fn, split="validate"
+        )
         rank(population)
 
-        print_and_log(log, f"***** Run complete. Output directory: {spec.output_dir} *****")
+        print_and_log(
+            log, f"***** Run complete. Output directory: {spec.output_dir} *****"
+        )
 
-    finally: #runs whether or not an exception is raised, ensuring that results are saved
+    finally:  # runs whether or not an exception is raised, ensuring that results are saved
         exc_info = sys.exc_info()
         if exc_info[0] is not None:
-            print_and_log(log, f"***** Run failed with exception:\n{''.join(traceback.format_exception(*exc_info))}***** Output directory: {spec.output_dir} *****")
+            print_and_log(
+                log,
+                f"***** Run failed with exception:\n{''.join(traceback.format_exception(*exc_info))}***** Output directory: {spec.output_dir} *****",
+            )
         population.save(os.path.join(spec.output_dir, "population.jsonl"))
         save_island_census(census, os.path.join(spec.output_dir, "island_census.jsonl"))
         close_log(log)
-        try: 
-            write_family_tree(population, census, spec.output_dir, param_penalty_weight=spec.scoring.get("param_penalty_weight"))
+        try:
+            write_family_tree(
+                population,
+                census,
+                spec.output_dir,
+                param_penalty_weight=spec.scoring.get("param_penalty_weight"),
+            )
         except Exception:
             pass  # don't mask the original exception
 
