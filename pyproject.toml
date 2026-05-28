@@ -31,5 +31,16 @@ markers = [
     "slow: tests that take a long time"
 ]
 
+[dependency-groups]
+dev = ["pre-commit"]
+
 [tool.uv]
 package = true
+
+[tool.ruff.lint]
+select = [
+    # pycodestyle
+    "E",
+    # Pyflakes
+    "F",
+] #rules to follow for linting

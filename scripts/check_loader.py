@@ -14,8 +14,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.io.config import Config  # noqa: E402
-from src.io.task_spec import TaskSpec  # noqa: E402
+from edgar.io.config import Config  # noqa: E402
+from edgar.io.task_spec import TaskSpec  # noqa: E402
 
 
 def _summarize(obj, prefix: str = "") -> None:

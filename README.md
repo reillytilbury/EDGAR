@@ -1,5 +1,8 @@
 # EDGAR: Equation Discovery with Graphical AI Reasoning
 
+[![Lint](https://github.com/reillytilbury/EDGAR/actions/workflows/lint.yml/badge.svg)](https://github.com/reillytilbury/EDGAR/actions/workflows/lint.yml)
+[![Tests](https://github.com/reillytilbury/EDGAR/actions/workflows/test.yml/badge.svg)](https://github.com/reillytilbury/EDGAR/actions/workflows/test.yml)
+
 EDGAR is an evolutionary framework for discovering scientific equations using LLM-generated programs and parameter estimators.
 
 Each run evolves a population of candidate models across multiple islands. The LLM generates numpy model code and parameter estimators; JAX-translated versions are then optimised via gradient descent. Programs are selected, pruned, and migrated between islands over many generations.
@@ -20,13 +23,21 @@ This installs the `edgar` package in editable mode (deps are sourced from `requi
 `import edgar` then works from any cwd / IDE cell without `sys.path` hacks.
 
 #### uv
-No install needed, just run commands with `uv run` from the repo root, e.g
+Run the command
 ```bash
-uv run edgar test projects/orientation_tuning/config.yaml
+uv sync
 ```
-will automatically setup the environment in the root folder.
+which will automatically setup the environment in the root folder.
+Now any commands will be run in this environment when using the prefix `uv run`, e.g
+```bash
+uv run edgar test projects/synthetic_data/config.yaml
+```
 (TODO: check issues with uv add?)
-
+---
+To verify your environment is setup correctly run the script
+```bash
+bash scripts/check_env.sh
+```
 ### 2. Set API key
 
 Add your Gemini API key to `.env` in the project root:
@@ -39,6 +50,12 @@ The key is loaded automatically at runtime via `python-dotenv`. You can also exp
 
 ```bash
 export GEMINI_API_KEY=your_key_here
+```
+You can do the same for an `ANTHROPIC_API_KEY` if using an anthropic model.
+---
+Vetify your API key is configured correctly by running
+```bash
+bash scripts/check_api_keys.sh
 ```
 
 ### 3. Run an experiment
@@ -67,11 +84,27 @@ Run a quick test with reduced settings (1 generation, 2 islands, batch size 2) t
 edgar test projects/orientation_tuning/config.yaml
 ```
 
-
 Reproduce a previous run from its saved `task_spec.yaml`:
 
 ```bash
 edgar run program_databases/05-06/14-32-10/task_spec.yaml
+```
+
+---
+
+### 4. Contributing / dev setup
+
+After cloning, install dev dependencies and register the pre-commit hook (runs ruff before each commit):
+
+```bash
+uv sync --group dev
+pre-commit install
+```
+
+Verify your environment is correctly set up:
+```bash
+bash scripts/check_env.sh   # checks edgar imports + fake pipeline
+bash scripts/check_live.sh  # checks all LLM API keys work
 ```
 
 ---

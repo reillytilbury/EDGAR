@@ -21,14 +21,13 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(REPO_ROOT / ".env")
 
-from src.llm.llm_calling import call_llm  # noqa: E402
+from edgar.llm.llm_calling import call_llm  # noqa: E402
 
 PROVIDER_PAIRS = [
     ("gemini-2.5-flash-lite", "GOOGLE_API_KEY"),
     ("claude-haiku-4-5", "ANTHROPIC_API_KEY"),
     ("opus-4-7", "ANTHROPIC_API_KEY"),
 ]
-
 
 async def main() -> int:
     n_fail = 0
@@ -38,7 +37,7 @@ async def main() -> int:
             continue
         try:
             response = await call_llm(
-                prompt="Reply with exactly the token Nyoki and something else.",
+                prompt="Reply with exactly the token 12345 and something else.",
                 llm_model=model_name,
                 output_type=str,
                 max_tokens=20,
@@ -49,7 +48,7 @@ async def main() -> int:
             continue
         ok = "12345" in (response or "")
         marker = "ok  " if ok else "fail"
-        print(f"[{marker}] {model_name}: {response!r}")
+        print(f"[{marker}] {model_name} ({env_var} set)")
         if not ok:
             n_fail += 1
     return 1 if n_fail else 0
