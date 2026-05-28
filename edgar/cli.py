@@ -30,6 +30,12 @@ run
         edgar run projects/my_task/config.yaml
         edgar run runs/05-01/14-32-10/task_spec.yaml
 
+resume
+    Resume a crashed or interrupted run from its output directory. Picks up at
+    the next unfinished generation and writes back into the same directory:
+
+        edgar resume program_databases/05-26/14-54-15/
+
     Control logging verbosity (default: compact):
 
         edgar run projects/my_task/config.yaml --log-level code
@@ -385,6 +391,44 @@ def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> No
     asyncio.run(run(spec, log_level=log_level))
 
 
+def _build_and_resume(run_dir: str, log_level: str) -> int:
+    """Resume a crashed/interrupted run from its output directory.
+
+    Rebuilds the TaskSpec from the run's frozen task_spec.yaml and continues
+    the evolution loop at the next unfinished generation. Output is written
+    back into the same directory.
+    """
+    import asyncio
+    from .io.config import Config
+    from .io.task_spec import TaskSpec
+    from .io.status import read_status
+    from .run import run
+
+    run_path = Path(run_dir).expanduser().resolve()
+    task_spec_path = run_path / "task_spec.yaml"
+    if not task_spec_path.exists():
+        print(f"error: not a run directory (no task_spec.yaml): {run_path}")
+        return 1
+
+    status = read_status(run_path) or {}
+    state = status.get("state")
+    if state == "complete":
+        print(f"error: run is already complete (status.state={state!r}): {run_path}")
+        return 1
+    if state not in (None, "starting", "running", "failed"):
+        print(f"error: unrecognised status.state={state!r}; refusing to resume.")
+        return 1
+
+    config = Config.from_taskspec(task_spec_path)
+    spec = TaskSpec.from_config(config)
+    print(f"Resuming run at: {run_path}")
+    print(
+        f"  previous status: state={state!r} current_gen={status.get('current_gen')!r}"
+    )
+    asyncio.run(run(spec, log_level=log_level, resume_from=run_path))
+    return 0
+
+
 def _run_test_fake() -> None:
     import sys
 
@@ -495,6 +539,22 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_args("run", "Run an EDGAR experiment from a config.yaml or task_spec.yaml")
     _add_run_args("test", "Run a small test experiment with reduced evolution settings")
 
+    p_resume = sub.add_parser(
+        "resume",
+        help="Resume a crashed/interrupted run from its output directory",
+    )
+    p_resume.add_argument(
+        "run_dir",
+        type=str,
+        help="Path to a run directory (containing task_spec.yaml + population.jsonl + island_census.jsonl)",
+    )
+    p_resume.add_argument(
+        "--log-level",
+        choices=["compact", "code", "prompts"],
+        default="compact",
+        help="Logging verbosity: compact (default), code, or prompts",
+    )
+
     sub.add_parser(
         "test-fake",
         help="Run a small end-to-end pipeline with fake LLM responses (no real API calls)",
@@ -537,6 +597,9 @@ def run_cli(argv=None) -> int:
         print("Running test run with real LLM calls...")
         _build_and_run(args.config, TEST_OVERRIDES + overrides, args.log_level)
         return 0
+    if args.command == "resume":
+        print("Resuming experiment...")
+        return _build_and_resume(args.run_dir, args.log_level)
 
     if args.command == "test-fake":
         print("Running test run with fake LLM calls...")

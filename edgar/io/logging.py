@@ -97,7 +97,7 @@ class RunLog:
     prev_showwarning: Any = None
 
 
-def open_log(output_dir: str, level: str = "compact") -> RunLog:
+def open_log(output_dir: str, level: str = "compact", append: bool = False) -> RunLog:
     """
     Create run.log in output_dir and return a RunLog handle.
 
@@ -107,12 +107,20 @@ def open_log(output_dir: str, level: str = "compact") -> RunLog:
     Args:
         output_dir: Run output directory (spec.output_dir).
         level: Verbosity — "compact", "code", or "prompts".
+        append: If True, open run.log in append mode and write a "RESUMED"
+            banner instead of the fresh-run header. Used by `edgar resume`.
     """
     if level not in LEVELS:
         raise ValueError(f"level must be one of {LEVELS}, got {level!r}")
     os.makedirs(output_dir, exist_ok=True)
-    f = open(os.path.join(output_dir, "run.log"), "w")
-    f.write(f"EDGAR run log  |  level={level}\n{'=' * 60}\n\n")
+    f = open(os.path.join(output_dir, "run.log"), "a" if append else "w")
+    if append:
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(
+            f"\n{'=' * 60}\n──── RESUMED at {ts}  |  level={level} ────\n{'=' * 60}\n\n"
+        )
+    else:
+        f.write(f"EDGAR run log  |  level={level}\n{'=' * 60}\n\n")
     f.flush()
     log = RunLog(file=f, level=level, start_time=time.monotonic())
 
