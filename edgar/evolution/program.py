@@ -28,8 +28,10 @@ from ..llm.code_loading import load_function_from_source
 MODEL_ENTRYPOINT     = "model"
 PARAM_EST_ENTRYPOINT = "parameter_estimator"
 
-class ModelLoadingError(Exception): pass
-class ParamEstLoadingError(Exception): pass
+class ModelLoadingError(Exception): 
+    pass
+class ParamEstLoadingError(Exception): 
+    pass
 
 @dataclass
 class BirthCertificate:

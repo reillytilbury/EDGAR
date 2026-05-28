@@ -13,7 +13,7 @@ Covers:
 import numpy as np
 import pytest
 
-from edgar.evolution.program import NotValidated
+from edgar.evolution.program import NotValidated, ModelLoadingError, ParamEstLoadingError
 from tests.evolution.utils import make_program, wrong_entrypoint_code
 
 class TestCompile:
