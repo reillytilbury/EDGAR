@@ -33,7 +33,7 @@ Now any commands will be run in this environment when using the prefix `uv run`,
 uv run edgar test projects/synthetic_data/config.yaml
 ```
 (TODO: check issues with uv add?)
----
+
 To verify your environment is setup correctly run the script
 ```bash
 bash scripts/check_env.sh
@@ -52,8 +52,8 @@ The key is loaded automatically at runtime via `python-dotenv`. You can also exp
 export GEMINI_API_KEY=your_key_here
 ```
 You can do the same for an `ANTHROPIC_API_KEY` if using an anthropic model.
----
-Vetify your API key is configured correctly by running
+
+Verify your API key is configured correctly by running
 ```bash
 bash scripts/check_api_keys.sh
 ```
