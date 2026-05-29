@@ -65,7 +65,7 @@ def test_fromconfig():
     )
     assert taskspec.model_prompt_schema.image_analysis_instructions is None
     assert (
-        taskspec.model_prompt_schema.program_detail_template
+        taskspec.model_prompt_schema.parent_program_template
         == "test_program_detail_template"
     )
     assert isinstance(taskspec.param_est_prompt_schema, PromptSchema)
@@ -82,7 +82,7 @@ def test_fromconfig():
     )
     assert taskspec.param_est_prompt_schema.image_analysis_instructions is None
     assert (
-        taskspec.param_est_prompt_schema.program_detail_template
+        taskspec.param_est_prompt_schema.parent_program_template
         == "test_param_est_program_detail_template"
     )
     assert isinstance(taskspec.jax_model_prompt_schema, PromptSchema)
@@ -98,7 +98,7 @@ def test_fromconfig():
     )
     assert taskspec.jax_model_prompt_schema.image_analysis_instructions is None
     assert (
-        taskspec.jax_model_prompt_schema.program_detail_template
+        taskspec.jax_model_prompt_schema.parent_program_template
         == "test_jax_program_detail_template"
     )
 

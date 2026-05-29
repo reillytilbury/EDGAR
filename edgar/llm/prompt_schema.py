@@ -6,10 +6,10 @@ Schema holding the component parts of a prompt.
 There are two kinds of template variables:
 - config_vars: come from config/spec (e.g. k, max_lines, swear_words).
   Only source: the config file / TaskSpec.
-- program_vars: dotted paths into Program fields (e.g. "name",
+- parent_program_vars: dotted paths into Program fields (e.g. "name",
   "code.model", "program_losses.discover.final"). Dots in the path are
   replaced with underscores to form the template variable name, so
-  "code.model" is referenced as {code_model} in program_detail_template.
+  "code.model" is referenced as {code_model} in parent_program_template.
 
 Example usage:
     schema = PromptSchema(
@@ -17,16 +17,15 @@ Example usage:
         explore="Be creative...",
         code_guidelines="Function signature must be...",
         docstring_guidelines="Include a brief description...",
-        program_detail_template="model: {name}\\nloss: {program_losses_discover_final}\\n{code_model}\\n",
-        config_vars=["num_parents"],
-        program_vars=["name", "program_losses.discover.final", "code.model"],
+        parent_program_template="model: {name}\\nloss: {program_losses_discover_final}\\n{code_model}\\n",
+        parent_program_vars=["name", "program_losses.discover.final", "code.model"],
     )
 
     # config: flat dict from TaskSpec.flat_config (merged evolution + llms + scoring)
     config = {"num_parents": 2, "max_lines": 50, "swear_words": "scipy.optimize, curve_fit"}
 
-    # parents: list of Program objects (program_vars extracted via dotted-path traversal)
-    prompt = schema.build_prompt("explore", parents, config)
+    # parent_programs: list of Program objects (parent_program_vars extracted via dotted-path traversal)
+    prompt = schema.build_prompt("explore", parent_programs=parents, config=config)
 """
 
 from __future__ import annotations
@@ -56,20 +55,23 @@ class PromptSchema(BaseModel):
     code_guidelines: str
     docstring_guidelines: str
     image_analysis_instructions: Optional[str] = None
-    program_detail_template: str
-    program_vars: list[str] = Field(default_factory=list)
+    parent_program_template: str
+    parent_program_vars: list[str] = Field(default_factory=list)
+    current_program_template: Optional[str] = None
+    current_program_vars: list[str] = Field(default_factory=list)
 
     def build_prompt(
         self,
         mode: str,
-        programs: list[Program] | None = None,
+        parent_programs: list[Program] | None = None,
         config: dict[str, Any] | None = None,
+        current_program: Program | None = None,
     ) -> str:
         """Build a prompt by selecting and formatting schema sections."""
         if mode not in {"explore", "exploit"}:
             raise ValueError("mode must be 'explore' or 'exploit'")
 
-        programs = programs or []
+        parent_programs = parent_programs or []
         config = config or {}
 
         sections = [
@@ -82,17 +84,26 @@ class PromptSchema(BaseModel):
 
         prompt_parts = [s.format(**config) for s in sections if s]
 
-        if programs:
+        if parent_programs:
             programs_text = [
-                self.program_detail_template.format(
+                self.parent_program_template.format(
                     parent_number=i + 1,
                     **{
                         x.replace(".", "_"): _get_nested_attr(p, x, "")
-                        for x in self.program_vars
+                        for x in self.parent_program_vars
                     },
                 )
-                for i, p in enumerate(programs)
+                for i, p in enumerate(parent_programs)
             ]
             prompt_parts.append("\n".join(programs_text))
+
+        if current_program is not None and self.current_program_template is not None:
+            current_text = self.current_program_template.format(
+                **{
+                    x.replace(".", "_"): _get_nested_attr(current_program, x, "")
+                    for x in self.current_program_vars
+                }
+            )
+            prompt_parts.append(current_text)
 
         return "\n\n".join(prompt_parts).strip()

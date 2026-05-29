@@ -40,17 +40,17 @@ model:
     '
   image_analysis_instructions: "**Image Analysis Instructions:**\n 
     The image shows a scatter plot of the observed experimental data, with its binned mean in sky-blue, and model fits. The model with better lower average loss is plotted in green and the model with higher average loss is plotted in red. Analyze the plot and how the models compare to the data, use this analysis to inform your model generation, in order to create a new model that improves upon these models\n"
-  #image_analysis_instructions: null
-  program_detail_template: '**Model: {name}**
+  
+  parent_program_template: '**Model: {name}**
 
     loss: {program_losses_discover_final}
 
     {code_model}
 
     '
-  program_vars:
+  parent_program_vars:
   - name
-  - program_losses_discover_final
+  - program_losses.discover.final
   - code.model
 parameter_estimator:
   base: 'You are an AI scientist. Your task is to create a simple parameter estimator to estimate the free parameters of the latest model.
@@ -70,7 +70,9 @@ parameter_estimator:
 
     * Function signature must be `def parameter_estimator(data):`.
 
-    * Return a parameter dict with the same keys expected by the model.\n* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
+    * Return a parameter dict with the same keys expected by the model.
+
+    * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
 
     * Do not call the model function in your estimator code; this function must be self-contained.
 
@@ -83,11 +85,24 @@ parameter_estimator:
 
     '
   image_analysis_instructions: null
-  program_detail_template: '**Model: {name}**
-
+  parent_program_template: |
+    **Parent model: {name}**
+    loss: {program_losses_discover_final}
+    model:
     {code_model}
+    parameter_estimator:
+    {code_param_est}
 
-    '
-  program_vars:
+    ----------
+  parent_program_vars:
+  - name
+  - program_losses.discover.final
+  - code.model
+  - code.param_est
+  current_program_template: |
+    **New model: {name}**
+    {code_model}
+    -----------
+  current_program_vars:
   - name
   - code.model

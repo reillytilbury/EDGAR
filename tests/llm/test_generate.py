@@ -22,8 +22,8 @@ async def test_generate_one_model():
         explore="...",
         code_guidelines='...',
         docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
+        parent_program_template="..",
+        parent_program_vars=[],
     )
     llm = FakeLLM()
     llm_model = llm.gen_model() #A TestModel with code for Program1
@@ -54,8 +54,8 @@ async def test_generate_same_model():
         explore="...",
         code_guidelines='...',
         docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
+        parent_program_template="..",
+        parent_program_vars=[],
     )
     llm = FakeLLM()
     llm_model = llm.gen_model() # A TestModel with code for Program1
@@ -94,8 +94,8 @@ async def test_generate_distinct_models():
         explore="...",
         code_guidelines='...',
         docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
+        parent_program_template="..",
+        parent_program_vars=[],
     )
     llm = FakeLLM()
     llm_models = CyclingModel([llm.gen_model() for _ in range(9)])
@@ -126,12 +126,12 @@ async def test_generate_one_param_est():
         explore="...",
         code_guidelines='...',
         docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
+        parent_program_template="..",
+        parent_program_vars=[],
     )
     llm = FakeLLM()
     llm_model = llm.gen_param_est() #A TestModel with param_est for Program1
-    await _generate_one_param_est(program, prompt_schema, llm_model)
+    await _generate_one_param_est(program, [], prompt_schema, llm_model)
 
     assert program.code.param_est == Program1.param_est
     
@@ -148,8 +148,8 @@ async def test_generate_param_est():
         explore="...",
         code_guidelines='...',
         docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
+        parent_program_template="..",
+        parent_program_vars=[],
     )
     no_model = make_empty_program() #Needs model and param est
     model_no_param_est = await generate_fake_models(3)
@@ -183,8 +183,8 @@ async def test_translate_one_model():
         explore="...",
         code_guidelines='...',
         docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
+        parent_program_template="..",
+        parent_program_vars=[],
     )
     llm = FakeLLM()
     llm_model = llm.gen_model_translation() #A TestModel with code.model_jax for Program1
@@ -205,8 +205,8 @@ async def test_translate_models():
         explore="...",
         code_guidelines='...',
         docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
+        parent_program_template="..",
+        parent_program_vars=[],
     )
     no_model = make_empty_program() #Needs model and param est
     models_no_jax = await generate_fake_models(3)
@@ -239,11 +239,11 @@ async def test_generate_one_model_with_real_llm():
         "Model signature must be `def model(data, params):` where `data is a dict of named arrays and `params` is a dict of named scalars.",
         docstring_guidelines = "Include a docstring, with a short descriptive name for the model",
         image_analysis_instructions = "Add a short description in the docstring of the image you see",
-        program_detail_template="Model {parent_number}: {name}" \
+        parent_program_template="Model {parent_number}: {name}"
         "loss: {program_losses_discover_final}" \
         "" \
         "{code_model}",
-        program_vars = ["name", "program_losses.discover.final", "code.model"]
+        parent_program_vars = ["name", "program_losses.discover.final", "code.model"]
     )
     program1 = Program(
         birth = BirthCertificate(generation=0, island=0, batch_index=0),
@@ -286,10 +286,10 @@ async def test_generate_one_param_est_with_real_llm():
         explore="The estimator should return a sensible initial guess for the model parameters.",
         code_guidelines="Function signature must be `def parameter_estimator(data):` where `data` is a dict of named arrays. Return a dict of named scalar floats.",
         docstring_guidelines="Include a short docstring describing the estimation strategy.",
-        program_detail_template="Model: {name}\n\n{code_model}",
-        program_vars=["name", "code.model"],
+        parent_program_template="Model: {name}\n\n{code_model}",
+        parent_program_vars=["name", "code.model"],
     )
-    await _generate_one_param_est(program, prompt_schema, llm=LLM_MODEL)
+    await _generate_one_param_est(program, [], prompt_schema, llm=LLM_MODEL)
     print("Generated param est code:\n", program.code.param_est)
     assert "def parameter_estimator(data):" in program.code.param_est
     assert isinstance(program.code.param_est, str)
@@ -310,8 +310,8 @@ async def test_translate_one_model_with_real_llm():
         explore="Preserve the logic exactly; only replace numpy with jax.numpy.",
         code_guidelines="Import jax.numpy as jnp. Function signature must be `def model(data, params):` identical to the original.",
         docstring_guidelines="Keep the original docstring unchanged.",
-        program_detail_template="Model: {name}\n\n{code_model}",
-        program_vars=["name", "code.model"],
+        parent_program_template="Model: {name}\n\n{code_model}",
+        parent_program_vars=["name", "code.model"],
     )
     await _translate_one_model(program, prompt_schema, llm=LLM_MODEL)
     print("Generated JAX model code:\n", program.code.model_jax)
