@@ -404,9 +404,14 @@ def save_island_census(census: list[list[set[int]]], path: str) -> None:
     """
     Save island_census to JSON.
     census[island_id][generation] is the set of program indices at end of that generation.
+
+    Written atomically (write-tmp-then-rename) so a polling reader never sees a
+    partially-written file.
     """
-    with open(path, "w") as f:
-        json.dump([[list(s) for s in island] for island in census], f)
+    from ..io.status import atomic_write_text
+
+    payload = json.dumps([[list(s) for s in island] for island in census])
+    atomic_write_text(path, payload)
 
 
 def load_island_census(path: str) -> list[list[set[int]]]:

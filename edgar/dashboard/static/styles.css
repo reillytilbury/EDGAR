@@ -1,0 +1,42 @@
+/* Small overrides on top of Tailwind Play CDN. Keep this file tiny. */
+
+html, body { height: 100%; }
+
+/* Plotly's default modebar is hidden by config, but its hover label may still bleed dark theme weirdly. */
+.js-plotly-plot .modebar { display: none !important; }
+
+/* hljs override to inherit dark bg from our container */
+pre code.hljs { background: transparent !important; }
+
+/* Prose-style rendering for the run prompt */
+.prose-prompt {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #d4d4d8;
+}
+.prose-prompt p { margin: 0.4em 0; }
+.prose-prompt pre {
+  background: #18181b;
+  padding: 8px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 11px;
+}
+.prose-prompt code { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+.prose-prompt ul, .prose-prompt ol { padding-left: 1.4em; margin: 0.4em 0; }
+
+/* KaTeX dark adjustments */
+.katex { color: #e4e4e7; }
+
+/* table sticky header polish */
+table thead th { backdrop-filter: blur(4px); }
+
+/* drawer slide-in (subtle; Alpine x-show flips display) */
+aside { animation: slide-in 0.15s ease-out; }
+@keyframes slide-in { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* native scrollbar in dark */
+* { scrollbar-color: #3f3f46 #18181b; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }

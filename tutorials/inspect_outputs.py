@@ -27,10 +27,18 @@ What you'll learn (one concept per cell):
     9.  Inspecting a single program's code + fitted params
     10. Finding failed / NaN programs
     11. island_census.jsonl — who was on which island when
-    12. Monitoring helpers (family_tree + progress reports)
+    12. The dashboard (programmatic data layer)
     13. Reading run.log
     14. Where to go next
 """
+
+# %% [markdown]
+# # 1. Setup
+#
+# Bootstrap the repo onto `sys.path` so `import edgar.*` works regardless of
+# where Python is launched from, and point `RUN_DIR` at the run we want to
+# inspect. Change this constant to point at any other run dir under
+# `program_databases/`.
 
 # %%
 import json
@@ -42,7 +50,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-RUN_DIR = REPO_ROOT / "program_databases" / "06-01" / "15-18-49"
+RUN_DIR = REPO_ROOT / "program_databases" / "05-24" / "09-25-00"
 
 print(f"REPO_ROOT = {REPO_ROOT}")
 print(f"RUN_DIR   = {RUN_DIR}")
@@ -376,46 +384,47 @@ if dead_at_end:
 
 
 # %% [markdown]
-# # 12. Monitoring helpers
+# # 12. The dashboard
 #
-# `edgar/monitoring/` writes three standalone HTML reports straight from a
-# `Population` + `census`. They have no run-time dependency, so you can
-# regenerate them post-hoc whenever you've tweaked the visualisation code or
-# inherited a run that's missing one of them.
+# `edgar.dashboard` is the canonical way to visualise a run end-to-end. It
+# exposes a FastAPI server with a Live view (real-time progress as the
+# algorithm evolves) and an Inspect view (post-hoc analysis: ranked programs,
+# code, LLM-derived LaTeX equations, fits). From this notebook, you'd
+# typically launch it in a terminal:
+#
+# ```bash
+# python -m edgar.cli dashboard program_databases/05-24/17-17-45/
+# ```
+#
+# But you can also call the data layer directly for programmatic analysis,
+# which is what the cells below demonstrate.
 
 # %%
-import tempfile  # noqa: E402
-
-from edgar import monitoring  # noqa: E402
-from edgar.monitoring.family_tree import write_family_tree  # noqa: E402
-from edgar.monitoring.progress import write_progress  # noqa: E402
-
-print("Public monitoring helpers:")
-for name in monitoring.__all__:
-    print(f"  monitoring.{name}")
-
-# Write to a tempdir rather than mutating RUN_DIR itself, so the canonical
-# run output stays pristine. Replace with any path of your choice if you
-# want to keep the regenerated HTML around.
-regen_dir = Path(tempfile.mkdtemp(prefix="edgar_regen_html_"))
-
-family_tree_path = write_family_tree(
-    population, census, regen_dir,
-    task_name=spec.task_name,
-    param_penalty_weight=spec.scoring.get("param_penalty_weight", 0.0),
-)
-loss_progress_path, gd_effect_path = write_progress(
-    population, census, regen_dir,
-    task_name=spec.task_name,
-    param_penalty_weight=spec.scoring.get("param_penalty_weight", 0.0),
+from edgar.dashboard import (  # noqa: E402
+    load_run_summary,
+    load_live_state,
+    load_program_list,
+    load_program_detail,
 )
 
-print(f"\nRegenerated into {regen_dir}/:")
-print(f"  family_tree.html   ({family_tree_path.stat().st_size} bytes)")
-print(f"  loss_progress.html ({loss_progress_path.stat().st_size} bytes)")
-print(f"  gd_effect.html     ({gd_effect_path.stat().st_size} bytes)")
-print(f"\nTo open the original family tree in a browser:")
-print(f"  open {RUN_DIR / 'family_tree.html'}")
+dash_summary = load_run_summary(RUN_DIR)
+print(
+    f"summary: task={dash_summary['task_name']}  "
+    f"status={dash_summary['status']}  "
+    f"best_validate={dash_summary['best_validate_loss']}"
+)
+
+ranked = load_program_list(RUN_DIR)
+print(f"\nranked programs ({len(ranked)}):")
+for p in ranked[:5]:
+    print(f"  rank={p['rank']}  #{p['idx']}  {p['name']!r:50s}  "
+          f"validate={p['loss_validate']}")
+
+if ranked:
+    detail = load_program_detail(RUN_DIR, ranked[0]['idx'])
+    print(f"\nwinner detail: parents={detail['parents']}  "
+          f"children={detail['children']}  "
+          f"fingerprint_shape={detail['fingerprint_shape']}")
 
 
 # %% [markdown]
@@ -425,9 +434,7 @@ print(f"  open {RUN_DIR / 'family_tree.html'}")
 # `edgar.io.logging.log_generation`. At the default `compact` level you get one
 # block per generation: timings, success rates for each LLM stage, the global
 # best loss so far, and the best program on each island. Buffered warnings
-# get appended to whichever generation they fired during. Note this is only
-# if the run was launched via `edgar.run.run()` e.g by running `edgar run ...` 
-# from the command line.
+# get appended to whichever generation they fired during.
 
 # %%
 with open(RUN_DIR / "run.log") as f:

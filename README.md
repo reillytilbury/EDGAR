@@ -87,6 +87,11 @@ Reproduce a previous run from its saved `task_spec.yaml`:
 edgar run program_databases/05-06/14-32-10/task_spec.yaml
 ```
 
+To launch the dashboard to view in progress and finished experiments:
+```bash
+edgar dashboard
+```
+
 ---
 
 ### 4. Dev setup

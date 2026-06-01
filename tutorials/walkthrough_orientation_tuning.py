@@ -75,8 +75,6 @@ from edgar.llm.generate import (  # noqa: E402
     translate_programs,
 )
 from edgar.scoring.scoring import rank, score  # noqa: E402
-from edgar.monitoring.family_tree import write_family_tree  # noqa: E402
-
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────
@@ -588,5 +586,3 @@ if __name__ == "__main__":
 #   in cell A6.
 if __name__ == "__main__":
     print("Walkthrough complete.")
-
-# %%
