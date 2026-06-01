@@ -29,13 +29,13 @@ model:
 
     '
   image_analysis_instructions: null
-  program_detail_template: '**{name}**
+  parent_program_template: '**{name}**
 
     {code_model}
 
     '
   config_vars: []
-  program_vars:
+  parent_program_vars:
   - name
   - code.model
 parameter_estimator:
@@ -69,11 +69,11 @@ parameter_estimator:
 
     '
   image_analysis_instructions: null
-  program_detail_template: '**{name}**
+  parent_program_template: '**{name}**
 
     {code_model}
 
     '
-  program_vars:
+  parent_program_vars:
   - name
   - code.model

@@ -44,8 +44,8 @@ async def generate_one_fake_model():
         explore="...",
         code_guidelines='...',
         docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
+        parent_program_template="..",
+        parent_program_vars=[],
     )
     llm = FakeLLM()
     llm_model = llm.gen_model() #A TestModel with code for Program1
@@ -59,8 +59,8 @@ async def generate_fake_models(n: int):
         explore="...",
         code_guidelines='...',
         docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
+        parent_program_template="..",
+        parent_program_vars=[],
     )
     llm = FakeLLM()
     llm_models = CyclingModel([llm.gen_model() for _ in range(n)])
@@ -75,10 +75,10 @@ async def generate_one_fake_param_est():
         explore="...",
         code_guidelines='...',
         docstring_guidelines="...",
-        program_detail_template="..",
-        program_vars=[],
+        parent_program_template="..",
+        parent_program_vars=[],
     )
     llm = FakeLLM()
     llm_model = llm.gen_param_est() #A TestModel with param_est for Program1
-    await _generate_one_param_est(program, prompt_schema, llm_model)
+    await _generate_one_param_est(program, [], prompt_schema, llm_model)
     return program

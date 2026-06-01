@@ -3,7 +3,7 @@
 #
 # Two kinds of template variables:
 #   - config_vars: come from config/spec, passed explicitly (e.g. k, max_lines, swear_words)
-#   - program_vars: dotted paths into Program fields (e.g. "name", "code.model", "program_losses.discover.final")
+#   - parent_program_vars: dotted paths into Program fields (e.g. "name", "code.model", "program_losses.discover.final")
 
 model:
   base: 'You are an AI scientist. Below are {num_parents} models describing a phenomenon, sorted from worst to best.
@@ -51,7 +51,7 @@ model:
 
     '
   image_analysis_instructions: null
-  program_detail_template: 'Model: {name}
+  parent_program_template: 'Model: {name}
 
     loss: {program_losses_discover_final}
 
@@ -62,15 +62,14 @@ model:
     '
   config_vars:
   - num_parents
-  program_vars:
+  parent_program_vars:
   - name
   - program_losses.discover.final
   - code.model
 parameter_estimator:
-  base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest model (shown last below).
+  base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest model (shown last below). Also included are previous parent models and their parameter estimators.
 
     The parameter should be estimated directly, using statistical principles.
-
 
     *Analyze* the progression of the parameter estimators, *generalize* the improvements, and *create* a new parameter estimator that is better than *all* previous estimators.
 
@@ -81,7 +80,8 @@ parameter_estimator:
     * Import any packages you use.
     * Do not include any text other than the code.
     * Function signature must be `def parameter_estimator(data):`, where `data` is the single-sample data dict used by `model`.
-    * Return a parameter dict with the same keys expected by the model.\n* Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
+    * Return a parameter dict with the same keys expected by the model.
+    * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
     * Do not attempt to fit the parameters using complex fitting functions like {swear_words}. We only need a simple, fast initial estimate of the parameters.
     * Do not call the model function in your parameter_estimator code, as you will not have access to it!
     * Cast to `int()` when using a numeric value as an array size, slice index, or `range()` argument (e.g. `n_bins = int(np.sqrt(len(x)))`). numpy float scalars raise `TypeError: ''numpy.float32'' object cannot be interpreted as an integer` in these contexts.
@@ -94,18 +94,25 @@ parameter_estimator:
 
     '
   image_analysis_instructions: null
-  program_detail_template: 'Model: {name}
-
+  parent_program_template: 'Parent model: {name}
     loss: {program_losses_discover_final}
-
+    model:
     {code_model}
+    parameter_estimator:
+    {code_param_est}
 
-    ----------------------------
-
+    ---
     '
-  program_vars:
+  parent_program_vars:
   - name
   - program_losses.discover.final
+  - code.model
+  - code.param_est
+  current_program_template: 'New model: {name}
+    {code_model}
+    '
+  current_program_vars:
+  - name
   - code.model
 jax_translator_model:
   base: '
@@ -118,6 +125,8 @@ jax_translator_model:
     Include all necessary imports (jax, jax.numpy as jnp).
 
     Ensure compatibility with jax.jit, jax.grad, and jax.vmap.
+
+    Do not include any text other than the code.
 
     '
   explore: null
@@ -147,12 +156,13 @@ jax_translator_model:
     Do not include any text in the docstring. The function should only contain the jax-translated code.
     '
   image_analysis_instructions: null
-  program_detail_template: 'Model code:
+  parent_program_template: ''
+  parent_program_vars: []
+  current_program_template: 'Model code:
 
     {code_model}
 
     '
-  config_vars: []
-  program_vars:
+  current_program_vars:
   - code.model
 

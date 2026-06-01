@@ -85,8 +85,8 @@ prompt_schemas:
     code_guidelines: test_code_guidelines
     docstring_guidelines: test_docstring_guidelines
     image_analysis_instructions: null
-    program_detail_template: test_program_detail_template
-    program_vars: []
+    parent_program_template: test_program_detail_template
+    parent_program_vars: []
   param_est:
     base: test_param_est_base
     explore: null
@@ -94,8 +94,8 @@ prompt_schemas:
     code_guidelines: test_param_est_code_guidelines
     docstring_guidelines: test_param_est_docstring_guidelines
     image_analysis_instructions: null
-    program_detail_template: test_param_est_program_detail_template
-    program_vars: []
+    parent_program_template: test_param_est_program_detail_template
+    parent_program_vars: []
   jax_model:
     base: test_jax_base
     explore: null
@@ -103,5 +103,5 @@ prompt_schemas:
     code_guidelines: test_jax_code_guidelines
     docstring_guidelines: test_jax_docstring_guidelines
     image_analysis_instructions: null
-    program_detail_template: test_jax_program_detail_template
-    program_vars: []
+    parent_program_template: test_jax_program_detail_template
+    parent_program_vars: []

@@ -5,8 +5,8 @@ model:
   code_guidelines: 'default_code_guidelines'
   docstring_guidelines: 'default_docstring_guidelines'
   image_analysis_instructions: null
-  program_detail_template: 'default_program_detail_template'
-  program_vars: []
+  parent_program_template: 'default_program_detail_template'
+  parent_program_vars: []
 parameter_estimator:
   base: 'default_param_est_base'
   explore: null
@@ -14,6 +14,6 @@ parameter_estimator:
   code_guidelines: 'default_param_est_code_guidelines'
   docstring_guidelines: 'default_param_est_docstring_guidelines'
   image_analysis_instructions: null
-  program_detail_template: 'default_param_est_program_detail_template'
-  program_vars: []
+  parent_program_template: 'default_param_est_program_detail_template'
+  parent_program_vars: []
 #missing jax translator model 

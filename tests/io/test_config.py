@@ -41,21 +41,21 @@ def test_load_perfect_config():
     assert config.prompts.model.code_guidelines == 'default_code_guidelines1'
     assert config.prompts.model.docstring_guidelines == 'default_docstring_guidelines1'
     assert config.prompts.model.image_analysis_instructions is None
-    assert config.prompts.model.program_detail_template == 'default_program_detail_template1'
+    assert config.prompts.model.parent_program_template == 'default_program_detail_template1'
     assert config.prompts.parameter_estimator.base == 'default_param_est_base1'
     assert config.prompts.parameter_estimator.explore is None
     assert config.prompts.parameter_estimator.exploit is None
     assert config.prompts.parameter_estimator.code_guidelines == 'default_param_est_code_guidelines1'
     assert config.prompts.parameter_estimator.docstring_guidelines == 'default_param_est_docstring_guidelines1'
     assert config.prompts.parameter_estimator.image_analysis_instructions is None
-    assert config.prompts.parameter_estimator.program_detail_template == 'default_param_est_program_detail_template1'
+    assert config.prompts.parameter_estimator.parent_program_template == 'default_param_est_program_detail_template1'
     assert config.prompts.jax_translator_model.base == 'default_jax_base1'
     assert config.prompts.jax_translator_model.explore is None
     assert config.prompts.jax_translator_model.exploit is None
     assert config.prompts.jax_translator_model.code_guidelines == 'default_jax_code_guidelines1'
     assert config.prompts.jax_translator_model.docstring_guidelines == 'default_jax_docstring_guidelines1'
     assert config.prompts.jax_translator_model.image_analysis_instructions is None
-    assert config.prompts.jax_translator_model.program_detail_template == 'default_jax_program_detail_template1'
+    assert config.prompts.jax_translator_model.parent_program_template == 'default_jax_program_detail_template1'
 
 def test_load_missing_field_config_perfect_default():
     """

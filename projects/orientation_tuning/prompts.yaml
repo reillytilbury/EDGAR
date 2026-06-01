@@ -43,19 +43,19 @@ model:
       **Parameter Flexibility:** Are there free parameters that could be introduced or modified to better capture the observed response profiles? Utilize your analysis of the shortcomings of the current models' shapes and add free parameters or modify existing ones to address these issues.\n
 
       Use this analysis to inform the design of a new neuron model that improves upon the previous models.\n"
-  program_detail_template: '**Model: {name}**
+  parent_program_template: '**Model: {name}**
 
     loss: {program_losses_discover_final}
 
     {code_model}
 
     '
-  program_vars:
+  parent_program_vars:
   - name
   - program_losses.discover.final
   - code.model
 parameter_estimator:
-  base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest neuron model.
+  base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest neuron model (shown last below). Also included are previous parent models and their parameter estimators.
 
     The parameter should be estimated directly, using statistical principles and knowledge of what the parameters represent biologically.
 
@@ -87,11 +87,24 @@ parameter_estimator:
 
     '
   image_analysis_instructions: null
-  program_detail_template: '**Model {name}**
-
+  parent_program_template: |
+    **Parent model: {name}**
+    loss: {program_losses_discover_final}
+    model:
     {code_model}
+    parameter_estimator:
+    {code_param_est}
 
-    '
-  program_vars:
+    ----------
+  parent_program_vars:
+  - name
+  - program_losses.discover.final
+  - code.model
+  - code.param_est
+  current_program_template: |
+    **New model: {name}**
+    {code_model}
+    -----------
+  current_program_vars:
   - name
   - code.model

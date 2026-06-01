@@ -143,12 +143,13 @@ async def generate_models(
 
 async def _generate_one_param_est(
     program: Program,
+    parents: list[Program],
     prompt_schema: PromptSchema,
     llm: str | Model,
     config: dict[str, Any] | None = None,
 ) -> None:
     cfg = config or {}
-    prompt = prompt_schema.build_prompt("explore", [program], config)
+    prompt = prompt_schema.build_prompt("explore", parents, config, current_program=program)
     result = await call_llm(
         prompt=prompt,
         llm_model=llm,
@@ -176,7 +177,7 @@ async def generate_param_ests(
     """
     programs = _filter_programs(population, _needs_param_est_code)
     await asyncio.gather(*[
-        _generate_one_param_est(p, prompt_schema, llm, config)
+        _generate_one_param_est(p, _resolve_parents(population, p), prompt_schema, llm, config)
         for p in programs
     ])
 
@@ -191,7 +192,7 @@ async def _translate_one_model(
     retry_config: RetryConfig | None = None,
     max_tokens: int | None = None,
 ) -> None:
-    model_prompt = model_prompt_schema.build_prompt("explore", [program])
+    model_prompt = model_prompt_schema.build_prompt("explore", current_program=program)
     model_result = await call_llm(prompt=model_prompt, llm_model=llm, output_type=TranslationSchema, temperature=1.0, retry_config=retry_config, max_tokens=max_tokens)
     if model_result is not None and load_function_from_source(model_result.code, "model") is not None:
         program.code.model_jax = model_result.code

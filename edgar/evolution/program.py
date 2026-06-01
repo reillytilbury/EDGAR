@@ -102,7 +102,7 @@ class Program:
         return param_est_fn
 
     # ── prompt template properties ──
-    # These match the program_vars used in prompt_defaults.yaml so that
+    # These match the parent_program_vars used in prompt_defaults.yaml so that
     # getattr(program, var_name) works in PromptSchema.build_prompt.
 
     @property
