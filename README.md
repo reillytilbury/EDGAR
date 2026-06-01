@@ -1,6 +1,5 @@
 # EDGAR: Equation Discovery with Graphical AI Reasoning
 
-[![Lint](https://github.com/reillytilbury/EDGAR/actions/workflows/lint.yml/badge.svg)](https://github.com/reillytilbury/EDGAR/actions/workflows/lint.yml)
 [![Tests](https://github.com/reillytilbury/EDGAR/actions/workflows/test.yml/badge.svg)](https://github.com/reillytilbury/EDGAR/actions/workflows/test.yml)
 
 EDGAR is an evolutionary framework for discovering scientific equations using LLM-generated programs and parameter estimators.
