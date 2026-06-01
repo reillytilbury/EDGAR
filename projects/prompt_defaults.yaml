@@ -126,6 +126,8 @@ jax_translator_model:
 
     Ensure compatibility with jax.jit, jax.grad, and jax.vmap.
 
+    Do not include any text other than the code.
+
     '
   explore: null
   exploit: null
