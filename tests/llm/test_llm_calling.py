@@ -200,6 +200,8 @@ async def test_call_llm_provider_ping(model_name, env_var):
     model name validity, and network path in one shot. Cheap (≤10 output tokens).
     """
     if not os.getenv(env_var):
+        if os.getenv("CI"):
+            pytest.fail(f"{env_var} is not set — configure it as a GitHub Actions secret.")
         pytest.skip(f"{env_var} not set; skipping {model_name} ping.")
     result = await call_llm(
         prompt="Reply with exactly the token 12345 and nothing else.",
