@@ -409,7 +409,6 @@ def _run_dashboard(target: str | None, port: int, host: str, no_open: bool) -> i
 
     project_root = _find_project_root()
     pdb_default = project_root / "program_databases"
-    test_output_default = project_root / "test_output"
 
     roots: list[Path] = []
     default_run_dir: Path | None = None
@@ -428,11 +427,9 @@ def _run_dashboard(target: str | None, port: int, host: str, no_open: bool) -> i
     else:
         roots.append(pdb_default)
 
-    # always include the canonical program_databases/ and test_output/ if present
+    # always include the canonical program_databases/
     if pdb_default.exists() and pdb_default not in roots:
         roots.append(pdb_default)
-    if test_output_default.exists() and test_output_default not in roots:
-        roots.append(test_output_default)
 
     import socket
 
