@@ -12,7 +12,6 @@ import asyncio
 import os
 import warnings
 from typing import Any, TYPE_CHECKING, Callable
-import itertools
 
 from pydantic_ai.models import Model
 

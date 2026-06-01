@@ -33,7 +33,6 @@ from typing import Callable
 import numpy as np
 import yaml
 
-from pydantic_ai.models import Model
 
 from ..evolution.program import Program, BirthCertificate, Code
 from ..llm.code_loading import load_function_from_source

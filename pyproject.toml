@@ -15,12 +15,9 @@ edgar = "edgar.cli:run_cli"
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
 
-# `namespaces = true` is needed because most subpackages under `edgar/` have no
-# `__init__.py` (PEP 420 namespace packages). Only `edgar/monitoring/` has one.
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["edgar*"]
-namespaces = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -37,10 +34,18 @@ dev = ["pre-commit"]
 [tool.uv]
 package = true
 
+[tool.ruff]
+exclude = ["projects", "scripts", "figures"]
+
 [tool.ruff.lint]
 select = [
     # pycodestyle
     "E",
     # Pyflakes
     "F",
-] #rules to follow for linting
+]
+ignore = [
+    "E501", #line too long
+    "E702", #multiple statements on one lines
+    "E741", #variables l
+]

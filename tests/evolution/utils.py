@@ -1,7 +1,7 @@
 import numpy as np
 from edgar.evolution.population import Population
 from edgar.evolution.program import BirthCertificate, Code, Program
-from tests.llm.programs import Seed1, Seed2, Program1, Program2, ProgramSolution, InvalidProgram
+from tests.llm.programs import Seed1, Seed2
 
 def linear_model_code():
     return """

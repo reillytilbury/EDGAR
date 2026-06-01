@@ -22,7 +22,7 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.settings import ModelSettings
 
-from .programs import Program1, Program2, InvalidProgram, ProgramSolution, Seed1, Seed2
+from .programs import Program1, InvalidProgram, ProgramSolution, Seed1, Seed2
 
 
 class FakeLLM:

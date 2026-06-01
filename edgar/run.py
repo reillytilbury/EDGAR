@@ -1,6 +1,7 @@
 """
 Main runner. Translates the pseudocode directly into real code.
 """
+#ruff: noqa: E402 -- allow imports after non=import code so can set environment variables
 
 from __future__ import annotations
 

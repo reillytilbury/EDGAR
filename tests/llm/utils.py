@@ -1,4 +1,3 @@
-import asyncio
 import tempfile
 from types import SimpleNamespace
 import numpy as np

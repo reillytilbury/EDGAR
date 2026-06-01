@@ -1,3 +1,5 @@
+#ruff: noqa: F841
+
 import pytest
 from edgar.io.config import Config
 from pydantic import ValidationError

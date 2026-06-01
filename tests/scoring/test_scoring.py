@@ -1,7 +1,7 @@
+#ruff: noqa: E402
 import sys
 import time
 from pathlib import Path
-import pytest
 
 import jax.numpy as jnp
 
