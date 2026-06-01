@@ -15,31 +15,11 @@ Two modes of use — same source file:
     # State persists between cells, so you can inspect `population`,
     # `islands`, etc. at any checkpoint.
 
-Why every cell is wrapped in `if __name__ == "__main__":`
-─────────────────────────────────────────────────────────
-`edgar.scoring.score()` runs each program in a subprocess via
-`multiprocessing.get_context("spawn")`. On macOS / Python 3.13, spawn
-re-imports the main script in every child process so it can find the worker
-target function. Without a `__main__` guard, every spawn child would re-run
-all the cells (LLM calls, scoring, …) — infinite recursion, immediate crash.
-
-Wrapping each cell in `if __name__ == "__main__":` makes:
-    1. direct execution (`python tutorials/...py`) work — `__name__` is
-       `"__main__"`, the guard fires, cells run.
-    2. Cursor / VSCode interactive cells work — the kernel sets `__name__`
-       to `"__main__"`, the guard fires, cells run.
-    3. spawn-child re-imports skip the cells — `__name__` is
-       `"__mp_main__"`, the guard does not fire.
-
-The module-level preamble (imports, sys.path tweak) re-runs safely in spawn
-children — it has no side effects beyond setting up the import path.
-
 Prerequisites
 ─────────────
-- `conda activate edgar` (or use the explicit interpreter path).
+- `conda activate edgar` (or use the explicit interpreter path, if using uv this is `.venv/bin/python` in the repo root).
 - `ANTHROPIC_API_KEY` set in `.env` at the repo root. This tutorial uses
-  `claude-haiku-4-5` for all three LLM roles. Gemini is not used here,
-  partly because its free-tier daily quota is small and runs out fast.
+  `claude-haiku-4-5` for all three LLM roles. Gemini can be used through instead setting `GOOGLE_API_KEY` and choosing gemini models such as `gemini-2.5-flash-lite`
 - Data file at `data/gratings_drifting_GT1_2019_04_12_1.npy`.
 
 Tutorial-time overrides applied in cell A6 keep this fast (~3-5 min, ~$0.01):
@@ -54,6 +34,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 # Cursor / Jupyter cells run inside an already-active asyncio event loop, so the
 # `asyncio.run(...)` calls in later cells would raise "cannot be called from a
@@ -604,7 +585,8 @@ if __name__ == "__main__":
 # - To re-run the whole tutorial from scratch, restart the Python kernel
 #   (or `python tutorials/walkthrough_orientation_tuning.py` for a fresh run).
 # - To compare LLMs, change `model_llm` / `param_est_llm` / `jax_model_translator_llm`
-#   in cell A6. Provider is inferred from the model-name prefix
-#   ('gemini-' → Google, 'claude-' → Anthropic) — see edgar/llm/llm_calling.py.
+#   in cell A6.
 if __name__ == "__main__":
     print("Walkthrough complete.")
+
+# %%

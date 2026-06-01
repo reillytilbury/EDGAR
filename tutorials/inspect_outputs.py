@@ -32,14 +32,6 @@ What you'll learn (one concept per cell):
     14. Where to go next
 """
 
-# %% [markdown]
-# # 1. Setup
-#
-# Bootstrap the repo onto `sys.path` so `import edgar.*` works regardless of
-# where Python is launched from, and point `RUN_DIR` at the run we want to
-# inspect. Change this constant to point at any other run dir under
-# `program_databases/`.
-
 # %%
 import json
 import os
@@ -50,7 +42,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-RUN_DIR = REPO_ROOT / "program_databases" / "05-24" / "09-25-00"
+RUN_DIR = REPO_ROOT / "program_databases" / "06-01" / "15-18-49"
 
 print(f"REPO_ROOT = {REPO_ROOT}")
 print(f"RUN_DIR   = {RUN_DIR}")
@@ -433,7 +425,9 @@ print(f"  open {RUN_DIR / 'family_tree.html'}")
 # `edgar.io.logging.log_generation`. At the default `compact` level you get one
 # block per generation: timings, success rates for each LLM stage, the global
 # best loss so far, and the best program on each island. Buffered warnings
-# get appended to whichever generation they fired during.
+# get appended to whichever generation they fired during. Note this is only
+# if the run was launched via `edgar.run.run()` e.g by running `edgar run ...` 
+# from the command line.
 
 # %%
 with open(RUN_DIR / "run.log") as f:
