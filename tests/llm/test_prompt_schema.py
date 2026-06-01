@@ -24,7 +24,9 @@ def _make_program(model: str, loss: float | None = None) -> Program:
 
 
 def test_build_model_prompt():
-    schema = _make_schema(image_analysis_instructions="When analyzing images, do X, Y, Z")
+    schema = _make_schema(
+        image_analysis_instructions="When analyzing images, do X, Y, Z"
+    )
     p1 = _make_program(Program1.model)
     p2 = _make_program(Program2.model)
 
@@ -65,7 +67,9 @@ def test_build_prompt_with_current_program():
     current = _make_program(Program2.model)
 
     prompt = schema.build_prompt(
-        mode="explore", parent_programs=[parent], config={"num_parents": 1},
+        mode="explore",
+        parent_programs=[parent],
+        config={"num_parents": 1},
         current_program=current,
     )
 
@@ -84,7 +88,9 @@ def test_current_program_not_rendered_without_template():
     current = _make_program(Program2.model)
 
     prompt = schema.build_prompt(
-        mode="explore", parent_programs=[parent], config={"num_parents": 1},
+        mode="explore",
+        parent_programs=[parent],
+        config={"num_parents": 1},
         current_program=current,
     )
 

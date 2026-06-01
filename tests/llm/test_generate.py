@@ -170,7 +170,7 @@ async def test_generate_one_param_est():
         parent_program_vars=[],
     )
     llm = FakeLLM()
-    llm_model = llm.gen_param_est() #A TestModel with param_est for Program1
+    llm_model = llm.gen_param_est()  # A TestModel with param_est for Program1
     await _generate_one_param_est(program, [], prompt_schema, llm_model)
 
     assert program.code.param_est == Program1.param_est
@@ -305,13 +305,13 @@ async def test_generate_one_model_with_real_llm():
         exploit="Focus on generating a model which executes, not too disimilar to the existing model",
         code_guidelines="Import any packages you use."
         "Model signature must be `def model(data, params):` where `data is a dict of named arrays and `params` is a dict of named scalars.",
-        docstring_guidelines = "Include a docstring, with a short descriptive name for the model",
-        image_analysis_instructions = "Add a short description in the docstring of the image you see",
+        docstring_guidelines="Include a docstring, with a short descriptive name for the model",
+        image_analysis_instructions="Add a short description in the docstring of the image you see",
         parent_program_template="Model {parent_number}: {name}"
-        "loss: {program_losses_discover_final}" \
-        "" \
+        "loss: {program_losses_discover_final}"
+        ""
         "{code_model}",
-        parent_program_vars = ["name", "program_losses.discover.final", "code.model"]
+        parent_program_vars=["name", "program_losses.discover.final", "code.model"],
     )
     program1 = Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),

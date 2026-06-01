@@ -85,7 +85,11 @@ def test_load_perfect_config():
         == "default_jax_docstring_guidelines1"
     )
     assert config.prompts.jax_translator_model.image_analysis_instructions is None
-    assert config.prompts.jax_translator_model.parent_program_template == 'default_jax_program_detail_template1'
+    assert (
+        config.prompts.jax_translator_model.parent_program_template
+        == "default_jax_program_detail_template1"
+    )
+
 
 def test_load_missing_field_config_perfect_default():
     """
@@ -199,7 +203,7 @@ def test_load_missing_prompt_field_no_default():
     with pytest.raises(ValidationError):
         config = Config.from_yaml(
             "tests/io/test_configs/missing_field/config.yaml",
-            default_path="tests/io/test_configs/missing_field/prompt_defaults.yaml",
+            default_path="tests/io/test_configs/missing_field/default_config.yaml",
         )
 
 
@@ -221,7 +225,7 @@ def test_load_missing_prompt_subfield_no_default():
     with pytest.raises(ValidationError):
         config = Config.from_yaml(
             "tests/io/test_configs/missing_subfield/config.yaml",
-            default_path="tests/io/test_configs/missing_subfield/prompt_defaults.yaml",
+            default_path="tests/io/test_configs/missing_subfield/default_config.yaml",
         )
 
 

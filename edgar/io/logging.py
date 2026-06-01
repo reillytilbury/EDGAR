@@ -205,9 +205,15 @@ def log_generation(
         parents = [population[i] for i in p.birth.parent_indices]
         mode_p = p.birth.mode or "explore"
         f.write(f"  --- Prompts for Program #{p.idx} ---\n")
-        f.write(f"  [model prompt]\n{spec.model_prompt_schema.build_prompt(mode_p, parents, spec.flat_config)}\n\n")
-        f.write(f"  [param_est prompt]\n{spec.param_est_prompt_schema.build_prompt('explore', parents, spec.flat_config, current_program=p)}\n\n")
-        f.write(f"  [jax model prompt]\n{spec.jax_model_prompt_schema.build_prompt('explore', current_program=p, config=spec.flat_config)}\n\n")
+        f.write(
+            f"  [model prompt]\n{spec.model_prompt_schema.build_prompt(mode_p, parents, spec.flat_config)}\n\n"
+        )
+        f.write(
+            f"  [param_est prompt]\n{spec.param_est_prompt_schema.build_prompt('explore', parents, spec.flat_config, current_program=p)}\n\n"
+        )
+        f.write(
+            f"  [jax model prompt]\n{spec.jax_model_prompt_schema.build_prompt('explore', current_program=p, config=spec.flat_config)}\n\n"
+        )
         if p.image_path:
             f.write(f"  [image] {p.image_path}\n")
         f.write("\n")
