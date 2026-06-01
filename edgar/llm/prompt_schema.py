@@ -37,6 +37,10 @@ if TYPE_CHECKING:
     from ..evolution.program import Program
 
 
+def _fill_program_vars(program: Any, var_names: list[str]) -> dict[str, Any]:
+    return {x.replace(".", "_"): _get_nested_attr(program, x, "") for x in var_names}
+
+
 def _get_nested_attr(obj: Any, dotted_key: str, default: Any = None) -> Any:
     item = obj
 
@@ -88,10 +92,7 @@ class PromptSchema(BaseModel):
             programs_text = [
                 self.parent_program_template.format(
                     parent_number=i + 1,
-                    **{
-                        x.replace(".", "_"): _get_nested_attr(p, x, "")
-                        for x in self.parent_program_vars
-                    },
+                    **_fill_program_vars(p, self.parent_program_vars),
                 )
                 for i, p in enumerate(parent_programs)
             ]
@@ -99,10 +100,7 @@ class PromptSchema(BaseModel):
 
         if current_program is not None and self.current_program_template is not None:
             current_text = self.current_program_template.format(
-                **{
-                    x.replace(".", "_"): _get_nested_attr(current_program, x, "")
-                    for x in self.current_program_vars
-                }
+                **_fill_program_vars(current_program, self.current_program_vars)
             )
             prompt_parts.append(current_text)
 
