@@ -35,7 +35,7 @@ dev = ["pre-commit"]
 package = true
 
 [tool.ruff]
-exclude = ["projects", "scripts", "figures"]
+exclude = ["projects", "scripts", "figures", "tests/io/test_task", "tests/io/test_task_no_image", "tests/system/test_task"]
 
 [tool.ruff.lint]
 select = [
