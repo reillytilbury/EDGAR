@@ -11,17 +11,7 @@ Each run evolves a population of candidate models across multiple islands. The L
 ## Quickstart
 
 ### 1. Install
-
-#### Conda + pip
-```bash
-conda create -n edgar python=3.13 -y
-conda activate edgar
-pip install -e .
-```
-This installs the `edgar` package in editable mode (deps are sourced from `requirements.txt` via `pyproject.toml`).
-`import edgar` then works from any cwd / IDE cell without `sys.path` hacks.
-
-#### uv
+#### uv (recommended)
 Run the command
 ```bash
 uv sync
@@ -31,7 +21,15 @@ Now any commands will be run in this environment when using the prefix `uv run`,
 ```bash
 uv run edgar test projects/synthetic_data/config.yaml
 ```
-(TODO: check issues with uv add?)
+
+#### Conda + pip
+```bash
+conda create -n edgar python=3.13 -y
+conda activate edgar
+pip install -e .
+```
+This installs the `edgar` package in editable mode (deps are sourced from `requirements.txt` via `pyproject.toml`).
+`import edgar` then works from any cwd / IDE cell without `sys.path` hacks.
 
 To verify your environment is setup correctly run the script
 ```bash
@@ -91,9 +89,9 @@ edgar run program_databases/05-06/14-32-10/task_spec.yaml
 
 ---
 
-### 4. Contributing / dev setup
+### 4. Dev setup
 
-After cloning, install dev dependencies and register the pre-commit hook (runs ruff before each commit):
+After cloning, install dev dependencies and register the pre-commit hook:
 
 ```bash
 uv sync --group dev
@@ -103,8 +101,21 @@ pre-commit install
 Verify your environment is correctly set up:
 ```bash
 bash scripts/check_env.sh   # checks edgar imports + fake pipeline
-bash scripts/check_live.sh  # checks all LLM API keys work
+bash scripts/check_api_keys.sh  # checks all LLM API keys work
 ```
+
+When making a `git commit`, do the following
+```bash
+git add -u
+make commit-check
+# Returns status of pre-commit, files may need to be modified
+git add -u
+git commit -m 'a commit message'
+```
+
+Upon pushing to remote the following tests are run, and status displayed on github:
+- All unit and integration pytests in tests except those with live llm calls.
+- Pings google and anthropic LLMs to check they can be called.
 
 ---
 
