@@ -13,8 +13,13 @@ Covers:
 import numpy as np
 import pytest
 
-from edgar.evolution.program import NotValidated, ModelLoadingError, ParamEstLoadingError
+from edgar.evolution.program import (
+    NotValidated,
+    ModelLoadingError,
+    ParamEstLoadingError,
+)
 from tests.evolution.utils import make_program, wrong_entrypoint_code
+
 
 class TestCompile:
     def test_compile_returns_callables(self):
@@ -56,26 +61,30 @@ class TestCompile:
         with pytest.raises(ParamEstLoadingError, match="parameter_estimator"):
             program.compile_param_est()
 
+
 def test_no_default_params():
     program = make_program()
     assert program.n_params is None
     with pytest.warns(UserWarning):
         assert program.default_params is None
 
+
 def test_initializing_with_default_params():
-    default_params = {'a': 1.0, 'b': 2.0}
+    default_params = {"a": 1.0, "b": 2.0}
     program = make_program(default_params=default_params)
     assert program.n_params == 2
     assert program.default_params == default_params
+
 
 def test_setting_default_params_after_initialization():
     program = make_program()
     assert program.n_params is None
     assert program.default_params is None
-    default_params = {'a': 1.0, 'b': 2.0, 'c': 3.0}
+    default_params = {"a": 1.0, "b": 2.0, "c": 3.0}
     program.default_params = default_params
     assert program.n_params == 3
     assert program.default_params == default_params
+
 
 def test_setting_default_params_with_invalid_input():
     program = make_program()
@@ -83,6 +92,7 @@ def test_setting_default_params_with_invalid_input():
         program.default_params = "not a dict"
     assert program.n_params is None
     assert program.default_params is None
+
 
 class TestLossesDefaults:
     def test_discover_final_is_none(self):
@@ -95,7 +105,7 @@ class TestLossesDefaults:
 
     def test_validate_final_is_not_yet_prepared(self):
         program = make_program()
-        assert isinstance(program.program_losses.validate.final, NotValidated) 
+        assert isinstance(program.program_losses.validate.final, NotValidated)
 
     def test_validate_init_is_none(self):
         program = make_program()

@@ -8,6 +8,7 @@ Example usage:
     from tests.system.fake_runner import run_test_fake
     run_test_fake()
 """
+
 import asyncio
 import os
 import shutil
@@ -36,8 +37,12 @@ def build_fake_spec(output_dir: Path) -> TaskSpec:
     fake = FakeLLM()
     seed_fake = SeedFakeLLM()
 
-    spec.llms["model_llm"] = CyclingModel([fake.gen_model() for _ in range(n_gen * n_per_gen)])
-    spec.llms["param_est_llm"] = CyclingModel([fake.gen_param_est() for _ in range(n_gen * n_per_gen)])
+    spec.llms["model_llm"] = CyclingModel(
+        [fake.gen_model() for _ in range(n_gen * n_per_gen)]
+    )
+    spec.llms["param_est_llm"] = CyclingModel(
+        [fake.gen_param_est() for _ in range(n_gen * n_per_gen)]
+    )
     spec.llms["jax_model_translator_llm"] = CyclingModel(
         [seed_fake.gen_model_translation() for _ in range(n_seed)]
         + [fake.gen_model_translation() for _ in range(n_gen * n_per_gen)]

@@ -9,6 +9,7 @@ Public surface:
 - render(template_name, substitutions) -> str
 - _SIDEBAR_CSS, _SIDEBAR_JS, _COLOUR_MODE_JS  (preloaded static assets)
 """
+
 from __future__ import annotations
 
 import math
@@ -25,8 +26,14 @@ _SIDEBAR_JS = (_TEMPLATES_DIR / "sidebar.js").read_text()
 _COLOUR_MODE_JS = (_TEMPLATES_DIR / "colour_mode.js").read_text()
 
 _ISLAND_COLOURS = [
-    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-    "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
 ]
 
 
@@ -74,7 +81,7 @@ def build_sidebar_data(
     for i in range(len(population)):
         p = population[i]
         parents = list(p.birth.parent_indices)
-        parent_dict = {f"parent{j+1}_id": parents[j] for j in range(len(parents))}
+        parent_dict = {f"parent{j + 1}_id": parents[j] for j in range(len(parents))}
         sidebar[str(p.idx)] = {
             "program_id": p.idx,
             "display_label": p.name or f"P{p.idx}",
@@ -92,7 +99,9 @@ def build_sidebar_data(
             "llm_name": p.birth.llm_name,
             **parent_dict,
             "n_params": p.n_params,
-            "complexity_penalty": param_penalty_weight * p.n_params if p.n_params is not None else None,
+            "complexity_penalty": param_penalty_weight * p.n_params
+            if p.n_params is not None
+            else None,
             "rank": p.rank,
             "initial_loss": p.program_losses.discover.init,
             "train_loss": p.program_losses.discover.final,
@@ -104,7 +113,9 @@ def build_sidebar_data(
     return sidebar
 
 
-def split_seeds_and_progs(population: Population) -> tuple[list[Program], list[Program]]:
+def split_seeds_and_progs(
+    population: Population,
+) -> tuple[list[Program], list[Program]]:
     seeds, progs = [], []
     for i in range(len(population)):
         (seeds if is_seed(population[i]) else progs).append(population[i])
@@ -113,7 +124,11 @@ def split_seeds_and_progs(population: Population) -> tuple[list[Program], list[P
 
 def reference_loss(seeds: list[Program]) -> float:
     """Reference loss for perplexity normalization: min seed train loss."""
-    losses = [s.program_losses.discover.final for s in seeds if s.program_losses.discover.final is not None]
+    losses = [
+        s.program_losses.discover.final
+        for s in seeds
+        if s.program_losses.discover.final is not None
+    ]
     return min(losses) if losses else 0.0
 
 

@@ -19,6 +19,7 @@ Example usage:
     mode, temp, llms = spec.schedule(generation=0)
     spec.save(run_dir)
 """
+
 from __future__ import annotations
 
 import os
@@ -46,6 +47,7 @@ from .config import PROJECT_ROOT
 LLMs = namedtuple("LLMs", ["model", "param_est", "model_jax"])
 PromptSchemas = namedtuple("PromptSchemas", ["model", "param_est", "jax_model"])
 
+
 def _git_state() -> tuple[str, bool]:
     """Return (sha, dirty) for the current git HEAD.
 
@@ -54,11 +56,17 @@ def _git_state() -> tuple[str, bool]:
     changes, so the sha alone is not enough to reproduce the run.
     """
     try:
-        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True).strip()
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+        ).strip()
     except Exception:
         sha = "unknown"
     try:
-        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=PROJECT_ROOT, text=True).strip())
+        dirty = bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain"], cwd=PROJECT_ROOT, text=True
+            ).strip()
+        )
     except Exception:
         dirty = True
     return sha, dirty
@@ -128,7 +136,9 @@ class TaskSpec:
 
     # ── runtime state ──
     # Timestamp set at construction, produces on-disk layout `<save_path>/MM-DD/HH-MM-SS/`.
-    creation_timestamp: str = field(default_factory=lambda: datetime.now().strftime("%m-%d/%H-%M-%S"))
+    creation_timestamp: str = field(
+        default_factory=lambda: datetime.now().strftime("%m-%d/%H-%M-%S")
+    )
 
     # Hand-written seed programs (typically 2) that bootstrap the population.
     # Loaded from <project_dir>/seed_programs/modelN.py + param_estN.py pairs.
@@ -159,7 +169,9 @@ class TaskSpec:
         # code, and project code on one path. The cost is that import errors surface
         # as `None` returns instead of ImportError, hence the explicit None checks.
         data_loader_path = config.project_dir / "data_loader" / "load_data.py"
-        load_data_fn = load_function_from_source(data_loader_path.read_text(), "load_data")
+        load_data_fn = load_function_from_source(
+            data_loader_path.read_text(), "load_data"
+        )
         if load_data_fn is None:
             raise ValueError(f"{data_loader_path} must define callable load_data()")
         loss_fn = load_function_from_source(data_loader_path.read_text(), "loss_fn")
@@ -167,7 +179,11 @@ class TaskSpec:
             raise ValueError(f"{data_loader_path} must define callable loss_fn()")
 
         plot_path = config.project_dir / "image_feedback" / "plot.py"
-        plot_fn = load_function_from_source(plot_path.read_text(), "plot_model_fits") if plot_path.exists() else None
+        plot_fn = (
+            load_function_from_source(plot_path.read_text(), "plot_model_fits")
+            if plot_path.exists()
+            else None
+        )
 
         git_sha, git_dirty = _git_state()
 
@@ -180,12 +196,19 @@ class TaskSpec:
         for batch_idx, model_path in enumerate(sorted(seed_dir.glob("model*.py"))):
             model_num = model_path.stem.replace("model", "")
             param_est_path = seed_dir / f"param_est{model_num}.py"
-            seed_programs.append(Program(
-                birth=BirthCertificate(generation=-1, island=-1, batch_index=batch_idx, mode="seed"),
-                code=Code(model=model_path.read_text(), param_est=param_est_path.read_text()),
-                name=f"Seed Model {model_num}",
-                _default_params = cls._extract_default_params(model_path.read_text())
-            ))
+            seed_programs.append(
+                Program(
+                    birth=BirthCertificate(
+                        generation=-1, island=-1, batch_index=batch_idx, mode="seed"
+                    ),
+                    code=Code(
+                        model=model_path.read_text(),
+                        param_est=param_est_path.read_text(),
+                    ),
+                    name=f"Seed Model {model_num}",
+                    _default_params=cls._extract_default_params(model_path.read_text()),
+                )
+            )
 
         return cls(
             task_name=task_name,
@@ -284,7 +307,11 @@ class TaskSpec:
         mode = "explore" if generation < n_generations // 2 else "exploit"
         temperature = 1 + np.exp(-generation / n_generations)
 
-        model_llm = self.llms["model_llm"][generation % len(self.llms["model_llm"])] if isinstance(self.llms["model_llm"], list) else self.llms["model_llm"]
+        model_llm = (
+            self.llms["model_llm"][generation % len(self.llms["model_llm"])]
+            if isinstance(self.llms["model_llm"], list)
+            else self.llms["model_llm"]
+        )
 
         llms = LLMs(
             model=model_llm,

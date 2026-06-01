@@ -1,4 +1,4 @@
-#ruff: noqa: E402
+# ruff: noqa: E402
 import sys
 import time
 from pathlib import Path
@@ -59,11 +59,11 @@ BASE_CONFIG_WITH_PARAM_PENALTY = {
 }
 
 
-def _make_program(model_code, default_params = {"w": jnp.array(1.0)}):
+def _make_program(model_code, default_params={"w": jnp.array(1.0)}):
     return Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
         code=Code(param_est=PARAM_EST_CODE, model_jax=model_code),
-        _default_params = default_params
+        _default_params=default_params,
     )
 
 
@@ -75,12 +75,16 @@ def _make_data(n_samples=3, n_trials=8):
 def loss_fn(output, data):
     return jnp.mean((output - data["y"]) ** 2, axis=-1)
 
+
 # --- _score_one_model ---
+
 
 def test_score_one_model_returns_finite_loss():
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+    final_loss, initial_loss, _, _, _ = _score_one_model(
+        program, data, loss_fn, BASE_CONFIG
+    )
     assert jnp.isfinite(final_loss)
     assert jnp.isfinite(initial_loss)
     assert final_loss >= 0.0
@@ -94,19 +98,28 @@ def test_score_one_model_perfect_fit():
     final_loss, _, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
     assert final_loss < 1e-4
 
+
 def test_score_one_model_perfect_fit_with_param_penalty():
     """w=1.0 with y=x should give near-param_penalty loss after optimization."""
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    final_loss, _, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG_WITH_PARAM_PENALTY)
-    assert final_loss < BASE_CONFIG_WITH_PARAM_PENALTY["param_penalty_weight"]  + 1e-4 #since n_params=1
+    final_loss, _, _, _, _ = _score_one_model(
+        program, data, loss_fn, BASE_CONFIG_WITH_PARAM_PENALTY
+    )
+    assert (
+        final_loss < BASE_CONFIG_WITH_PARAM_PENALTY["param_penalty_weight"] + 1e-4
+    )  # since n_params=1
+
 
 def test_score_one_gives_infinite_loss_for_program_with_none_default_params():
     program = _make_program(FAST_MODEL_CODE, default_params=None)
     assert program.n_params is None
-    final_loss, initial_loss, _, _, _ = _score_one_model(program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG)
+    final_loss, initial_loss, _, _, _ = _score_one_model(
+        program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+    )
     assert final_loss == float("inf")
     assert initial_loss == float("inf")
+
 
 def test_score_one_model_kills_slow_model():
     program = _make_program(SLOW_MODEL_CODE)
@@ -128,7 +141,9 @@ def test_score_one_model_falls_back_to_default_params():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+    final_loss, initial_loss, _, _, _ = _score_one_model(
+        program, data, loss_fn, BASE_CONFIG
+    )
 
     assert jnp.isfinite(final_loss)
     assert jnp.isfinite(initial_loss)
@@ -144,6 +159,7 @@ def model(data, params):
     return params['w'] * data['x'
 """
 
+
 def test_score_one_model_gives_infinite_loss_for_broken_model_syntax():
     """model_jax with syntax error → ModelLoadingError → infinite loss."""
     program = Program(
@@ -152,10 +168,13 @@ def test_score_one_model_gives_infinite_loss_for_broken_model_syntax():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+    final_loss, initial_loss, _, _, _ = _score_one_model(
+        program, data, loss_fn, BASE_CONFIG
+    )
 
     assert final_loss == float("inf")
     assert initial_loss == float("inf")
+
 
 def test_score_one_model_falls_back_when_param_est_syntax_error():
     """param_est with syntax error → falls back to default_params, loss still finite."""
@@ -165,7 +184,9 @@ def test_score_one_model_falls_back_when_param_est_syntax_error():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+    final_loss, initial_loss, _, _, _ = _score_one_model(
+        program, data, loss_fn, BASE_CONFIG
+    )
 
     assert jnp.isfinite(final_loss)
     assert jnp.isfinite(initial_loss)
@@ -176,22 +197,29 @@ def test_score_one_model_with_notvalidated_loss():
     program = _make_program(FAST_MODEL_CODE)
     assert type(program.program_losses.validate.final).__name__ == "NotValidated"
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+    final_loss, initial_loss, _, _, _ = _score_one_model(
+        program, data, loss_fn, BASE_CONFIG
+    )
 
     assert jnp.isfinite(final_loss)
     assert jnp.isfinite(initial_loss)
 
+
 # --- optimize and _eval_loss ---
 
+
 def test_optimize_before_convergence():
-    """ Do a few optimization steps but not enough to converge, checking against expected value which protects against optimization loop errors, e.g params used from wrong iteration."""
+    """Do a few optimization steps but not enough to converge, checking against expected value which protects against optimization loop errors, e.g params used from wrong iteration."""
     ns = {}
     exec(Program1.model_jax, ns)
-    model_fn = ns['model']
+    model_fn = ns["model"]
 
     data_train = _make_data()
-    n_samples = data_train['x'].shape[0]
-    params_init = {k: jnp.stack([jnp.asarray(v)] * n_samples) for k, v in Program1.default_params.items()}
+    n_samples = data_train["x"].shape[0]
+    params_init = {
+        k: jnp.stack([jnp.asarray(v)] * n_samples)
+        for k, v in Program1.default_params.items()
+    }
     gd_config = {"max_iter": 5, "learning_rate": 0.001}
     best_params = _optimize(
         model_fn=model_fn,
@@ -204,7 +232,9 @@ def test_optimize_before_convergence():
     print(f"Final loss: {loss:.6f}")
     assert round(loss, 6) == 0.008466
 
+
 # --- score (population) ---
+
 
 def test_score_writes_back_to_population():
     pop = Population()
@@ -218,7 +248,9 @@ def test_score_writes_back_to_population():
         assert jnp.isfinite(pop[i].program_losses.discover.final)
         assert jnp.isfinite(pop[i].program_losses.discover.init)
         assert pop[i].program_losses.discover.final < 1e-4
-        assert isinstance(pop[i].program_losses.validate.final, NotValidated) #this is set to NotValidated, so final validation scoring is opt in, see scoring._needs_scoring, population.prepare_validation_scoring
+        assert isinstance(
+            pop[i].program_losses.validate.final, NotValidated
+        )  # this is set to NotValidated, so final validation scoring is opt in, see scoring._needs_scoring, population.prepare_validation_scoring
         assert pop[i].n_params == 1
 
 
@@ -228,7 +260,9 @@ def test_score_skips_already_scored_programs():
     pop[0].program_losses.discover.final = 0.5
     pop[0].program_losses.discover.init = 0.5
 
-    score(pop, (_make_data(), _make_data()), None, BASE_CONFIG, loss_fn, split="discover")
+    score(
+        pop, (_make_data(), _make_data()), None, BASE_CONFIG, loss_fn, split="discover"
+    )
 
     assert pop[0].program_losses.discover.final == 0.5
     assert pop[0].program_losses.discover.init == 0.5
@@ -238,9 +272,12 @@ def test_score_skips_programs_without_code():
     pop = Population()
     pop.add(Program(birth=BirthCertificate(generation=0, island=0, batch_index=0)))
 
-    score(pop, (_make_data(), _make_data()), None, BASE_CONFIG, loss_fn, split="discover")
+    score(
+        pop, (_make_data(), _make_data()), None, BASE_CONFIG, loss_fn, split="discover"
+    )
 
     assert pop[0].program_losses.discover.final is None
+
 
 # --- rank ---
 def test_rank():

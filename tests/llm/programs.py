@@ -17,7 +17,7 @@ class Program1:
         "\treturn a * x**2 + b * x"
     )
     default_params = {"a": 1.0, "b": 0.1}
-    latex_equation = r'y = ax^2 + bx'
+    latex_equation = r"y = ax^2 + bx"
 
     model_jax = (
         "import jax.numpy as jnp\n\n"
@@ -47,7 +47,7 @@ class Program2:
     )
 
     default_params = {"a": 1.0, "b": 0.1, "c": 0.2}
-    latex_equation = r'y = ax^3 + bx^2 + cx'
+    latex_equation = r"y = ax^3 + bx^2 + cx"
 
     model_jax = (
         "import jax.numpy as jnp\n\n"
@@ -82,7 +82,7 @@ class ProgramSolution:
     )
 
     default_params = {"a": 1.0, "b": 0.1, "c": 0.2, "k": 6.0, "phi_0": 0.0}
-    latex_equation = r'y = (ax^2 + bx + c) \sin(kx + \phi_0)'
+    latex_equation = r"y = (ax^2 + bx + c) \sin(kx + \phi_0)"
 
     model_jax = (
         "import jax.numpy as jnp\n\n"
@@ -116,7 +116,7 @@ class InvalidProgram:
     )
 
     default_params = {"a": 1.0, "b": 0.0}
-    latex_equation = r'y = ax^4 + bx + c'
+    latex_equation = r"y = ax^4 + bx + c"
 
     model_jax = (
         "import jax.numpy as jnp\n\n"
@@ -129,8 +129,7 @@ class InvalidProgram:
     )
 
     param_est = (
-        "def parameter_estimator(data):\n"
-        '\treturn {"a": float(1), "b": float(0)}\n'
+        'def parameter_estimator(data):\n\treturn {"a": float(1), "b": float(0)}\n'
     )
 
 
@@ -171,7 +170,8 @@ class Seed1:
 
     default_params = {"a": 1.0, "b": 0.0}
 
-    latex_equation = r'y = a \mathrm{relu}(x - b)'
+    latex_equation = r"y = a \mathrm{relu}(x - b)"
+
 
 class Seed2:
     model = (
@@ -205,5 +205,5 @@ class Seed2:
     )
 
     default_params = {"a": 1.0, "b": 0.0}
-    
-    latex_equation = r'y = ax + b'
+
+    latex_equation = r"y = ax + b"

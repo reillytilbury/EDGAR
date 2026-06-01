@@ -363,8 +363,9 @@ TEST_OVERRIDES = [
     "--llms.model_llm=gemini-2.5-flash",
     "--llms.param_est_llm=gemini-2.5-flash",
     "--llms.jax_model_translator_llm=gemini-2.5-flash-lite",
-    #"--llms.log_raw_llm_response=True",
+    # "--llms.log_raw_llm_response=True",
 ]
+
 
 def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> None:
     import asyncio
@@ -373,7 +374,11 @@ def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> No
     from .run import run
 
     path = Path(config_path)
-    config = Config.from_taskspec(path) if path.name == "task_spec.yaml" else Config.from_yaml(path)
+    config = (
+        Config.from_taskspec(path)
+        if path.name == "task_spec.yaml"
+        else Config.from_yaml(path)
+    )
     spec = TaskSpec.from_config(config)
     if overrides:
         _apply_overrides(spec, overrides)
@@ -382,10 +387,12 @@ def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> No
 
 def _run_test_fake() -> None:
     import sys
+
     project_root = Path(__file__).resolve().parent.parent
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
     from tests.system.fake_runner import run_test_fake
+
     run_test_fake()
 
 
@@ -408,7 +415,7 @@ def build_parser() -> argparse.ArgumentParser:
         "task", type=str, help="Project name (folder under projects/)"
     )
 
-    #Helper for defining run args since run and test share most args 
+    # Helper for defining run args since run and test share most args
     def _add_run_args(p, help_str: str) -> None:
         p = sub.add_parser(p, help=help_str)
         p.add_argument("config", type=str, help="Path to config.yaml or task_spec.yaml")

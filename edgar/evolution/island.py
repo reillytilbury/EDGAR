@@ -30,7 +30,7 @@ Example usage:
     # within-island deduplication
     island_0 = deduplicate(programs_0)                   # set[int]
 
-    # TODO: describe old cross-island deduplication 
+    # TODO: describe old cross-island deduplication
 
     # append current island state to census each generation
     for island_id, island in enumerate(islands):
@@ -50,7 +50,10 @@ from .population import Population
 # Initialization: seed and spawn
 # ─────────────────────────────────────────────────────────────────────────
 
-def seed(population: Population, seed_programs: list[Program], n_islands: int) -> list[set[int]]:
+
+def seed(
+    population: Population, seed_programs: list[Program], n_islands: int
+) -> list[set[int]]:
     """
     Add seed programs to population and initialize islands.
 
@@ -63,6 +66,7 @@ def seed(population: Population, seed_programs: list[Program], n_islands: int) -
 
     seed_indices = {p.idx for p in seed_programs}
     return [set(seed_indices) for _ in range(n_islands)]
+
 
 def spawn(
     population: Population,
@@ -106,6 +110,7 @@ def spawn(
 # Sampling and pruning
 # ─────────────────────────────────────────────────────────────────────────
 
+
 def prune(islands: list[set[int]], population: Population, evolution: dict) -> None:
     """Prune each island to critical_population_size - n_migrants best programs, mutating islands in-place.
     This ensures that after migration, each island has at most critical_population_size programs
@@ -119,11 +124,20 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
     for i, island in enumerate(islands):
         programs = [population[idx] for idx in island]
         # explicitly handle cases where the loss is None or inf to avoid sorting issues
-        ranked = sorted(programs, key=lambda p: float('inf') if p.program_losses.discover.final is None else p.program_losses.discover.final)
+        ranked = sorted(
+            programs,
+            key=lambda p: (
+                float("inf")
+                if p.program_losses.discover.final is None
+                else p.program_losses.discover.final
+            ),
+        )
         islands[i] = {p.idx for p in ranked[:keep_n]}
 
 
-def uniform_sample(programs: list[Program], k: int, rng: np.random.Generator) -> set[int]:
+def uniform_sample(
+    programs: list[Program], k: int, rng: np.random.Generator
+) -> set[int]:
     """
     Sample k global indices uniformly at random.
 
@@ -131,12 +145,16 @@ def uniform_sample(programs: list[Program], k: int, rng: np.random.Generator) ->
         parents    = uniform_sample(programs_0, k=2)  # e.g. {0, 2}
     """
     if k > len(programs):
-        raise ValueError(f"k={k} exceeds number of programs sampled from {len(programs)}")
+        raise ValueError(
+            f"k={k} exceeds number of programs sampled from {len(programs)}"
+        )
     chosen = rng.choice(len(programs), size=k, replace=False)
     return {programs[j].idx for j in chosen}
 
 
-def boltzmann_sample(programs: list[Program], k: int, temperature: float, rng: np.random.Generator) -> set[int]:
+def boltzmann_sample(
+    programs: list[Program], k: int, temperature: float, rng: np.random.Generator
+) -> set[int]:
     r"""
     Sample k global indices using a Boltzmann distribution over relative,
     std-normalised losses. High temperature → uniform, low → best dominate.
@@ -150,14 +168,26 @@ def boltzmann_sample(programs: list[Program], k: int, temperature: float, rng: n
         parents    = boltzmann_sample(programs_0, k=2, temperature=1.0)  # e.g. {0, 2}
     """
     if k > len(programs):
-        raise ValueError(f"k={k} exceeds number of programs sampled from {len(programs)}")
-    losses = np.array([p.program_losses.discover.final for p in programs], dtype=float) #dtype = float converts None to nan
-    losses = np.where(np.isnan(losses) | np.isinf(losses), float("inf"), losses) #convert NaN, +-inf to +inf
+        raise ValueError(
+            f"k={k} exceeds number of programs sampled from {len(programs)}"
+        )
+    losses = np.array(
+        [p.program_losses.discover.final for p in programs], dtype=float
+    )  # dtype = float converts None to nan
+    losses = np.where(
+        np.isnan(losses) | np.isinf(losses), float("inf"), losses
+    )  # convert NaN, +-inf to +inf
     finite_losses = losses[np.isfinite(losses)]
     worst_finite = finite_losses.max() if len(finite_losses) > 0 else 0.0
-    losses = np.where(np.isinf(losses), worst_finite + 1.0, losses) #convert +inf to worst_finite + 1
-    logits = -(losses - losses.min()) / (np.std(losses) + 1e-6) / max(temperature, 1e-3) #compute g_i logits
-    logits -= logits.max() #ensures largest value being exponentiated is 0, so exp(g_i) is in [0, 1]
+    losses = np.where(
+        np.isinf(losses), worst_finite + 1.0, losses
+    )  # convert +inf to worst_finite + 1
+    logits = (
+        -(losses - losses.min()) / (np.std(losses) + 1e-6) / max(temperature, 1e-3)
+    )  # compute g_i logits
+    logits -= (
+        logits.max()
+    )  # ensures largest value being exponentiated is 0, so exp(g_i) is in [0, 1]
     probs = np.exp(logits)
     probs /= probs.sum()
     chosen = rng.choice(len(programs), size=k, replace=False, p=probs)
@@ -168,7 +198,14 @@ def boltzmann_sample(programs: list[Program], k: int, temperature: float, rng: n
 # Migration
 # ─────────────────────────────────────────────────────────────────────────
 
-def migrate(islands: list[set[int]], population: Population, evolution: dict, temperature: float, rng: np.random.Generator) -> None:
+
+def migrate(
+    islands: list[set[int]],
+    population: Population,
+    evolution: dict,
+    temperature: float,
+    rng: np.random.Generator,
+) -> None:
     """Sample migrants from each island via Boltzmann distribution and add to topology destination.
 
     For each island i, sample n_migrants programs using Boltzmann distribution (biased toward
@@ -194,32 +231,45 @@ def migrate(islands: list[set[int]], population: Population, evolution: dict, te
     topology = evolution["topology"]
     T_warped = (temperature - 1.0) ** 4
 
-    #First collect which programs will be migrated
+    # First collect which programs will be migrated
     updates = []
     for island in islands:
         programs = [population[idx] for idx in island]
-        sampled = boltzmann_sample(programs, k=n_migrants, temperature=T_warped, rng=rng)
+        sampled = boltzmann_sample(
+            programs, k=n_migrants, temperature=T_warped, rng=rng
+        )
         updates.append(sampled)
 
     # Copy the migrants across to destination islands, updating all islands simultaneously
     for destination, migrants in zip(topology, updates):
         islands[destination].update(migrants)
 
+
 # ─────────────────────────────────────────────────────────────────────────
 # Deduplication
 # ─────────────────────────────────────────────────────────────────────────
+
 
 def _loss(p: Program) -> float:
     v = p.program_losses.discover.final
     return v if v is not None else float("inf")
 
-def _are_duplicates(p_i: Program, p_j: Program, loss_tol: float, cosine_tol: float) -> bool:
+
+def _are_duplicates(
+    p_i: Program, p_j: Program, loss_tol: float, cosine_tol: float
+) -> bool:
     if p_i.n_params is None or p_j.n_params is None or p_i.n_params != p_j.n_params:
         return False
     if p_i.eval_fingerprint is None or p_j.eval_fingerprint is None:
         return False
-    if p_i.program_losses.discover.final is not None and p_j.program_losses.discover.final is not None:
-        if abs(p_i.program_losses.discover.final - p_j.program_losses.discover.final) > loss_tol:
+    if (
+        p_i.program_losses.discover.final is not None
+        and p_j.program_losses.discover.final is not None
+    ):
+        if (
+            abs(p_i.program_losses.discover.final - p_j.program_losses.discover.final)
+            > loss_tol
+        ):
             return False
     y_i = p_i.eval_fingerprint.flatten()
     y_j = p_j.eval_fingerprint.flatten()
@@ -227,7 +277,12 @@ def _are_duplicates(p_i: Program, p_j: Program, loss_tol: float, cosine_tol: flo
     return bool(cosine >= cosine_tol)
 
 
-def deduplicate_inner(islands: list[set[int]], population: Population, loss_tol: float = 0.01, cosine_tol: float = 0.95) -> None:
+def deduplicate_inner(
+    islands: list[set[int]],
+    population: Population,
+    loss_tol: float = 0.01,
+    cosine_tol: float = 0.95,
+) -> None:
     """Remove near-duplicate programs within each island, mutating islands in-place.
 
     Two programs are considered duplicates if they pass all three checks:
@@ -252,13 +307,24 @@ def deduplicate_inner(islands: list[set[int]], population: Population, loss_tol:
                 continue
             if not _are_duplicates(p_j, p_k, loss_tol, cosine_tol):
                 continue
-            loser = p_j if p_j.program_losses.discover.final >= p_k.program_losses.discover.final else p_k
+            loser = (
+                p_j
+                if p_j.program_losses.discover.final
+                >= p_k.program_losses.discover.final
+                else p_k
+            )
             to_remove.add(loser.idx)
 
         islands[i] = {p.idx for p in programs if p.idx not in to_remove}
 
 
-def deduplicate_outer(islands: list[set[int]], population: Population, min_island_size: int = 6, loss_tol: float = 0.01, cosine_tol: float = 0.99) -> None:
+def deduplicate_outer(
+    islands: list[set[int]],
+    population: Population,
+    min_island_size: int = 6,
+    loss_tol: float = 0.01,
+    cosine_tol: float = 0.99,
+) -> None:
     """Remove cross-island duplicate programs, keeping the lower-loss copy. Note: assumes deduplicate_inner has already been applied to ensure at most one duplicate of a program on the other island.
 
     For each pair of islands, skips the pair if either has fewer than min_island_size programs.
@@ -303,7 +369,13 @@ def deduplicate_outer(islands: list[set[int]], population: Population, min_islan
                 break  # deduplicate_inner guarantees at most one duplicate of a program on the other island (each island has unique programs)
 
 
-def deduplicate(islands: list[set[int]], population: Population, evolution: dict, loss_tol: float = 0.01, cosine_tol: float = 0.95) -> None:
+def deduplicate(
+    islands: list[set[int]],
+    population: Population,
+    evolution: dict,
+    loss_tol: float = 0.01,
+    cosine_tol: float = 0.95,
+) -> None:
     """Apply within-island and between-island deduplication, mutating islands in-place.
 
     First removes duplicates within each island, then checks adjacent islands for
@@ -315,7 +387,9 @@ def deduplicate(islands: list[set[int]], population: Population, evolution: dict
         evolution: evolution config dict containing loss_tol, cosine_tol, min_island_size
     """
     n_critical = evolution.get("critical_population_size", 12)
-    min_island_size = 0.75*n_critical # only remove cross-island duplicates if both islands have at least 75% of critical population size
+    min_island_size = (
+        0.75 * n_critical
+    )  # only remove cross-island duplicates if both islands have at least 75% of critical population size
 
     deduplicate_inner(islands, population, loss_tol, cosine_tol)
     deduplicate_outer(islands, population, min_island_size, loss_tol, cosine_tol)
@@ -324,6 +398,7 @@ def deduplicate(islands: list[set[int]], population: Population, evolution: dict
 # ─────────────────────────────────────────────────────────────────────────
 # Census: save and load island membership history
 # ─────────────────────────────────────────────────────────────────────────
+
 
 def save_island_census(census: list[list[set[int]]], path: str) -> None:
     """

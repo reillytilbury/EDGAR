@@ -109,7 +109,10 @@ def test_fromconfig():
     assert taskspec.seed_programs[0].code.model in seed_model_src
     seed_model_src = (Path("tests/io/test_task/seed_programs/model2.py")).read_text()
     assert taskspec.seed_programs[1].code.model in seed_model_src
-    assert taskspec.rng.integers(0, 2**31) == np.random.default_rng(42).integers(0, 2**31) #check rng correctly seeded with 42 (see config.yaml)
+    assert taskspec.rng.integers(0, 2**31) == np.random.default_rng(42).integers(
+        0, 2**31
+    )  # check rng correctly seeded with 42 (see config.yaml)
+
 
 def test_fromconfig_no_plot_fn():
     """Tests that plot_fn is None when image_feedback/plot.py is absent."""
@@ -117,15 +120,21 @@ def test_fromconfig_no_plot_fn():
     taskspec = TaskSpec.from_config(config)
     assert taskspec.plot_fn is None
 
+
 def test_schedule_model_list():
     """
-        Tests that the schedule produces the expected mode, temperature and model_llms for each generation
+    Tests that the schedule produces the expected mode, temperature and model_llms for each generation
     """
     config = Config.from_yaml("tests/io/test_task/config.yaml")
     taskspec = TaskSpec.from_config(config)
     n_generations = taskspec.evolution["n_generations"]
-    expected_modes = 2*["explore"] + 2*["exploit"]
-    expected_model_llms = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"]
+    expected_modes = 2 * ["explore"] + 2 * ["exploit"]
+    expected_model_llms = [
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash-lite",
+    ]
     for gen in range(n_generations):
         mode, temperature, llms = taskspec.schedule(gen)
         assert mode == expected_modes[gen]
@@ -134,15 +143,18 @@ def test_schedule_model_list():
         assert llms.param_est == "gemini-2.5-flash-lite"
         assert llms.model_jax == "gemini-2.5-flash-lite"
 
+
 def test_schedule_single_model():
     """
-        Tests that the schedule produces the expected mode, temperature and model_llms for each generation
+    Tests that the schedule produces the expected mode, temperature and model_llms for each generation
     """
     config = Config.from_yaml("tests/io/test_task/config.yaml")
-    config.llms.model_llm = "gemini-2.5-flash-lite" #Override with single model instead of list
+    config.llms.model_llm = (
+        "gemini-2.5-flash-lite"  # Override with single model instead of list
+    )
     taskspec = TaskSpec.from_config(config)
     n_generations = taskspec.evolution["n_generations"]
-    expected_modes = 2*["explore"] + 2*["exploit"]
+    expected_modes = 2 * ["explore"] + 2 * ["exploit"]
     for gen in range(n_generations):
         mode, temperature, llms = taskspec.schedule(gen)
         assert mode == expected_modes[gen]

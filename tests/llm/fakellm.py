@@ -17,6 +17,7 @@ Example usage:
     cycling = CyclingModel([fake.gen_model() for _ in range(6)])
     result = await call_llm("prompt", llm_model=cycling, output_type=ModelSchema)
 """
+
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.messages import ModelMessage, ModelResponse
@@ -48,24 +49,28 @@ class FakeLLM:
         )
         latex_equation = self._programs[idx].latex_equation
         default_params = self._programs[idx].default_params
-        
+
         self._model_counter[idx] += 1
-        return TestModel(custom_output_args={
-            "thought_process": "fake thought process",
-            "descriptive_name": f"Fake Model {idx}",
-            "latex_equations": latex_equation,
-            "code": code,
-            "default_params": default_params
-        })
+        return TestModel(
+            custom_output_args={
+                "thought_process": "fake thought process",
+                "descriptive_name": f"Fake Model {idx}",
+                "latex_equations": latex_equation,
+                "code": code,
+                "default_params": default_params,
+            }
+        )
 
     def gen_param_est(self) -> TestModel:
         """Return a TestModel which outputs a parameter estimator matching ParamEstSchema for the next program in rotation."""
         idx = self._param_est_counter.index(min(self._param_est_counter))
         code = self._programs[idx].param_est
         self._param_est_counter[idx] += 1
-        return TestModel(custom_output_args={
-            "code": code,
-        })
+        return TestModel(
+            custom_output_args={
+                "code": code,
+            }
+        )
 
     def gen_model_translation(self) -> TestModel:
         """Return a TestModel which outputs a jax-translated model matching TranslationSchema for the next program in rotation."""
@@ -75,9 +80,11 @@ class FakeLLM:
             self.offset * self._model_jax_counter[idx],
         )
         self._model_jax_counter[idx] += 1
-        return TestModel(custom_output_args={
-            "code": model_code,
-        })
+        return TestModel(
+            custom_output_args={
+                "code": model_code,
+            }
+        )
 
 
 class SeedFakeLLM:
@@ -91,11 +98,9 @@ class SeedFakeLLM:
 
     def gen_model_translation(self) -> TestModel:
         """Return a TestModel whose output matches TranslationSchema for the next seed model."""
-        model_code = self._seed_models[self._model_counter%len(self._seed_models)]
+        model_code = self._seed_models[self._model_counter % len(self._seed_models)]
         self._model_counter += 1
-        return TestModel(custom_output_args={
-            "code": model_code + "\n"
-        })
+        return TestModel(custom_output_args={"code": model_code + "\n"})
 
 
 class CyclingModel(Model):

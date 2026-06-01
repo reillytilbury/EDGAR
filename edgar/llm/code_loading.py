@@ -1,6 +1,7 @@
 import warnings
 from collections.abc import Callable
 
+
 def load_function_from_source(
     source: str | None,
     entrypoint_name: str,

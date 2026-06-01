@@ -7,6 +7,7 @@ Reads from:
 Layout: hierarchical, y = generation (negated so older sits on top).
 Each generation's programs are placed left-to-right by global idx.
 """
+
 from __future__ import annotations
 
 import json
@@ -79,7 +80,9 @@ def _build_nodes(population: Population, pos: dict) -> dict:
         label = p.name or f"P{p.idx}"
         labels.append(label)
         hover_label = f"★ {label}" if p.rank == 1 else label
-        hover.append(f"{hover_label}<br>loss: {loss_str(p.program_losses.discover.final)}")
+        hover.append(
+            f"{hover_label}<br>loss: {loss_str(p.program_losses.discover.final)}"
+        )
         colors.append(_node_colour(p.program_losses.discover.final))
         if p.rank == 1:
             symbols.append("star")
@@ -91,8 +94,14 @@ def _build_nodes(population: Population, pos: dict) -> dict:
             symbols.append("circle")
             sizes.append(16)
     return {
-        "x": x, "y": y, "ids": ids, "labels": labels, "hover": hover,
-        "colors": colors, "symbols": symbols, "sizes": sizes,
+        "x": x,
+        "y": y,
+        "ids": ids,
+        "labels": labels,
+        "hover": hover,
+        "colors": colors,
+        "symbols": symbols,
+        "sizes": sizes,
     }
 
 
@@ -128,23 +137,26 @@ def write_family_tree(
     pos_map = {str(idx): list(xy) for idx, xy in pos.items()}
 
     title = f"{task_name} — Family Tree"
-    html = render("family_tree.html", {
-        "__TITLE_HTML__": escape(title),
-        "__TITLE_JSON__": json.dumps(title),
-        "__SIDEBAR_DATA__": json.dumps(sidebar_data, default=str),
-        "__PARENT_MAP__": json.dumps(parent_map),
-        "__POS_MAP__": json.dumps(pos_map),
-        "__EDGE_X__": json.dumps(edge_x),
-        "__EDGE_Y__": json.dumps(edge_y),
-        "__NODE_X__": json.dumps(nodes["x"]),
-        "__NODE_Y__": json.dumps(nodes["y"]),
-        "__NODE_IDS__": json.dumps(nodes["ids"]),
-        "__NODE_LABELS__": json.dumps(nodes["labels"]),
-        "__NODE_HOVER__": json.dumps(nodes["hover"]),
-        "__NODE_COLORS__": json.dumps(nodes["colors"]),
-        "__NODE_SYMBOLS__": json.dumps(nodes["symbols"]),
-        "__NODE_SIZES__": json.dumps(nodes["sizes"]),
-    })
+    html = render(
+        "family_tree.html",
+        {
+            "__TITLE_HTML__": escape(title),
+            "__TITLE_JSON__": json.dumps(title),
+            "__SIDEBAR_DATA__": json.dumps(sidebar_data, default=str),
+            "__PARENT_MAP__": json.dumps(parent_map),
+            "__POS_MAP__": json.dumps(pos_map),
+            "__EDGE_X__": json.dumps(edge_x),
+            "__EDGE_Y__": json.dumps(edge_y),
+            "__NODE_X__": json.dumps(nodes["x"]),
+            "__NODE_Y__": json.dumps(nodes["y"]),
+            "__NODE_IDS__": json.dumps(nodes["ids"]),
+            "__NODE_LABELS__": json.dumps(nodes["labels"]),
+            "__NODE_HOVER__": json.dumps(nodes["hover"]),
+            "__NODE_COLORS__": json.dumps(nodes["colors"]),
+            "__NODE_SYMBOLS__": json.dumps(nodes["symbols"]),
+            "__NODE_SIZES__": json.dumps(nodes["sizes"]),
+        },
+    )
 
     out_path = out_dir / "family_tree.html"
     out_path.write_text(html)
@@ -155,7 +167,9 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python -m edgar.monitoring.family_tree <path/to/population.jsonl>")
+        print(
+            "Usage: python -m edgar.monitoring.family_tree <path/to/population.jsonl>"
+        )
         sys.exit(1)
 
     pop_path = Path(sys.argv[1])

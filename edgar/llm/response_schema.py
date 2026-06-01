@@ -13,8 +13,7 @@ class ModelSchema(BaseModel):
     )
     descriptive_name: str = Field(
         description=(
-            "A concise, descriptive name for the model "
-            "(e.g., 'Double Gaussian Model')."
+            "A concise, descriptive name for the model (e.g., 'Double Gaussian Model')."
         )
     )
     latex_equations: str = Field(

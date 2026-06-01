@@ -4,6 +4,7 @@ write_progress() emits two HTML files:
 - loss_progress.html — perplexity P(L) over generations, one trace per island
 - gd_effect.html — perplexity of init loss vs final loss; above-diagonal = GD helped
 """
+
 from __future__ import annotations
 
 import json
@@ -30,6 +31,7 @@ from .data import (
 
 # ── loss progress ──
 
+
 def _loss_traces_per_island(
     progs: list[Program],
     islands: list[int],
@@ -55,15 +57,17 @@ def _loss_traces_per_island(
                 f"<br>train loss: {loss_str(p.program_losses.discover.final)}"
                 f"<br>mode: {p.birth.mode or ''}"
             )
-        traces.append({
-            "island_idx": island_idx,
-            "x": x_vals,
-            "y_with_penalty": y_vals,
-            "y_without_penalty": y_vals,
-            "custom": custom,
-            "hover": hover,
-            "colour": island_colour(island_idx),
-        })
+        traces.append(
+            {
+                "island_idx": island_idx,
+                "x": x_vals,
+                "y_with_penalty": y_vals,
+                "y_without_penalty": y_vals,
+                "custom": custom,
+                "hover": hover,
+                "colour": island_colour(island_idx),
+            }
+        )
     return traces
 
 
@@ -109,7 +113,9 @@ def _lineage_edges(
     return edge_segs, edge_map, parent_map
 
 
-def _axis_range(values: list[float], pad_min: float, pad_frac: float, clamp_zero: bool = False) -> str:
+def _axis_range(
+    values: list[float], pad_min: float, pad_frac: float, clamp_zero: bool = False
+) -> str:
     finite = [v for v in values if v is not None]
     if not finite:
         return "null"
@@ -143,31 +149,37 @@ def _render_loss_progress(
     edge_segs, edge_map, parent_map = _lineage_edges(population, pos)
 
     all_x = [xv for t in traces for xv in t["x"]] + seed["x"]
-    all_y = [yv for t in traces for yv in t["y_with_penalty"] if yv is not None] \
-        + [yv for yv in seed["y"] if yv is not None]
+    all_y = [yv for t in traces for yv in t["y_with_penalty"] if yv is not None] + [
+        yv for yv in seed["y"] if yv is not None
+    ]
 
     title = f"{task_name} — Loss Progress"
-    html = render("loss_progress.html", {
-        "__TITLE_HTML__": escape(title),
-        "__TITLE_JSON__": json.dumps(title),
-        "__SIDEBAR_CSS__": _SIDEBAR_CSS,
-        "__SIDEBAR_JS__": _SIDEBAR_JS,
-        "__COLOUR_MODE_JS__": _COLOUR_MODE_JS,
-        "__SIDEBAR_DATA__": json.dumps(sidebar_data, default=str),
-        "__TRACES__": json.dumps(traces),
-        "__ISLANDS__": json.dumps(islands),
-        "__SEED_X__": json.dumps(seed["x"]),
-        "__SEED_Y_PENALTY__": json.dumps(seed["y"]),
-        "__SEED_Y_RAW__": json.dumps(seed["y"]),
-        "__SEED_CUSTOM__": json.dumps(seed["custom"]),
-        "__SEED_HOVER__": json.dumps(seed["hover"]),
-        "__EDGE_SEGS_PENALTY__": json.dumps(edge_segs),
-        "__EDGE_SEGS_RAW__": json.dumps(edge_segs),
-        "__PARENT_MAP__": json.dumps(parent_map),
-        "__EDGE_MAP__": json.dumps(edge_map),
-        "__X_RANGE__": _axis_range(all_x, pad_min=0.5, pad_frac=0.04),
-        "__Y_RANGE__": _axis_range(all_y, pad_min=0.05, pad_frac=0.05, clamp_zero=True),
-    })
+    html = render(
+        "loss_progress.html",
+        {
+            "__TITLE_HTML__": escape(title),
+            "__TITLE_JSON__": json.dumps(title),
+            "__SIDEBAR_CSS__": _SIDEBAR_CSS,
+            "__SIDEBAR_JS__": _SIDEBAR_JS,
+            "__COLOUR_MODE_JS__": _COLOUR_MODE_JS,
+            "__SIDEBAR_DATA__": json.dumps(sidebar_data, default=str),
+            "__TRACES__": json.dumps(traces),
+            "__ISLANDS__": json.dumps(islands),
+            "__SEED_X__": json.dumps(seed["x"]),
+            "__SEED_Y_PENALTY__": json.dumps(seed["y"]),
+            "__SEED_Y_RAW__": json.dumps(seed["y"]),
+            "__SEED_CUSTOM__": json.dumps(seed["custom"]),
+            "__SEED_HOVER__": json.dumps(seed["hover"]),
+            "__EDGE_SEGS_PENALTY__": json.dumps(edge_segs),
+            "__EDGE_SEGS_RAW__": json.dumps(edge_segs),
+            "__PARENT_MAP__": json.dumps(parent_map),
+            "__EDGE_MAP__": json.dumps(edge_map),
+            "__X_RANGE__": _axis_range(all_x, pad_min=0.5, pad_frac=0.04),
+            "__Y_RANGE__": _axis_range(
+                all_y, pad_min=0.05, pad_frac=0.05, clamp_zero=True
+            ),
+        },
+    )
 
     out_path = out_dir / "loss_progress.html"
     out_path.write_text(html)
@@ -175,6 +187,7 @@ def _render_loss_progress(
 
 
 # ── GD effect ──
+
 
 def _gd_traces_per_island(
     progs: list[Program],
@@ -185,7 +198,8 @@ def _gd_traces_per_island(
     all_perp: list[float] = []
     for island_idx in islands:
         island_progs = [
-            p for p in progs
+            p
+            for p in progs
             if p.birth.island == island_idx
             and p.program_losses.discover.init is not None
             and p.program_losses.discover.final is not None
@@ -209,14 +223,16 @@ def _gd_traces_per_island(
                 f"<br>mode: {p.birth.mode or ''}"
             )
             all_perp.extend(v for v in (p_init, p_final) if v is not None)
-        traces.append({
-            "island_idx": island_idx,
-            "x": x_vals,
-            "y": y_vals,
-            "custom": custom,
-            "hover": hover,
-            "colour": island_colour(island_idx),
-        })
+        traces.append(
+            {
+                "island_idx": island_idx,
+                "x": x_vals,
+                "y": y_vals,
+                "custom": custom,
+                "hover": hover,
+                "colour": island_colour(island_idx),
+            }
+        )
     return traces, all_perp
 
 
@@ -224,7 +240,10 @@ def _gd_seed_data(seeds: list[Program], L_0: float) -> tuple[dict, list[float]]:
     x, y, custom, hover = [], [], [], []
     all_perp: list[float] = []
     for s in seeds:
-        if s.program_losses.discover.init is None or s.program_losses.discover.final is None:
+        if (
+            s.program_losses.discover.init is None
+            or s.program_losses.discover.final is None
+        ):
             continue
         p_init = perplexity(s.program_losses.discover.init, L_0)
         p_final = perplexity(s.program_losses.discover.final, L_0)
@@ -261,20 +280,23 @@ def _render_gd_effect(
     diag_max = max(all_perp) if all_perp else 2.0
 
     title = f"{task_name} — GD Effect"
-    html = render("gd_effect.html", {
-        "__TITLE_HTML__": escape(title),
-        "__TITLE_JSON__": json.dumps(title),
-        "__SIDEBAR_CSS__": _SIDEBAR_CSS,
-        "__SIDEBAR_JS__": _SIDEBAR_JS,
-        "__COLOUR_MODE_JS__": _COLOUR_MODE_JS,
-        "__SIDEBAR_DATA__": json.dumps(sidebar_data, default=str),
-        "__TRACES__": json.dumps(traces),
-        "__SEED_X__": json.dumps(seed["x"]),
-        "__SEED_Y__": json.dumps(seed["y"]),
-        "__SEED_CUSTOM__": json.dumps(seed["custom"]),
-        "__SEED_HOVER__": json.dumps(seed["hover"]),
-        "__DIAG_RANGE__": json.dumps([diag_min, diag_max]),
-    })
+    html = render(
+        "gd_effect.html",
+        {
+            "__TITLE_HTML__": escape(title),
+            "__TITLE_JSON__": json.dumps(title),
+            "__SIDEBAR_CSS__": _SIDEBAR_CSS,
+            "__SIDEBAR_JS__": _SIDEBAR_JS,
+            "__COLOUR_MODE_JS__": _COLOUR_MODE_JS,
+            "__SIDEBAR_DATA__": json.dumps(sidebar_data, default=str),
+            "__TRACES__": json.dumps(traces),
+            "__SEED_X__": json.dumps(seed["x"]),
+            "__SEED_Y__": json.dumps(seed["y"]),
+            "__SEED_CUSTOM__": json.dumps(seed["custom"]),
+            "__SEED_HOVER__": json.dumps(seed["hover"]),
+            "__DIAG_RANGE__": json.dumps([diag_min, diag_max]),
+        },
+    )
 
     out_path = out_dir / "gd_effect.html"
     out_path.write_text(html)
@@ -282,6 +304,7 @@ def _render_gd_effect(
 
 
 # ── public API ──
+
 
 def write_progress(
     population: Population,

@@ -6,6 +6,7 @@ and filling in their fields via LLM calls.
 
 Prompt variable mapping is handled by PromptSchema, not here.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,34 +34,48 @@ if TYPE_CHECKING:
 def _needs_model_code(program: Program) -> bool:
     return program.code.model is None
 
+
 def _needs_param_est_code(program: Program) -> bool:
     return program.code.model is not None and program.code.param_est is None
+
 
 def _needs_model_translation(program: Program) -> bool:
     return program.code.model is not None and program.code.model_jax is None
 
-def _filter_programs(population: Population, filter_rule: Callable[[Program], bool]) -> list[Program]:
+
+def _filter_programs(
+    population: Population, filter_rule: Callable[[Program], bool]
+) -> list[Program]:
     return [p for p in population if filter_rule(p)]
+
 
 def _resolve_parents(population: Population, program: Program) -> list[Program]:
     """
     Resolve the parent programs for a given program, sorted by discover.final loss from highest to lowest.
     """
     parents = [population[i] for i in program.birth.parent_indices]
+
     def _loss(p: Program) -> float:
         v = p.program_losses.discover.final
-        return float('inf') if (v is None or not isinstance(v, float)) else v
+        return float("inf") if (v is None or not isinstance(v, float)) else v
+
     return sorted(parents, key=_loss, reverse=True)
 
-def _prompt_image_bytes(spec: TaskSpec, data: dict, parents: list[Program], program: Program) -> bytes | None:
+
+def _prompt_image_bytes(
+    spec: TaskSpec, data: dict, parents: list[Program], program: Program
+) -> bytes | None:
     if spec is None or spec.plot_fn is None or data is None:
         return None
     b = program.birth
-    img_path = os.path.join(spec.output_dir, "image_feedback",
-                            f"gen_{b.generation:03d}",
-                            f"island_{b.island:03d}",
-                            f"batch_{b.batch_index:03d}",
-                            "image.png")
+    img_path = os.path.join(
+        spec.output_dir,
+        "image_feedback",
+        f"gen_{b.generation:03d}",
+        f"island_{b.island:03d}",
+        f"batch_{b.batch_index:03d}",
+        "image.png",
+    )
     os.makedirs(os.path.dirname(img_path), exist_ok=True)
     try:
         spec.plot_fn(data, parents, save_path=img_path)
@@ -74,6 +89,7 @@ def _prompt_image_bytes(spec: TaskSpec, data: dict, parents: list[Program], prog
 # ---------------------------------------------------------------------------
 # Model code generation
 # ---------------------------------------------------------------------------
+
 
 async def _generate_one_model(
     program: Program,
@@ -100,7 +116,9 @@ async def _generate_one_model(
         retry_config=cfg.get("retry_config"),
     )
     if result is None:
-        warnings.warn(f"[generate] Skipping model code for program #{program.idx}: call_llm returned None")
+        warnings.warn(
+            f"[generate] Skipping model code for program #{program.idx}: call_llm returned None"
+        )
         return
     header = f'"""\n{result.thought_process}\n\n{result.latex_equations}\n"""\n\n'
     program.code.model = header + result.code
@@ -127,18 +145,28 @@ async def generate_models(
     Mutates: program.code.model, program.name, program.birth.llm_name, program.image_path
     """
     programs = _filter_programs(population, _needs_model_code)
-    await asyncio.gather(*[
-        _generate_one_model(
-            p, _resolve_parents(population, p), prompt_schema, llm, mode, temperature,
-            config, spec, data,
-        )
-        for p in programs
-    ])
+    await asyncio.gather(
+        *[
+            _generate_one_model(
+                p,
+                _resolve_parents(population, p),
+                prompt_schema,
+                llm,
+                mode,
+                temperature,
+                config,
+                spec,
+                data,
+            )
+            for p in programs
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
 # Parameter estimator code generation
 # ---------------------------------------------------------------------------
+
 
 async def _generate_one_param_est(
     program: Program,
@@ -159,7 +187,9 @@ async def _generate_one_param_est(
         retry_config=cfg.get("retry_config"),
     )
     if result is None:
-        warnings.warn(f"[generate] Skipping param_est for program #{program.idx}: call_llm returned None")
+        warnings.warn(
+            f"[generate] Skipping param_est for program #{program.idx}: call_llm returned None"
+        )
         return
     program.code.param_est = result.code
 
@@ -196,6 +226,7 @@ async def _translate_one_model(
     if model_result is not None and load_function_from_source(model_result.code, "model") is not None:
         program.code.model_jax = model_result.code
 
+
 async def translate_programs(
     population: Population,
     model_prompt_schema: PromptSchema,
@@ -208,7 +239,9 @@ async def translate_programs(
     Mutates: program.code.model_jax
     """
     programs = _filter_programs(population, _needs_model_translation)
-    await asyncio.gather(*[
-        _translate_one_model(p, model_prompt_schema, llm, retry_config, max_tokens)
-        for p in programs
-    ])
+    await asyncio.gather(
+        *[
+            _translate_one_model(p, model_prompt_schema, llm, retry_config, max_tokens)
+            for p in programs
+        ]
+    )

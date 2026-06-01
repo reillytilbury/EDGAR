@@ -26,6 +26,7 @@ Example usage:
 
     close_log(log)
 """
+
 from __future__ import annotations
 
 import os
@@ -43,11 +44,13 @@ if TYPE_CHECKING:
 
 LEVELS = ("compact", "code", "prompts")
 
+
 def print_and_log(log: RunLog, message: str) -> None:
-    """ Print message to console and appent to log file. """
+    """Print message to console and appent to log file."""
     print(message)
     log.file.write(message + "\n")
     log.file.flush()
+
 
 @dataclass
 class RunLog:
@@ -130,34 +133,55 @@ def log_generation(
     """
     f = log.file
     mode, temperature, llms = spec.schedule(gen)
-    llm = llms.model[gen % len(llms.model)] if isinstance(llms.model, list) else llms.model
-    born = [population[i] for i in range(len(population)) if population[i].birth.generation == gen]
+    llm = (
+        llms.model[gen % len(llms.model)]
+        if isinstance(llms.model, list)
+        else llms.model
+    )
+    born = [
+        population[i]
+        for i in range(len(population))
+        if population[i].birth.generation == gen
+    ]
     n = len(born)
 
-    def pct(k): return f"{100 * k / n:.0f}%" if n else "n/a"
+    def pct(k):
+        return f"{100 * k / n:.0f}%" if n else "n/a"
 
-    n_model     = sum(1 for p in born if p.code.model is not None)
+    n_model = sum(1 for p in born if p.code.model is not None)
     n_param_est = sum(1 for p in born if p.code.param_est is not None)
-    n_jax       = sum(1 for p in born if p.code.model_jax is not None)
-    n_scored    = sum(1 for p in born if p.program_losses.discover.final not in (None, float("inf")))
+    n_jax = sum(1 for p in born if p.code.model_jax is not None)
+    n_scored = sum(
+        1 for p in born if p.program_losses.discover.final not in (None, float("inf"))
+    )
 
-    all_final   = [population[i].program_losses.discover.final for i in range(len(population))]
-    valid       = [l for l in all_final if l is not None and not isinstance(l, NotValidated)]
+    all_final = [
+        population[i].program_losses.discover.final for i in range(len(population))
+    ]
+    valid = [l for l in all_final if l is not None and not isinstance(l, NotValidated)]
     global_best = f"{min(valid):.6f}" if valid else "n/a"
-    elapsed     = time.monotonic() - log.start_time
+    elapsed = time.monotonic() - log.start_time
     this_gen_time = elapsed - log.previous_gen_time
     log.previous_gen_time = elapsed
 
     f.write(f"{'=' * 60}\n")
-    f.write(f"Gen {gen:3d}  |  {mode}  |  temp={temperature:.3f}  | gen_time={this_gen_time:.1f}s | total time elapsed={elapsed:.1f}s\n")
-    f.write(f"LLMs     model={llm}  param_est={llms.param_est}  model_jax={llms.model_jax}\n")
-    f.write(f"Spawned  {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n")
+    f.write(
+        f"Gen {gen:3d}  |  {mode}  |  temp={temperature:.3f}  | gen_time={this_gen_time:.1f}s | total time elapsed={elapsed:.1f}s\n"
+    )
+    f.write(
+        f"LLMs     model={llm}  param_est={llms.param_est}  model_jax={llms.model_jax}\n"
+    )
+    f.write(
+        f"Spawned  {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n"
+    )
     f.write(f"Global best discover loss: {global_best}\n\n")
     f.write("Best programs on each island:\n")
     for idx, island in enumerate(islands):
         progs = [population[i] for i in island]
-        best  = min(progs, key=lambda p: p.program_losses.discover.final or float("inf"))
-        f.write(f"  Island {idx}  size={len(island)}  best=#{best.idx} {best.name!r}  loss={best.program_losses.discover.final:.6f}\n")
+        best = min(progs, key=lambda p: p.program_losses.discover.final or float("inf"))
+        f.write(
+            f"  Island {idx}  size={len(island)}  best=#{best.idx} {best.name!r}  loss={best.program_losses.discover.final:.6f}\n"
+        )
     f.write("\n")
 
     if log.level not in ("code", "prompts"):
@@ -178,8 +202,8 @@ def log_generation(
         return
 
     for p in born:
-        parents  = [population[i] for i in p.birth.parent_indices]
-        mode_p   = p.birth.mode or "explore"
+        parents = [population[i] for i in p.birth.parent_indices]
+        mode_p = p.birth.mode or "explore"
         f.write(f"  --- Prompts for Program #{p.idx} ---\n")
         f.write(f"  [model prompt]\n{spec.model_prompt_schema.build_prompt(mode_p, parents, spec.flat_config)}\n\n")
         f.write(f"  [param_est prompt]\n{spec.param_est_prompt_schema.build_prompt('explore', parents, spec.flat_config, current_program=p)}\n\n")

@@ -3,6 +3,7 @@ from edgar.evolution.population import Population
 from edgar.evolution.program import BirthCertificate, Code, Program
 from tests.llm.programs import Seed1, Seed2
 
+
 def linear_model_code():
     return """
 import numpy as np
@@ -12,6 +13,7 @@ def model(data, params):
 
 model.DEFAULT_PARAMS = {'a': 1.0, 'b': 0.0}
 """
+
 
 def linear_param_est_code():
     return """
@@ -23,6 +25,7 @@ def parameter_estimator(data):
     b = x_max
     return {'a': float(a), 'b': float(b)}
 """
+
 
 def quadratic_model_code():
     return """
@@ -48,17 +51,20 @@ def parameter_estimator(data):
     return {'a': float(a), 'b': float(b), 'c': float(c)}
 """
 
+
 def wrong_entrypoint_code():
     return """
 def not_a_model(data, params):
     return params['a'] * data['x']
 """
 
+
 def make_empty_program(number: int = 0):
     return Program(
         birth=BirthCertificate(generation=-1, island=-1, batch_index=-1),
-        name = f"Program{number}"
+        name=f"Program{number}",
     )
+
 
 def make_empty_population(num_programs: int = 2):
     pop = Population()
@@ -66,17 +72,20 @@ def make_empty_population(num_programs: int = 2):
         pop.add(make_empty_program(number=i))
     return pop
 
-def make_program(model_code = linear_model_code(), param_est_code = linear_param_est_code(), number = 0, default_params = None):
+
+def make_program(
+    model_code=linear_model_code(),
+    param_est_code=linear_param_est_code(),
+    number=0,
+    default_params=None,
+):
     return Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
-        code=Code(
-            model=model_code,
-            param_est=param_est_code,
-            model_jax=model_code
-        ),
-        name = f"Program{number}",
-        _default_params = default_params
+        code=Code(model=model_code, param_est=param_est_code, model_jax=model_code),
+        name=f"Program{number}",
+        _default_params=default_params,
     )
+
 
 def make_population():
     p1 = make_program(linear_model_code(), linear_param_est_code(), number=1)
@@ -85,6 +94,7 @@ def make_population():
     pop.add(p1)
     pop.add(p2)
     return pop
+
 
 def make_fingerprint_program(
     fingerprint: list[float],
@@ -116,17 +126,19 @@ def make_fingerprint_population(specs: list[tuple]) -> Population:
 
 def make_seeds():
     seed1 = Program(
-        birth = BirthCertificate(generation=-1, island=-1, batch_index=0),
-        code = Code(model=Seed1.model, param_est=Seed1.param_est,model_jax=Seed1.model_jax),
-        name = "Seed1",
-        _default_params = Seed1.default_params,
+        birth=BirthCertificate(generation=-1, island=-1, batch_index=0),
+        code=Code(
+            model=Seed1.model, param_est=Seed1.param_est, model_jax=Seed1.model_jax
+        ),
+        name="Seed1",
+        _default_params=Seed1.default_params,
     )
     seed2 = Program(
-        birth = BirthCertificate(generation=-1, island=-1, batch_index=1),
-        code = Code(model=Seed2.model, param_est=Seed2.param_est,model_jax=Seed2.model_jax),
-        name = "Seed2",
-        _default_params = Seed2.default_params,
+        birth=BirthCertificate(generation=-1, island=-1, batch_index=1),
+        code=Code(
+            model=Seed2.model, param_est=Seed2.param_est, model_jax=Seed2.model_jax
+        ),
+        name="Seed2",
+        _default_params=Seed2.default_params,
     )
     return [seed1, seed2]
-
-    

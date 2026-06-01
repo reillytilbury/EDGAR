@@ -1,4 +1,4 @@
-name: Lint
+name: Lint and Format
 
 on:
   push:
@@ -12,3 +12,4 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
       - run: uvx ruff check .
+      - run: uvx ruff format --check .

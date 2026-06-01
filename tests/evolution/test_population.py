@@ -14,8 +14,16 @@ Covers:
 import json
 import numpy as np
 from edgar.evolution.population import Population, _params_to_json, _params_from_json
-from edgar.evolution.program import NotValidated, BirthCertificate, Program, Code, Losses, LossPair
+from edgar.evolution.program import (
+    NotValidated,
+    BirthCertificate,
+    Program,
+    Code,
+    Losses,
+    LossPair,
+)
 from tests.evolution.utils import make_program, linear_model_code, linear_param_est_code
+
 
 def initialize_program(i, model_code, param_est_code):
     """
@@ -23,7 +31,7 @@ def initialize_program(i, model_code, param_est_code):
     """
     return Program(
         birth=BirthCertificate(generation=i, island=i, batch_index=i),
-        code=Code(model=model_code, param_est=param_est_code, model_jax = model_code),
+        code=Code(model=model_code, param_est=param_est_code, model_jax=model_code),
         name=f"Program {i}",
         program_losses=Losses(
             discover=LossPair(init=float(i), final=float(i) / 2),
@@ -51,12 +59,12 @@ class TestPopulation:
         assert len(pop) == 2
         assert pop[1].name == program2.name
 
-    def test_population_save_and_load(
-        self, tmp_path
-    ):
+    def test_population_save_and_load(self, tmp_path):
         pop = Population()
         for i in range(3):
-            program = initialize_program(i, linear_model_code(), linear_param_est_code())
+            program = initialize_program(
+                i, linear_model_code(), linear_param_est_code()
+            )
             pop.add(program)
         pop.save(tmp_path / "population.jsonl")
         loaded_pop = Population.load(tmp_path / "population.jsonl")
@@ -67,10 +75,22 @@ class TestPopulation:
             assert p_original.code == p_loaded.code
             assert p_original.code.model_jax == p_loaded.code.model_jax
             assert p_original.name == p_loaded.name
-            assert p_original.program_losses.discover.init == p_loaded.program_losses.discover.init
-            assert p_original.program_losses.discover.final == p_loaded.program_losses.discover.final
-            assert p_original.program_losses.validate.init == p_loaded.program_losses.validate.init
-            assert p_original.program_losses.validate.final == p_loaded.program_losses.validate.final
+            assert (
+                p_original.program_losses.discover.init
+                == p_loaded.program_losses.discover.init
+            )
+            assert (
+                p_original.program_losses.discover.final
+                == p_loaded.program_losses.discover.final
+            )
+            assert (
+                p_original.program_losses.validate.init
+                == p_loaded.program_losses.validate.init
+            )
+            assert (
+                p_original.program_losses.validate.final
+                == p_loaded.program_losses.validate.final
+            )
             assert p_original.n_params == p_loaded.n_params
             np.testing.assert_array_equal(
                 p_original.eval_fingerprint, p_loaded.eval_fingerprint
@@ -83,7 +103,9 @@ class TestPopulation:
             program = make_program()
             program.name = f"Program {i}"
             pop.add(program)
-            assert isinstance(pop[i].program_losses.validate.final, NotValidated)  # Initially set to NotValidated
+            assert isinstance(
+                pop[i].program_losses.validate.final, NotValidated
+            )  # Initially set to NotValidated
 
         # Prepare validation scoring for programs at indices 1, 3, 4
         pop.prepare_validation_scoring(islands=[{1, 3, 4}])
