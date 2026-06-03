@@ -273,20 +273,34 @@ def _top_eval_strip(images: np.ndarray, scores: np.ndarray, k: int = 3) -> np.nd
 
 def plot_model_fits(
     data,
-    parent_programs,
+    programs,
     save_path="",
+    losses=None,
+    sample_losses=None,
+    program_names=None,
+    params=None,
     title_prefix: str | None = None,
 ):
     if save_path == "":
         raise ValueError("plot_model_fits requires a non-empty save_path")
+
+    # Default losses, sample_losses and program_names
+    if losses is None:
+        losses = [program.program_losses.discover.final for program in programs]
+    if sample_losses is None:
+        sample_losses = [program.sample_losses if program.sample_losses is not None else None for program in programs]
+    if program_names is None:
+        program_names = [program.name for program in programs]
+    if params is None:
+        params = [program.params for program in programs]
 
     cache = _build_anchor_cache(data)
     anchors = cache["anchors"][: min(4, len(cache["anchors"]))]
     if len(anchors) == 0:
         raise ValueError("No anchor neurons available for plotting.")
 
-    n_models = len(parent_programs)
-    model_fns = [program.compile_model() for program in parent_programs]
+    n_models = len(programs)
+    model_fns = [program.compile_model() for program in programs]
 
     fig = plt.figure(figsize=(4.2 * (1 + n_models), 3.0 * len(anchors)))
     outer = fig.add_gridspec(len(anchors), 1 + n_models, wspace=0.25, hspace=0.35)
@@ -310,13 +324,13 @@ def plot_model_fits(
         order = np.argsort(response)[::-1]
         sorted_response = response[order]
 
-        for model_idx, (program, model_fn) in enumerate(zip(parent_programs, model_fns)):
-            label = f"model_{model_idx + 1}"
-            params_s = {k: np.asarray(v[sample_idx]) for k, v in program.params.items()}
+        for model_idx, (program, model_fn) in enumerate(zip(programs, model_fns)):
+            label = program_names[model_idx]
+            params_s = {k: np.asarray(v[sample_idx]) for k, v in params[model_idx].items()}
             pred = _vectorize_prediction(np.asarray(model_fn(sample, params_s)))
             pred_sorted = pred[order]
 
-            sample_loss = program.sample_losses[sample_idx] if program.sample_losses is not None else float("nan")
+            s_loss = sample_losses[model_idx][sample_idx] if sample_losses[model_idx] is not None else float("nan")
             fev_value, feve_value = _feve_for_sample(repeats, pred)
 
             sub = outer[row_idx, 1 + model_idx].subgridspec(2, 1, height_ratios=[1.0, 1.35], hspace=0.08)
@@ -342,7 +356,7 @@ def plot_model_fits(
             if model_idx == n_models - 1:
                 ax_trace.legend(fontsize=7, frameon=False, loc="upper right")
 
-            text_lines = [f"loss={sample_loss:.2f}" if np.isfinite(sample_loss) else "loss=n/a"]
+            text_lines = [f"loss={s_loss:.2f}" if np.isfinite(s_loss) else "loss=n/a"]
             if np.isfinite(fev_value):
                 text_lines.append(f"FEV={fev_value:.2f}")
             if np.isfinite(feve_value):
@@ -359,9 +373,8 @@ def plot_model_fits(
             )
 
     title_parts = [title_prefix] if title_prefix else []
-    for j, program in enumerate(parent_programs):
-        loss = program.program_losses.discover.final
-        title_parts.append(f"{program.name}: loss={loss:.3f}" if loss is not None else f"{program.name}: loss=n/a")
+    for j, program in enumerate(programs):
+        title_parts.append(f"{program_names[j]}: loss={losses[j]:.3f}" if losses[j] is not None else f"{program_names[j]}: loss=n/a")
     if title_parts:
         fig.suptitle(" | ".join([p for p in title_parts if p]), fontsize=13)
     fig.subplots_adjust(left=0.02, right=0.98, bottom=0.03, top=0.92, wspace=0.25, hspace=0.4)

@@ -364,13 +364,11 @@
               <div class="text-zinc-500 text-xs">init</div>
               <div class="text-zinc-500 text-xs">final (post-GD)</div>
               <template x-for="split in ['discover','validate']" :key="split">
-                <template>
-                  <div class="contents">
-                    <div class="text-zinc-400" x-text="split"></div>
-                    <div class="font-mono" :class="lossClass(programDetail.losses?.[split]?.init)" x-text="fmt(programDetail.losses?.[split]?.init)"></div>
-                    <div class="font-mono" :class="lossClass(programDetail.losses?.[split]?.final)" x-text="fmt(programDetail.losses?.[split]?.final)"></div>
-                  </div>
-                </template>
+                <div class="contents">
+                  <div class="text-zinc-400" x-text="split"></div>
+                  <div class="font-mono" :class="lossClass(programDetail.losses?.[split]?.init)" x-text="fmt(programDetail.losses?.[split]?.init)"></div>
+                  <div class="font-mono" :class="lossClass(programDetail.losses?.[split]?.final)" x-text="fmt(programDetail.losses?.[split]?.final)"></div>
+                </div>
               </template>
             </div>
           </div>
@@ -432,12 +430,12 @@
 
         <!-- Fit tab -->
         <div x-show="panelTab === 'fit'">
-          <div x-show="programDetail.image_url">
-            <img :src="`/api/runs/${runId}/${programDetail.image_url}`" alt="model fit"
+          <div x-show="programDetail.fit_image_url">
+            <img :src="`/api/runs/${runId}/${programDetail.fit_image_url}`" alt="model fit"
               class="rounded border border-zinc-800 max-w-full" />
           </div>
-          <div x-show="!programDetail.image_url" class="text-zinc-500 italic text-sm">
-            No image_feedback was generated for this program (image_path is null).
+          <div x-show="!programDetail.fit_image_url" class="text-zinc-500 italic text-sm">
+            No fit image was generated for this program (either not yet scored or plot_fn missing).
           </div>
         </div>
       </div>

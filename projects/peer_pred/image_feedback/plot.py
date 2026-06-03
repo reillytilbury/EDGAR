@@ -5,8 +5,12 @@ import matplotlib.colors as mcolors
 
 def plot_model_fits(
     data,
-    parent_programs,
+    programs,
     save_path="",
+    losses=None,
+    sample_losses=None,
+    program_names=None,
+    params=None,
     title_prefix: str | None = None,
 ):
     """
@@ -14,12 +18,26 @@ def plot_model_fits(
 
     Args:
         data: X_disc_train dict with keys 'source', 'target' — shape (n_samples, n_features, n_trials).
-        parent_programs: list of Program objects with .params and .compile_model() methods.
+        programs: list of Program objects with .params and .compile_model() methods.
         save_path: file path to save the figure.
+        losses: list of loss values for each program, if None defaults to program.program_losses.discover.final
+        sample_losses: list of arrays of shape (n_cells,) for each program, if None defaults to program.sample_losses
+        program_names: optional list of names for the programs to use in the legend, if None defaults to program.name
+        params: list of parameter dictionaries for each program, if None defaults to program.params
         title_prefix: optional string prepended to the suptitle.
     """
     if not save_path:
         raise ValueError("Please provide a save path for the plot")
+
+    # Default losses, sample_losses and program_names
+    if losses is None:
+        losses = [program.program_losses.discover.final for program in programs]
+    if sample_losses is None:
+        sample_losses = [program.sample_losses if program.sample_losses is not None else None for program in programs]
+    if program_names is None:
+        program_names = [program.name for program in programs]
+    if params is None:
+        params = [program.params for program in programs]
 
     def _to_array3d(obj) -> np.ndarray:
         arr = np.asarray(obj)
@@ -48,17 +66,14 @@ def plot_model_fits(
         gridspec_kw={"width_ratios": [1.25, 1.25, 1.0], "height_ratios": [1.0, 1.0, 0.8]},
     )
 
-    model_fns   = [program.compile_model() for program in parent_programs]
+    model_fns   = [program.compile_model() for program in programs]
     preds_by_model = []
-    model_losses   = []
-    for j, (program, model_fn) in enumerate(zip(parent_programs, model_fns)):
-        params_s = {k: np.asarray(v[sample_idx]) for k, v in program.params.items()}
+    for j, (program, model_fn) in enumerate(zip(programs, model_fns)):
+        params_s = {k: np.asarray(v[sample_idx]) for k, v in params[j].items()}
         y_pred = np.asarray(model_fn({"source": x}, params_s))
         if y_pred.ndim == 1:
             y_pred = y_pred[None, :]
         preds_by_model.append(y_pred)
-        sample_loss = program.sample_losses[sample_idx] if program.sample_losses is not None else None
-        model_losses.append(sample_loss)
 
     def _pc1_order(cell_by_trial: np.ndarray) -> np.ndarray:
         arr = np.nan_to_num(np.asarray(cell_by_trial, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
@@ -125,8 +140,8 @@ def plot_model_fits(
         n_cells_plot = y_sorted.shape[0]
         ax.axhline(n_cells_plot - 0.5, color="white", linewidth=1.0, alpha=0.95)
         ax.set_yticks([n_cells_plot / 2.0, n_cells_plot + n_cells_plot / 2.0])
-        ax.set_yticklabels([f"Y_obs (gray)", f"pred {parent_programs[row].name} ({colours[row]})"])
-        ax.set_title(f"{parent_programs[row].name}: observed + prediction")
+        ax.set_yticklabels([f"Y_obs (gray)", f"pred {program_names[row]} ({colours[row]})"])
+        ax.set_title(f"{program_names[row]}: observed + prediction")
         if row == 1:
             ax.set_xlabel("time (sec)")
         else:
@@ -144,8 +159,8 @@ def plot_model_fits(
         n_cells_plot = y_sorted.shape[0]
         ax.axhline(n_cells_plot - 0.5, color="white", linewidth=1.0, alpha=0.95)
         ax.set_yticks([n_cells_plot / 2.0, n_cells_plot + n_cells_plot / 2.0])
-        ax.set_yticklabels(["Y_obs (gray)", f"resid (Y_obs - {parent_programs[row].name})"])
-        ax.set_title(f"Observed + residual (Y_obs - {parent_programs[row].name})")
+        ax.set_yticklabels(["Y_obs (gray)", f"resid (Y_obs - {program_names[row]})"])
+        ax.set_title(f"Observed + residual (Y_obs - {program_names[row]})")
         if row == 1:
             ax.set_xlabel("time (sec)")
         else:
@@ -169,8 +184,8 @@ def plot_model_fits(
                 lo -= pad; hi += pad
             ax_scatter.plot([lo, hi], [lo, hi], linestyle="--", color="gray", linewidth=1.5)
             ax_scatter.set_xlim(lo, hi); ax_scatter.set_ylim(lo, hi)
-        ax_scatter.set_xlabel(f"{parent_programs[0].name} per-cell MSE")
-        ax_scatter.set_ylabel(f"{parent_programs[1].name} per-cell MSE")
+        ax_scatter.set_xlabel(f"{program_names[0]} per-cell MSE")
+        ax_scatter.set_ylabel(f"{program_names[1]} per-cell MSE")
         ax_scatter.set_title("Per-cell loss comparison")
     else:
         ax_scatter.text(0.5, 0.5, "need two models", ha="center", va="center")
@@ -180,8 +195,8 @@ def plot_model_fits(
     if len(pred_blocks) >= 2:
         t = np.arange(y_block.shape[1])
         ax_trace.plot(t, np.mean(y_block, axis=0), color="black", linewidth=2, label="Population mean (Y_obs)")
-        ax_trace.plot(t, np.mean(y_block - pred_blocks[0], axis=0), color="red", linewidth=2, alpha=0.9, label=f"Residual mean (Y_obs - {parent_programs[0].name})")
-        ax_trace.plot(t, np.mean(y_block - pred_blocks[1], axis=0), color="blue", linewidth=2, alpha=0.9, label=f"Residual mean (Y_obs - {parent_programs[1].name})")
+        ax_trace.plot(t, np.mean(y_block - pred_blocks[0], axis=0), color="red", linewidth=2, alpha=0.9, label=f"Residual mean (Y_obs - {program_names[0]})")
+        ax_trace.plot(t, np.mean(y_block - pred_blocks[1], axis=0), color="blue", linewidth=2, alpha=0.9, label=f"Residual mean (Y_obs - {program_names[1]})")
         ax_trace.axhline(0.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.7)
         ax_trace.set_title("Population mean and residual means")
         ax_trace.set_xlabel("trial index")
@@ -204,9 +219,9 @@ def plot_model_fits(
             y_true = y_block[cell_idx]
             ax.plot(t, y_true, color="black", linewidth=1.8, label="Y_obs")
             for j, (pred_block, colour) in enumerate(zip(pred_blocks, colours)):
-                mse = float(np.mean((y_true - pred_block[cell_idx]) ** 2))
+                s_loss = float(np.mean((y_true - pred_block[cell_idx]) ** 2))
                 ax.plot(t, pred_block[cell_idx], color=colour, linewidth=1.6, alpha=0.9,
-                        label=f"{parent_programs[j].name} (mse={mse:.2f})")
+                        label=f"{program_names[j]} (mse={s_loss:.2f})")
             ax.axhline(0.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.6)
             ax.set_title(f"Random cell {cell_idx}")
             ax.set_xlabel("trial index")
@@ -218,10 +233,12 @@ def plot_model_fits(
             axes[2, col].text(0.5, 0.5, "need two models", ha="center", va="center")
             axes[2, col].set_axis_off()
 
-    title_parts = [title_prefix] if title_prefix else []
-    for j, (program, loss) in enumerate(zip(parent_programs, model_losses)):
+    title_parts = []
+    if title_prefix:
+        title_parts.append(title_prefix)
+    for j, (program, loss) in enumerate(zip(programs, losses)):
         loss_str = f"{loss:.3f}" if loss is not None else "n/a"
-        title_parts.append(f"{program.name}: loss={loss_str}")
+        title_parts.append(f"{program_names[j]}: loss={loss_str}")
     if title_parts:
         plt.suptitle(" | ".join(title_parts), fontsize=14)
 

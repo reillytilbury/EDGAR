@@ -95,8 +95,12 @@ class Population:
                 d["eval_fingerprint"] = p.eval_fingerprint.tolist()
             if d["params"] is not None:
                 d["params"] = _params_to_json(p.params)
+            if d.get("params_init") is not None:
+                d["params_init"] = _params_to_json(p.params_init)
             if d["sample_losses"] is not None:
                 d["sample_losses"] = p.sample_losses.tolist()
+            if d.get("sample_losses_init") is not None:
+                d["sample_losses_init"] = p.sample_losses_init.tolist()
             if isinstance(d["program_losses"]["validate"]["final"], NotValidated):
                 d["program_losses"]["validate"]["final"] = "NOTVALIDATED"
             llm = d["birth"]["llm_name"]
@@ -126,7 +130,9 @@ class Population:
                 if fingerprint is not None:
                     fingerprint = np.array(fingerprint)
                 raw_params = d.get("params")
+                raw_params_init = d.get("params_init")
                 raw_sample_losses = d.get("sample_losses")
+                raw_sample_losses_init = d.get("sample_losses_init")
                 program = Program(
                     birth=BirthCertificate(**d["birth"]),
                     code=Code(**d["code"]),
@@ -140,10 +146,17 @@ class Population:
                     params=_params_from_json(raw_params)
                     if raw_params is not None
                     else None,
+                    params_init=_params_from_json(raw_params_init)
+                    if raw_params_init is not None
+                    else None,
                     sample_losses=np.array(raw_sample_losses)
                     if raw_sample_losses is not None
                     else None,
+                    sample_losses_init=np.array(raw_sample_losses_init)
+                    if raw_sample_losses_init is not None
+                    else None,
                     image_path=d.get("image_path"),
+                    fit_image_path=d.get("fit_image_path"),
                     rank=d.get("rank"),
                 )
                 pop.add(program)

@@ -82,7 +82,7 @@ def loss_fn(output, data):
 def test_score_one_model_returns_finite_loss():
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _, _, _ = _score_one_model(
+    final_loss, initial_loss, _, _, _, _, _ = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
     assert jnp.isfinite(final_loss)
@@ -95,7 +95,7 @@ def test_score_one_model_perfect_fit():
     """w=1.0 with y=x should give near-zero loss after optimization."""
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    final_loss, _, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+    final_loss, _, _, _, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
     assert final_loss < 1e-4
 
 
@@ -103,7 +103,7 @@ def test_score_one_model_perfect_fit_with_param_penalty():
     """w=1.0 with y=x should give near-param_penalty loss after optimization."""
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
-    final_loss, _, _, _, _ = _score_one_model(
+    final_loss, _, _, _, _, _, _ = _score_one_model(
         program, data, loss_fn, BASE_CONFIG_WITH_PARAM_PENALTY
     )
     assert (
@@ -114,7 +114,7 @@ def test_score_one_model_perfect_fit_with_param_penalty():
 def test_score_one_gives_infinite_loss_for_program_with_none_default_params():
     program = _make_program(FAST_MODEL_CODE, default_params=None)
     assert program.n_params is None
-    final_loss, initial_loss, _, _, _ = _score_one_model(
+    final_loss, initial_loss, _, _, _, _, _ = _score_one_model(
         program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
     )
     assert final_loss == float("inf")
@@ -126,7 +126,9 @@ def test_score_one_model_kills_slow_model():
     data = (_make_data(), _make_data())
     config = {**BASE_CONFIG, "timeout_s": 2.0}
     t0 = time.time()
-    final_loss, initial_loss, _, _, _ = _score_one_model(program, data, loss_fn, config)
+    final_loss, initial_loss, _, _, _, _, _ = _score_one_model(
+        program, data, loss_fn, config
+    )
     elapsed = time.time() - t0
     assert final_loss == float("inf")
     assert initial_loss == float("inf")
@@ -141,7 +143,7 @@ def test_score_one_model_falls_back_to_default_params():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _, _, _ = _score_one_model(
+    final_loss, initial_loss, _, _, _, _, _ = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
 
@@ -168,7 +170,7 @@ def test_score_one_model_gives_infinite_loss_for_broken_model_syntax():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _, _, _ = _score_one_model(
+    final_loss, initial_loss, _, _, _, _, _ = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
 
@@ -184,7 +186,7 @@ def test_score_one_model_falls_back_when_param_est_syntax_error():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _, _, _ = _score_one_model(
+    final_loss, initial_loss, _, _, _, _, _ = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
 
@@ -197,7 +199,7 @@ def test_score_one_model_with_notvalidated_loss():
     program = _make_program(FAST_MODEL_CODE)
     assert type(program.program_losses.validate.final).__name__ == "NotValidated"
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, _, _, _ = _score_one_model(
+    final_loss, initial_loss, _, _, _, _, _ = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
 

@@ -580,6 +580,7 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
         "fingerprint_shape": fingerprint_shape,
         "image_path": p.image_path,
         "image_url": _image_url_for(p),
+        "fit_image_url": _fit_image_url_for(p),
         "parents_detail": [
             {
                 "idx": parent_idx,
@@ -615,6 +616,13 @@ def _image_url_for(p: Program) -> str | None:
     if p.birth.generation < 0 or p.birth.island < 0:
         return None
     return f"image/gen_{p.birth.generation:03d}/island_{p.birth.island:03d}/batch_{p.birth.batch_index:03d}"
+
+
+def _fit_image_url_for(p: Program) -> str | None:
+    """Convention from edgar/io/plotting.py: P{idx:04d}.png."""
+    if p.idx is None or p.fit_image_path is None:
+        return None
+    return f"fit_image/{p.idx}"
 
 
 # ── helpers ──

@@ -39,6 +39,8 @@ def initialize_program(i, model_code, param_est_code):
         ),
         n_params=i,
         eval_fingerprint=np.array([i, i + 1, i + 2]),
+        params_init={"w": np.array([float(i)])},
+        fit_image_path=f"path/to/fit_{i}.png",
     )
 
 
@@ -96,6 +98,12 @@ class TestPopulation:
                 p_original.eval_fingerprint, p_loaded.eval_fingerprint
             )
             assert p_original.idx == p_loaded.idx
+            assert p_original.fit_image_path == p_loaded.fit_image_path
+            if p_original.params_init is not None:
+                for k in p_original.params_init:
+                    np.testing.assert_array_equal(
+                        p_original.params_init[k], p_loaded.params_init[k]
+                    )
 
     def test_population_prepare_validation_scoring(self):
         pop = Population()

@@ -41,6 +41,7 @@ from .llm.generate import (
 )
 from .io.config import RetryConfig
 from .scoring.scoring import rank, score
+from .io.plotting import generate_program_fits
 
 
 async def run(spec: TaskSpec, log_level: str = "compact") -> str:
@@ -77,6 +78,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
         score(
             population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover"
         )
+        generate_program_fits(spec, X_discover[1], population)
         population.save(
             pop_path
         )  # snapshot of seed phase so the dashboard has data before gen 0 finishes
@@ -136,6 +138,7 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
                 spec.loss_fn,
                 split="discover",
             )
+            generate_program_fits(spec, X_discover[1], population)
 
             deduplicate(islands, population, spec.evolution)
             prune(islands, population, spec.evolution)

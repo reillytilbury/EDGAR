@@ -5,11 +5,12 @@
 CLAUDE.md
 .codex
 
-# programs database
+# output folders to ignore
 git rm --cached -r program_databases
 program_databases/
 figures/gradopt_tests/
 test_output/
+sample_plots/
 
 # Python cache
 __pycache__/

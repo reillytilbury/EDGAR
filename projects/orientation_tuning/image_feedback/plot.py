@@ -3,17 +3,31 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
 
-def plot_model_fits(data, parent_programs, save_path=""):
+def plot_model_fits(data, programs, save_path="", losses = None, sample_losses = None, program_names = None, params = None):
     """
-    Plot observed and predicted orientation tuning curves for up to 9 random cells.
+    Plot observed and predicted orientation tuning curves for up to 9 random cells for the programs specified.
 
     Args:
         data: X_disc_train dict with keys 'stimulus', 'response' — shape (n_cells, n_trials).
-        parent_programs: list of Program objects with .params and .compile_model() methods.
+        programs: list of Program objects with .params and .compile_model() methods.
         save_path: file path to save the figure.
+        losses: list of loss values for each program, if None defaults to program.program_losses.discover.final
+        sample_losses: list of arrays of shape (n_cells,) for each program, if None defaults to program.sample_losses
+        program_names: optional list of names for the programs to use in the legend, if None defaults to program.name
+        params: list of parameter dictionaries for each program, if None defaults to program.params
     """
     if not save_path:
         raise ValueError("Please provide a save path for the plot")
+    
+    #Default losses, sample_losses and program_names
+    if losses is None:
+        losses = [program.program_losses.discover.final for program in programs]
+    if sample_losses is None:
+        sample_losses = [program.sample_losses if program.sample_losses is not None else None for program in programs]
+    if program_names is None:
+        program_names = [program.name for program in programs]
+    if params is None:
+        params = [program.params for program in programs]
 
     stimulus = np.asarray(data['stimulus'])  # (n_cells, n_trials)
     response = np.asarray(data['response'])  # (n_cells, n_trials)
@@ -22,7 +36,7 @@ def plot_model_fits(data, parent_programs, save_path=""):
 
     n_show         = min(9, n_cells)
     sample_indices = np.random.choice(n_cells, size=n_show, replace=False)
-    model_fns      = [program.compile_model() for program in parent_programs]
+    model_fns      = [program.compile_model() for program in programs]
 
     fig, axes = plt.subplots(3, 3, figsize=(18, 18))
 
@@ -36,11 +50,11 @@ def plot_model_fits(data, parent_programs, save_path=""):
         ax.plot(x_grid, _binned_mean(theta, y_obs, x_grid), color="deepskyblue",
                 linewidth=4, label="Binned mean", alpha=0.8)
 
-        for j, (program, model_fn) in enumerate(zip(parent_programs, model_fns)):
-            params_s = {k: np.asarray(v[s]) for k, v in program.params.items()}
+        for j, (program, model_fn) in enumerate(zip(programs, model_fns)):
+            params_s = {k: np.asarray(v[s]) for k, v in params[j].items()}
             y_pred   = np.asarray(model_fn({'stimulus': jnp.asarray(x_grid)}, params_s)).flatten()
-            sample_loss = program.sample_losses[s] if program.sample_losses is not None else None
-            label    = f"{program.name} (loss={sample_loss:.3f})" if sample_loss is not None else f"{program.name}"
+            sample_loss = sample_losses[j][s] if sample_losses[j] is not None else None
+            label    = f"{program_names[j]} (loss={sample_loss:.3f})" if sample_loss is not None else f"{program_names[j]}"
             ax.plot(x_grid, y_pred, color=colours[j % len(colours)], linewidth=3,
                     label=label, alpha=0.8)
 
@@ -54,9 +68,8 @@ def plot_model_fits(data, parent_programs, save_path=""):
         axes[i // 3, i % 3].axis("off")
 
     title_parts = []
-    for j, program in enumerate(parent_programs):
-        loss = program.program_losses.discover.final
-        title_parts.append(f"{program.name}: loss={loss:.3f}" if loss is not None else f"{program.name}: loss=n/a")
+    for j, program in enumerate(programs):
+        title_parts.append(f"{program_names[j]}: loss={losses[j]:.3f}" if losses[j] is not None else f"{program_names[j]}: loss=n/a")
     plt.suptitle("Model Fits\n" + "  |  ".join(title_parts), fontsize=24)
 
     plt.tight_layout()

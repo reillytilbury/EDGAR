@@ -89,8 +89,11 @@ class Program:
     n_params: int | None = None
     eval_fingerprint: np.ndarray | None = field(default=None, repr=False)
     params: dict | None = field(default=None, repr=False)
+    params_init: dict | None = field(default=None, repr=False)
     sample_losses: np.ndarray | None = field(default=None, repr=False)
+    sample_losses_init: np.ndarray | None = field(default=None, repr=False)
     image_path: str | None = None
+    fit_image_path: str | None = None
     idx: int | None = field(default=None, init=False)
     rank: int | None = None
     _default_params: dict | None = None

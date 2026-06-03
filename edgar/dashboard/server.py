@@ -113,6 +113,14 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
             raise HTTPException(404, f"no image at {img_path}")
         return FileResponse(img_path, media_type="image/png")
 
+    @app.get("/api/runs/{run_id}/fit_image/{idx}")
+    def fit_image(run_id: str, idx: int):
+        run_dir = _resolve(run_id)
+        img_path = run_dir / "image_fits" / f"P{idx:04d}.png"
+        if not img_path.exists():
+            raise HTTPException(404, f"no fit image at {img_path}")
+        return FileResponse(img_path, media_type="image/png")
+
     # ── static frontend ──
 
     if not STATIC_DIR.exists():

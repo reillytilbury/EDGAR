@@ -107,8 +107,8 @@ def _eval_fingerprint(model_fn, params, X_eval):
     return jax.vmap(model_fn, in_axes=(0, 0))(X_eval, params_matched)
 
 
-def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval):
-    """Score one program inside a subprocess. Always puts a 5-tuple on the queue."""
+def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
+    """Score one program inside a subprocess. Always puts a 7-tuple on the queue."""
     program = cloudpickle.loads(program_bytes)
     loss_fn = cloudpickle.loads(loss_fn_bytes)
     data_train, data_test = data
@@ -117,7 +117,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval):
         model_fn = program.compile_model()
     except ModelLoadingError as e:
         print(f"[scoring] program #{program.idx} model failed to load: {e}")
-        queue.put((float("inf"), float("inf"), None, None, None))
+        queue.put((float("inf"), float("inf"), None, None, None, None, None))
         return
 
     try:
@@ -140,7 +140,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval):
         print(f"[scoring] program #{program.idx} failed during optimize/eval: {e}")
         print(f"[scoring] traceback:\n{traceback.format_exc()}")
         print(f"[scoring] code.model_jax:\n{program.code.model_jax}")
-        queue.put((float("inf"), float("inf"), None, None, None))
+        queue.put((float("inf"), float("inf"), None, None, None, None, None))
         return
 
     # Fingerprint and sample losses are non-critical: failures here don't poison the loss.
@@ -158,7 +158,29 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval):
         print(f"[scoring] program #{program.idx} sample_losses failed (ignored): {e}")
         sample_losses = None
 
-    queue.put((final_loss, initial_loss, fingerprint, params, sample_losses))
+    try:
+        sample_losses_init = (
+            _eval_sample_losses(model_fn, loss_fn, params_init, data_test)
+            if split == "discover"
+            else None
+        )
+    except Exception as e:
+        print(
+            f"[scoring] program #{program.idx} sample_losses_init failed (ignored): {e}"
+        )
+        sample_losses_init = None
+
+    queue.put(
+        (
+            final_loss,
+            initial_loss,
+            fingerprint,
+            params,
+            sample_losses,
+            params_init,
+            sample_losses_init,
+        )
+    )
 
 
 # ── per-program ──
@@ -170,23 +192,33 @@ def _score_one_model(
     loss_fn,
     config: dict,
     X_eval=None,
-) -> tuple[float, float, jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
+    split: str = "discover",
+) -> tuple[
+    float,
+    float,
+    jnp.ndarray,
+    dict | None,
+    jnp.ndarray | None,
+    dict | None,
+    jnp.ndarray | None,
+]:
     """Score one program in a spawn subprocess; kill on timeout.
 
-    Returns (final_loss, initial_loss, eval_fingerprint, params).
+    Returns (final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init).
     """
     if program.n_params is None:
         warnings.warn(
             f"Program #{program.idx} has n_params=None, applying infinite loss, verify that its default_params were set prior to scoring"
         )
-        return (float("inf"), float("inf"), None, None, None)
+        return (float("inf"), float("inf"), None, None, None, None, None)
 
     ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
     queue = ctx.Queue()
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
     program_bytes = cloudpickle.dumps(program)
     proc = ctx.Process(
-        target=_worker, args=(queue, program_bytes, data, loss_fn_bytes, config, X_eval)
+        target=_worker,
+        args=(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split),
     )
     proc.start()
     try:
@@ -194,7 +226,7 @@ def _score_one_model(
     except mp.queues.Empty:  # if subproces doesn't respond in time config["timeout_s"]
         proc.kill()
         proc.join()
-        return (float("inf"), float("inf"), None, None, None)
+        return (float("inf"), float("inf"), None, None, None, None, None)
     proc.join()
     return result
 
@@ -244,9 +276,15 @@ def score(
     so the discover-derived fingerprint isn't overwritten).
     """
     for program in _needs_scoring(population, split):
-        final_loss, initial_loss, fingerprint, params, sample_losses = _score_one_model(
-            program, X_split, loss_fn, config, X_eval
-        )
+        (
+            final_loss,
+            initial_loss,
+            fingerprint,
+            params,
+            sample_losses,
+            params_init,
+            sample_losses_init,
+        ) = _score_one_model(program, X_split, loss_fn, config, X_eval, split)
         loss_pair = getattr(program.program_losses, split)
         loss_pair.init = initial_loss
         loss_pair.final = final_loss
@@ -254,8 +292,12 @@ def score(
             program.eval_fingerprint = fingerprint
         if params is not None:
             program.params = params
+        if params_init is not None:
+            program.params_init = params_init
         if sample_losses is not None and split == "discover":
             program.sample_losses = sample_losses
+        if sample_losses_init is not None and split == "discover":
+            program.sample_losses_init = sample_losses_init
 
 
 def rank(

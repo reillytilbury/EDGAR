@@ -10,7 +10,6 @@ Prompt variable mapping is handled by PromptSchema, not here.
 from __future__ import annotations
 
 import asyncio
-import os
 import warnings
 from typing import Any, TYPE_CHECKING, Callable
 
@@ -23,6 +22,7 @@ from ..llm.llm_calling import call_llm
 from ..io.config import RetryConfig
 from ..llm.response_schema import ModelSchema, ParamEstSchema, TranslationSchema
 from ..llm.code_loading import load_function_from_source
+from ..io.plotting import generate_feedback_image
 
 if TYPE_CHECKING:
     from ..io.task_spec import TaskSpec
@@ -62,30 +62,6 @@ def _resolve_parents(population: Population, program: Program) -> list[Program]:
     return sorted(parents, key=_loss, reverse=True)
 
 
-def _prompt_image_bytes(
-    spec: TaskSpec, data: dict, parents: list[Program], program: Program
-) -> bytes | None:
-    if spec is None or spec.plot_fn is None or data is None:
-        return None
-    b = program.birth
-    img_path = os.path.join(
-        spec.output_dir,
-        "image_feedback",
-        f"gen_{b.generation:03d}",
-        f"island_{b.island:03d}",
-        f"batch_{b.batch_index:03d}",
-        "image.png",
-    )
-    os.makedirs(os.path.dirname(img_path), exist_ok=True)
-    try:
-        spec.plot_fn(data, parents, save_path=img_path)
-        program.image_path = img_path
-        return open(img_path, "rb").read()
-    except Exception as e:
-        warnings.warn(f"[generate] plot_fn failed for program #{program.idx}: {e}")
-        return None
-
-
 # ---------------------------------------------------------------------------
 # Model code generation
 # ---------------------------------------------------------------------------
@@ -102,7 +78,7 @@ async def _generate_one_model(
     spec: TaskSpec | None = None,
     data: dict | None = None,
 ) -> None:
-    image_bytes = _prompt_image_bytes(spec, data, parents, program)
+    image_bytes = generate_feedback_image(spec, data, parents, program)
     cfg = config or {}
     prompt = prompt_schema.build_prompt(mode, parents, config)
     result = await call_llm(
