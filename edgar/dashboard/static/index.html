@@ -336,7 +336,7 @@
           </div>
           <div x-show="latexError" class="text-sm text-rose-400" x-text="latexError"></div>
           <div x-show="!latexResult.latex && !latexLoading && !latexError" class="text-zinc-500 text-sm">
-            Click the button above to ask the LLM (<span class="font-mono" x-text="summary.llms?.model"></span>)
+            Click the button above to ask the LLM (<span class="font-mono" x-text="summary.llms?.latex"></span>)
             to derive the LaTeX equations this program implements. Result is cached on disk.
           </div>
           <div x-show="latexResult.latex" id="latex-render" class="text-sm leading-relaxed"

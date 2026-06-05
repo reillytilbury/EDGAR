@@ -107,7 +107,7 @@ def _llm_from_task_spec(spec_path: Path) -> str | None:
     except yaml.YAMLError:
         return None
     llms = spec.get("llms") or {}
-    return llms.get("model_llm")
+    return llms.get("jax_model_translator_llm")
 
 
 _LATEX_PROMPT = """\

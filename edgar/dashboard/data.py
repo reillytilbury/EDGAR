@@ -225,7 +225,7 @@ def resolve_run_dir(run_id: str, roots: list[Path]) -> Path | None:
 
 # ── Summary ──
 
-STALE_THRESHOLD_S = 60.0
+STALE_THRESHOLD_S = 180.0
 
 
 def _derived_state(status_doc: dict | None) -> tuple[str, bool]:
@@ -292,6 +292,7 @@ def load_run_summary(run_dir: Path) -> dict:
             "model": _llm_name(llms.get("model_llm")),
             "param_est": _llm_name(llms.get("param_est_llm")),
             "jax_translator": _llm_name(llms.get("jax_model_translator_llm")),
+            "latex": _llm_name(llms.get("jax_model_translator_llm")),
         },
         "scoring": {
             "param_penalty_weight": scoring.get("param_penalty_weight"),
@@ -671,11 +672,14 @@ def _llm_name(v: Any) -> str | None:
     Real runs save the LLM name as a string. The fake-LLM test runner
     pickles a CyclingModel into the yaml; if so, surface its repr instead of
     leaking a Python object into the JSON response.
+    If llm is a list of strings, join the strings with a comma in between
     """
     if v is None:
         return None
     if isinstance(v, str):
         return v
+    if isinstance(v, list) and all(isinstance(x, str) for x in v):
+        return ",".join([x for x in v])
     name = getattr(v, "model_name", None)
     if name:
         return str(name)
