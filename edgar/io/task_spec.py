@@ -437,3 +437,4 @@ class TaskSpec:
         func = load_function_from_source(model_code, "model")
         default_params = getattr(func, "DEFAULT_PARAMS", None)
         return default_params
+"""
