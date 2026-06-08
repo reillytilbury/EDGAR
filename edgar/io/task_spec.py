@@ -39,7 +39,7 @@ from ..evolution.program import Program, BirthCertificate, Code
 from ..llm.code_loading import load_function_from_source
 from ..llm.prompt_schema import PromptSchema
 from .config import Config
-from .config import PROJECT_ROOT
+from .config import REPO_ROOT
 
 
 LLMs = namedtuple("LLMs", ["model", "param_est", "model_jax"])
@@ -61,14 +61,14 @@ def _git_state() -> tuple[str, bool]:
     """
     try:
         sha = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
         ).strip()
     except Exception:
         sha = "unknown"
     try:
         dirty = bool(
             subprocess.check_output(
-                ["git", "status", "--porcelain"], cwd=PROJECT_ROOT, text=True
+                ["git", "status", "--porcelain"], cwd=REPO_ROOT, text=True
             ).strip()
         )
     except Exception:
