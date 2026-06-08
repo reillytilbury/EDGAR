@@ -1,14 +1,22 @@
 """
-Scoring. Mirrors the generate pattern in edgar/llm/generate.py:
+Scoring module for EDGAR.
 
-    _score_one_model(program, ...)   # single program, timeout baked in
-    score(population, ...)           # finds programs needing scoring, fills losses
+This module provides functionalities for evaluating the performance of generated
+models, mirroring the asynchronous generation pattern found in `edgar/llm/generate.py`.
+It handles the scoring of individual programs within isolated subprocesses
+and orchestrates population-level scoring and ranking.
+
+Key functionalities include:
+- `_score_one_model`: Scores a single program in a dedicated subprocess, ensuring
+  clean JAX initialization and robust timeout enforcement.
+- `score`: Identifies programs requiring evaluation for a specific data split
+  (e.g., 'discover' or 'validate') and updates their performance metrics.
 
 Per-program work runs in a subprocess so JAX initialises cleanly and runaway
 models can be killed on timeout. The subprocess start method defaults to
 "spawn" (safe with the macOS Objective-C runtime / JAX) but can be overridden
-to "fork" via the EDGAR_MP_START_METHOD env var. Fork is useful for scripts
-that don't use an `if __name__ == "__main__":` guard (e.g. interactive
+to "fork" via the EDGAR_MP_START_METHOD environment variable. Fork is useful for
+scripts that don't use an `if __name__ == "__main__":` guard (e.g., interactive
 notebooks, tutorial scripts) because it doesn't re-import the parent module
 in each child.
 """
@@ -42,6 +50,24 @@ from ..io.metrics import get_active_metrics, stream_line
 
 
 def _get_params(param_est_fn, default_params, data_train):
+    """Estimates initial parameters for a model, falling back to defaults if the parameter estimator fails.
+
+    This function attempts to use the provided `param_est_fn` to derive initial
+    parameters for each sample in the training data. If the `param_est_fn` is
+    not provided or fails during execution, it falls back to stacking the
+    `default_params` for each sample.
+
+    Args:
+        param_est_fn: The parameter estimator function (callable) from the program.
+            Expected to take a single data sample (dict) and return a dict of parameters.
+        default_params: A dictionary of default parameters for the model.
+        data_train: A dictionary of training data, where keys are feature names
+            and values are JAX arrays. Assumes the first dimension is the batch size.
+
+    Returns:
+        A JAX pytree (dictionary of JAX arrays) representing the initial parameters
+        for each sample in `data_train`.
+    """
     try:
         n = next(iter(data_train.values())).shape[0]
         data_np = {k: np.asarray(v) for k, v in data_train.items()}
@@ -60,6 +86,27 @@ def _get_params(param_est_fn, default_params, data_train):
 
 
 def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
+    """Performs gradient descent to optimize model parameters.
+
+    This function uses the Optax library and JAX to perform gradient-based
+    optimization of a model's parameters. It minimizes the `loss_fn` using
+    the Adam optimizer, tracking the best parameters found during the
+    optimization process.
+
+    Args:
+        model_fn: The JAX-compiled model function (callable). Expected to take
+            data and parameters, and return predictions.
+        loss_fn: The loss function (callable). Expected to take predictions
+            and data, and return per-sample losses.
+        params_init: The initial parameters for the model (JAX pytree).
+        data_train: A dictionary of training data, where keys are feature names
+            and values are JAX arrays. Assumes the first dimension is the batch size.
+        gd_config: Configuration dictionary for gradient descent,
+            e.g., `{"learning_rate": 1e-3, "max_iter": 1000}`.
+
+    Returns:
+        A JAX pytree representing the optimized parameters.
+    """
     flat, unflatten = ravel_pytree(params_init)
 
     def total_loss(flat_p):
@@ -92,6 +139,20 @@ def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
 
 
 def _eval_loss(model_fn, loss_fn, params, data_test):
+    """Computes the overall scalar loss for a model on a given dataset.
+
+    This function calculates the mean of the per-sample losses from the `loss_fn`
+    after running the `model_fn` with the provided parameters on the test data.
+
+    Args:
+        model_fn: The JAX-compiled model function (callable).
+        loss_fn: The loss function (callable) that returns per-sample losses.
+        params: The model parameters (JAX pytree).
+        data_test: A dictionary of test data.
+
+    Returns:
+        The scalar mean loss as a float. Returns `float("inf")` if parameters are `None`.
+    """
     if params is None:
         return float("inf")
     output = jax.vmap(model_fn, in_axes=(0, 0))(data_test, params)
@@ -99,18 +160,73 @@ def _eval_loss(model_fn, loss_fn, params, data_test):
 
 
 def _eval_sample_losses(model_fn, loss_fn, params, data_test):
+    """Computes individual losses for each sample in a dataset.
+
+    This function applies the model and loss function to each sample in the
+    test data to get an array of per-sample loss values, without any
+    complexity penalty.
+
+    Args:
+        model_fn: The JAX-compiled model function (callable).
+        loss_fn: The loss function (callable) that returns per-sample losses.
+        params: The model parameters (JAX pytree).
+        data_test: A dictionary of test data.
+
+    Returns:
+        A NumPy array of per-sample loss values.
+    """
     output = jax.vmap(model_fn, in_axes=(0, 0))(data_test, params)
     return np.asarray(loss_fn(output, data_test))
 
 
 def _eval_fingerprint(model_fn, params, X_eval):
+    """Generates a low-dimensional "fingerprint" of model outputs for deduplication.
+
+    This fingerprint is used to compare models and identify functionally
+    identical or very similar programs, even if their code differs. It applies
+    the model to a small, fixed subset of the evaluation data (`X_eval`).
+
+    Args:
+        model_fn: The JAX-compiled model function (callable).
+        params: The model parameters (JAX pytree).
+        X_eval: A dictionary of evaluation data, containing a `_sample_indices`
+            key to select a subset of samples for fingerprinting.
+
+    Returns:
+        A JAX array representing the model's output fingerprint.
+    """
     sample_indices = X_eval["_sample_indices"]
     params_matched = jax.tree_util.tree_map(lambda p: p[sample_indices], params)
     return jax.vmap(model_fn, in_axes=(0, 0))(X_eval, params_matched)
 
 
 def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
-    """Score one program inside a subprocess. Always puts a 7-tuple on the queue."""
+    """Scores one program inside a subprocess.
+
+    This function deserializes a `Program` and `loss_fn`, compiles the program's
+    JAX model and parameter estimator, performs parameter estimation,
+    optimization, calculates various losses, and generates a fingerprint and
+    sample-specific losses. All results are placed onto a multiprocessing queue.
+    It includes robust error handling for model loading, optimization, and
+    evaluation steps.
+
+    Args:
+        queue: A multiprocessing Queue to put the results on.
+        program_bytes: A `cloudpickle`-serialized `Program` object.
+        data: A tuple `(data_train, data_test)` containing dictionaries of JAX arrays
+            for training and testing.
+        loss_fn_bytes: A `cloudpickle`-serialized loss function.
+        config: A dictionary containing scoring configuration, e.g.,
+            `param_penalty_weight` and `gradient_descent` settings.
+        X_eval: A dictionary of evaluation data for fingerprinting, or `None`.
+        split: A string indicating the current scoring split (e.g., "discover" or "validate").
+
+    Returns:
+        None. Results are placed on the `queue` as a 7-tuple:
+        `(final_loss, initial_loss, fingerprint, params, sample_losses, params_init, sample_losses_init)`.
+        If any critical failure occurs (model loading, optimization), infinite
+        losses and `None` for other results are returned.
+    """
     program = cloudpickle.loads(program_bytes)
     loss_fn = cloudpickle.loads(loss_fn_bytes)
     data_train, data_test = data
@@ -204,12 +320,27 @@ def _score_one_model(
     dict | None,
     jnp.ndarray | None,
 ]:
-    """Score one program in a spawn subprocess; kill on timeout.
+    """Scores a single program in a dedicated subprocess, enforcing a timeout.
 
-    Returns ``(final_loss, initial_loss, eval_fingerprint, params, sample_losses,
-    params_init, sample_losses_init)``. On timeout or worker exception, returns
-    the all-inf 7-tuple. ``score()`` uses ``_score_one_with_outcome`` directly
-    to recover the precise outcome (``timeout`` vs ``inf``) for metrics.
+    This function delegates to `_score_one_with_outcome` to execute the
+    scoring in a separate process, allowing for robust timeout handling.
+    If the worker process does not return a result within `config["timeout_s"]`,
+    it is killed, and the program is assigned an infinite loss.
+
+    Args:
+        program: The `Program` object to be scored.
+        data: A tuple `(data_train, data_test)` containing dictionaries of JAX arrays
+            for training and testing.
+        loss_fn: The loss function (callable).
+        config: A dictionary containing scoring configuration, including `timeout_s`.
+        X_eval: Optional. A dictionary of evaluation data for fingerprinting.
+            If `None`, fingerprint computation is skipped.
+        split: The scoring split (e.g., "discover" or "validate").
+
+    Returns:
+        A 7-tuple: `(final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init)`.
+        If a timeout occurs or `program.n_params` is `None`, infinite losses and `None`
+        for other results are returned.
     """
     result = _score_one_with_outcome(program, data, loss_fn, config, X_eval, split)
     return result[:7]
@@ -279,21 +410,36 @@ def _score_one_with_outcome(
 
 
 def _has_jax_code(program: Program) -> bool:
-    """Does this program have jax model code and a numpy param_est that can be scored?"""
+    """Checks if a program has both JAX model code and a NumPy parameter estimator.
+
+    A program is considered ready for scoring if it has successfully had its
+    numpy model translated to JAX and has a parameter estimator.
+
+    Args:
+        program: The `Program` object to check.
+
+    Returns:
+        True if the program has both `model_jax` and `param_est` code, False otherwise.
+    """
     return bool(program.code.model_jax and program.code.param_est)
 
 
 def _needs_scoring(population: Population, split: str) -> list[Program]:
-    """Programs with jax code whose `split` final loss hasn't been written yet.
+    """Identifies programs in the population that need to be scored for a given split.
 
-    Initialization behavior:
-    - discover: initialized to None, so all programs with JAX code are scored
-    - validate: initialized to NotValidated, only set to None for programs alive at loop end
-      (via population.prepare_validation_scoring), allowing selective validation
-      scoring.
+    Programs are considered to need scoring if they have JAX model code and their
+    `final` loss for the specified `split` has not yet been set (i.e., it is `None`).
+    For the 'validate' split, programs initialized with `NotValidated` are also
+    considered unscored until `population.prepare_validation_scoring` is called.
+    A program with a scalar or infinite loss is treated as already scored and
+    will not be rescored.
 
-    A program with a scalar/inf loss is treated as already scored —
-    inf means scoring genuinely failed and shouldn't be retried.
+    Args:
+        population: The `Population` object containing all programs.
+        split: The name of the scoring split (e.g., "discover" or "validate").
+
+    Returns:
+        A list of `Program` objects that require scoring for the specified split.
     """
     return [
         population[i]
@@ -311,16 +457,36 @@ def score(
     loss_fn,
     split: str,
 ) -> None:
-    """Score every program needing scoring on the given split.
+    """Scores every program needing scoring on the given split.
 
-    Mutates: program.program_losses.<split>.{init, final}, program.eval_fingerprint,
-    program.sample_losses, program.n_params.
+    This function iterates through the `population`, identifies programs that
+    require scoring for the specified `split`, and then calls `_score_one_model`
+    for each. The results (losses, fingerprint, parameters) are then used to
+    mutate the corresponding `Program` object's attributes in place.
 
     Pass X_eval=None to skip fingerprint computation (e.g. on validate scoring,
     so the discover-derived fingerprint isn't overwritten).
 
     Streams per-program tick lines to ``run.log`` and updates the active
     ``RunMetrics`` (if any) so the dashboard can show ``score (k/n)`` live.
+
+    Args:
+        population: The `Population` object whose programs are to be scored.
+            This object will be mutated in place.
+        X_split: A tuple `(data_train, data_test)` containing dictionaries of JAX arrays
+            for training and testing data specific to the current split.
+        X_eval: A dictionary of evaluation data for fingerprint computation.
+            Pass `None` to skip fingerprint computation (e.g., when scoring on
+            the 'validate' split to avoid overwriting the 'discover'-derived fingerprint).
+        config: A dictionary containing scoring configuration parameters.
+        loss_fn: The loss function (callable) to be used for scoring.
+        split: The name of the scoring split (e.g., "discover" or "validate").
+
+    Returns:
+        None. The `population` object is mutated in place, updating
+        `program.program_losses.<split>.{init, final}`, `program.eval_fingerprint`,
+        `program.params`, `program.params_init`, `program.sample_losses`,
+        and `program.sample_losses_init`.
     """
     queue = _needs_scoring(population, split)
     n_total = len(queue)
@@ -377,9 +543,21 @@ def score(
 def rank(
     population: Population,
 ) -> None:
-    """
-    Rank programs surviving at the end of the evolution by validate.final loss.
-    Only ranks those which have validate.final != NotValidated, which should be the ones alive at the end of the evolution.
+    """Ranks programs based on their final validation loss.
+
+    This function assigns a numerical rank to programs that have successfully
+    undergone validation scoring (i.e., their `validate.final` loss is not
+    `NotValidated`). Programs are sorted by their `validate.final` loss in
+    ascending order.
+
+    Args:
+        population: The `Population` object containing all programs.
+            The `rank` attribute of individual `Program` objects will be
+            mutated in place.
+
+    Returns:
+        None. The `rank` attribute of `Program` objects within the population
+        is updated, and the ranking information is printed to the console.
     """
     validated_program_indices = [
         i
