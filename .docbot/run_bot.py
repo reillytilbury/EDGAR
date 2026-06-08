@@ -11,7 +11,11 @@ from google import genai
 
 
 def generate_report(
-    client: genai.Client, updated_files: list, old_summary: str, new_summary: str
+    client: genai.Client,
+    updated_files: list,
+    old_summary: str,
+    new_summary: str,
+    tree_str: str,
 ):
     """Generate a commit message and PR body using Gemini."""
     files_list = "\n".join([f"- {f}" for f in updated_files])
@@ -25,6 +29,9 @@ PREVIOUS Global Summary:
 
 UPDATED Global Summary:
 {new_summary}
+
+Current file structure:
+{tree_str}
 
 List of files updated with new docstrings:
 {files_list}
@@ -50,7 +57,44 @@ Instructions:
     print("Successfully generated .docbot/report.md")
 
 
+def generate_folder_tree(startpath: str) -> str:
+    """Generates a visual string of the folder tree structure, including .py files."""
+    ignore_set = {"__pycache__", ".git", ".github", "docs", ".pytest_cache"}
+    tree_lines = [f"{os.path.basename(startpath)}/"]
+
+    def _build_tree(current_path: str, prefix: str = ""):
+        try:
+            # List items and sort them (directories first, then files)
+            items = sorted(os.listdir(current_path))
+            # Filter items: ignore hidden, ignore specified set, and only keep .py files or directories
+            filtered_items = []
+            for item in items:
+                item_path = os.path.join(current_path, item)
+                if item in ignore_set or item.startswith("."):
+                    continue
+                if os.path.isdir(item_path) or item.endswith(".py"):
+                    filtered_items.append(item)
+
+            for i, item in enumerate(filtered_items):
+                item_path = os.path.join(current_path, item)
+                is_last = i == len(filtered_items) - 1
+                connector = "└── " if is_last else "├── "
+
+                if os.path.isdir(item_path):
+                    tree_lines.append(f"{prefix}{connector}{item}/")
+                    new_prefix = prefix + ("    " if is_last else "│   ")
+                    _build_tree(item_path, new_prefix)
+                else:
+                    tree_lines.append(f"{prefix}{connector}{item}")
+        except PermissionError:
+            tree_lines.append(f"{prefix}└── [Permission Denied]")
+
+    _build_tree(startpath)
+    return "\n".join(tree_lines)
+
+
 def main():
+    tree_path = ".docbot/folder_tree.txt"
     if "GOOGLE_API_KEY" not in os.environ:
         print("Error: GOOGLE_API_KEY environment variable not set.")
         sys.exit(1)
@@ -63,14 +107,17 @@ def main():
     old_summary = ""
     new_summary = ""
     try:
-        old_summary, new_summary = update_summary()
+        tree_str = generate_folder_tree("edgar")
+        with open(tree_path, "w") as f:
+            f.write(tree_str)
+        old_summary, new_summary = update_summary(tree_str)
     except Exception as e:
         print(f"Error during summary update: {e}")
 
     print("\n[Step 2/3] Generating Docstrings for Changed Files...")
     updated_files = []
     try:
-        updated_files = generate_docstrings()
+        updated_files = generate_docstrings(tree_str)
     except Exception as e:
         print(f"Error during docstring generation: {e}")
         sys.exit(1)
@@ -78,7 +125,7 @@ def main():
     if updated_files or (old_summary != new_summary):
         print("\n[Step 3/3] Generating Change Report...")
         try:
-            generate_report(client, updated_files, old_summary, new_summary)
+            generate_report(client, updated_files, old_summary, new_summary, tree_str)
         except Exception as e:
             print(f"Error during report generation: {e}")
 

@@ -3,7 +3,7 @@ from google import genai
 from git_utils import get_last_doc_commit, get_diff, run_git_command
 
 
-def update_summary():
+def update_summary(folder_tree: str = ""):
     client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 
     with open(".docbot/edgar_overview.md", "r") as f:
@@ -18,11 +18,14 @@ def update_summary():
 
     last_commit = get_last_doc_commit()
     if not last_commit:
-        # Fallback: get the first commit in the repo
+        # Fallback: get the commit hash from 50 commits ago (or the first commit if less than 50)
         try:
-            last_commit = run_git_command(["rev-list", "--max-parents=0", "HEAD"])
+            # --skip=50 finds the commit 50 steps back. If fewer than 50 exist, it returns nothing.
+            last_commit = run_git_command(["log", "-1", "--skip=49", "--format=%H"])
+            if not last_commit:
+                # If less than 50 commits, get the very first one
+                last_commit = run_git_command(["rev-list", "--max-parents=0", "HEAD"])
         except Exception:
-            # If everything fails, use an empty diff or a special indicator
             last_commit = None
 
     if last_commit:
@@ -32,7 +35,7 @@ def update_summary():
 
     if not diff.strip() and old_summary.strip():
         print("No changes detected in edgar/. Skipping summary update.")
-        return old_summary
+        return old_summary, old_summary
 
     prompt = f"""
 You are an expert technical writer and scientific researcher. 
@@ -41,6 +44,9 @@ Your task is to update a global codebase summary file ('code_summary.md') for th
 EDGAR Overview:
 {overview}
 
+Repository Structure (edgar/ directory):
+{folder_tree}
+
 Current Summary:
 {old_summary}
 
@@ -48,7 +54,7 @@ Recent Changes (Git Diff):
 {diff}
 
 Instructions:
-1. Review the EDGAR Overview and the Current Summary.
+1. Review the EDGAR Overview, the Repository Structure, and the Current Summary.
 2. Analyze the Git Diff to understand what has changed in the codebase (specifically in the 'edgar/' directory).
 3. Update the 'code_summary.md' to reflect these changes.
 4. Maintain a high-level architectural and mathematical overview.
