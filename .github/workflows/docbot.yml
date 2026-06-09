@@ -49,7 +49,10 @@ jobs:
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: ${{ steps.parse_report.outputs.title }}
+          author: docbot <docbot@users.noreply.github.com>
+          committer: docbot <docbot@users.noreply.github.com>
           title: ${{ steps.parse_report.outputs.title }}
           body: ${{ steps.parse_report.outputs.body }}
           branch: docbot-updates
