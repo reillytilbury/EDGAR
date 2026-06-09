@@ -79,7 +79,7 @@ Instructions:
 1. Read the provided file content and understand its functionality, paying attention to its location in the broader Repository Structure and the Codebase Summary.
 2. If you need to see the definition of an imported class, a base class, or a utility function from another file to write accurate docstrings, use the `read_repository_file` tool.
 3. Add or update docstrings, paying attention to the context of the entire codebase and the specific role of this file within it, and following the Documentation Guidelines.
-4. **Important:** Only modify existings docstrings if they do not match the Documentation Guidelines or do not match the content of the function/module. 
+4. **IMPORTANT:** Always modify/update docstrings which contain the @docbot tag.
 5. Use the provided context to ensure mathematical and scientific precision.
 6. **CRITICAL**: Do NOT change any functional code, imports, or logic. Only modify docstrings.
 7. Return the ENTIRE updated file content, do not include ```python ... ``` backticks to enclose the code.
