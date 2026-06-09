@@ -306,7 +306,7 @@ def init_project(task: str) -> int:
           num_parents: 2
           model_llm: gemini-2.5-flash
           param_est_llm: gemini-2.5-flash
-          jax_translator_llm: gemini-2.5-flash-lite
+          jax_model_translator_llm: gemini-2.5-flash-lite
 
         scoring:
           param_penalty_weight: 0.01

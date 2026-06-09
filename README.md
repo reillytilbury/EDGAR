@@ -8,6 +8,17 @@ Each run evolves a population of candidate models across multiple islands. The L
 
 ---
 
+## Prerequisites
+
+The recommended way to manage dependencies and environments is [uv](https://docs.astral.sh/uv/).
+
+To install `uv` on Linux or macOS:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+---
+
 ## Quickstart
 
 ### 1. Install
@@ -91,36 +102,10 @@ To launch the dashboard to view in progress and finished experiments:
 ```bash
 edgar dashboard
 ```
-
----
-
-### 4. Dev setup
-
-After cloning, install dev dependencies and register the pre-commit hook:
-
+By default this allows access to data saved in `program_databases`. If the data you require is saved elsewhere, do
 ```bash
-uv sync --group dev
-pre-commit install
+edgar dashboard {data_directory}
 ```
-
-Verify your environment is correctly set up:
-```bash
-bash scripts/check_env.sh   # checks edgar imports + fake pipeline
-bash scripts/check_api_keys.sh  # checks all LLM API keys work
-```
-
-When making a `git commit`, do the following
-```bash
-git add -u
-make commit-check
-# Returns status of pre-commit, files may need to be modified
-git add -u
-git commit -m 'a commit message'
-```
-
-Upon pushing to remote the following tests are run, and status displayed on github:
-- All unit and integration pytests in tests except those with live llm calls.
-- Pings google and anthropic LLMs to check they can be called.
 
 ---
 
@@ -150,17 +135,23 @@ program_databases/
 ### 1. Scaffold
 
 ```bash
-python -m edgar.cli init-project my_task
+edgar init-project my_task
 ```
 
 This creates:
 
-```
+```text
 projects/my_task/
 ├── config.yaml
-├── seed_programs/model1.py, model2.py, param_est1.py, param_est2.py
-├── data_loader/load_data.py
-└── image_feedback/plot.py
+├── seed_programs/
+│   ├── model1.py
+│   ├── model2.py
+│   ├── param_est1.py
+│   └── param_est2.py
+├── data_loader/
+│   └── load_data.py
+└── image_feedback/
+    └── plot.py
 ```
 
 Each file contains a stub with a docstring. Fill in the implementations.
@@ -172,27 +163,31 @@ Must define two callables:
 **`load_data(data_path, **kwargs) -> (X_discover, X_validate, X_eval)`**
 
 Returns three splits:
-- `X_discover = (X_disc_train, X_disc_test)` — seen by the LLM discovery loop
-- `X_validate = (X_val_train, X_val_test)` — never seen during discovery
-- `X_eval` — small fingerprint subset (dict of JAX arrays + `_sample_indices`)
+- `X_discover = (X_disc_train, X_disc_test)` — seen by the LLM discovery loop.
+- `X_validate = (X_val_train, X_val_test)` — never seen during discovery.
+- `X_eval` (dict) — small subset of `X_disc_train` used for generating model fingerprints.
 
-All arrays should be JAX arrays. Data shape convention: `(n_samples, n_trials)` per key.
+`X_eval` must be a dictionary containing:
+- Feature/response JAX arrays (same keys as other splits).
+- `_sample_indices`: a NumPy array of integer indices indicating which samples from `X_disc_train` are included in `X_eval`.
+
+All data arrays should be JAX arrays. Data shape convention: `(n_samples, n_trials)` per key.
 
 **`loss_fn(model_output, data) -> JAX array of shape (n_samples,)`**
 
-Per-sample loss between model predictions and data.
+Per-sample loss between model predictions (`model_output`) and data (`data`).
 
 ### 3. Fill in seed programs
 
 `model*.py` must define `def model(data, params):`
-- `data`: dict of JAX arrays, one sample, e.g. `data['stimulus']` shape `(n_trials,)`
-- `params`: dict of named scalars/arrays
-- Returns predictions shape `(n_trials,)`
+- `data`: dict of JAX arrays for one sample, e.g. `data['stimulus']` shape `(n_trials,)`.
+- `params`: dict of named scalars/arrays.
+- Returns predictions shape `(n_trials,)`.
 - Must have `model.DEFAULT_PARAMS = {"param_name": initial_value, ...}`
 
 `param_est*.py` must define `def parameter_estimator(data):`
-- Returns a parameter dict with the same keys as `model.DEFAULT_PARAMS`
-- Keep it simple (no scipy.optimize / curve_fit)
+- Returns a parameter dict with the same keys as `model.DEFAULT_PARAMS`.
+- Keep it simple (no `scipy.optimize` or `curve_fit`).
 
 ### 4. Configure `config.yaml`
 
@@ -216,7 +211,7 @@ llms:
   model_llm: gemini-2.5-pro
 ```
 
-### 5. Customise prompts (optional)
+### 5. Customise prompts
 
 Create `projects/<task>/prompts.yaml` to override the defaults in `projects/prompt_defaults.yaml`. The two files are **deep-merged**, so you only need to include the fields you want to change — everything else is inherited.
 
@@ -240,16 +235,28 @@ model:
 
 All other `model` fields (explore, exploit, docstring_guidelines, parent_detail_template, config_vars, parent_vars) are inherited from the defaults unchanged.
 
-### 6. Validate
+### 6. Fill in `image_feedback/plot.py` (Optional)
+
+Must define:
+
+**`plot_model_fits(data, parent_programs, save_path="")`**
+
+- `data`: `X_disc_train` dictionary of JAX arrays.
+- `parent_programs`: list of `Program` objects to visualize.
+- `save_path`: file path to save the generated figure.
+
+If this file/function is left as a `pass` stub, no images will be generated or provided as LLM feedback.
+
+### 7. Validate
 
 ```bash
-python -m edgar.cli validate my_task
+edgar validate my_task
 ```
 
-### 7. Run
+### 8. Run
 
 ```bash
-python -m edgar.cli run projects/my_task/config.yaml
+edgar run projects/my_task/config.yaml
 ```
 
 ---
