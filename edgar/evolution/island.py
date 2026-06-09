@@ -557,10 +557,3 @@ def load_island_census(path: str) -> list[list[set[int]]]:
     with open(path) as f:
         data = json.load(f)
     return [[set(s) for s in island] for island in data]
-
-
-def f(x):
-    """
-    This a dummy function to test the docbot and see what it does
-    """
-    return x
