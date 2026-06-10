@@ -110,7 +110,7 @@
             <span class="text-zinc-500">/</span>
             <span x-text="state.n_gens ?? '-'"></span>
           </div>
-          <div class="text-xs text-emerald-300 font-mono truncate" x-text="state.current_stage || '\u00a0'"></div>
+          <div class="text-xs text-emerald-300 font-mono truncate" x-text="fmtStage(state.current_stage)"></div>
         </div>
         <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
           <div class="text-xs text-zinc-500 uppercase">Best loss</div>

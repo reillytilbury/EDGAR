@@ -188,6 +188,17 @@ function dashboard() {
       if (this.state?.is_stale) return 'stalled';
       return state || 'unknown';
     },
+    fmtStage(s) {
+      if (!s) return '\u00a0';
+      const labels = {
+        translate_programs: 'translate',
+        translate_seeds: 'translate',
+        score: 'score',
+        score_seeds: 'score',
+        score_validate: 'score',
+      };
+      return labels[s] || s;
+    },
     lossClass(v) {
       if (v === null || v === undefined) return 'text-zinc-500';
       // green at low loss, red at high. anchor at orientation-tuning scale.
@@ -355,6 +366,13 @@ function dashboard() {
         prune: '#fb7185',
         migrate: '#facc15',
       };
+      const stageLabels = {
+        translate_programs: 'translate',
+        translate_seeds: 'translate',
+        score: 'score',
+        score_seeds: 'score',
+        score_validate: 'score',
+      };
       const stageOrder = [
         'spawn', 'generate_models', 'generate_param_ests',
         'translate_programs', 'translate_seeds',
@@ -363,14 +381,21 @@ function dashboard() {
       ];
       const xs = rows.map(r => r.gen);
       const traces = [];
+      const seenLabels = new Set();
+
       for (const stage of stageOrder) {
         const ys = rows.map(r => (r.stage_times && r.stage_times[stage]) || 0);
         if (ys.every(v => !v)) continue;
+
+        const label = stageLabels[stage] || stage;
         traces.push({
-          x: xs, y: ys, type: 'bar', name: stage,
+          x: xs, y: ys, type: 'bar', name: label,
           marker: { color: stagePalette[stage] || '#71717a' },
           hovertemplate: `${stage}: %{y:.1f}s<br>gen %{x}<extra></extra>`,
+          legendgroup: label,
+          showlegend: !seenLabels.has(label),
         });
+        seenLabels.add(label);
       }
       Plotly.react(el, traces, {
         paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
