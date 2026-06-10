@@ -460,8 +460,9 @@ def _run_dashboard(target: str | None, port: int, host: str, no_open: bool) -> i
 
         print(
             f"  warning: 'pydantic_ai' is not installed in {sys.executable!r}; "
-            "the LaTeX tab will return 503. Activate the 'edgar' conda env "
-            "(or `pip install -e .` from this repo) and restart."
+            "the LaTeX tab will return 503. This is likely due to running the "
+            "dashboard from the wrong environment. Activate the 'edgar' conda env, "
+            "`pip install -e .` from the repo root, or use the prefix `uv run` and restart."
         )
     if not no_open:
         try:
