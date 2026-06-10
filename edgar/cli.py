@@ -453,6 +453,17 @@ def _run_dashboard(target: str | None, port: int, host: str, no_open: bool) -> i
         url += f"#/inspect?run={dd._run_id(default_run_dir)}"
     print(f"EDGAR dashboard running at  {url}")
     print(f"  roots: {[str(r) for r in roots]}")
+    try:
+        import pydantic_ai  # noqa: F401
+    except ModuleNotFoundError:
+        import sys
+
+        print(
+            f"  warning: 'pydantic_ai' is not installed in {sys.executable!r}; "
+            "the LaTeX tab will return 503. This is likely due to running the "
+            "dashboard from the wrong environment. Activate the 'edgar' conda env, "
+            "`pip install -e .` from the repo root, or use the prefix `uv run` and restart."
+        )
     if not no_open:
         try:
             webbrowser.open(url)
