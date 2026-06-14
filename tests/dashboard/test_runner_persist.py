@@ -131,23 +131,16 @@ def test_runner_failure_marks_status_failed(fake_output_dir: Path, monkeypatch):
     spec = build_fake_spec(fake_output_dir)
     run_dir = Path(spec.output_dir)
 
-    # Patch the name in edgar.run (where it's imported into module scope) rather
-    # than in edgar.scoring.scoring (where run.py already imported a reference
-    # at module load).
+    # run.py wraps `score` in stage-timed aliases at import time, so the loop
+    # calls `t_score` rather than `score` directly. Patch that alias (looked up
+    # as a module global at call time). The seed phase uses a separate alias
+    # (`t_score_seeds`), so exploding `t_score` only trips the generation loop.
     import edgar.run as run_mod
 
-    original_score = run_mod.score
-    call_counter = {"n": 0}
-
     def exploding_score(*args, **kwargs):
-        # First score call is the seed-phase score; let that pass.
-        # Second call is inside the generation loop — blow up.
-        call_counter["n"] += 1
-        if call_counter["n"] >= 2:
-            raise RuntimeError("synthetic scoring failure")
-        return original_score(*args, **kwargs)
+        raise RuntimeError("synthetic scoring failure")
 
-    monkeypatch.setattr(run_mod, "score", exploding_score)
+    monkeypatch.setattr(run_mod, "t_score", exploding_score)
 
     with pytest.raises(RuntimeError, match="synthetic scoring failure"):
         asyncio.run(run(spec))

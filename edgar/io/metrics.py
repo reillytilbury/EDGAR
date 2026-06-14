@@ -36,14 +36,16 @@ Persistence shape per generation (one line in metrics.jsonl):
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import json
 import statistics
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
-from typing import Any, Iterator, Literal, TYPE_CHECKING
+from typing import Any, Callable, Iterator, Literal, TYPE_CHECKING
 
 from .status import atomic_write_text, write_status
 
@@ -319,6 +321,45 @@ def stage_timer(
         metrics._stage_times[name] = round(dt, 3)
         if not quiet:
             _write_line(metrics.run_log, f"  [{gen_label}] {name}: done in {dt:.1f}s")
+
+
+def timed(name: str, quiet: bool = False) -> Callable:
+    """Wrap a function so each call is timed as a pipeline stage.
+
+    Returns a decorator/alias that runs the wrapped call inside ``stage_timer``,
+    resolving the active ``RunMetrics`` via ``get_active_metrics()`` (so callers
+    don't thread a metrics handle through). The wrapper pops an optional
+    ``n_items`` keyword and forwards it to ``stage_timer`` (not the wrapped fn),
+    matching the per-stage progress counter behaviour of the explicit blocks.
+
+    Usage (alias form, as in run.py)::
+
+        t_score = timed("score")(score)
+        t_score(population, ..., n_items=48)
+    """
+
+    def decorator(fn: Callable) -> Callable:
+        if asyncio.iscoroutinefunction(fn):
+
+            @wraps(fn)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                n_items = kwargs.pop("n_items", None)
+                with stage_timer(
+                    get_active_metrics(), name, n_items=n_items, quiet=quiet
+                ):
+                    return await fn(*args, **kwargs)
+
+            return async_wrapper
+
+        @wraps(fn)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            n_items = kwargs.pop("n_items", None)
+            with stage_timer(get_active_metrics(), name, n_items=n_items, quiet=quiet):
+                return fn(*args, **kwargs)
+
+        return sync_wrapper
+
+    return decorator
 
 
 def stream_line(metrics: RunMetrics | None, msg: str) -> None:

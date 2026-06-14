@@ -25,7 +25,7 @@ from pathlib import Path
 from .io.task_spec import TaskSpec
 from .io.logging import open_log, log_generation, close_log, print_and_log, gen_banner
 from .io.status import write_status
-from .io.metrics import RunMetrics, stage_timer
+from .io.metrics import RunMetrics, timed
 from .evolution.population import Population
 from .evolution.island import (
     seed,
@@ -43,6 +43,28 @@ from .llm.generate import (
 from .io.config import RetryConfig
 from .scoring.scoring import rank, score
 from .io.plotting import generate_program_fits
+
+
+# Stage-timed aliases. Each wraps a pipeline call in stage_timer via timed() so
+# the run loop below reads as clean pseudocode rather than nested `with` blocks
+# (see PR #40 review). Behaviour is identical: same stage names, n_items progress
+# counters, and quiet flags. Pass the per-stage item count as `n_items=...`.
+t_seed = timed("seed", quiet=True)(seed)
+t_translate_seeds = timed("translate_seeds")(translate_programs)
+t_score_seeds = timed("score_seeds")(score)
+t_fits_seeds = timed("generate_program_fits_seeds", quiet=True)(generate_program_fits)
+
+t_spawn = timed("spawn", quiet=True)(spawn)
+t_generate_models = timed("generate_models")(generate_models)
+t_generate_param_ests = timed("generate_param_ests")(generate_param_ests)
+t_translate_programs = timed("translate_programs")(translate_programs)
+t_score = timed("score")(score)
+t_fits = timed("generate_program_fits", quiet=True)(generate_program_fits)
+t_deduplicate = timed("deduplicate", quiet=True)(deduplicate)
+t_prune = timed("prune", quiet=True)(prune)
+t_migrate = timed("migrate", quiet=True)(migrate)
+
+t_score_validate = timed("score_validate")(score)
 
 
 async def run(spec: TaskSpec, log_level: str = "compact") -> str:
@@ -88,29 +110,25 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
 
             # ── Seed phase ──
             metrics.start_generation(-1)
-            with stage_timer(metrics, "seed", quiet=True):
-                islands = seed(population, spec.seed_programs, n_islands)
-            with stage_timer(
-                metrics, "translate_seeds", n_items=len(spec.seed_programs)
-            ):
-                await translate_programs(
-                    population,
-                    spec.prompt_schemas.jax_model,
-                    spec.llms["jax_model_translator_llm"],
-                    retry_config=retry_config,
-                    max_tokens=config.get("max_tokens"),
-                )
-            with stage_timer(metrics, "score_seeds", n_items=len(spec.seed_programs)):
-                score(
-                    population,
-                    X_discover,
-                    X_eval,
-                    spec.scoring,
-                    spec.loss_fn,
-                    split="discover",
-                )
-            with stage_timer(metrics, "generate_program_fits_seeds", quiet=True):
-                generate_program_fits(spec, X_discover[1], population)
+            islands = t_seed(population, spec.seed_programs, n_islands)
+            await t_translate_seeds(
+                population,
+                spec.prompt_schemas.jax_model,
+                spec.llms["jax_model_translator_llm"],
+                retry_config=retry_config,
+                max_tokens=config.get("max_tokens"),
+                n_items=len(spec.seed_programs),
+            )
+            t_score_seeds(
+                population,
+                X_discover,
+                X_eval,
+                spec.scoring,
+                spec.loss_fn,
+                split="discover",
+                n_items=len(spec.seed_programs),
+            )
+            t_fits_seeds(spec, X_discover[1], population)
             population.save(pop_path)
             save_island_census(census, census_path)
             metrics.finish_generation()
@@ -131,70 +149,65 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
                 n_spawn = n_islands * batch_size
                 gen_banner(log, gen, n_gens, mode, temperature, llms, n_spawn=n_spawn)
 
-                with stage_timer(metrics, "spawn", quiet=True):
-                    spawn(
-                        population,
-                        islands,
-                        gen,
-                        mode,
-                        temperature,
-                        batch_size=batch_size,
-                        num_parents=spec.llms["num_parents"],
-                        rng=spec.rng,
-                    )
+                t_spawn(
+                    population,
+                    islands,
+                    gen,
+                    mode,
+                    temperature,
+                    batch_size=batch_size,
+                    num_parents=spec.llms["num_parents"],
+                    rng=spec.rng,
+                )
 
-                with stage_timer(metrics, "generate_models", n_items=n_spawn):
-                    await generate_models(
-                        population,
-                        spec.prompt_schemas.model,
-                        llms.model[gen % len(llms.model)]
-                        if isinstance(llms.model, list)
-                        else llms.model,
-                        mode,
-                        temperature,
-                        config=config,
-                        spec=spec,
-                        data=X_discover[1],
-                    )
-                with stage_timer(metrics, "generate_param_ests", n_items=n_spawn):
-                    await generate_param_ests(
-                        population,
-                        spec.prompt_schemas.param_est,
-                        llms.param_est,
-                        config,
-                    )
-                with stage_timer(metrics, "translate_programs", n_items=n_spawn):
-                    await translate_programs(
-                        population,
-                        spec.prompt_schemas.jax_model,
-                        llms.model_jax,
-                        retry_config=retry_config,
-                        max_tokens=config.get("max_tokens"),
-                    )
-                with stage_timer(metrics, "score", n_items=n_spawn):
-                    score(
-                        population,
-                        X_discover,
-                        X_eval,
-                        spec.scoring,
-                        spec.loss_fn,
-                        split="discover",
-                    )
-                with stage_timer(metrics, "generate_program_fits", quiet=True):
-                    generate_program_fits(spec, X_discover[1], population)
+                await t_generate_models(
+                    population,
+                    spec.prompt_schemas.model,
+                    llms.model[gen % len(llms.model)]
+                    if isinstance(llms.model, list)
+                    else llms.model,
+                    mode,
+                    temperature,
+                    config=config,
+                    spec=spec,
+                    data=X_discover[1],
+                    n_items=n_spawn,
+                )
+                await t_generate_param_ests(
+                    population,
+                    spec.prompt_schemas.param_est,
+                    llms.param_est,
+                    config,
+                    n_items=n_spawn,
+                )
+                await t_translate_programs(
+                    population,
+                    spec.prompt_schemas.jax_model,
+                    llms.model_jax,
+                    retry_config=retry_config,
+                    max_tokens=config.get("max_tokens"),
+                    n_items=n_spawn,
+                )
+                t_score(
+                    population,
+                    X_discover,
+                    X_eval,
+                    spec.scoring,
+                    spec.loss_fn,
+                    split="discover",
+                    n_items=n_spawn,
+                )
+                t_fits(spec, X_discover[1], population)
 
-                with stage_timer(metrics, "deduplicate", quiet=True):
-                    deduplicate(islands, population, spec.evolution)
-                with stage_timer(metrics, "prune", quiet=True):
-                    prune(islands, population, spec.evolution)
-                with stage_timer(metrics, "migrate", quiet=True):
-                    migrate(
-                        islands,
-                        population,
-                        spec.evolution,
-                        temperature,
-                        rng=spec.rng,
-                    )
+                t_deduplicate(islands, population, spec.evolution)
+                t_prune(islands, population, spec.evolution)
+                t_migrate(
+                    islands,
+                    population,
+                    spec.evolution,
+                    temperature,
+                    rng=spec.rng,
+                )
                 census.append([set(island) for island in islands])
 
                 log_generation(log, gen, population, islands, spec, metrics=metrics)
@@ -217,15 +230,14 @@ async def run(spec: TaskSpec, log_level: str = "compact") -> str:
             # ── Validation ──
             metrics.start_generation(n_gens)
             population.prepare_validation_scoring(islands)
-            with stage_timer(metrics, "score_validate"):
-                score(
-                    population,
-                    X_validate,
-                    None,
-                    spec.scoring,
-                    spec.loss_fn,
-                    split="validate",
-                )
+            t_score_validate(
+                population,
+                X_validate,
+                None,
+                spec.scoring,
+                spec.loss_fn,
+                split="validate",
+            )
             rank(population)
             metrics.finish_generation()
 
