@@ -169,6 +169,24 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
         """
         return dd.load_program_list(_resolve(run_id))
 
+    @app.get("/api/runs/{run_id}/family_tree")
+    def family_tree(run_id: str):
+        """Returns data for the family tree (lineage) visualization.
+
+        Provides hierarchical layout positions, parent-child edges, and
+        node metadata for rendering a lineage graph in the dashboard.
+
+        Args:
+            run_id: The unique identifier for the EDGAR run.
+
+        Returns:
+            A dictionary containing Plotly-compatible trace data and a parent map.
+
+        Raises:
+            HTTPException: If the `run_id` is not found.
+        """
+        return dd.load_family_tree_data(_resolve(run_id))
+
     @app.get("/api/runs/{run_id}/programs/{idx}")
     def program_detail(run_id: str, idx: int):
         """Returns detailed information for a specific program within an EDGAR run.

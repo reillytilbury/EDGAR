@@ -1,15 +1,14 @@
 io:
   data_path: ""
-  save_path: "/home/rajah/projects/synthetic_data/run_output"
 
 evolution:
-  #n_generations: 4
-  n_generations: 1
+  n_generations: 4
+  #n_generations: 1
   batch_size: 3
-  #n_islands: 4
-  n_islands: 2
-  #topology: [1, 2, 3, 0]
-  topology: [1, 0]
+  n_islands: 4
+  #n_islands: 2
+  topology: [1, 2, 3, 0]
+  #topology: [1, 0]
 
 
 llms:

@@ -62,6 +62,9 @@
         <button @click="view = 'inspect'"
           :class="view === 'inspect' ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:text-zinc-100'"
           class="px-3 py-1 rounded text-sm">Inspect</button>
+        <button @click="view = 'family_tree'"
+          :class="view === 'family_tree' ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:text-zinc-100'"
+          class="px-3 py-1 rounded text-sm">Family Tree</button>
       </div>
     </div>
 
@@ -231,6 +234,11 @@
              x-effect="state.recent_log; scrollLogTail()"></pre>
       </div>
     </section>
+  </main>
+
+  <!-- ── FAMILY TREE VIEW ── -->
+  <main x-show="view === 'family_tree'" class="flex-1 flex flex-col" style="display:none">
+    <div id="family-tree-chart" class="flex-1 min-h-[calc(100vh-64px)]"></div>
   </main>
 
   <!-- ── INSPECT VIEW ── -->
