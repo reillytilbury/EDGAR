@@ -69,6 +69,8 @@ and navigate to the relevant run.
 ## Documentation
 
 We use [Google style docstrings](https://google.github.io/styleguide/pyguide.html#383-functions-and-methods).
+A file with guidelines (useful for coding agents) is in `documentation_guidelines.md`.
+
 Documentation can be automatically generated using the `.docbot`.
 The workflow is:
 1. In the Github Actions tab select 'Documentation Bot'.

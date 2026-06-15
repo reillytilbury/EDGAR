@@ -26,7 +26,7 @@ def read_repository_file(path: str) -> str:
 def generate_docstrings(folder_tree: str = ""):
     client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 
-    with open(".docbot/documentation_guidelines.md", "r") as f:
+    with open("documentation_guidelines.md", "r") as f:
         guidelines = f.read()
 
     with open(".docbot/edgar_overview.md", "r") as f:
