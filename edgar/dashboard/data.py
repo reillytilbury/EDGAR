@@ -28,6 +28,7 @@ from ..evolution.population import Population
 from ..evolution.program import NotValidated, Program
 from ..io.metrics import METRICS_FILENAME, read_metrics
 from ..io.status import read_status
+from ..llm.prompt_schema import PromptSchema
 
 
 # ── Population cache (path, mtime) → Population ──
@@ -56,6 +57,58 @@ def _load_population(run_dir: Path) -> Population | None:
         return cached[1] if cached else None
     _POP_CACHE[key] = (mtime, pop)
     return pop
+
+
+def _reconstruct_model_prompt(run_dir: Path, pop: Population, idx: int) -> str:
+    """Reconstruct the prompt shown to the LLM for a given program.
+
+    This uses the PromptSchema and configuration from task_spec.yaml along
+    with the program's parents to rebuild the exact prompt string.
+    """
+    spec_doc = _load_task_spec(run_dir)
+    if not spec_doc:
+        return ""
+
+    schemas = spec_doc.get("prompt_schemas") or {}
+    model_schema_dict = schemas.get("model")
+    if not model_schema_dict:
+        return ""
+
+    try:
+        prompt_schema = PromptSchema(**model_schema_dict)
+    except Exception:
+        return "(error: could not parse PromptSchema from task_spec.yaml)"
+
+    # Flatten config for build_prompt (evolution + llms + scoring)
+    flat_config = {
+        **(spec_doc.get("evolution") or {}),
+        **(spec_doc.get("llms") or {}),
+        **(spec_doc.get("scoring") or {}),
+    }
+
+    p = pop[idx]
+    if p.birth.generation < 0:
+        return "Seed program: no LLM prompt was used."
+
+    # Retrieve parents. Same sort logic as generate._resolve_parents
+    parents = [pop[i] for i in p.birth.parent_indices if 0 <= i < len(pop)]
+
+    def _loss(prog: Program) -> float:
+        v = prog.program_losses.discover.final
+        return float("inf") if (v is None or not isinstance(v, float)) else v
+
+    parents = sorted(parents, key=_loss, reverse=True)
+
+    mode = p.birth.mode or "explore"
+
+    try:
+        return prompt_schema.build_prompt(
+            mode=mode,
+            parent_programs=parents,
+            config=flat_config,
+        )
+    except Exception as e:
+        return f"(error: prompt reconstruction failed: {e})"
 
 
 def _load_census(run_dir: Path) -> list[list[set[int]]]:
@@ -636,6 +689,7 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
 
     return {
         **base,
+        "reconstructed_prompt": _reconstruct_model_prompt(run_dir, pop, idx),
         "code": {
             "model": p.code.model or "",
             "param_est": p.code.param_est or "",
