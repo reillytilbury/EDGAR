@@ -50,12 +50,16 @@ def test_resume_after_midrun_crash(tmp_path):
 
     def crashing_score(*args, **kwargs):
         # Seeds (1) + gen 0 (1) succeed; gen 1 raises.
+        kwargs.pop("n_items", None)  # pop n_items added by timed() decorator
         call_count["n"] += 1
         if call_count["n"] >= 3:
             raise RuntimeError("injected mid-gen-1 crash")
         return original_score(*args, **kwargs)
 
-    with patch("edgar.run.score", side_effect=crashing_score):
+    with (
+        patch("edgar.run.t_score", side_effect=crashing_score),
+        patch("edgar.run.t_score_seeds", side_effect=crashing_score),
+    ):
         with pytest.raises(RuntimeError, match="injected mid-gen-1 crash"):
             asyncio.run(run(spec))
 
