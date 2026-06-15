@@ -3,13 +3,17 @@ prompt_schema.py
 
 Schema holding the component parts of a prompt.
 
+This module defines the `PromptSchema` Pydantic model for constructing LLM prompts. It enables
+modular prompt design by separating various instructions (base, mode-specific, code/docstring guidelines,
+image analysis) and supports dynamic variable substitution.
+
 There are two kinds of template variables:
-- config_vars: come from config/spec (e.g. k, max_lines, swear_words).
-  Only source: the config file / TaskSpec.
-- parent_program_vars: dotted paths into Program fields (e.g. "name",
-  "code.model", "program_losses.discover.final"). Dots in the path are
-  replaced with underscores to form the template variable name, so
-  "code.model" is referenced as {code_model} in parent_program_template.
+- config_vars: These are derived from the global configuration or `TaskSpec` (e.g., `k`, `max_lines`,
+  `swear_words`). They are sourced directly from the `config` dictionary passed to `build_prompt`.
+- program_vars (parent_program_vars, current_program_vars): These are extracted from `Program`
+  objects using dotted paths (e.g., "name", "code.model", "program_losses.discover.final").
+  Dots in the path are replaced with underscores to form the template variable name, so
+  "code.model" is referenced as `{code_model}` in prompt templates.
 
 Example usage:
     schema = PromptSchema(
@@ -38,10 +42,34 @@ if TYPE_CHECKING:
 
 
 def _fill_program_vars(program: Any, var_names: list[str]) -> dict[str, Any]:
+    """Fills a dictionary with program attributes, converting dotted paths to underscore-separated keys.
+
+    Args:
+        program: The Program object from which to extract variables.
+        var_names: A list of dotted-path strings representing the program attributes
+            to extract (e.g., "name", "code.model").
+
+    Returns:
+        A dictionary where keys are underscore-separated variable names (e.g., "code_model")
+        and values are the extracted attributes from the program.
+    """
     return {x.replace(".", "_"): _get_nested_attr(program, x, "") for x in var_names}
 
 
 def _get_nested_attr(obj: Any, dotted_key: str, default: Any = None) -> Any:
+    """Safely retrieves a nested attribute from an object using a dotted key.
+
+    Example: `_get_nested_attr(program, "code.model")` would return `program.code.model`.
+
+    Args:
+        obj: The object from which to retrieve the attribute.
+        dotted_key: A string representing the dotted path to the attribute (e.g., "parent.child.grandchild").
+        default: The default value to return if any part of the dotted path is not found
+            or is None. Defaults to None.
+
+    Returns:
+        The value of the nested attribute, or the default value if not found.
+    """
     item = obj
 
     for part in dotted_key.split("."):
@@ -53,16 +81,47 @@ def _get_nested_attr(obj: Any, dotted_key: str, default: Any = None) -> Any:
 
 
 class PromptSchema(BaseModel):
-    base: str
-    explore: Optional[str] = None
-    exploit: Optional[str] = None
-    code_guidelines: str
-    docstring_guidelines: str
-    image_analysis_instructions: Optional[str] = None
-    parent_program_template: str
-    parent_program_vars: list[str] = Field(default_factory=list)
-    current_program_template: Optional[str] = None
-    current_program_vars: list[str] = Field(default_factory=list)
+    """Defines the schema for constructing an LLM prompt.
+
+    This Pydantic model structures the various components of a prompt, allowing for
+    flexible and contextualized prompt generation for LLM code generation tasks.
+    It supports different sections for base instructions, mode-specific guidance,
+    code/docstring conventions, and image analysis, alongside templating for
+    configuration and program-specific variables.
+    """
+
+    base: str = Field(description="The base instructions for the LLM.")
+    explore: Optional[str] = Field(
+        None, description="Instructions specific to the 'explore' generation mode."
+    )
+    exploit: Optional[str] = Field(
+        None, description="Instructions specific to the 'exploit' generation mode."
+    )
+    code_guidelines: str = Field(
+        description="Guidelines for the structure and style of generated code."
+    )
+    docstring_guidelines: str = Field(
+        description="Guidelines for the format and content of docstrings in generated code."
+    )
+    image_analysis_instructions: Optional[str] = Field(
+        None,
+        description="Instructions for the LLM on how to interpret and use multimodal image feedback.",
+    )
+    parent_program_template: str = Field(
+        description="A template string for formatting information about parent programs, variables defined as e.g {code_model} are filled with the corresponding dotted variable from parent_program_vars (e.g code.model)"
+    )
+    parent_program_vars: list[str] = Field(
+        default_factory=list,
+        description="A list of dotted-path strings for variables to extract from parent `Program` objects, e.g code.model",
+    )
+    current_program_template: Optional[str] = Field(
+        None,
+        description="A template string for formatting information about the program currently being generated/modified, variables defined as e.g {code_model} are filled with the corresponding dotted variable from current_program_vars (e.g code.model)",
+    )
+    current_program_vars: list[str] = Field(
+        default_factory=list,
+        description="A list of dotted-path strings for variables to extract from the current `Program` object, e.g code.model",
+    )
 
     def build_prompt(
         self,
@@ -71,7 +130,31 @@ class PromptSchema(BaseModel):
         config: dict[str, Any] | None = None,
         current_program: Program | None = None,
     ) -> str:
-        """Build a prompt by selecting and formatting schema sections."""
+        """Builds a complete LLM prompt by selecting and formatting schema sections.
+
+        This method combines the base instructions, mode-specific guidance (explore/exploit),
+        code and docstring guidelines, and information about parent and current programs
+        into a single, coherent prompt string. It substitutes variables from the global
+        configuration and program objects into their respective templates.
+
+        Args:
+            mode: The current generation mode, either 'explore' or 'exploit'. This
+                determines which set of mode-specific instructions to include.
+            parent_programs: An optional list of `Program` objects that serve as
+                parents for the generation of a new program. Their attributes will
+                be included in the prompt via `parent_program_template` and `parent_program_vars`.
+            config: An optional dictionary of global configuration variables (e.g., from
+                `TaskSpec.flat_config`) to be substituted into the prompt templates, e.g `num_parents`.
+            current_program: An optional `Program` object representing the program
+                currently being worked on (e.g., for parameter estimation/translation). Its
+                attributes will be included in the prompt via `current_program_template` and `current_program_vars`.
+
+        Returns:
+            A string containing the fully formatted and substituted LLM prompt.
+
+        Raises:
+            ValueError: If the provided `mode` is not 'explore' or 'exploit'.
+        """
         if mode not in {"explore", "exploit"}:
             raise ValueError("mode must be 'explore' or 'exploit'")
 

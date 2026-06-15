@@ -1,0 +1,33 @@
+edgar/
+├── __init__.py
+├── cli.py
+├── dashboard/
+│   ├── __init__.py
+│   ├── data.py
+│   ├── latex_cache.py
+│   ├── server.py
+│   └── static/
+├── evolution/
+│   ├── __init__.py
+│   ├── island.py
+│   ├── population.py
+│   └── program.py
+├── io/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── logging.py
+│   ├── plotting.py
+│   ├── status.py
+│   └── task_spec.py
+├── llm/
+│   ├── __init__.py
+│   ├── code_loading.py
+│   ├── generate.py
+│   ├── llm_calling.py
+│   ├── prompt_schema.py
+│   └── response_schema.py
+├── run.py
+└── scoring/
+    ├── __init__.py
+    ├── hello.py
+    └── scoring.py

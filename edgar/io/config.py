@@ -33,14 +33,30 @@ ValidLLMs = Literal[
     "claude-opus-4-5",
     "claude-opus-4-6",
     "claude-opus-4-7",
-]  # List of supported LLMs, update as needed. Provider is inferred from the prefix ('gemini-' → Google, 'claude-' → Anthropic).
+]
+"""Literal type for valid LLM model names.
+
+The provider is inferred from the model name prefix (e.g., 'gemini-' for Google,
+'claude-' for Anthropic).
+"""
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+"""The root directory of the EDGAR project."""
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """Recursively merge override into base, with override taking precedence."""
+    """Recursively merge override into base, with override taking precedence.
+
+    Example: `base = {"a": 1, "b": 2} and override = {"b": 3, "c": 4}` would produce `{"a": 1, "b": 3, "c": 4}`.
+
+    Args:
+        base: The base dictionary.
+        override: The dictionary with overriding values.
+
+    Returns:
+        A new dictionary representing the merged result.
+    """
     result = base.copy()
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
@@ -55,14 +71,26 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 class _LaxModel(BaseModel):
-    """Pydantic BaseModel which raises a warning if there are unexpected fields."""
+    """Pydantic BaseModel which raises a warning if there are unexpected fields.
+
+    This model is used as a base for configuration sections to allow for
+    forward compatibility and to provide helpful warnings when unknown
+    configuration fields are encountered, rather than raising errors.
+    """
 
     model_config = ConfigDict(extra="ignore")  # Doesnt raise an error if extra fields
 
     @model_validator(mode="before")
     @classmethod
     def warn_extra_fields(cls, values: dict) -> dict:
-        """Warn if there are any unexpected fields"""
+        """Warns if the input dictionary contains any unexpected fields for the model.
+
+        Args:
+            values: The dictionary of values to validate.
+
+        Returns:
+            The original dictionary of values.
+        """
         if isinstance(values, dict):
             extra = set(values.keys()) - set(cls.model_fields.keys())
             if extra:
@@ -73,15 +101,46 @@ class _LaxModel(BaseModel):
 
 
 class RunConfig(_LaxModel):
+    """Configuration settings related to the overall EDGAR run.
+
+    Attributes:
+        random_seed: An optional integer seed for the random number generator
+            to ensure reproducibility of runs. If None, a random seed will be used.
+    """
+
     random_seed: int | None
 
 
 class IOConfig(_LaxModel):
+    """Configuration settings for input/output operations.
+
+    Attributes:
+        data_path: The path to the directory or file containing the experiment's data.
+        save_path: The base path where all run artifacts (logs, programs,
+            dashboard data) will be saved.
+    """
+
     data_path: str
     save_path: str
 
 
 class EvolutionConfig(_LaxModel):
+    """Configuration settings for the evolutionary algorithm.
+
+    Attributes:
+        n_generations: The total number of evolutionary generations to run.
+        n_islands: The number of independent islands (subpopulations) in the
+            island evolutionary algorithm.
+        batch_size: The number of new programs to generate and score per
+            generation on each island.
+        critical_population_size: The target population size for each island
+            after pruning. This value influences the number of programs retained.
+        n_migrants: The number of programs to migrate between islands each generation.
+        topology: A list of integers representing the migration topology.
+            `topology[i]` specifies the island that island `i` will migrate programs to.
+            Must be a permutation of `range(n_islands)`.
+    """
+
     n_generations: int
     n_islands: int
     batch_size: int
@@ -91,6 +150,19 @@ class EvolutionConfig(_LaxModel):
 
     @model_validator(mode="after")
     def check_args(self) -> EvolutionConfig:
+        """Validates the `topology` configuration.
+
+        Ensures that the length of the `topology` list matches `n_islands` and
+        that it contains exactly the indices from 0 to `n_islands - 1` (i.e., it's a
+        permutation of island indices).
+
+        Raises:
+            ValueError: If the `topology` length does not match `n_islands` or
+                if it does not contain valid island indices.
+
+        Returns:
+            The validated EvolutionConfig instance.
+        """
         if len(self.topology) != self.n_islands:
             raise ValueError(
                 f"topology length ({len(self.topology)}) must equal n_islands ({self.n_islands})"
@@ -103,6 +175,16 @@ class EvolutionConfig(_LaxModel):
 
 
 class RetryConfig(_LaxModel):
+    """Configuration for retrying failed LLM calls.
+
+    Attributes:
+        max_retries: The maximum number of times to retry a failed LLM call.
+        initial_delay: The initial delay in seconds before the first retry.
+        backoff_multiplier: The multiplier for exponential backoff between retries.
+        max_delay: The maximum delay in seconds between retries.
+        retryable_status_codes: A list of HTTP status codes that should trigger a retry.
+    """
+
     max_retries: int = 3
     initial_delay: float = 1.0
     backoff_multiplier: float = 2.0
@@ -111,6 +193,25 @@ class RetryConfig(_LaxModel):
 
 
 class LLMsConfig(_LaxModel):
+    """Configuration settings for Large Language Model interactions.
+
+    Attributes:
+        num_parents: The number of parent programs to include in the prompt
+            when generating new programs.
+        retry: Configuration for retrying failed LLM API calls.
+        model_llm: The LLM model(s) to use for generating new scientific models
+            (numpy `model` code and `default_params`). Can be a single LLM or a list for cycling.
+        param_est_llm: The LLM model(s) to use for generating `parameter_estimator` code.
+            Can be a single LLM or a list for cycling.
+        jax_model_translator_llm: The LLM model(s) to use for translating numpy `model`
+            code into JAX-compatible code. Can be a single LLM or a list for cycling.
+        log_raw_llm_response: If True, logs the raw JSON responses from LLM calls
+            for debugging purposes.
+        max_lines: The maximum number of lines allowed in generated code snippets.
+        swear_words: A list of words to filter out or flag in LLM-generated text.
+        max_tokens: The maximum number of tokens to request from the LLM in a response.
+    """
+
     num_parents: int
     retry: RetryConfig
     model_llm: ValidLLMs | list[ValidLLMs]
@@ -123,17 +224,43 @@ class LLMsConfig(_LaxModel):
 
 
 class GradientDescentConfig(_LaxModel):
+    """Configuration settings for the gradient descent optimizer.
+
+    Attributes:
+        max_iter: The maximum number of iterations for the gradient descent algorithm.
+        learning_rate: The learning rate used by the optimizer.
+    """
+
     max_iter: int
     learning_rate: float
 
 
 class ScoringConfig(_LaxModel):
+    """Configuration settings for model scoring and evaluation.
+
+    Attributes:
+        param_penalty_weight: A weighting factor for the parameter complexity penalty
+            added to the loss function. Higher values penalize more complex models.
+        timeout_s: The maximum time in seconds allowed for scoring a single program.
+            If exceeded, the program is considered to have infinite loss.
+        gradient_descent: Configuration for the gradient descent optimization
+            performed during scoring.
+    """
+
     param_penalty_weight: float
     timeout_s: float
     gradient_descent: GradientDescentConfig
 
 
 class PromptsConfig(_LaxModel):
+    """Configuration containing the prompt schemas for different LLM generation tasks.
+
+    Attributes:
+        model: The PromptSchema for generating new scientific models.
+        parameter_estimator: The PromptSchema for generating parameter estimators.
+        jax_translator_model: The PromptSchema for translating numpy models to JAX.
+    """
+
     model: PromptSchema
     parameter_estimator: PromptSchema
     jax_translator_model: PromptSchema
@@ -147,7 +274,19 @@ class Config(BaseModel):
     All settings needed to construct a TaskSpec, in plain-dict form.
 
     Constructed via from_yaml (live run) or from_taskspec (reproduce a past run).
-    TaskSpec.from_config(config) turns this into a fully-loaded TaskSpec.
+    TaskSpec.from_config(config) turns this into a TaskSpec.
+
+    Attributes:
+        task_name: The name of the current scientific task or project.
+        project_dir: The path to the project directory containing task-specific files.
+        io: I/O configuration settings.
+        evolution: Evolutionary algorithm configuration settings.
+        llms: Large Language Model configuration settings.
+        scoring: Model scoring configuration settings.
+        run: Run-specific configuration settings.
+        project_params: A dictionary for arbitrary project-specific parameters
+            that are not covered by other structured config sections.
+        prompts: Prompt schemas for various LLM generation tasks.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -166,21 +305,30 @@ class Config(BaseModel):
     def from_yaml(
         cls, path: Path | str, default_path: Path | str | None = None
     ) -> Config:
-        """
-        Load a config.yaml and merge with project defaults.
+        """Loads configuration from a YAML file, merging with project defaults.
+
+        This method loads a `config.yaml` specific to a task and merges it with
+        a default configuration (`projects/config_default.yaml`). It also loads
+        and merges prompt configurations from `prompt_defaults.yaml` and a
+        task-specific `prompts.yaml`.
 
         Args:
-            path: Path to a project config.yaml.
-            default_path: Optional path to a default config.yaml to merge with before loading the project config. If None, uses projects/config_default.yaml
+            path: Path to the project's `config.yaml` file.
+            default_path: Optional path to a default `config.yaml` to merge with
+                before loading the project config. If None, it defaults to
+                `REPO_ROOT / "projects" / "config_default.yaml"`.
+
+        Returns:
+            A `Config` object populated with the merged configuration settings.
         """
         path = Path(path)
         if not path.is_absolute():
-            path = PROJECT_ROOT / path
+            path = REPO_ROOT / path
         if default_path is None:
-            default_path = PROJECT_ROOT / "projects" / "config_default.yaml"
+            default_path = REPO_ROOT / "projects" / "config_default.yaml"
         default_path = Path(default_path)
         if not default_path.is_absolute():
-            default_path = PROJECT_ROOT / default_path
+            default_path = REPO_ROOT / default_path
 
         task_name = path.parent.name
         project_dir = path.parent
@@ -227,18 +375,22 @@ class Config(BaseModel):
 
     @classmethod
     def from_taskspec(cls, path: Path) -> Config:
-        """
-        Extract config from a task_spec.yaml saved by a previous run.
+        """Extracts configuration settings from a previously saved `task_spec.yaml`.
 
-        Callables, git state, and creation_timestamp are always regenerated fresh
-        when TaskSpec.from_config is later called — only the config dicts are preserved.
+        This method is used to reconstruct the configuration of a past EDGAR run.
+        Callables, git state, and creation timestamp
+        are regenerated when `TaskSpec.from_config` is later called; only the
+        configuration dictionaries are preserved from the `task_spec.yaml`.
 
         Args:
-            path: Path to a task_spec.yaml.
+            path: Path to a `task_spec.yaml` file.
+
+        Returns:
+            A `Config` object populated with settings extracted from the `task_spec.yaml`.
         """
         path = Path(path)
         if not path.is_absolute():
-            path = PROJECT_ROOT / path
+            path = REPO_ROOT / path
 
         record = yaml.safe_load(path.read_text())
         schemas = record["prompt_schemas"]
@@ -251,7 +403,7 @@ class Config(BaseModel):
             task_name=record["task_name"],
             project_dir=Path(record["project_dir"])
             if "project_dir" in record
-            else PROJECT_ROOT / "projects" / record["task_name"],
+            else REPO_ROOT / "projects" / record["task_name"],
             io=record.get("io", {}),
             evolution=record.get("evolution", {}),
             llms=record.get("llms", {}),

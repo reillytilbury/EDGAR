@@ -48,6 +48,18 @@ resume
 
     Valid sections: io, evolution, llms, scoring, project_params.
     Values are parsed as Python literals (int, float, bool) where possible.
+
+test
+    Run a test run which overrides project config values to have n_generations=1, n_islands=2, batch_size=2, etc. This is useful for quickly checking that the pipeline runs end-to-end with real LLM calls:
+        edgar test projects/my_task/config.yaml
+
+    Output is saved to test_output/
+
+test-fake
+    Run a test run with fake LLM responses (no real API calls). This is useful for end-to-end testing of the pipeline without incurring API costs or waiting for LLM responses:
+        edgar test-fake
+
+    Output is saved to test_output/
 """
 
 import argparse
@@ -74,21 +86,30 @@ SPEC_TEMPLATE_DATA_LOADER = dedent(
         """
         Load and preprocess data, then split into discover / validate / eval sets.
 
-        Returns
-        -------
-        (X_discover, X_validate, X_eval)
+        Args:
+            data_path (str): The path to the raw data file.
+            n_eval_samples (int): Number of samples to use for the evaluation fingerprint.
+            **kwargs: Additional parameters passed from `project_params` in `config.yaml`.
 
-        X_discover = (X_disc_train, X_disc_test)
-            X_disc_train: dict of JAX arrays, shape (n_samples//2, n_trials//2) — seen by the LLM loop.
-            X_disc_test:  dict of JAX arrays, shape (n_samples//2, n_trials//2) — held-out test within discovery.
+        Returns:
+            tuple: A tuple containing (X_discover, X_validate, X_eval).
 
-        X_validate = (X_val_train, X_val_test)
-            X_val_train: dict of JAX arrays, shape (n_samples//2, n_trials//2) — never seen during discovery.
-            X_val_test:  dict of JAX arrays, shape (n_samples//2, n_trials//2) — final held-out evaluation.
-
-        X_eval
-            Small fingerprint subset from discover train, used for deduplication.
-            Dict of JAX arrays plus '_sample_indices' (numpy int array of positions within disc_idx).
+            X_discover (tuple):
+                Contains `X_disc_train` and `X_disc_test`.
+                `X_disc_train` (dict): Dictionary of JAX arrays, shape (n_samples//2, n_trials//2)
+                    — seen by the LLM loop for model discovery.
+                `X_disc_test` (dict): Dictionary of JAX arrays, shape (n_samples//2, n_trials//2)
+                    — held-out test set used within the discovery phase.
+            X_validate (tuple):
+                Contains `X_val_train` and `X_val_test`.
+                `X_val_train` (dict): Dictionary of JAX arrays, shape (n_samples//2, n_trials//2)
+                    — never seen during the discovery phase, used for validation.
+                `X_val_test` (dict): Dictionary of JAX arrays, shape (n_samples//2, n_trials//2)
+                    — final held-out evaluation set.
+            X_eval (dict):
+                A small subset of data from `X_disc_train` used for generating model
+                fingerprints for deduplication. Contains JAX arrays plus `_sample_indices`
+                (numpy int array of positions within `disc_idx`).
         """
         raise NotImplementedError
 
@@ -179,10 +200,28 @@ SPEC_TEMPLATE_PLOT = dedent(
 
 
 def _find_project_root() -> Path:
+    """
+    Finds the root directory of the EDGAR project.
+
+    Returns:
+        Path: The absolute path to the EDGAR project root directory.
+    """
     return Path(__file__).resolve().parent.parent
 
 
 def _find_collection_dir(project_root: Path) -> Path:
+    """
+    Determines the directory where projects are stored (either 'projects/' or 'experiments/').
+
+    Prioritizes 'projects/' if it exists, otherwise 'experiments/', and defaults to 'projects/'
+    if neither exist.
+
+    Args:
+        project_root (Path): The root directory of the EDGAR project.
+
+    Returns:
+        Path: The path to the project collection directory.
+    """
     projects_dir = project_root / "projects"
     experiments_dir = project_root / "experiments"
     if projects_dir.exists():
@@ -193,12 +232,35 @@ def _find_collection_dir(project_root: Path) -> Path:
 
 
 def _task_dir(task: str) -> Path:
+    """
+    Constructs the absolute path for a given EDGAR task directory.
+
+    Args:
+        task (str): The name of the EDGAR task.
+
+    Returns:
+        Path: The absolute path to the task's directory within the project collection.
+    """
     root = _find_project_root()
     collection = _find_collection_dir(root)
     return collection / task
 
 
 def init_project(task: str) -> int:
+    """
+    Initializes a new EDGAR project with a predefined directory structure and template files.
+
+    This command scaffolds a new project under `projects/` (or `experiments/` if that exists)
+    by creating directories for seed programs, data loader, and image feedback, along with
+    template Python files and a default `config.yaml`. Existing files will be overwritten.
+
+    Args:
+        task (str): The name of the project to initialize. This will be the name of the
+                    directory created under `projects/` (e.g., `projects/my_task`).
+
+    Returns:
+        int: Exit code (0 for success, non-zero for failure).
+    """
     task_path = _task_dir(task)
     task_path.mkdir(parents=True, exist_ok=True)
 
@@ -256,7 +318,7 @@ def init_project(task: str) -> int:
           num_parents: 2
           model_llm: gemini-2.5-flash
           param_est_llm: gemini-2.5-flash
-          jax_translator_llm: gemini-2.5-flash-lite
+          jax_model_translator_llm: gemini-2.5-flash-lite
 
         scoring:
           param_penalty_weight: 0.01
@@ -274,6 +336,20 @@ def init_project(task: str) -> int:
 
 
 def validate_project(task: str) -> int:
+    """
+    Validates an EDGAR project by checking for the existence of required files and functions.
+
+    Ensures that the project directory exists and contains all necessary files (e.g.,
+    `model1.py`, `load_data.py`, `config.yaml`) and that these files define the expected
+    functions (`model`, `parameter_estimator`, `load_data`, `loss_fn`, `plot_model_fits`).
+    This helps to ensure a correct setup before an experiment is run.
+
+    Args:
+        task (str): The name of the project to validate.
+
+    Returns:
+        int: Exit code (0 for successful validation, 1 for failure).
+    """
     from .llm.code_loading import load_function_from_source
 
     task_path = _task_dir(task)
@@ -336,6 +412,13 @@ def _apply_overrides(spec, overrides: list[str]) -> None:
 
     Example:
         _apply_overrides(spec, ["evolution.n_generations=1", "io.data_path=/data/foo.npy"])
+
+    Args:
+        spec: The TaskSpec object to apply overrides to. This object is modified in-place.
+        overrides (list[str]): A list of string overrides in the format "--section.key=value".
+
+    Raises:
+        ValueError: If an override is not in the correct format or specifies an unknown section.
     """
     sections = {"io", "evolution", "llms", "scoring", "project_params"}
     for override in overrides:
@@ -374,6 +457,20 @@ TEST_OVERRIDES = [
 
 
 def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> None:
+    """
+    Builds a `TaskSpec` from a configuration and runs an EDGAR experiment.
+
+    This function initializes a `Config` object from the provided `config_path`
+    (either a `config.yaml` or a saved `task_spec.yaml`), then creates a `TaskSpec`.
+    Any command-line `overrides` are applied to the `TaskSpec` before
+    the main asynchronous `run` function is invoked.
+
+    Args:
+        config_path (str): Path to the `config.yaml` or `task_spec.yaml` file.
+        overrides (list[str]): A list of command-line override strings
+                                (e.g., `"--evolution.n_generations=20"`).
+        log_level (str): The desired logging verbosity ('compact', 'code', or 'prompts').
+    """
     import asyncio
     from .io.config import Config
     from .io.task_spec import TaskSpec
@@ -430,6 +527,13 @@ def _build_and_resume(run_dir: str, log_level: str) -> int:
 
 
 def _run_test_fake() -> None:
+    """
+    Runs a scaled-down EDGAR experiment with mocked LLM responses.
+
+    This function is used for end-to-end testing of the EDGAR pipeline without
+    making actual API calls to Large Language Models. It directly invokes the
+    `run_test_fake` function from the system tests.
+    """
     import sys
 
     project_root = Path(__file__).resolve().parent.parent
@@ -447,6 +551,17 @@ def _run_dashboard(target: str | None, port: int, host: str, no_open: bool) -> i
         - None: scan ./program_databases for runs and let the user pick.
         - A path to a single run directory (contains task_spec.yaml).
         - A path to program_databases/ itself.
+
+    Args:
+        target (str | None): The target for the dashboard. Can be a path to a
+                             specific run directory, a `program_databases/` root,
+                             or None to scan the default location.
+        port (int): The starting port number to try for the dashboard server.
+        host (str): The host address for the dashboard server.
+        no_open (bool): If True, prevents the automatic opening of a browser window.
+
+    Returns:
+        int: Exit code (0 for success, 1 for failure).
     """
     import webbrowser
     import uvicorn
@@ -518,6 +633,16 @@ def _run_dashboard(target: str | None, port: int, host: str, no_open: bool) -> i
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """
+    Builds and returns the ArgumentParser for the EDGAR command-line interface.
+
+    This function defines all the available commands (`init-project`, `validate`, `run`,
+    `test`, `test-fake`, `dashboard`) and their respective arguments, help messages,
+    and argument parsing logic.
+
+    Returns:
+        argparse.ArgumentParser: The configured argument parser.
+    """
     parser = argparse.ArgumentParser(
         description="EDGAR project scaffold, validation, and run CLI"
     )
@@ -593,6 +718,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_cli(argv=None) -> int:
+    """
+    Main entry point for the EDGAR command-line interface.
+
+    Parses command-line arguments and dispatches to the appropriate function
+    (`init_project`, `validate_project`, `_build_and_run`, `_run_test_fake`,
+    or `_run_dashboard`) based on the subcommand provided. It handles known
+    and unknown arguments, passing overrides to the run commands.
+
+    Args:
+        argv (list[str], optional): A list of command-line arguments to parse.
+                                    If None, `sys.argv` is used. Defaults to None.
+
+    Returns:
+        int: The exit code of the executed command.
+    """
     parser = build_parser()
     args, overrides = parser.parse_known_args(argv)
 

@@ -1,7 +1,21 @@
+"""Pydantic schemas for enforcing structured output from Large Language Models.
+
+This module defines data models that ensure LLM-generated code and metadata
+conform to expected formats. These schemas are used by `edgar.llm.llm_calling.call_llm`
+to validate and parse LLM responses.
+"""
+
 from pydantic import BaseModel, Field
 
 
 class ModelSchema(BaseModel):
+    """Schema for the structured output of LLM model generation.
+
+    This schema defines the expected fields for a new scientific model generated
+    by an LLM, including its code, descriptive name, mathematical representation,
+    and initial parameter values.
+    """
+
     thought_process: str = Field(
         description=(
             "Summary of reasoning: "
@@ -39,6 +53,8 @@ class ModelSchema(BaseModel):
 
 
 class ParamEstSchema(BaseModel):
+    """Schema for the structured output of LLM parameter estimator generation."""
+
     code: str = Field(
         description=(
             "The complete, self-contained Python implementation of the parameter estimator. "
@@ -48,6 +64,8 @@ class ParamEstSchema(BaseModel):
 
 
 class TranslationSchema(BaseModel):
+    """Schema for the structured output of LLM JAX translation."""
+
     code: str = Field(
         description="The translated JAX-compatible code, including imports."
     )

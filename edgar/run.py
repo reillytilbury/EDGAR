@@ -1,5 +1,6 @@
-"""
-Main runner. Translates the pseudocode directly into real code.
+"""Orchestrates the entire EDGAR evolutionary experiment.
+
+This module serves as the main entry point for running an EDGAR experiment.
 """
 
 # ruff: noqa: E402
@@ -72,17 +73,41 @@ async def run(
     spec: TaskSpec,
     log_level: str = "compact",
     resume_from: str | Path | None = None,
-) -> str:
-    """Run an EDGAR experiment, optionally resuming a crashed run.
+) -> None:
+    """Orchestrates and executes the entire EDGAR evolutionary experiment.
 
-    Args:
-        spec: TaskSpec built from a config or task_spec.yaml.
-        log_level: Logging verbosity (compact/code/prompts).
-        resume_from: Path to a run directory (containing population.jsonl +
-            island_census.jsonl + task_spec.yaml). When set:
-              - The seed phase is skipped; state is loaded from disk.
-              - Output is written back into ``resume_from`` (spec is restamped).
-              - The loop continues at ``len(census)``.
+    This function manages the full lifecycle of an EDGAR run, from initialization
+    and data loading to the generational evolutionary loop, LLM interactions, scoring, and final
+    validation. It ensures logging, status tracking, and persistence of results for
+    real-time dashboard monitoring and post-hoc analysis.
+
+    The core algorithm follows these steps:
+    1.  **Initialization**: Sets up the run environment, creates the output directory, and
+        saves the `TaskSpec` for reproducibility. Initializes structured logging and real-time
+        status tracking.
+    2.  **Data Loading**: Loads the scientific problem data into `X_discover`, `X_validate`,
+        and `X_eval` splits using the `spec.load_data_fn`.
+    3.  **Seed Phase**:
+        *   Seed programs are loaded and optionally translated.
+        *   Seed programs are scored to establish a baseline.
+    4.  **Generational Loop**: For each generation:
+        *   New program variants are `spawn`ed from the current population.
+        *   LLMs generate new model architectures (`generate_models`) and parameter
+            estimation logic (`generate_param_ests`).
+        *   Programs are `translate`d to JAX.
+        *   Programs are `score`ed and `rank`ed.
+        *   The population is `deduplicate`d, `prune`d, and survivors `migrate` between islands.
+    5.  **Finalization**:
+        *   The final population and island census are saved.
+        *   Programs are `rank`ed based on their final validation losses.
+    6.  **Error Handling**: A `finally` block ensures that the `Population`, `census`, and
+        `status.json` are always saved, even if an exception occurs during the run. Any exceptions
+        are captured, logged with their traceback, and the run status is updated to 'failed'.
+
+    Resuming Runs:
+        If `resume_from` is provided:
+              - The population and census are loaded from the specified directory.
+              - The run starts from the next generation (max(population.birth.gen) + 1).
               - run.log is opened in append mode with a RESUMED banner.
               - started_at is preserved from the original status.json so total
                 wall time across resumes is recoverable from gen timings.
@@ -92,12 +117,22 @@ async def run(
                 resumed spawning/migration draws differ from a continuous run.
                 LLM responses are non-deterministic anyway.
               - The original task_spec.yaml is reused as-is (chmod read-only).
+
+    Args:
+        spec: A `TaskSpec` object containing all configuration, data, and callable functions
+            required for the experiment.
+        log_level: The verbosity level for logging messages to the console and `run.log`.
+            Can be 'compact', 'code', or 'prompts'.
+        resume_from: Optional path to a previous run's output directory to resume from.
+
+    Returns:
+        None. The function's primary effects are side effects: creating output files, updating
+        status, and logging.
     """
     resume = resume_from is not None
     if resume:
         resume_from = Path(resume_from).resolve()
         _prepare_resume(spec, resume_from)
-
     os.makedirs(spec.output_dir, exist_ok=True)
     if not resume:
         spec.save(spec.output_dir)
@@ -401,6 +436,13 @@ def _validate_resume_state(population: Population, census: list, n_gens: int) ->
 
 
 if __name__ == "__main__":
+    """Main execution block for running EDGAR from the command line.
+
+    This block parses command-line arguments to obtain the configuration file path.
+    It then loads the `Config` (either from a `config.yaml` or a previously saved
+    `task_spec.yaml`), initializes a `TaskSpec` object from this configuration,
+    and finally runs the asynchronous EDGAR experiment using `asyncio.run()`.
+    """
     parser = argparse.ArgumentParser(description="Run EDGAR")
     parser.add_argument(
         "config", type=str, help="Path to task config.yaml or task_spec.yaml"

@@ -149,9 +149,9 @@ async def test_call_llm_live_model_schema_with_image():
 async def test_call_llm_live_param_est_schema():
     prompt = (
         "Write a parameter estimator for this model:\n\n"
-        "    def model(data, params):\n"
-        "        x = data['x']\n"
-        "        return params['a'] * x**2 + params['b'] * x\n\n"
+        "\tdef model(data, params):\n"
+        "\t\tx = data['x']\n"
+        "\t\treturn params['a'] * x**2 + params['b'] * x\n\n"
         "- data is a dict with keys 'x' and 'y' (1D float arrays)\n"
         "- return a dict with keys 'a' and 'b' as floats\n"
         "- function must be named `parameter_estimator`"

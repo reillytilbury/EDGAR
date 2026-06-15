@@ -2,8 +2,8 @@
 TaskSpec: A frozen bundle containing all configuration and callables needed to run an EDGAR experiment.
 
 TaskSpec serves two purposes:
-1. Load project callables and seed programs from a Config into ready-to-use fields
-2. Save a record of exact settings used so runs can be reproduced
+1. Load project callables and seed programs from a Config into ready-to-use fields.
+2. Save a record of exact settings used so runs can be reproduced.
 
 Construction:
     from_config(config)  — accepts a Config object built from Config.from_yaml or Config.from_taskspec
@@ -39,32 +39,36 @@ from ..evolution.program import Program, BirthCertificate, Code
 from ..llm.code_loading import load_function_from_source
 from ..llm.prompt_schema import PromptSchema
 from .config import Config
-from .config import PROJECT_ROOT
+from .config import REPO_ROOT
 
 
-# Lightweight ergonomic wrappers: callers can write `llms.model` and
-# `schemas.param_est` instead of `dict["model_llm"]` / attribute soup.
 LLMs = namedtuple("LLMs", ["model", "param_est", "model_jax"])
 PromptSchemas = namedtuple("PromptSchemas", ["model", "param_est", "jax_model"])
 
 
 def _git_state() -> tuple[str, bool]:
-    """Return (sha, dirty) for the current git HEAD.
+    """Returns the current Git HEAD SHA and a boolean indicating if the worktree is dirty.
 
-    Captured at TaskSpec construction so saved task_spec.yaml records exactly
-    which commit produced a run. `dirty=True` means there were uncommitted
-    changes, so the sha alone is not enough to reproduce the run.
+    This function is used to capture the exact state of the repository at the time
+    a `TaskSpec` is constructed.
+
+    Returns:
+        tuple[str, bool]: A tuple containing:
+            - sha (str): The full SHA of the Git HEAD commit. Returns "unknown" if
+              Git command fails.
+            - dirty (bool): True if there are uncommitted changes in the worktree;
+              False otherwise. Returns True if Git status command fails.
     """
     try:
         sha = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
         ).strip()
     except Exception:
         sha = "unknown"
     try:
         dirty = bool(
             subprocess.check_output(
-                ["git", "status", "--porcelain"], cwd=PROJECT_ROOT, text=True
+                ["git", "status", "--porcelain"], cwd=REPO_ROOT, text=True
             ).strip()
         )
     except Exception:
@@ -74,30 +78,72 @@ def _git_state() -> tuple[str, bool]:
 
 @dataclass
 class TaskSpec:
+    """Frozen bundle of everything needed to run (or re-run) an EDGAR experiment.
+
+    TaskSpec serves two primary purposes:
+    1.  **Initialization**: Loads and merges all configuration parameters, project-specific
+        callable functions (e.g., data loader, loss function, plot function), and
+        seed programs into a single, ready-to-use object.
+    2.  **Reproducibility**: Saves a complete record of the exact settings and
+        source code references used, allowing for precise reproduction of past
+        experimental runs.
+
+    This dataclass is immutable (`frozen=True`) to ensure that the configuration
+    and state of an experiment remain consistent once initialized.
+
+    Attributes:
+        task_name (str): Human-readable name of the project (e.g., "orientation_tuning").
+        git_sha (str): Full SHA of the git HEAD commit at TaskSpec construction time.
+            Ensures exact code version traceability.
+        git_dirty (bool): True if the worktree had uncommitted changes when the
+            TaskSpec was built, indicating the SHA alone is not sufficient for
+            reproduction.
+        project_dir (Path): Absolute path to the project directory, which is the
+            source of custom callables and seed programs.
+        io (dict): Dictionary of I/O configuration parameters, controlling aspects
+            like save paths.
+        evolution (dict): Dictionary of evolutionary algorithm configuration parameters,
+            such as number of generations, population sizes, etc.
+        llms (dict): Dictionary of Large Language Model configuration parameters,
+            including model names and potentially API settings.
+        scoring (dict): Dictionary of scoring configuration parameters, such as
+            gradient descent settings or complexity penalties.
+        run (dict): Dictionary of general run-time configuration parameters,
+            including the random seed.
+        project_params (dict): Dictionary of project-specific parameters passed to
+            functions like `load_data_fn`.
+        model_prompt_schema (PromptSchema): Schema defining the prompt structure for
+            generating new candidate models.
+        param_est_prompt_schema (PromptSchema): Schema defining the prompt structure for
+            generating parameter estimator functions.
+        jax_model_prompt_schema (PromptSchema): Schema defining the prompt structure for
+            translating NumPy models to JAX.
+        load_data_fn (Callable): Function to load training, validation, and evaluation
+            data for the project. Signature:
+            `load_data(data_path, **project_params) -> (X_disc, X_val, X_eval)`.
+        loss_fn (Callable): Project-specific loss function used by the scoring
+            sandbox to evaluate model predictions against held-out data.
+        plot_fn (Callable | None): Optional function to render model-fit images for
+            LLM image-feedback prompts. None if the project does not provide
+            `image_feedback/plot.py`.
+        creation_timestamp (str): Timestamp set at construction, used to create the
+            hierarchical on-disk layout `<save_path>/MM-DD/HH-MM-SS/`.
+        seed_programs (list[Program]): Hand-written seed programs (typically 2) that
+            bootstrap the initial population. These programs are loaded from
+            `<project_dir>/seed_programs/modelN.py + param_estN.py` pairs.
+        rng (np.random.Generator): A single seeded NumPy random number generator
+            for the entire run. Ensures reproducibility of stochastic processes
+            like spawning, migration, and Boltzmann sampling based on `run.random_seed`.
     """
-    Frozen bundle of everything needed to run (or re-run) an experiment.
 
-    Job 1: load and merge all config + project code into ready-to-use fields.
-    Job 2: save a record of the exact settings used so the run can be reproduced.
-
-    Constructed via from_config (live run) or from_record (reproduce a past run).
-    """
-
-    # ── identity ──
-    # Human-readable name of the project (e.g. "orientation_tuning").
     task_name: str
 
-    # Full SHA of the git HEAD commit at TaskSpec construction time.
     git_sha: str
 
-    # True if the worktree had uncommitted changes when the TaskSpec was built.
     git_dirty: bool
 
-    # Absolute path to the project directory (source of callables and seed programs).
     project_dir: Path
 
-    # ── config subsections — plain dicts, passed through to the functions that need them
-    # TODO: Put documentation for these in io/config.py
     io: dict
 
     evolution: dict
@@ -110,64 +156,50 @@ class TaskSpec:
 
     project_params: dict
 
-    # ── prompt schemas — one per LLM role, built from merged prompt yamls ──
-    # Schema for the "generate a new candidate model" prompt.
     model_prompt_schema: PromptSchema
 
-    # Schema for the "generate a parameter estimator function" prompt.
     param_est_prompt_schema: PromptSchema
 
-    # Schema for the "translate a numpy model to JAX" prompt.
     jax_model_prompt_schema: PromptSchema
 
-    # ── project callables — loaded from <project_dir>/data_loader/ and image_feedback/ ──
-    # Loads training/validation/eval data for this project.
-    # Signature: load_data(data_path, **project_params) ->
-    #   ((X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval)
     load_data_fn: Callable
 
-    # Project-specific loss function used by the scoring sandbox to score
-    # predictions against held-out data.
     loss_fn: Callable
 
-    # Optional: renders model-fit images for image-feedback prompts. None if the
-    # project has no `image_feedback/plot.py`.
     plot_fn: Callable | None
 
-    # ── runtime state ──
-    # Timestamp set at construction, produces on-disk layout `<save_path>/MM-DD/HH-MM-SS/`.
     creation_timestamp: str = field(
         default_factory=lambda: datetime.now().strftime("%m-%d/%H-%M-%S")
     )
 
-    # Hand-written seed programs (typically 2) that bootstrap the population.
-    # Loaded from <project_dir>/seed_programs/modelN.py + param_estN.py pairs.
     seed_programs: list[Program] = field(default_factory=list)
 
-    # Single seeded RNG for the whole run. Use this instead of `np.random` so
-    # spawning, migration, and Boltzmann sampling are reproducible from the
-    # `run.random_seed` config value.
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
 
     # ── constructors ──
 
     @classmethod
     def from_config(cls, config: Config) -> TaskSpec:
-        """
-        Build a TaskSpec from a Config object.
+        """Build a TaskSpec object from a given `Config` object.
 
-        Callables, git state, and creation_timestamp are always fresh.
-        Use Config.from_yaml for a new run, Config.from_taskspec to reproduce a past run.
+        This factory method loads all necessary callables (data loader, loss function,
+        optional plotting function) from the project directory, extracts Git state,
+        and initializes seed programs. It serves as the primary way to create a
+        `TaskSpec` for either a new run or to reproduce a past run.
 
         Args:
-            config: A Config object built from Config.from_yaml or Config.from_taskspec.
+            config: A `Config` object, typically built from `Config.from_yaml` for
+                a new run or `Config.from_taskspec` to reproduce a past run.
+
+        Returns:
+            TaskSpec: A fully initialized and frozen `TaskSpec` object ready for an
+                EDGAR experiment.
+
+        Raises:
+            ValueError: If `load_data.py` does not define `load_data()` or `loss_fn()`.
         """
         task_name = config.task_name
 
-        # Project callables are loaded from .py source rather than imported, so the
-        # same machinery (load_function_from_source) handles seed code, LLM-generated
-        # code, and project code on one path. The cost is that import errors surface
-        # as `None` returns instead of ImportError, hence the explicit None checks.
         data_loader_path = config.project_dir / "data_loader" / "load_data.py"
         load_data_fn = load_function_from_source(
             data_loader_path.read_text(), "load_data"
@@ -187,10 +219,6 @@ class TaskSpec:
 
         git_sha, git_dirty = _git_state()
 
-        # Seed programs are paired by filename suffix: model1.py with param_est1.py,
-        # model2.py with param_est2.py, ... sorted alphanumerically. They get
-        # sentinel birth fields (generation=-1, island=-1) so downstream code can
-        # cheaply distinguish hand-written seeds from LLM-evolved descendants.
         seed_dir = config.project_dir / "seed_programs"
         seed_programs = []
         for batch_idx, model_path in enumerate(sorted(seed_dir.glob("model*.py"))):
@@ -234,14 +262,19 @@ class TaskSpec:
     # ── persistence ──
 
     def save(self, run_dir: Path) -> Path:
-        """
-        Write task_spec.yaml for reproducibility.
+        """Writes the current `TaskSpec` to a `task_spec.yaml` file.
+
+        This method serializes the `TaskSpec`'s configuration, Git state, creation
+        timestamp, project directory, seed programs, and prompt schemas into a YAML
+        file. After writing, it strips write permissions from the file to prevent
+        accidental modification, ensuring the saved specification accurately reflects
+        the experiment that produced it.
 
         Args:
-            run_dir: Directory to save task_spec.yaml into
+            run_dir: The directory where the `task_spec.yaml` file should be saved.
 
         Returns:
-            Path to the saved task_spec.yaml file
+            Path: The path to the newly saved `task_spec.yaml` file.
         """
         record = {
             "task_name": self.task_name,
@@ -282,23 +315,35 @@ class TaskSpec:
     # ── generation schedule ──
 
     def schedule(self, generation: int) -> tuple[str, float, LLMs]:
-        """
-        Return (mode, temperature, llms) for a given generation.
+        """Returns the operational mode, temperature, and specific LLMs for a given generation.
 
-        temperature = `1 + exp(-generation / n_generations)`, so decay is from 2 -> 1.37.
-        The [1.37, 2.0] range is the **Gemini scale** (range [0, 2]).
-        Anthropic only accepts [0, 1]; when the resolved model is an
-        AnthropicModel, call_llm rescales by /2 to map [1.37, 2.0] → [0.685, 1.0].
-        See `src/llm/llm_calling.py:_build_model` + the rescale guard right after.
+        The `temperature` for LLM generation follows a decaying schedule:
+        `temperature = 1 + exp(-generation / n_generations)`. This results in a decay
+        from 2.0 (at generation 0) towards 1.37 (as `generation` approaches
+        `n_generations`). This range [1.37, 2.0] is considered the **Gemini scale**.
+        For LLM providers like Anthropic, which typically accept temperatures in the
+        range [0, 1], the `call_llm` function in `llm_calling.py` handles the necessary
+        rescaling (e.g., mapping [1.37, 2.0] to [0.685, 1.0]) to ensure consistent
+        behavior.
+
+        The `mode` transitions from "explore" (first half of generations) to "exploit"
+        (second half), guiding the LLM's behavior towards either novelty or refinement.
+        LLMs for model generation, parameter estimation, and JAX translation can be
+        specified as single models or as lists to cycle through per generation.
 
         Args:
-            generation: Generation number (0-indexed)
+            generation: The current generation number (0-indexed) of the evolutionary algorithm.
 
         Returns:
-            tuple: (mode, temperature, llms) where:
-                - mode: "explore" for first half of generations, "exploit" for second half
-                - temperature: Gemini-scale [1.37, 2.0]; rescaled at the call site for Anthropic
-                - llms: namedtuple with llm.model, llm.param_est and llm.model_jax specifying the LLM to be used this generation
+            tuple[str, float, LLMs]: A tuple containing:
+                - mode (str): "explore" if the generation is in the first half of the run,
+                  "exploit" otherwise.
+                - temperature (float): The Gemini-scale temperature ([1.37, 2.0]) for
+                  LLM generation. This value will be rescaled at the call site for
+                  LLMs with different accepted temperature ranges (e.g., Anthropic).
+                - llms (LLMs): A namedtuple providing the specific LLM models to be
+                  used for `model` generation, `param_est` generation, and `model_jax`
+                  translation in this generation.
         """
         import numpy as np
 
@@ -325,20 +370,29 @@ class TaskSpec:
 
     @property
     def output_dir(self) -> str:
+        """Returns the full path to the run's output directory.
+
+        This path is constructed by combining the base save path from `io`
+        configuration and the unique `creation_timestamp` of this `TaskSpec`.
+
+        Returns:
+            str: The absolute path to the run's output directory.
+        """
         return os.path.join(self.io["save_path"], self.creation_timestamp)
 
     @property
     def flat_config(self) -> dict:
-        """
-        Merge all config sections into a single dict for prompt variable lookup.
+        """Merges relevant configuration sections into a single dictionary for prompt variable lookup.
 
-        Prompts declare their `config_vars` by name (e.g. `num_parents`, `max_lines`,
-        `swear_words`) without specifying which section the var lives in. Returning a
-        flat merged dict lets the prompt-building code look up any var without
-        plumbing the section through.
+        This property flattens configuration parameters from the `evolution`, `llms`,
+        and `scoring` sections into a single dictionary. This is particularly useful
+        for prompt templating, where prompts declare variables by name (e.g.,
+        `num_parents`, `max_lines`) without needing to know which specific
+        configuration section they belong to.
 
         Returns:
-            dict combining evolution, llms, and scoring config sections
+            dict: A merged dictionary containing configuration parameters from the
+                `evolution`, `llms`, and `scoring` sections.
         """
         return {**self.evolution, **self.llms, **self.scoring}
 
@@ -346,11 +400,15 @@ class TaskSpec:
 
     @property
     def prompt_schemas(self) -> PromptSchemas:
-        """
-        Get all prompt schemas as a namedtuple.
+        """Retrieves all prompt schemas as a namedtuple for convenient access.
+
+        This property provides an ergonomic way to access the `PromptSchema` objects
+        for model generation, parameter estimator generation, and JAX model translation
+        using attribute-style access (e.g., `spec.prompt_schemas.model`).
 
         Returns:
-            PromptSchemas with model, param_est, and jax PromptSchema objects
+            PromptSchemas: A namedtuple containing `PromptSchema` objects for
+                `model`, `param_est`, and `jax_model` generation.
         """
         return PromptSchemas(
             model=self.model_prompt_schema,
@@ -360,13 +418,21 @@ class TaskSpec:
 
     @staticmethod
     def _extract_default_params(model_code: str) -> dict:
-        """Read DEFAULT_PARAMS attached to a model function.
+        """Reads the `DEFAULT_PARAMS` dictionary attached to a model function's source code.
 
-        By convention, seed model files attach a DEFAULT_PARAMS dict to the `model`
-        function (typically via a decorator). The pipeline uses these as the
-        starting point for gradient-descent parameter fitting before scoring; if
-        the attribute is missing, returns None and the program is treated as
-        having no provided defaults.
+        By convention, seed model files can attach a `DEFAULT_PARAMS` dictionary
+        as an attribute to their `model` function (often via a decorator). These
+        parameters serve as the initial guess for gradient-descent parameter
+        fitting before a program is scored. This method safely loads the model
+        function from its source code and attempts to retrieve this attribute.
+
+        Args:
+            model_code: A string containing the Python source code of a model.
+
+        Returns:
+            dict: The `DEFAULT_PARAMS` dictionary if found, otherwise None. If the
+                `model_code` is invalid or `model` function cannot be loaded,
+                `None` is returned.
         """
         func = load_function_from_source(model_code, "model")
         default_params = getattr(func, "DEFAULT_PARAMS", None)

@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..evolution.program import Program
 
@@ -19,9 +19,27 @@ if TYPE_CHECKING:
 def generate_feedback_image(
     spec: TaskSpec, data: dict, parents: list[Program], program: Program
 ) -> bytes | None:
-    """
-    Renders a model-fit image for image-feedback prompts using spec.plot_fn.
-    Saves it to spec.output_dir/image_feedback/gen_NNN/island_NNN/batch_NNN/image.png.
+    """Renders a model-fit image for image-feedback prompts.
+
+    This function uses the project-specific `plot_fn` defined in the `TaskSpec`
+    to generate a visualization of a program's model fit, often comparing it
+    to parent programs or ground truth data. The generated image serves as
+    multimodal feedback for Large Language Models during program generation.
+    The image is saved to a structured directory within the run output.
+
+    Args:
+        spec: The `TaskSpec` object containing configuration and callable
+            functions, including the `plot_fn`.
+        data: The input data (e.g., `X_discover`) required by the `plot_fn`
+            to render the model's performance.
+        parents: A list of `Program` objects that served as parents for the
+            current `program`. These are often included in the plot for
+            contextual feedback to the LLM.
+        program: The `Program` object for which the feedback image is being
+            generated.
+
+    Returns:
+        The raw bytes of the generated image if successful, otherwise `None`.
     """
     if spec is None or spec.plot_fn is None or data is None:
         return None
@@ -45,11 +63,24 @@ def generate_feedback_image(
 
 
 def generate_program_fits(
-    spec: TaskSpec, data: dict, programs: list[Program] | any
+    spec: TaskSpec, data: dict, programs: list[Program] | Any
 ) -> None:
-    """
-    Generates a comparison plot for each program showing fit with params_init (from estimator)
-    and final params (post-GD). Saves to spec.output_dir/image_fits/P{idx:04d}.png.
+    """Generates a comparison plot for each program showing initial and final model fits.
+
+    For each provided program, this function uses the project-specific `plot_fn`
+    to visualize the model's performance with its initial parameters (estimated
+    by the parameter estimator) and its final, optimized parameters (after
+    gradient descent). These plots are saved to the `image_fits` directory
+    within the run output and are typically used for post-hoc analysis and
+    dashboard display.
+
+    Args:
+        spec: The `TaskSpec` object containing configuration and callable
+            functions, including the `plot_fn`.
+        data: The input data (e.g., `X_discover`) required by the `plot_fn`
+            to render the model's performance.
+        programs: A list of `Program` objects for which comparison plots
+            should be generated.
     """
     if spec.plot_fn is None:
         return

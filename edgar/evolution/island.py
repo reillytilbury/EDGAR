@@ -1,40 +1,36 @@
 """
-island.py
+Provides core operations for managing "islands" in the evolutionary algorithm,
+including program seeding, spawning, sampling, pruning, migration, and deduplication,
+as well as the persistence of island membership history.
 
-Operations on islands (plain set[int] of global Population indices) and
-island census persistence.
+An island is represented as a set of global `Program` indices. The `island_census`
+tracks the membership of each island across generations, enabling historical analysis.
 
-Single-island operations (prune, sample, deduplicate) take a set of Program
-objects resolved from the island and return a new set of global indices.
-Cross-island operation (deduplicate_islands) takes two program sets and resets
-the worse island to the two seed programs {0, 1} if the islands are duplicates.
-
-island_census tracks each island's membership at the end of every generation:
-
-    census[island_id][generation] -> set[int]
+The module implements single-island operations such as pruning, which reduces
+an island to its best programs, and sampling, which selects programs based on
+uniform or Boltzmann distributions. Cross-island operations, like migration
+and deduplication, facilitate genetic exchange and maintain diversity and efficiency
+across the entire population.
 
 Example usage:
---------------
-    programs_0 = {popn[i] for i in island_0}
-    programs_1 = {popn[i] for i in island_1}
 
-    # prune island_0 to 10 best programs
-    island_0 = prune(programs_0, keep_n=10)              # set[int]
+    # Assume `population` is an initialized Population object and `islands` is a list of sets.
+    programs_0 = [population[i] for i in islands[0]]
+    programs_1 = [population[i] for i in islands[1]]
 
-    # sample 2 parents via Boltzmann distribution
-    parents = boltzmann_sample(programs_0, k=2, temperature=1.0)   # set[int]
+    # Prune island_0 to retain the 10 best programs.
+    prune(islands, population, evolution_config_dict)
 
-    # migration — union with a sample from another island
-    island_1 = island_1 | uniform_sample(programs_0, k=2)
+    # Sample 2 parents from island_0 using a Boltzmann distribution.
+    parents = boltzmann_sample(programs_0, k=2, temperature=1.0, rng=np.random.default_rng())
 
-    # within-island deduplication
-    island_0 = deduplicate(programs_0)                   # set[int]
+    # Migrate 2 programs from island_0 to island_1 via uniform sampling.
+    islands[1].update(uniform_sample(programs_0, k=2, rng=np.random.default_rng()))
 
-    # TODO: describe old cross-island deduplication
+    # Perform within-island and cross-island deduplication.
+    deduplicate(islands, population, evolution_config_dict)
 
-    # append current island state to census each generation
-    for island_id, island in enumerate(islands):
-        census[island_id].append(set(island))
+    # Save the current island census after each generation.
     save_island_census(census, "census.json")
 """
 
@@ -54,11 +50,24 @@ from .population import Population
 def seed(
     population: Population, seed_programs: list[Program], n_islands: int
 ) -> list[set[int]]:
-    """
-    Add seed programs to population and initialize islands.
+    """Adds seed programs to the population and initializes all islands.
 
-    Mutates: population (adds seed programs)
-    Returns: islands — list of n_islands sets, each containing all seed indices
+    This function adds the initial set of `Program` objects to the global `Population`
+    and then creates `n_islands` identical islands, each containing the indices
+    of all seed programs.
+
+    Args:
+        population: The global `Population` object to which seed programs will be added.
+            This object is mutated.
+        seed_programs: A list of initial `Program` objects to seed the population.
+        n_islands: The total number of islands to create.
+
+    Returns:
+        A list of `n_islands` sets, where each set contains the global indices
+        of all `seed_programs`.
+
+    Raises:
+        AssertionError: If the initial `population` is not empty.
     """
     assert len(population) == 0, "Initial population must be empty"
     for program in seed_programs:
@@ -78,14 +87,26 @@ def spawn(
     num_parents: int,
     rng: np.random.Generator,
 ) -> None:
-    """
-    Sample parents from each island and create empty Program shells.
-    Adds shells to population and their birth island.
+    """Samples parents from each island and creates empty `Program` shells.
 
-    Each shell gets a BirthCertificate record (generation, island, batch_index, parents,
-    mode, temperature) but no code yet.
+    For each island, this function samples `num_parents` programs (uniformly at random)
+    and uses their indices to create `batch_size` new `Program` shells. Each shell
+    receives a `BirthCertificate` detailing its origin (generation, island, batch index,
+    parentage, mode, and temperature). These new shells are added to the global
+    `population` and their respective birth islands. The shells do not contain
+    any code yet; their code will be generated by LLMs in a subsequent step.
 
-    Mutates: population (adds shells), islands (adds new indices)
+    Args:
+        population: The global `Population` object where new program shells will be added.
+            This object is mutated.
+        islands: A list of island sets, where each set contains program indices.
+            These sets are mutated to include the indices of newly spawned programs.
+        generation: The current generation number of the evolutionary run.
+        mode: The current operational mode (e.g., "explore" or "exploit").
+        temperature: The temperature parameter used for LLM generation in this generation.
+        batch_size: The number of new programs to spawn for each island in the current batch.
+        num_parents: The number of parent programs to sample for each new child program.
+        rng: The NumPy random number generator to use for sampling parents.
     """
     for island_idx, island in enumerate(islands):
         programs = [population[i] for i in island]
@@ -112,13 +133,21 @@ def spawn(
 
 
 def prune(islands: list[set[int]], population: Population, evolution: dict) -> None:
-    """Prune each island to critical_population_size - n_migrants best programs, mutating islands in-place.
-    This ensures that after migration, each island has at most critical_population_size programs
+    """Prunes each island to a fixed number of the best-performing programs.
+
+    This function iterates through each island and sorts its programs based on their
+    `discover.final` loss. It retains only the `critical_population_size - n_migrants`
+    best programs. Programs with `None` or `inf` losses are explicitly handled by
+    being assigned `float("inf")` for sorting purposes, ensuring they are ranked
+    as the worst performers.
 
     Args:
-        islands: list of island sets (each set contains program indices)
-        population: Population object to resolve indices to Programs
-        evolution: evolution config dict containing critical_population_size
+        islands: A list of island sets (each set contains program indices).
+            The sets in this list are mutated in-place.
+        population: The global `Population` object used to resolve program indices
+            to `Program` objects for loss evaluation.
+        evolution: A dictionary containing evolutionary configuration parameters,
+            specifically `critical_population_size` and `n_migrants`.
     """
     keep_n = evolution["critical_population_size"] - evolution["n_migrants"]
     for i, island in enumerate(islands):
@@ -138,11 +167,18 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
 def uniform_sample(
     programs: list[Program], k: int, rng: np.random.Generator
 ) -> set[int]:
-    """
-    Sample k global indices uniformly at random.
+    """Samples `k` global program indices uniformly at random from a list of programs.
 
-        programs_0 = [pop[i] for i in island_0]
-        parents    = uniform_sample(programs_0, k=2)  # e.g. {0, 2}
+    Args:
+        programs: A list of `Program` objects from which to sample.
+        k: The number of program indices to sample.
+        rng: The NumPy random number generator to use for sampling.
+
+    Returns:
+        A set of `k` global program indices.
+
+    Raises:
+        ValueError: If `k` is greater than the number of available programs.
     """
     if k > len(programs):
         raise ValueError(
@@ -155,17 +191,33 @@ def uniform_sample(
 def boltzmann_sample(
     programs: list[Program], k: int, temperature: float, rng: np.random.Generator
 ) -> set[int]:
-    r"""
-    Sample k global indices using a Boltzmann distribution over relative,
-    std-normalised losses. High temperature → uniform, low → best dominate.
-    Programs are sampled from the prob. distribution:
-    Math:
-        P_i = exp(g_i) / sum_j(exp(g_j)),
-        g_i = -z_i / max(temperature, 1e-3),
-        z_i = (loss_i - loss_min) / (std_loss + 1e-6)
+    r"""Samples `k` global program indices using a Boltzmann distribution.
 
-        programs_0 = [pop[i] for i in island_0]
-        parents    = boltzmann_sample(programs_0, k=2, temperature=1.0)  # e.g. {0, 2}
+    The probability of selecting a program is based on its `discover.final` loss,
+    with fitter programs (lower loss) having a higher probability of selection.
+    The `temperature` parameter controls the selection pressure: a high temperature
+    results in a more uniform sampling, while a low temperature causes the best
+    programs to dominate the selection. `NaN` and `inf` losses are converted to
+    a finite large value (`worst_finite + 1.0`) to ensure robust probability calculation.
+
+    The probability $P_i$ for selecting program $i$ is calculated as:
+    $$ P_i = \frac{e^{g_i}}{\sum_j e^{g_j}} $$
+    where:
+    $$ g_i = \frac{-z_i}{\max(\text{temperature}, 10^{-3})} $$
+    $$ z_i = \frac{\text{loss}_i - \text{loss}_{\min}}{\text{std}_{\text{loss}} + 10^{-6}} $$
+
+    Args:
+        programs: A list of `Program` objects from which to sample.
+        k: The number of program indices to sample.
+        temperature: The temperature parameter for the Boltzmann distribution.
+            Higher values lead to more exploration, lower values to more exploitation.
+        rng: The NumPy random number generator to use for sampling.
+
+    Returns:
+        A set of `k` global program indices.
+
+    Raises:
+        ValueError: If `k` is greater than the number of available programs.
     """
     if k > len(programs):
         raise ValueError(
@@ -206,17 +258,28 @@ def migrate(
     temperature: float,
     rng: np.random.Generator,
 ) -> None:
-    """Sample migrants from each island via Boltzmann distribution and add to topology destination.
+    """Samples migrants from each island and transfers them to destination islands.
 
-    For each island i, sample n_migrants programs using Boltzmann distribution (biased toward
-    better programs) and add them to the destination island specified by topology[i].
-    Mutates islands in-place.
+    For each island, `n_migrants` programs are sampled using a Boltzmann distribution
+    (biased towards better-performing programs). These sampled programs are then
+    added to their respective destination islands, as defined by the `topology`
+    configuration. The `temperature` parameter from the schedule is warped
+    ($T_{\text{warped}} = (T - 1.0)^4$) to create a sharp decay, making migration
+    strongly selective later in the run.
 
     Args:
-        islands: list of island sets (each set contains program indices)
-        population: Population object to resolve indices to Programs
-        evolution: evolution config dict containing n_migrants and topology
-        temperature: temperature for Boltzmann sampling
+        islands: A list of island sets (each set contains program indices).
+            This list and its contained sets are mutated in-place.
+        population: The global `Population` object used to resolve program indices
+            to `Program` objects for Boltzmann sampling.
+        evolution: A dictionary containing evolutionary configuration parameters,
+            specifically `n_migrants` and `topology`.
+        temperature: The base temperature from the generation schedule. This value
+            is warped before being used in Boltzmann sampling for migration.
+        rng: The NumPy random number generator to use for sampling migrants.
+
+    Raises:
+        ValueError: If the length of the `topology` does not match the number of islands.
     """
     # Temperature needs warping before being passed to boltzmann_sample.
     # Raw temperature from schedule() lives in [1, 2]. The correct transform is
@@ -251,6 +314,14 @@ def migrate(
 
 
 def _loss(p: Program) -> float:
+    """Retrieves the final discover loss of a program, handling None values.
+
+    Args:
+        p: The `Program` object.
+
+    Returns:
+        The final discover loss as a float. Returns `float("inf")` if the loss is `None`.
+    """
     v = p.program_losses.discover.final
     return v if v is not None else float("inf")
 
@@ -258,6 +329,23 @@ def _loss(p: Program) -> float:
 def _are_duplicates(
     p_i: Program, p_j: Program, loss_tol: float, cosine_tol: float
 ) -> bool:
+    """Checks if two programs are considered duplicates based on multiple criteria.
+
+    Two programs are identified as duplicates if they satisfy all of the following conditions:
+    1. They have the same number of parameters (`n_params`).
+    2. Their `discover.final` losses are within a specified `loss_tol`.
+    3. The cosine similarity of their `eval_fingerprint` arrays is greater than or equal
+       to a specified `cosine_tol`.
+
+    Args:
+        p_i: The first `Program` object to compare.
+        p_j: The second `Program` object to compare.
+        loss_tol: The absolute tolerance for the difference in `discover.final` losses.
+        cosine_tol: The minimum cosine similarity required between `eval_fingerprint` arrays.
+
+    Returns:
+        True if the two programs are considered duplicates, False otherwise.
+    """
     if p_i.n_params is None or p_j.n_params is None or p_i.n_params != p_j.n_params:
         return False
     if p_i.eval_fingerprint is None or p_j.eval_fingerprint is None:
@@ -283,20 +371,22 @@ def deduplicate_inner(
     loss_tol: float = 0.01,
     cosine_tol: float = 0.95,
 ) -> None:
-    """Remove near-duplicate programs within each island, mutating islands in-place.
+    """Removes near-duplicate programs within each island.
 
-    Two programs are considered duplicates if they pass all three checks:
-        1. same number of parameters
-        2. losses within loss_tol of each other
-        3. cosine similarity of eval fingerprints >= cosine_tol
-
-    For each duplicate pair, keeps the lower loss copy.
+    This function iterates through each island and identifies pairs of programs
+    that are considered duplicates based on `_are_duplicates`. For each identified
+    duplicate pair, the program with the higher `discover.final` loss is removed
+    from the island.
 
     Args:
-        islands: list of island sets (each set contains program indices)
-        population: Population object to resolve indices to Programs
-        loss_tol: loss tolerance for duplicate detection
-        cosine_tol: cosine similarity tolerance for duplicate detection
+        islands: A list of island sets (each set contains program indices).
+            The sets in this list are mutated in-place.
+        population: The global `Population` object used to resolve program indices
+            to `Program` objects for comparison.
+        loss_tol: The absolute tolerance for the difference in `discover.final` losses
+            to consider programs as duplicates. Defaults to 0.01.
+        cosine_tol: The minimum cosine similarity between `eval_fingerprint` arrays
+            to consider programs as duplicates. Defaults to 0.95.
     """
     for i, island in enumerate(islands):
         programs = [population[idx] for idx in island]
@@ -325,33 +415,55 @@ def deduplicate_outer(
     loss_tol: float = 0.01,
     cosine_tol: float = 0.99,
 ) -> None:
-    """Remove cross-island duplicate programs, keeping the lower-loss copy. Note: assumes deduplicate_inner has already been applied to ensure at most one duplicate of a program on the other island.
+    """Removes duplicate programs across different islands, prioritizing lower-loss copies.
 
-    For each pair of islands, skips the pair if either has fewer than min_island_size programs.
-    Otherwise iterates over all program pairs and removes the higher-loss duplicate
-    immediately upon detection. Ties are broken by keeping the program in the
-    lower-indexed island. Mutates islands in-place.
+    This function compares programs between all pairs of islands. It only performs
+    cross-island deduplication if both islands in a pair have at least `min_island_size`
+    programs. When a duplicate pair is found, the program with the higher
+    `discover.final` loss is removed. In case of a tie in loss, the program from the
+    higher-indexed island is removed. This function assumes that `deduplicate_inner`
+    has already been applied, ensuring at most one duplicate of a program on any
+    given island.
 
     Args:
-        islands: list of island sets (each set contains program indices)
-        population: Population object to resolve indices to Programs
-        min_island_size: minimum island size required to attempt cross-island deduplication
-        loss_tol: loss tolerance for duplicate detection
-        cosine_tol: cosine similarity tolerance for duplicate detection
+        islands: A list of island sets (each set contains program indices).
+            The sets in this list are mutated in-place.
+        population: The global `Population` object used to resolve program indices
+            to `Program` objects for comparison.
+        min_island_size: The minimum number of programs an island must have for
+            cross-island deduplication to be attempted. Defaults to 6.
+        loss_tol: The absolute tolerance for the difference in `discover.final` losses
+            to consider programs as duplicates. Defaults to 0.01.
+        cosine_tol: The minimum cosine similarity between `eval_fingerprint` arrays
+            to consider programs as duplicates. Defaults to 0.99.
     """
-    islands = [island for island in islands if len(island) >= min_island_size]
+    # Filter out islands that are too small for outer deduplication.
+    # Note: This is a copy of the list of sets, but not copies of the sets themselves.
+    # So `islands[loser_island].remove(loser_idx)` still modifies the original islands list.
+    filtered_islands = [
+        (idx, island)
+        for idx, island in enumerate(islands)
+        if len(island) >= min_island_size
+    ]
 
-    for i, j in combinations(range(len(islands)), 2):
-        snapshot_i = list(islands[i])
-        snapshot_j = list(islands[j])
+    for i_idx, j_idx in combinations(range(len(filtered_islands)), 2):
+        original_idx_i, island_i = filtered_islands[i_idx]
+        original_idx_j, island_j = filtered_islands[j_idx]
+
+        snapshot_i = list(island_i)
+        snapshot_j = list(island_j)
 
         for idx_j in snapshot_j:
-            if idx_j not in islands[j]:
+            if (
+                idx_j not in islands[original_idx_j]
+            ):  # Check if it hasn't been removed by a previous deduplication
                 continue
             p_j = population[idx_j]
 
             for idx_i in snapshot_i:
-                if idx_i not in islands[i]:
+                if (
+                    idx_i not in islands[original_idx_i]
+                ):  # Check if it hasn't been removed by a previous deduplication
                     continue
                 p_i = population[idx_i]
 
@@ -359,14 +471,15 @@ def deduplicate_outer(
                     continue
 
                 if _loss(p_i) < _loss(p_j):
-                    loser_island, loser_idx = j, idx_j
+                    loser_original_island_idx, loser_idx = original_idx_j, idx_j
                 elif _loss(p_i) > _loss(p_j):
-                    loser_island, loser_idx = i, idx_i
+                    loser_original_island_idx, loser_idx = original_idx_i, idx_i
                 else:
-                    loser_island, loser_idx = j, idx_j  # tie: keep lower island index
+                    # Tie in loss: keep program from the lower-indexed island
+                    loser_original_island_idx, loser_idx = original_idx_j, idx_j
 
-                islands[loser_island].remove(loser_idx)
-                break  # deduplicate_inner guarantees at most one duplicate of a program on the other island (each island has unique programs)
+                islands[loser_original_island_idx].remove(loser_idx)
+                break  # _deduplicate_inner ensures at most one duplicate of a program on the other island
 
 
 def deduplicate(
@@ -376,18 +489,28 @@ def deduplicate(
     loss_tol: float = 0.01,
     cosine_tol: float = 0.95,
 ) -> None:
-    """Apply within-island and between-island deduplication, mutating islands in-place.
+    """Applies both within-island and between-island deduplication to the population.
 
-    First removes duplicates within each island, then checks adjacent islands for
-    cross-island duplicates and resets worse islands if needed.
+    This function first calls `deduplicate_inner` to remove redundant programs
+    within each island. Subsequently, it calls `deduplicate_outer` to eliminate
+    duplicates found across different islands. The `min_island_size` for
+    cross-island deduplication is dynamically calculated as 75% of the
+    `critical_population_size` specified in the evolution configuration.
 
     Args:
-        islands: list of island sets (each set contains program indices)
-        population: Population object to resolve indices to Programs
-        evolution: evolution config dict containing loss_tol, cosine_tol, min_island_size
+        islands: A list of island sets (each set contains program indices).
+            The sets in this list are mutated in-place.
+        population: The global `Population` object used to resolve program indices
+            to `Program` objects.
+        evolution: A dictionary containing evolutionary configuration parameters,
+            specifically `critical_population_size`.
+        loss_tol: The absolute tolerance for the difference in `discover.final` losses
+            to consider programs as duplicates. Defaults to 0.01.
+        cosine_tol: The minimum cosine similarity between `eval_fingerprint` arrays
+            to consider programs as duplicates. Defaults to 0.95.
     """
     n_critical = evolution.get("critical_population_size", 12)
-    min_island_size = (
+    min_island_size = int(
         0.75 * n_critical
     )  # only remove cross-island duplicates if both islands have at least 75% of critical population size
 
@@ -401,12 +524,17 @@ def deduplicate(
 
 
 def save_island_census(census: list[list[set[int]]], path: str) -> None:
-    """
-    Save island_census to JSON.
-    census[island_id][generation] is the set of program indices at end of that generation.
+    """Saves the island census to a JSON file.
 
-    Written atomically (write-tmp-then-rename) so a polling reader never sees a
-    partially-written file.
+    The island census tracks the membership of each island at the end of every generation,
+    where `census[island_id][generation]` is a set of program indices. The data is
+    serialized to JSON and written to the specified path atomically (write-tmp-then-rename)
+    to ensure that external readers (e.g., the dashboard) never encounter a partially-written
+    or corrupted file.
+
+    Args:
+        census: A list of lists of sets, representing the island census history.
+        path: The file path where the census will be saved.
     """
     from ..io.status import atomic_write_text
 
@@ -415,6 +543,17 @@ def save_island_census(census: list[list[set[int]]], path: str) -> None:
 
 
 def load_island_census(path: str) -> list[list[set[int]]]:
+    """Loads the island census from a JSON file.
+
+    This function reads a JSON file containing the serialized island census and
+    deserializes it back into the original data structure (list of lists of sets of integers).
+
+    Args:
+        path: The file path from which to load the census.
+
+    Returns:
+        A list of lists of sets, representing the loaded island census history.
+    """
     with open(path) as f:
         data = json.load(f)
     return [[set(s) for s in island] for island in data]

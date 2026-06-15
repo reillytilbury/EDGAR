@@ -1,3 +1,13 @@
+"""Provides robust, retryable, and structured interaction with various Large Language Models.
+
+This module serves as the interface for EDGAR to communicate with LLM providers
+like Google (Gemini) and Anthropic (Claude). It dynamically builds PydanticAI Model
+instances, handles provider-specific configurations (e.g., API keys, temperature
+rescaling for Anthropic), and implements retry mechanisms for transient HTTP errors.
+Additionally, it supports multimodal input (text and images) and structured output
+parsing using Pydantic schemas, ensuring that LLM responses conform to expected formats.
+"""
+
 import asyncio
 import os
 import random
@@ -44,6 +54,16 @@ def _build_model(model_name: str) -> Model:
 
     Reads the matching provider's API key from the environment; raises UserError
     with a clear message if it's missing or the prefix is unknown.
+
+    Args:
+        model_name: The string identifier for the LLM, e.g., "gemini-pro" or "claude-3-sonnet".
+
+    Returns:
+        An instance of `pydantic_ai.models.Model` configured for the specified LLM.
+
+    Raises:
+        UserError: If the required API key for the model provider is not found
+            in the environment, or if the model name prefix is unrecognized.
     """
     if model_name.startswith("gemini-"):
         api_key = os.getenv("GOOGLE_API_KEY")
@@ -67,7 +87,13 @@ def _build_model(model_name: str) -> Model:
 
 
 class _LogRawResponseCapability(AbstractCapability):
-    """Prints the raw model response parts after every model call, before any parsing."""
+    """A PydanticAI capability that prints the raw LLM response after each call.
+
+    This capability intercepts the model response after a request has been made
+    but before any parsing or structured output extraction. It's useful for
+    debugging and understanding the exact content returned by the LLM, including
+    text parts, tool calls, and usage statistics.
+    """
 
     async def after_model_request(
         self,
@@ -76,6 +102,17 @@ class _LogRawResponseCapability(AbstractCapability):
         request_context: ModelRequestContext,
         response: ModelResponse,
     ) -> ModelResponse:
+        """Logs the raw model response details to the console.
+
+        Args:
+            ctx: The PydanticAI run context.
+            request_context: The context of the model request.
+            response: The raw `ModelResponse` received from the LLM.
+
+        Returns:
+            The `ModelResponse` unchanged, allowing it to pass through the
+            capability chain.
+        """
         parts_summary = []
         for part in response.parts:
             if isinstance(part, TextPart):
@@ -98,7 +135,14 @@ class _LogRawResponseCapability(AbstractCapability):
 
 
 class _WarnOnMaxTokensCapability(AbstractCapability):
-    """Warns if the model stopped because it hit the max_tokens limit."""
+    """A PydanticAI capability that warns if the LLM response was truncated.
+
+    This capability checks the `finish_reason` in the model's provider details.
+    If the model stopped due to hitting the `max_tokens` limit or if it returned
+    a malformed function call (often indicative of truncation), a warning is issued.
+    This helps in identifying cases where the LLM might not have completed its
+    response, which can affect the quality of generated code.
+    """
 
     async def after_model_request(
         self,
@@ -107,6 +151,16 @@ class _WarnOnMaxTokensCapability(AbstractCapability):
         request_context: ModelRequestContext,
         response: ModelResponse,
     ) -> ModelResponse:
+        """Checks for truncation and malformed function calls in the LLM response.
+
+        Args:
+            ctx: The PydanticAI run context.
+            request_context: The context of the model request.
+            response: The `ModelResponse` received from the LLM.
+
+        Returns:
+            The `ModelResponse` unchanged.
+        """
         finish_reason = (response.provider_details or {}).get("finish_reason")
         if finish_reason == "MAX_TOKENS":
             warnings.warn(
@@ -163,30 +217,53 @@ async def call_llm(
     log_raw_llm_response: bool = False,
     retry_config: RetryConfig | None = None,
     role: str | None = None,
-):
-    """
-    Call an LLM through PydanticAI and return the parsed output.
+) -> LLMOutputTypes | None:
+    """Calls an LLM through PydanticAI, handling provider-specific settings, retries, and structured output.
+
+    This asynchronous function provides a unified interface for interacting with different
+    LLMs (e.g., Gemini, Claude). It manages the construction of
+    the PydanticAI `Agent`, applies provider-specific temperature rescaling, handles
+    `max_tokens` defaults, and implements a retry mechanism for transient
+    HTTP errors. It also supports multimodal input by optionally including an image with the text prompt.
 
     Args:
         prompt: The text prompt to send to the model.
-        llm_model: The PydanticAI model specifier, e.g. "google-gla:gemini-2.5-flash".
-        output_type: The expected output type. Use `str` for plain text or a Pydantic model
+        llm_model: The PydanticAI model specifier (e.g., "gemini-2.5-flash")
+            or an already constructed `pydantic_ai.models.Model` instance.
+        output_type: The expected output type. Use `str` for plain text or a Pydantic
+            model (`ModelSchema`, `ParamEstSchema`, `TranslationSchema`)
             for structured output.
-        image_bytes: Optional PNG image bytes to include alongside the text prompt.
-        temperature: Sampling temperature for the model.
-        thinking: Optional reasoning effort setting. Can be `True`, `False`, or one of
-            "minimal", "low", "medium", "high", "xhigh".
-        max_tokens: Maximum number of tokens to generate.
+        image_bytes: Optional PNG image bytes to include alongside the text prompt
+            for multimodal LLM calls.
+        temperature: Sampling temperature for the model. Values are on a Gemini-scale
+            ([0, 2]). If an Anthropic model is used and the temperature exceeds 1.0,
+            it will be rescaled to fit Anthropic's [0, 1] range (e.g., [1.37, 2.0]
+            becomes [0.685, 1.0]).
+        thinking: Optional reasoning effort setting, influencing the LLM's response style.
+            Can be `True`, `False`, or one of "minimal", "low", "medium", "high", "xhigh".
+        max_tokens: Maximum number of tokens to generate in the model's response.
+            For Anthropic models, this is explicitly set to 10,000 if `None` is provided,
+            as their API requires it.
+        log_raw_llm_response: If `True`, the raw LLM response (before parsing)
+            will be printed to the console, useful for debugging.
+        retry_config: An optional `RetryConfig` object specifying the retry
+            strategy for transient HTTP errors. If `None`, a default configuration is used.
+        role: Optional role name for the LLM call.
 
     Returns:
-        The model output, either as a string or as an instance of `output_type`.
+        The model's output, either as a string, an instance of the specified `output_type`,
+        or `None` if an `UnexpectedModelBehavior` error occurs after all retries,
+        or if non-retryable errors are encountered during the retry loop.
 
     Raises:
-        UnexpectedModelBehavior: The model responded but its output could not be parsed
-            into `output_type`. Likely a prompt/schema mismatch — not retried.
-        ModelHTTPError: A non-retryable HTTP error (e.g. 400, 401, 403).
-        Other AgentRunError subclasses (UsageLimitExceeded, ModelAPIError, etc.) propagate
-            immediately as they indicate persistent configuration or quota problems.
+        TypeError: If `llm_model` is not a string or a `PydanticAI Model` instance.
+        UserError: If the required API key for the model provider is not found
+            in the environment.
+        ModelHTTPError: A non-retryable HTTP error (e.g., 400, 401, 403) from the LLM provider.
+        ModelAPIError: Indicates a non-HTTP network failure or a generic API issue.
+        UsageLimitExceeded: The LLM provider's usage limits have been hit.
+        Other AgentRunError subclasses: Propagate immediately as they indicate
+            persistent configuration or quota problems.
     """
     if isinstance(llm_model, str):
         model = _build_model(llm_model)

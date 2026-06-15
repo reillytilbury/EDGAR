@@ -1,12 +1,21 @@
 """
-population.py
+Population.py
 
-Population is an append-only list of Programs and the only way to persist them.
-Each Program's global index (program.idx) is set automatically on add(), so it
-is stable even as programs are grouped into islands elsewhere.
+This module defines the `Population` class, which serves as an append-only,
+globally indexed collection of `Program` objects.
+It manages the persistence of all program data to a JSONL file.
 
-Islands are plain set[int] (global indices) managed externally. Island operations
-(prune, sample, deduplicate, deduplicate_islands) live in island.py.
+Each `Program` added to the `Population` automatically receives a stable,
+global index (`program.idx`), which is used for consistent referencing
+across different components of the system, such as islands and the dashboard.
+
+The `Population` is central to tracking the evolutionary progress, providing
+methods for preparing programs for validation scoring, saving the entire
+population state, and retrieving a rank-sorted copy.
+
+Island operations (e.g., pruning, sampling, deduplication) are handled
+externally in `edgar.evolution.island.py`, using the global indices
+managed by the `Population` to refer to specific programs.
 
 Example usage:
 --------------
@@ -24,7 +33,7 @@ Example usage:
 
     # resolve an island (set of indices) into Program objects for island operations
     island = {0, 1}
-    programs = {popn[i] for i in island}
+    programs = [popn[i] for i in island]
 
     # save and load
     popn.save("population.jsonl")
@@ -39,51 +48,119 @@ from .program import NotValidated, Program, BirthCertificate, Code, LossPair, Lo
 
 
 def _params_to_json(params: dict) -> dict:
-    """Convert param pytree leaves (arrays) to Python lists."""
+    """Converts a JAX pytree of parameters to a JSON-serializable dictionary.
+
+    JAX pytree leaves, typically numpy arrays, are converted to standard Python lists
+    to ensure compatibility with JSON serialization. Non-array elements are kept as is.
+
+    Args:
+        params: A dictionary representing a JAX pytree of parameters, potentially
+            containing numpy arrays as leaf nodes.
+
+    Returns:
+        A dictionary where numpy arrays have been converted to Python lists,
+        suitable for JSON serialization.
+    """
     return {k: v.tolist() if hasattr(v, "tolist") else v for k, v in params.items()}
 
 
 def _params_from_json(params: dict) -> dict:
-    """Convert param pytree from JSON (lists → numpy arrays)."""
+    """Converts a dictionary from JSON format back to a JAX pytree of parameters.
+
+    Python lists that were originally numpy arrays are converted back to numpy arrays.
+    Other elements remain unchanged.
+
+    Args:
+        params: A dictionary loaded from JSON, where lists might represent
+            original numpy arrays.
+
+    Returns:
+        A dictionary where Python lists representing numerical data have been
+        converted back to numpy arrays, suitable for use as JAX pytree parameters.
+    """
     return {k: np.array(v) if isinstance(v, list) else v for k, v in params.items()}
 
 
 class Population:
+    """Manages the collection of all `Program` instances throughout an EDGAR experiment.
+
+    This class is an append-only list, automatically assigning a stable global
+    index (`program.idx`) to each `Program` upon addition. It handles the
+    persistence of all program data, including numpy arrays for fingerprints and
+    parameters, to a JSONL file (`population.jsonl`) using atomic writes.
+    """
+
     def __init__(self) -> None:
+        """Initializes an empty Population instance."""
         self._programs: list[Program] = []
 
     def add(self, program: Program) -> None:
+        """Adds a program to the population and assigns it a global index.
+
+        The `program.idx` attribute is automatically set to the current size
+        of the population before the program is appended. This ensures a
+        unique and stable global identifier for each program.
+
+        Args:
+            program: The `Program` instance to add to the population.
+        """
         program.idx = len(self._programs)
         self._programs.append(program)
 
     def __getitem__(self, idx: int) -> Program:
+        """Retrieves a program by its global index.
+
+        Args:
+            idx: The global index of the program to retrieve.
+
+        Returns:
+            The `Program` instance at the specified index.
+        """
         return self._programs[idx]
 
     def __len__(self) -> int:
+        """Returns the total number of programs in the population.
+
+        Returns:
+            The integer count of programs.
+        """
         return len(self._programs)
 
-    def prepare_validation_scoring(self, islands: dict | list) -> None:
-        """Set validation loss to None for programs alive at validation time.
+    def prepare_validation_scoring(self, islands: list) -> None:
+        """Prepares programs for final validation scoring.
 
-        Programs on an island are eligible for validation scoring. This resets their
-        validation.final loss from NotValidatedto None so _needs_scoring can identify them.
+        This method identifies all programs that are "alive" (i.e., currently
+        members of an island) and sets their `program_losses.validate.final`
+        attribute from `NotValidated` to `None`. This makes them eligible for
+        validation scoring by the `_needs_scoring` filter in `scoring.py`.
 
         Args:
-            islands: dict or list of island sets containing program indices
+            islands: A list of sets of program indices, representing the current
+                state of all islands in the evolutionary algorithm.
         """
         alive_indices = set()
-        island_list = islands.values() if isinstance(islands, dict) else islands
-        for island in island_list:
+        for island in islands:
             alive_indices.update(island)
 
         for i in alive_indices:
             self[i].program_losses.validate.final = None
 
     def save(self, path: str) -> None:
-        """Atomically write the population to a JSONL file.
+        """Atomically writes the entire population to a JSONL file.
 
-        Uses write-to-tmp-then-rename so a live dashboard polling this file
-        never observes a partially-written state.
+        Each `Program` object is serialized into a JSON string on a new line.
+        Numpy arrays (e.g., `eval_fingerprint`, `params`, `sample_losses`) are
+        converted to Python lists for JSON compatibility. The `NotValidated`
+        sentinel is converted to the string "NOTVALIDATED". LLM model names
+        which might be objects are converted to strings.
+
+        The method uses a write-to-temporary-file-then-rename strategy
+        (`atomic_write_text` from `edgar.io.status`) to ensure that any
+        dashboard or external process polling this file never observes a
+        partially written or corrupted state.
+
+        Args:
+            path: The file path where the population should be saved.
         """
         from io import StringIO
         from ..io.status import atomic_write_text
@@ -109,8 +186,20 @@ class Population:
             buf.write(json.dumps(d) + "\n")
         atomic_write_text(path, buf.getvalue())
 
-    def get_sorted(self) -> Population:
-        """Return a copy of the population sorted by rank"""
+    def get_sorted(self) -> list[Program]:
+        """Returns a new list of programs sorted by their final rank.
+
+        Programs are sorted in ascending order based on their `rank` attribute.
+        Programs with `None` ranks (meaning they haven't been ranked yet) are
+        treated as having an infinite rank and are placed at the end.
+
+        Raises:
+            RuntimeError: If `scoring.rank()` has not been called on the population
+                and therefore no programs have a `rank` assigned.
+
+        Returns:
+            A new list containing `Program` objects, sorted by rank.
+        """
         if all(p.rank is None for p in self._programs):
             raise RuntimeError(
                 "Population has not been ranked yet, call scoring.rank(population) first"
@@ -121,10 +210,25 @@ class Population:
 
     @classmethod
     def load(cls, path: str) -> Population:
+        """Loads a population from a JSONL file.
+
+        Each line in the file is parsed as a JSON object, representing a
+        serialized `Program`. The `idx` attribute is intentionally ignored
+        from the loaded JSON, as `add()` will re-assign new, correct indices
+        during the loading process. Numpy arrays and `NotValidated` sentinels
+        are reconstructed to their original types.
+
+        Args:
+            path: The file path to the JSONL file containing the serialized population.
+
+        Returns:
+            A new `Population` instance populated with the loaded programs.
+        """
         pop = cls()
         with open(path) as f:
             for line in f:
                 d = json.loads(line.strip())
+                # idx is set automatically by add()
                 d.pop("idx", None)
                 fingerprint = d["eval_fingerprint"]
                 if fingerprint is not None:
@@ -140,6 +244,7 @@ class Population:
                 validate_raw = d["program_losses"]["validate"]
                 if validate_raw.get("final") == "NOTVALIDATED":
                     validate_raw = {**validate_raw, "final": NotValidated()}
+
                 program = Program(
                     birth=BirthCertificate(**d["birth"]),
                     code=Code(**d["code"]),

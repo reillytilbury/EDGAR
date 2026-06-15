@@ -14,7 +14,7 @@ Verbosity is controlled by the level argument:
   prompts  — code + reconstructed LLM prompts and image paths
 
 Prompts are reconstructed post-hoc from program birth metadata and the spec's
-prompt schemas, so no prompt state needs to be threaded through the main loop.
+prompt schemas.
 
 Warnings emitted via warnings.warn() during a generation are buffered and
 appended to the end of that generation's block in the log.
@@ -40,7 +40,15 @@ LEVELS = ("compact", "code", "prompts")
 
 
 def print_and_log(log: RunLog, message: str) -> None:
-    """Print message to console and append to log file."""
+    """Prints a message to the console and appends it to the run log file.
+
+    Ensures that important messages are visible in real-time and
+    persisted in the run's log file for later review.
+
+    Args:
+        log: The `RunLog` object managing the log file.
+        message: The string message to print and log.
+    """
     print(message, flush=True)
     log.file.write(message + "\n")
     log.file.flush()
@@ -89,6 +97,21 @@ def gen_banner(
 
 @dataclass
 class RunLog:
+    """A dataclass to hold the state and file handle for the EDGAR run log.
+
+    Attributes:
+        file: A file-like object (TextIO) opened for writing the log.
+        level: The verbosity level of the log ("compact", "code", or "prompts").
+        start_time: The monotonic time when the log was opened, used for
+            calculating total elapsed time.
+        previous_gen_time: The monotonic time at the end of the previous
+            generation, used to calculate generation-specific elapsed time.
+        warnings_buffer: A list of buffered warning messages to be flushed
+            at the end of each generation.
+        prev_showwarning: Stores the original `warnings.showwarning` hook
+            to restore it when the log is closed.
+    """
+
     file: TextIO
     level: str
     start_time: float
@@ -98,17 +121,26 @@ class RunLog:
 
 
 def open_log(output_dir: str, level: str = "compact", append: bool = False) -> RunLog:
-    """
-    Create run.log in output_dir and return a RunLog handle.
+    """Creates `run.log` in the specified output directory and returns a RunLog handle.
 
-    Installs a warnings.showwarning hook that buffers warnings for inclusion
-    in each generation block. Call close_log() to restore the original hook.
+    This function initializes the logging system for an EDGAR run. It also
+    installs a custom `warnings.showwarning` hook that buffers any warnings
+    emitted during a generation. These buffered warnings are then appended
+    to the end of the current generation's log block, providing contextualized
+    warning messages. The original warning hook is stored so it can be
+    restored by `close_log()`.
 
     Args:
-        output_dir: Run output directory (spec.output_dir).
-        level: Verbosity — "compact", "code", or "prompts".
+        output_dir: The run output directory (e.g., `spec.output_dir`) where `run.log` will be created.
+        level: The verbosity level for the log, must be one of "compact", "code", or "prompts".
         append: If True, open run.log in append mode and write a "RESUMED"
             banner instead of the fresh-run header. Used by `edgar resume`.
+
+    Returns:
+        A `RunLog` object containing the log file handle and state.
+
+    Raises:
+        ValueError: If `level` is not one of the allowed verbosity levels.
     """
     if level not in LEVELS:
         raise ValueError(f"level must be one of {LEVELS}, got {level!r}")
@@ -137,7 +169,14 @@ def open_log(output_dir: str, level: str = "compact", append: bool = False) -> R
 
 
 def close_log(log: RunLog) -> None:
-    """Flush remaining buffered warnings, close the file, and restore the original showwarning hook."""
+    """Flushes any remaining buffered warnings, closes the log file, and restores the original warnings hook.
+
+    This function should be called at the end of an EDGAR run to ensure
+    all log messages and warnings are persisted and system state is cleaned up.
+
+    Args:
+        log: The `RunLog` object to close.
+    """
     _flush_warnings(log)
     log.file.close()
     if log.prev_showwarning is not None:
@@ -145,6 +184,11 @@ def close_log(log: RunLog) -> None:
 
 
 def _flush_warnings(log: RunLog) -> None:
+    """Writes all buffered warning messages to the log file and clears the buffer.
+
+    Args:
+        log: The `RunLog` object containing the warnings buffer.
+    """
     if log.warnings_buffer:
         log.file.write("  --- Warnings ---\n")
         log.file.writelines(log.warnings_buffer)
@@ -160,24 +204,36 @@ def log_generation(
     spec: TaskSpec,
     metrics: "RunMetrics | None" = None,
 ) -> None:
-    """
-    Append one generation's summary block to the log.
+    """Appends a summary block for one generation to the run log file.
 
-    Derives all statistics from current population and island state — no
-    intermediate capture needed. Mode, temperature, and LLMs are recovered
-    from spec.schedule(gen). Prompts are reconstructed from each program's
-    birth metadata and the spec's prompt schemas.
+    This function compiles and writes a comprehensive summary of the current
+    evolutionary generation to the `run.log` file. All statistics and details
+    are dynamically derived from the `population`, `islands`, and `spec`
+    objects, eliminating the need for intermediate state capture.
+
+    The verbosity of the logged information depends on `log.level`:
+    *   **"compact"**: Logs generation index, mode, temperature, elapsed times,
+        LLM names, program spawning success rates, and the global best discover
+        loss, along with the best program on each island.
+    *   **"code"**: Includes all "compact" information, plus the generated
+        `model`, `parameter_estimator`, and JAX `model_jax` code for all
+        programs born in this generation.
+    *   **"prompts"**: Includes all "code" information, plus the reconstructed
+        LLM prompts (for model, parameter estimator, and JAX translation)
+        used to generate each new program, along with paths to any associated
+        feedback images.
 
     If ``metrics`` is provided, also surfaces per-stage timing, per-role LLM
     token totals + retry counts, and scoring outcome breakdown from the
     active accumulator's bucket for this generation.
 
     Args:
-        log: RunLog handle from open_log().
-        gen: Generation index (0-based).
-        population: Current Population.
-        islands: Current island sets (post-prune and deduplicate).
-        spec: TaskSpec.
+        log: The `RunLog` handle obtained from `open_log()`.
+        gen: The current generation index (0-based).
+        population: The current `Population` object containing all evolved programs.
+        islands: A list of sets, where each set contains the indices of programs
+            currently residing on a specific island (after pruning and deduplication).
+        spec: The `TaskSpec` object containing global configuration and callables for the run.
         metrics: optional RunMetrics — used to surface live per-gen stats.
     """
     f = log.file
