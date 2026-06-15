@@ -48,6 +48,18 @@ resume
 
     Valid sections: io, evolution, llms, scoring, project_params.
     Values are parsed as Python literals (int, float, bool) where possible.
+
+test
+    Run a test run which overrides project config values to have n_generations=1, n_islands=2, batch_size=2, etc. This is useful for quickly checking that the pipeline runs end-to-end with real LLM calls:
+        edgar test projects/my_task/config.yaml
+
+    Output is saved to test_output/
+
+test-fake
+    Run a test run with fake LLM responses (no real API calls). This is useful for end-to-end testing of the pipeline without incurring API costs or waiting for LLM responses:
+        edgar test-fake
+
+    Output is saved to test_output/
 """
 
 import argparse

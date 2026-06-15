@@ -1,17 +1,6 @@
 """Orchestrates the entire EDGAR evolutionary experiment.
 
-This module serves as the main entry point for running an EDGAR experiment. It initializes the environment,
-sets up logging and status tracking, loads data, and then executes the core evolutionary loop.
-The loop involves spawning new programs using LLMs, scoring them, and applying evolutionary
-operations like deduplication, pruning, and migration across islands. It ensures robust
-persistence of experiment state for live monitoring and post-hoc analysis.
-
-JAX/XLA Runtime Guards:
-Before any JAX-related imports, this module sets critical environment variables for JAX/XLA.
-These guards are crucial for GPU memory management, specifically to mitigate out-of-memory (OOM)
-errors during the subprocess-based scoring sweeps. They ensure that JAX does not preallocate
-all GPU memory and uses the platform allocator, enhancing stability when multiple JAX processes
-are spawned.
+This module serves as the main entry point for running an EDGAR experiment.
 """
 
 # ruff: noqa: E402
@@ -87,9 +76,9 @@ async def run(
 ) -> None:
     """Orchestrates and executes the entire EDGAR evolutionary experiment.
 
-    This asynchronous function manages the full lifecycle of an EDGAR run, from initialization
+    This function manages the full lifecycle of an EDGAR run, from initialization
     and data loading to the generational evolutionary loop, LLM interactions, scoring, and final
-    validation. It ensures robust logging, status tracking, and persistence of results for
+    validation. It ensures logging, status tracking, and persistence of results for
     real-time dashboard monitoring and post-hoc analysis.
 
     The core algorithm follows these steps:
@@ -105,7 +94,7 @@ async def run(
         *   New program variants are `spawn`ed from the current population.
         *   LLMs generate new model architectures (`generate_models`) and parameter
             estimation logic (`generate_param_ests`).
-        *   Programs are optionally `translate`d to JAX.
+        *   Programs are `translate`d to JAX.
         *   Programs are `score`ed and `rank`ed.
         *   The population is `deduplicate`d, `prune`d, and survivors `migrate` between islands.
     5.  **Finalization**:
