@@ -47,10 +47,7 @@ from .scoring.scoring import rank, score
 from .io.plotting import generate_program_fits
 
 
-# Stage-timed aliases. Each wraps a pipeline call in stage_timer via timed() so
-# the run loop below reads as clean pseudocode rather than nested `with` blocks
-# (see PR #40 review). Behaviour is identical: same stage names, n_items progress
-# counters, and quiet flags. Pass the per-stage item count as `n_items=...`.
+# Stage-timed aliases. Wraps the functions for individual timing and logging.
 t_seed = timed("seed", quiet=True)(seed)
 t_translate_seeds = timed("translate_seeds")(translate_programs)
 t_score_seeds = timed("score_seeds")(score)
@@ -129,27 +126,19 @@ async def run(
         None. The function's primary effects are side effects: creating output files, updating
         status, and logging.
     """
-    resume = resume_from is not None
-    if resume:
-        resume_from = Path(resume_from).resolve()
-        _prepare_resume(spec, resume_from)
-    os.makedirs(spec.output_dir, exist_ok=True)
-    if not resume:
-        spec.save(spec.output_dir)
-    log = open_log(spec.output_dir, log_level, append=resume)
+    log, resume = _init_env(spec, resume_from, log_level)
+    (
+        population,
+        census,
+        islands,
+        start_gen,
+        n_dropped,
+        started_at,
+    ) = _load_or_init_state(spec, resume)
 
     n_gens = spec.evolution["n_generations"]
     pop_path = os.path.join(spec.output_dir, "population.jsonl")
     census_path = os.path.join(spec.output_dir, "island_census.jsonl")
-
-    if resume:
-        prior_status = read_status(spec.output_dir) or {}
-        started_at = float(prior_status.get("started_at", time.time()))
-    else:
-        started_at = time.time()
-        write_status(
-            spec.output_dir, state="starting", n_gens=n_gens, started_at=started_at
-        )
 
     X_discover, X_validate, X_eval = spec.load_data_fn(
         data_path=spec.io["data_path"], **spec.project_params
@@ -160,20 +149,6 @@ async def run(
     n_islands = spec.evolution["n_islands"]
     batch_size = spec.evolution["batch_size"]
 
-    if resume:
-        population = Population.load(pop_path)
-        census = load_island_census(census_path)
-        _validate_resume_state(population, census, n_gens)
-        n_dropped = _drop_trailing_unscored(population)
-        islands = [set(s) for s in census[-1]]
-        start_gen = len(census)
-    else:
-        population = Population()
-        census = []
-        islands = None  # populated in seed phase below
-        start_gen = 0
-        n_dropped = 0
-
     with RunMetrics(
         output_dir=Path(spec.output_dir),
         run_log=log,
@@ -181,30 +156,8 @@ async def run(
         started_at=started_at,
     ) as metrics:
         try:
-            if resume:
-                # Restore historical per-gen metrics so the dashboard's
-                # last_metrics reflects the full timeline, not just the resume.
-                metrics._gen_rows.extend(read_metrics(Path(spec.output_dir)))
-                print_and_log(log, f"Run RESUMED from {spec.output_dir}")
-                if n_dropped:
-                    print_and_log(
-                        log,
-                        f"Resume: dropped {n_dropped} trailing unscored programs "
-                        f"(stale spawn shells from the crashed generation).",
-                    )
-                print_and_log(
-                    log,
-                    f"Loaded population={len(population)} programs, "
-                    f"census={len(census)} completed gens. Resuming at gen={start_gen}.",
-                )
-            else:
-                print_and_log(log, f"Run started. Output: {spec.output_dir}")
-            print_and_log(
-                log,
-                f"Config: n_gens={n_gens} n_islands={n_islands} "
-                f"batch_size={batch_size} "
-                f"num_parents={spec.llms['num_parents']} "
-                f"critical_pop={spec.evolution['critical_population_size']}",
+            _log_startup(
+                log, spec, resume, population, census, start_gen, n_dropped, metrics
             )
 
             if not resume:
@@ -312,8 +265,7 @@ async def run(
 
                 log_generation(log, gen, population, islands, spec, metrics=metrics)
 
-                # Per-generation persistence for the live dashboard. Atomic writes
-                # protect a polling reader from observing torn files.
+                # Save each generation
                 population.save(pop_path)
                 save_island_census(census, census_path)
                 metrics.finish_generation()
@@ -355,6 +307,7 @@ async def run(
                     f"{''.join(traceback.format_exception(*exc_info))}"
                     f"***** Output directory: {spec.output_dir} *****",
                 )
+            # Final save, even if run failed
             population.save(pop_path)
             save_island_census(census, census_path)
             write_status(
@@ -433,6 +386,95 @@ def _validate_resume_state(population: Population, census: list, n_gens: int) ->
             f"Corrupt run dir: census references program idx {max_idx} but "
             f"population only has {len(population)} programs."
         )
+
+
+def _init_env(
+    spec: TaskSpec, resume_from: str | Path | None, log_level: str
+) -> tuple[any, bool]:
+    """Sets up the run environment, output directory, and logging."""
+    resume = resume_from is not None
+    if resume:
+        resume_from = Path(resume_from).resolve()
+        _prepare_resume(spec, resume_from)
+
+    os.makedirs(spec.output_dir, exist_ok=True)
+    if not resume:
+        spec.save(spec.output_dir)
+
+    log = open_log(spec.output_dir, log_level, append=resume)
+    return log, resume
+
+
+def _load_or_init_state(
+    spec: TaskSpec, resume: bool
+) -> tuple[Population, list, list[set[int]] | None, int, int, float]:
+    """Loads existing population/census if resuming, or initializes new state."""
+    n_gens = spec.evolution["n_generations"]
+    pop_path = os.path.join(spec.output_dir, "population.jsonl")
+    census_path = os.path.join(spec.output_dir, "island_census.jsonl")
+
+    if resume:
+        prior_status = read_status(spec.output_dir) or {}
+        started_at = float(prior_status.get("started_at", time.time()))
+        population = Population.load(pop_path)
+        census = load_island_census(census_path)
+        _validate_resume_state(population, census, n_gens)
+        n_dropped = _drop_trailing_unscored(population)
+        islands = [set(s) for s in census[-1]]
+        start_gen = len(census)
+    else:
+        started_at = time.time()
+        write_status(
+            spec.output_dir, state="starting", n_gens=n_gens, started_at=started_at
+        )
+        population = Population()
+        census = []
+        islands = None
+        start_gen = 0
+        n_dropped = 0
+
+    return population, census, islands, start_gen, n_dropped, started_at
+
+
+def _log_startup(
+    log: any,
+    spec: TaskSpec,
+    resume: bool,
+    population: Population,
+    census: list,
+    start_gen: int,
+    n_dropped: int,
+    metrics: RunMetrics,
+) -> None:
+    """Consolidates startup logging and restores historical metrics if resuming."""
+    n_gens = spec.evolution["n_generations"]
+    n_islands = spec.evolution["n_islands"]
+    batch_size = spec.evolution["batch_size"]
+
+    if resume:
+        metrics._gen_rows.extend(read_metrics(Path(spec.output_dir)))
+        print_and_log(log, f"Run RESUMED from {spec.output_dir}")
+        if n_dropped:
+            print_and_log(
+                log,
+                f"Resume: dropped {n_dropped} trailing unscored programs "
+                f"(stale spawn shells from the crashed generation).",
+            )
+        print_and_log(
+            log,
+            f"Loaded population={len(population)} programs, "
+            f"census={len(census)} completed gens. Resuming at gen={start_gen}.",
+        )
+    else:
+        print_and_log(log, f"Run started. Output: {spec.output_dir}")
+
+    print_and_log(
+        log,
+        f"Config: n_gens={n_gens} n_islands={n_islands} "
+        f"batch_size={batch_size} "
+        f"num_parents={spec.llms['num_parents']} "
+        f"critical_pop={spec.evolution['critical_population_size']}",
+    )
 
 
 if __name__ == "__main__":
