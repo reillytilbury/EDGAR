@@ -93,7 +93,7 @@
   <!-- ── LIVE VIEW ── -->
   <main x-show="view === 'live'" class="flex-1 flex">
     <section class="flex-1 p-5 space-y-5 min-w-0">
-      <!-- top tiles -->
+      <!-- top tiles: status, gen + current stage, best loss, elapsed/ETA -->
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
           <div class="text-xs text-zinc-500 uppercase">Status</div>
@@ -101,15 +101,16 @@
             <span :class="statusPillClass(state.status)" class="px-2 py-0.5 rounded text-xs font-medium"
               x-text="state.status || 'unknown'"></span>
           </div>
-          <div class="mt-1 text-xs text-zinc-400" x-text="state.error || ''"></div>
+          <div class="mt-1 text-xs text-zinc-400 truncate" x-text="state.error || ''"></div>
         </div>
         <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
-          <div class="text-xs text-zinc-500 uppercase">Generation</div>
+          <div class="text-xs text-zinc-500 uppercase">Generation · stage</div>
           <div class="mt-1 text-xl font-mono">
-            <span x-text="(state.current_gen ?? '-') + 1"></span>
+            <span x-text="(state.current_gen ?? -1) >= 0 ? (state.current_gen + 1) : 'seed'"></span>
             <span class="text-zinc-500">/</span>
             <span x-text="state.n_gens ?? '-'"></span>
           </div>
+          <div class="text-xs text-emerald-300 font-mono truncate" x-text="fmtStage(state.current_stage)"></div>
         </div>
         <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
           <div class="text-xs text-zinc-500 uppercase">Best loss</div>
@@ -126,41 +127,108 @@
         </div>
       </div>
 
-      <!-- success rates strip + sparkline -->
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <!-- efficiency tiles -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
-          <div class="text-xs text-zinc-500 uppercase">Per-gen best discover loss</div>
-          <div id="spark-chart" class="h-24 mt-1"></div>
+          <div class="text-xs text-zinc-500 uppercase">Tokens (in / out)</div>
+          <div class="mt-1 text-base font-mono">
+            <span x-text="fmtTokens(state.totals?.in_tokens)"></span>
+            <span class="text-zinc-500"> / </span>
+            <span x-text="fmtTokens(state.totals?.out_tokens)"></span>
+          </div>
+          <div class="text-xs text-zinc-500 mt-0.5">
+            <span x-text="state.totals?.n_llm_calls ?? 0"></span> calls
+            <span x-show="state.totals?.n_llm_retried" class="text-amber-400">
+              · <span x-text="state.totals?.n_llm_retried"></span> retried
+            </span>
+          </div>
         </div>
         <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
-          <div class="text-xs text-zinc-500 uppercase">Stage success rates (gen <span x-text="state.success_rates?.gen ?? '-'"></span>)</div>
-          <div class="grid grid-cols-4 gap-2 mt-2 text-center">
-            <template x-for="k in ['model','param_est','jax','scored']" :key="k">
-              <div>
-                <div class="text-xs text-zinc-500" x-text="k"></div>
-                <div class="text-lg font-mono"
-                  :class="rateClass(state.success_rates?.[k])"
-                  x-text="rateStr(state.success_rates?.[k])"></div>
-              </div>
-            </template>
+          <div class="text-xs text-zinc-500 uppercase">LLM time</div>
+          <div class="mt-1 text-base font-mono">
+            <span x-text="fmtDuration(state.totals?.llm_seconds)"></span>
+            <span class="text-zinc-500 text-xs" x-show="state.elapsed_s">
+              (<span x-text="fmtPct(state.totals?.llm_seconds, state.elapsed_s)"></span>)
+            </span>
+          </div>
+          <div class="text-xs text-zinc-500 mt-0.5">vs scoring
+            <span class="font-mono ml-1" x-text="fmtDuration(state.totals?.score_seconds)"></span>
+          </div>
+        </div>
+        <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+          <div class="text-xs text-zinc-500 uppercase">Scoring outcomes</div>
+          <div class="mt-1 text-base font-mono flex items-center gap-2">
+            <span class="text-emerald-400" x-text="state.totals?.n_ok ?? 0"></span>
+            <span class="text-zinc-600">·</span>
+            <span class="text-amber-400" x-text="state.totals?.n_timeout ?? 0"></span>
+            <span class="text-zinc-600">·</span>
+            <span class="text-rose-400" x-text="state.totals?.n_inf ?? 0"></span>
+          </div>
+          <div class="text-xs text-zinc-500 mt-0.5">ok · timeout · inf</div>
+        </div>
+        <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+          <div class="text-xs text-zinc-500 uppercase">Programs</div>
+          <div class="mt-1 text-base font-mono">
+            <span x-text="state.n_programs ?? 0"></span>
+            <span class="text-zinc-500"> · alive </span>
+            <span x-text="state.n_alive ?? 0"></span>
+          </div>
+          <div class="text-xs text-zinc-500 mt-0.5">
+            islands <span class="font-mono" x-text="state.n_islands ?? '-'"></span>
           </div>
         </div>
       </div>
 
-      <!-- swimlanes -->
+      <!-- per-gen best loss + per-gen stage breakdown -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+          <div class="text-xs text-zinc-500 uppercase">Per-gen best discover loss</div>
+          <div id="spark-chart" class="h-32 mt-1"></div>
+        </div>
+        <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+          <div class="text-xs text-zinc-500 uppercase">Per-gen stage timing (seconds)</div>
+          <div id="stage-chart" class="h-32 mt-1"></div>
+        </div>
+      </div>
+
+      <!-- success rates -->
+      <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+        <div class="text-xs text-zinc-500 uppercase">Stage success rates (gen <span x-text="state.success_rates?.gen ?? '-'"></span>)</div>
+        <div class="grid grid-cols-4 gap-2 mt-2 text-center">
+          <template x-for="k in ['model','param_est','jax','scored']" :key="k">
+            <div>
+              <div class="text-xs text-zinc-500" x-text="k"></div>
+              <div class="text-lg font-mono"
+                :class="rateClass(state.success_rates?.[k])"
+                x-text="rateStr(state.success_rates?.[k])"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- swimlanes (now horizontally scrollable for long runs) -->
       <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
         <div class="flex items-center justify-between">
           <div class="text-xs text-zinc-500 uppercase">Islands · programs over generations</div>
-          <div class="text-xs text-zinc-500">click a node for details · hover for tooltip</div>
+          <div class="text-xs text-zinc-500">click a node for details · hover for tooltip · scroll →</div>
         </div>
-        <div id="swimlanes-chart" class="mt-2" style="min-height: 360px;"></div>
+        <div class="mt-2 overflow-x-auto">
+          <div id="swimlanes-chart" style="min-height: 380px;"></div>
+        </div>
       </div>
 
-      <!-- log tail -->
+      <!-- log tail (taller + auto-scroll) -->
       <div class="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
-        <div class="text-xs text-zinc-500 uppercase">run.log (tail)</div>
-        <pre class="mt-2 max-h-56 overflow-auto text-[11px] leading-snug font-mono whitespace-pre text-zinc-300"
-          x-text="(state.recent_log || []).join('\n')"></pre>
+        <div class="flex items-center justify-between">
+          <div class="text-xs text-zinc-500 uppercase">run.log (tail)</div>
+          <label class="text-xs text-zinc-500 select-none">
+            <input type="checkbox" x-model="autoScrollLog" class="align-middle"> auto-scroll
+          </label>
+        </div>
+        <pre id="run-log-tail"
+             class="mt-2 max-h-[420px] overflow-auto text-[11px] leading-snug font-mono whitespace-pre text-zinc-300"
+             x-text="(state.recent_log || []).join('\n')"
+             x-effect="state.recent_log; scrollLogTail()"></pre>
       </div>
     </section>
   </main>

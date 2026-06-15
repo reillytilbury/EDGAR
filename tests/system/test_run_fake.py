@@ -149,13 +149,14 @@ def test_saves_on_error(tmp_path):
     from edgar.scoring.scoring import score as original_score
 
     def failing_score(*args, **kwargs):
+        kwargs.pop("n_items", None)  # pop n_items added by timed() decorator
         call_count["n"] += 1
         if call_count["n"] > 1:
             raise RuntimeError("injected failure")
         return original_score(*args, **kwargs)
 
     output_dir = Path(spec.output_dir)
-    with patch("edgar.run.score", side_effect=failing_score):
+    with patch("edgar.run.t_score", side_effect=failing_score):
         with pytest.raises(RuntimeError, match="injected failure"):
             asyncio.run(run(spec))
 

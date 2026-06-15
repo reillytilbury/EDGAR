@@ -90,6 +90,7 @@ async def _generate_one_model(
         log_raw_llm_response=cfg.get("log_raw_llm_response", False),
         max_tokens=cfg.get("max_tokens"),
         retry_config=cfg.get("retry_config"),
+        role="model",
     )
     if result is None:
         warnings.warn(
@@ -163,6 +164,7 @@ async def _generate_one_param_est(
         log_raw_llm_response=cfg.get("log_raw_llm_response", False),
         max_tokens=cfg.get("max_tokens"),
         retry_config=cfg.get("retry_config"),
+        role="param_est",
     )
     if result is None:
         warnings.warn(
@@ -211,6 +213,7 @@ async def _translate_one_model(
         temperature=1.0,
         retry_config=retry_config,
         max_tokens=max_tokens,
+        role="jax",
     )
     if (
         model_result is not None

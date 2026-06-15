@@ -13,6 +13,7 @@ function dashboard() {
     loading: true,
     autoPoll: true,
     pollIntervalMs: 2500,
+    autoScrollLog: true,
     _pollTimer: null,
 
     // sort
@@ -107,7 +108,7 @@ function dashboard() {
         if (!this.autoPoll || !this.runId) return;
         // Always poll state (cheap) so the live view updates.
         await this.fetchState();
-        // When the run is live and we're in inspect, also refresh the table.
+        // When the run is live, refresh whichever view-specific data we need.
         if (this.state.status === 'running' || this.state.status === 'starting') {
           if (this.view === 'inspect') {
             await this.fetchPrograms();
@@ -148,6 +149,21 @@ function dashboard() {
       if (m) return `${m}m ${s}s`;
       return `${s}s`;
     },
+    fmtTokens(n) {
+      if (n === null || n === undefined) return '-';
+      if (n < 1000) return String(n);
+      if (n < 1e6) return `${(n / 1000).toFixed(1)}k`;
+      return `${(n / 1e6).toFixed(2)}M`;
+    },
+    fmtPct(a, b) {
+      if (!a || !b) return '0%';
+      return `${Math.round((a / b) * 100)}%`;
+    },
+    scrollLogTail() {
+      if (!this.autoScrollLog) return;
+      const el = document.getElementById('run-log-tail');
+      if (el) el.scrollTop = el.scrollHeight;
+    },
     rateStr(r) {
       if (r === null || r === undefined) return '-';
       return `${Math.round(r * 100)}%`;
@@ -171,6 +187,17 @@ function dashboard() {
       // explicit failure was recorded.
       if (this.state?.is_stale) return 'stalled';
       return state || 'unknown';
+    },
+    fmtStage(s) {
+      if (!s) return '\u00a0';
+      const labels = {
+        translate_programs: 'translate',
+        translate_seeds: 'translate',
+        score: 'score',
+        score_seeds: 'score',
+        score_validate: 'score',
+      };
+      return labels[s] || s;
     },
     lossClass(v) {
       if (v === null || v === undefined) return 'text-zinc-500';
@@ -220,6 +247,7 @@ function dashboard() {
       requestAnimationFrame(() => {
         this.renderSwimlanes();
         this.renderSpark();
+        this.renderStageChart();
       });
     },
 
@@ -230,12 +258,14 @@ function dashboard() {
       const traces = [];
       const lossOf = p => p.loss_discover ?? p.loss_validate;
       const colors = islands.map((_, i) => islandColor(i));
+      let maxGen = 0;
       islands.forEach((row, ri) => {
         const xs = [], ys = [], texts = [], custom = [], markers = [], sizes = [];
         row.programs.forEach(p => {
           xs.push(p.gen);
           ys.push(ri);
           custom.push(p.idx);
+          maxGen = Math.max(maxGen, p.gen);
           const loss = lossOf(p);
           texts.push(
             `<b>${escapeHtml(p.name)}</b><br>#${p.idx} · gen ${p.gen} · island ${p.island}<br>` +
@@ -260,16 +290,23 @@ function dashboard() {
           name: `island ${row.idx}`,
         });
       });
+      // Give the plot an explicit width that scales with the number of gens so
+      // it can overflow horizontally. The outer wrapper div has overflow-x: auto.
+      const totalGens = Math.max(maxGen + 1, this.state.n_gens || 1, 1);
+      const width = Math.max(800, totalGens * 90);
+      el.style.width = `${width}px`;
       const layout = {
+        width,
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
         font: { color: '#d4d4d8', family: 'ui-sans-serif' },
         showlegend: false,
-        margin: { l: 64, r: 16, t: 8, b: 36 },
+        margin: { l: 84, r: 16, t: 8, b: 36 },
         xaxis: {
           title: { text: 'generation', font: { size: 11 } },
           gridcolor: '#27272a', zeroline: false,
           dtick: 1,
+          range: [-0.5, totalGens - 0.5],
         },
         yaxis: {
           tickmode: 'array',
@@ -280,7 +317,7 @@ function dashboard() {
         },
         hoverlabel: { bgcolor: '#0a0a0a', bordercolor: '#3f3f46', font: { color: '#fafafa' } },
       };
-      Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true })
+      Plotly.react(el, traces, layout, { displayModeBar: false, responsive: false })
         .then(() => {
           el.removeAllListeners?.('plotly_click');
           el.on('plotly_click', evt => {
@@ -307,6 +344,68 @@ function dashboard() {
         xaxis: { gridcolor: '#27272a', dtick: 1 },
         yaxis: { gridcolor: '#27272a' },
         showlegend: false,
+      }, { displayModeBar: false, responsive: true });
+    },
+
+    renderStageChart() {
+      const el = document.getElementById('stage-chart');
+      if (!el) return;
+      const rows = this.state.metrics || [];
+      // We collapse seed/validate (gen < 0 / gen >= n_gens) into negative xs
+      // for visibility but drop them if there are no real generations yet.
+      const stagePalette = {
+        spawn: '#a1a1aa',
+        generate_models: '#60a5fa',
+        generate_param_ests: '#a78bfa',
+        translate_programs: '#22d3ee',
+        translate_seeds: '#22d3ee',
+        score: '#34d399',
+        score_seeds: '#34d399',
+        score_validate: '#34d399',
+        deduplicate: '#fbbf24',
+        prune: '#fb7185',
+        migrate: '#facc15',
+      };
+      const stageLabels = {
+        translate_programs: 'translate',
+        translate_seeds: 'translate',
+        score: 'score',
+        score_seeds: 'score',
+        score_validate: 'score',
+      };
+      const stageOrder = [
+        'spawn', 'generate_models', 'generate_param_ests',
+        'translate_programs', 'translate_seeds',
+        'score', 'score_seeds', 'score_validate',
+        'deduplicate', 'prune', 'migrate',
+      ];
+      const xs = rows.map(r => r.gen);
+      const traces = [];
+      const seenLabels = new Set();
+
+      for (const stage of stageOrder) {
+        const ys = rows.map(r => (r.stage_times && r.stage_times[stage]) || 0);
+        if (ys.every(v => !v)) continue;
+
+        const label = stageLabels[stage] || stage;
+        traces.push({
+          x: xs, y: ys, type: 'bar', name: label,
+          marker: { color: stagePalette[stage] || '#71717a' },
+          hovertemplate: `${stage}: %{y:.1f}s<br>gen %{x}<extra></extra>`,
+          legendgroup: label,
+          showlegend: !seenLabels.has(label),
+        });
+        seenLabels.add(label);
+      }
+      Plotly.react(el, traces, {
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#a1a1aa', size: 10 },
+        margin: { l: 40, r: 8, t: 4, b: 20 },
+        barmode: 'stack',
+        xaxis: { gridcolor: '#27272a', dtick: 1, title: { text: '' } },
+        yaxis: { gridcolor: '#27272a', title: { text: '' } },
+        showlegend: true,
+        legend: { font: { size: 9 }, orientation: 'h', y: -0.25 },
       }, { displayModeBar: false, responsive: true });
     },
 

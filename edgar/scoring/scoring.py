@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import time
 
 import traceback
 import cloudpickle
@@ -34,6 +35,7 @@ from ..evolution.program import (
     Program,
 )
 from ..evolution.population import Population
+from ..io.metrics import get_active_metrics, stream_line
 
 
 # ── helpers ──
@@ -204,13 +206,42 @@ def _score_one_model(
 ]:
     """Score one program in a spawn subprocess; kill on timeout.
 
-    Returns (final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init).
+    Returns ``(final_loss, initial_loss, eval_fingerprint, params, sample_losses,
+    params_init, sample_losses_init)``. On timeout or worker exception, returns
+    the all-inf 7-tuple. ``score()`` uses ``_score_one_with_outcome`` directly
+    to recover the precise outcome (``timeout`` vs ``inf``) for metrics.
+    """
+    result = _score_one_with_outcome(program, data, loss_fn, config, X_eval, split)
+    return result[:7]
+
+
+def _score_one_with_outcome(
+    program: Program,
+    data: tuple,
+    loss_fn,
+    config: dict,
+    X_eval=None,
+    split: str = "discover",
+) -> tuple[
+    float,
+    float,
+    jnp.ndarray,
+    dict | None,
+    jnp.ndarray | None,
+    dict | None,
+    jnp.ndarray | None,
+    str,
+]:
+    """Same as ``_score_one_model`` but also returns an outcome label:
+    ``"ok"`` (finite loss), ``"timeout"`` (subprocess killed), ``"inf"``
+    (worker raised or program has no params).
     """
     if program.n_params is None:
         warnings.warn(
-            f"Program #{program.idx} has n_params=None, applying infinite loss, verify that its default_params were set prior to scoring"
+            f"Program #{program.idx} has n_params=None, applying infinite loss, "
+            "verify that its default_params were set prior to scoring"
         )
-        return (float("inf"), float("inf"), None, None, None, None, None)
+        return (float("inf"), float("inf"), None, None, None, None, None, "inf")
 
     ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
     queue = ctx.Queue()
@@ -223,12 +254,25 @@ def _score_one_model(
     proc.start()
     try:
         result = queue.get(timeout=config["timeout_s"])
-    except mp.queues.Empty:  # if subproces doesn't respond in time config["timeout_s"]
+    except mp.queues.Empty:
         proc.kill()
         proc.join()
-        return (float("inf"), float("inf"), None, None, None, None, None)
+        return (
+            float("inf"),
+            float("inf"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            "timeout",
+        )
     proc.join()
-    return result
+    final, init, fp, params, samples, params_init, samples_init = result
+    # Worker puts (inf, inf, None, None, None, None, None) on its own exception
+    # path. Treat that as "inf" rather than "timeout" so metrics distinguish them.
+    outcome = "ok" if np.isfinite(final) else "inf"
+    return (final, init, fp, params, samples, params_init, samples_init, outcome)
 
 
 # ── population-level ──
@@ -274,8 +318,18 @@ def score(
 
     Pass X_eval=None to skip fingerprint computation (e.g. on validate scoring,
     so the discover-derived fingerprint isn't overwritten).
+
+    Streams per-program tick lines to ``run.log`` and updates the active
+    ``RunMetrics`` (if any) so the dashboard can show ``score (k/n)`` live.
     """
-    for program in _needs_scoring(population, split):
+    queue = _needs_scoring(population, split)
+    n_total = len(queue)
+    metrics = get_active_metrics()
+    counters = {"ok": 0, "timeout": 0, "inf": 0}
+    latencies_ms: list[float] = []
+
+    for k, program in enumerate(queue, start=1):
+        t0 = time.monotonic()
         (
             final_loss,
             initial_loss,
@@ -284,7 +338,12 @@ def score(
             sample_losses,
             params_init,
             sample_losses_init,
-        ) = _score_one_model(program, X_split, loss_fn, config, X_eval, split)
+            outcome,
+        ) = _score_one_with_outcome(program, X_split, loss_fn, config, X_eval, split)
+        latency_ms = (time.monotonic() - t0) * 1000.0
+        latencies_ms.append(latency_ms)
+        counters[outcome] += 1
+
         loss_pair = getattr(program.program_losses, split)
         loss_pair.init = initial_loss
         loss_pair.final = final_loss
@@ -298,6 +357,21 @@ def score(
             program.sample_losses = sample_losses
         if sample_losses_init is not None and split == "discover":
             program.sample_losses_init = sample_losses_init
+
+        if metrics is not None:
+            metrics.record_score_result(program.idx, latency_ms, outcome)
+
+        # Cheap progress line so the user sees movement during the slow stage.
+        # Print every program for low n_total, every 4 for larger sweeps.
+        tick_every = 1 if n_total <= 12 else 4
+        if metrics is not None and (k == n_total or k % tick_every == 0):
+            avg_s = (sum(latencies_ms) / len(latencies_ms)) / 1000.0
+            stream_line(
+                metrics,
+                f"  [score {split}] {k}/{n_total}  "
+                f"(avg {avg_s:.1f}s, {counters['ok']} ok, "
+                f"{counters['timeout']} timeout, {counters['inf']} inf)",
+            )
 
 
 def rank(
