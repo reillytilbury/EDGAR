@@ -75,3 +75,7 @@ The workflow is:
 2. Use the workflow from and run the docbot on the branch you want documented added to.
 3. The docbot will look at which files have been modified since it was called and add documentation to modified files, creating a new branch `docbot-updates` and a pull request onto your branch.
 4. Verify the output of the docbot (it will report test status and have checked that the precommit passes), make any changes you want and merge into your branch.
+Alternatively it can be run via
+```bash
+uv run .docbot/run_bot.py
+```

@@ -107,6 +107,10 @@ By default this allows access to data saved in `program_databases`. If the data 
 edgar dashboard {data_directory}
 ```
 
+A run which failed can be resume via, for example:
+```bash
+edgar resume program_databases/mm-dd/hh-mm-ss
+```
 ---
 
 ## Run Output
