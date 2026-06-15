@@ -76,7 +76,7 @@ def _git_state() -> tuple[str, bool]:
     return sha, dirty
 
 
-@dataclass(frozen=True)
+@dataclass
 class TaskSpec:
     """Frozen bundle of everything needed to run (or re-run) an EDGAR experiment.
 
