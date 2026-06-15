@@ -28,6 +28,8 @@ model:
 
     * Ensure all free parameters are numeric, not strings.
 
+    * Ensure all string values in function call arguments are properly JSON-escaped
+
     * You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).
 
     '
