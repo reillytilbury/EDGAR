@@ -153,7 +153,7 @@ jax_translator_model:
 
     '
   docstring_guidelines: '
-    Do not include any text in the docstring. The function should only contain the jax-translated code.
+    Do not include a docstring.
     '
   image_analysis_instructions: null
   parent_program_template: ''
