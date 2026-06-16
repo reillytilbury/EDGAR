@@ -1,0 +1,18 @@
+name: Documentation Bot
+
+on:
+  workflow_dispatch: # Manual trigger
+    inputs:
+      base_branch:
+        description: 'Branch to run docbot on and use as PR base'
+        required: true
+        default: 'gamma'
+
+jobs:
+  docbot_stub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stub Information
+        run: |
+          echo "This is a placeholder workflow to enable the 'Run workflow' button in the UI."
+          echo "To run the actual Documentation Bot, please select 'gamma' from the 'Use workflow from' dropdown."
