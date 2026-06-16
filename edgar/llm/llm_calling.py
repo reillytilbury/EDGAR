@@ -301,7 +301,7 @@ async def call_llm(
     agent = Agent(
         model,
         output_type=output_type,
-        output_retries=rc.max_retries,
+        retries={"output": rc.max_retries},
         capabilities=capabilities,
     )
 
