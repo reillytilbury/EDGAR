@@ -27,7 +27,7 @@ Run the command
 ```bash
 uv sync
 ```
-which will automatically setup the environment in the root folder.
+from the repo root which will automatically setup the environment there.
 Now any commands will be run in this environment when using the prefix `uv run`, e.g
 ```bash
 uv run edgar test projects/synthetic_data/config.yaml
@@ -39,7 +39,7 @@ conda create -n edgar python=3.13 -y
 conda activate edgar
 pip install -e .
 ```
-This installs the `edgar` package in editable mode (deps are sourced from `requirements.txt` via `pyproject.toml`).
+This installs the `edgar` package in editable mode.
 `import edgar` then works from any cwd / IDE cell without `sys.path` hacks.
 
 To verify your environment is setup correctly run the script
@@ -115,7 +115,7 @@ edgar resume program_databases/mm-dd/hh-mm-ss
 
 ## Run Output
 
-Each run writes to `program_databases/MM-DD/HH-MM-SS/`:
+By default, each run writes to `program_databases/MM-DD/HH-MM-SS/`:
 
 ```text
 program_databases/
@@ -124,12 +124,16 @@ program_databases/
         ├── task_spec.yaml          # Full config + git SHA + prompt schemas + seed code. Read-only.
         ├── population.jsonl        # All Programs — code, losses, params, lineage. Main scientific output.
         ├── island_census.jsonl     # Island membership at the end of each generation.
+        ├── metrics.jsonl           # Timing, token and retry statistics for the various parts of the algorithm.
+        ├── status.json             # Overall status of the run, read by the dashboard.
         ├── run.log                 # Human-readable execution trace.
-        └── image_feedback/         # Only present if plot_fn is defined.
+        └── image_feedback/         # Only present if plot_fn is defined, image_feedback prompt shown to LLM.
             └── gen_000/
                 └── island_000/
                     └── batch_000/
                         └── image.png
+        └── image_fits/             # Only present if plot_fn is defined, plots each program before and after parameter optimization.
+            └── P0000.png 
 ```
 
 ---
