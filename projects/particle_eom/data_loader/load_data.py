@@ -74,7 +74,7 @@ def load_data(
     dt: float = 1e-3,
     n_steps: int = 2000,
     record_every: int = 5,
-    train_frac: float = 0.7,
+    n_chunks: int = 6,
     noise_std_frac: float = 0.05,
     n_sessions_discover: int = 12,
     n_sessions_validate: int = 4,
@@ -108,9 +108,10 @@ def load_data(
         dt: Integration timestep.
         n_steps: Total integration steps per session.
         record_every: Record positions/velocities every this many steps.
-        train_frac: Fraction of recorded time points (from the start) used as the
-            train block; the remainder is the held-out test block. Both blocks contain
-            the same cells — the split is purely along time.
+        n_chunks: Number of contiguous time blocks the recorded timeline is split into.
+            Odd chunks form the train split, even chunks the test split (≈50/50). Both
+            splits contain the same cells — the split is purely along time. A final
+            short chunk (when n_recorded doesn't divide evenly) is kept, not dropped.
         noise_std_frac: Gaussian noise std on the velocity target, as a fraction of the
             target's std. 0.0 disables noise.
         n_sessions_discover: Number of sessions in the discover split.
@@ -147,9 +148,15 @@ def load_data(
     neighbor_dx = _build_neighbor_dx(positions, L)  # (n_sessions, n_recorded, n_cells, n_cells-1)
 
     n_recorded = positions.shape[1]
-    n_train_time = int(round(train_frac * n_recorded))
-    train_time_idx = np.arange(0, n_train_time)
-    test_time_idx = np.arange(n_train_time, n_recorded)
+    # Split time into `n_chunks` contiguous blocks and interleave them: odd chunks
+    # (1st, 3rd, ...) to train, even chunks (2nd, 4th, ...) to test. This gives both
+    # splits coverage of every dynamical regime in the session (vs a block split where
+    # test is a later regime), while keeping each block long enough to limit leakage
+    # via temporal autocorrelation. `np.array_split` tolerates n_recorded not dividing
+    # evenly — the final chunk is simply shorter, never dropped.
+    chunks = np.array_split(np.arange(n_recorded), n_chunks)
+    train_time_idx = np.concatenate(chunks[0::2])
+    test_time_idx = np.concatenate(chunks[1::2])
 
     def _split_by_time(time_idx):
         return {

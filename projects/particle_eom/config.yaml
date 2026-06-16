@@ -24,7 +24,7 @@ scoring:
 # both tuned empirically, not guessed).
 project_params:
   seed: 42
-  n_cells: 10
+  n_cells: 40
   L: 40.0
   A: 1.0
   B: 1.0
@@ -32,7 +32,7 @@ project_params:
   dt: 0.001
   n_steps: 400
   record_every: 5
-  train_frac: 0.7
+  n_chunks: 6
   noise_std_frac: 0.05
   n_sessions_discover: 12
   n_sessions_validate: 4
