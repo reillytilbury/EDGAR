@@ -11,19 +11,14 @@ model:
     Analyze the progression of the models, generalize what worked, and create a better model.
 
     '
-  explore: 'Use the parent models as inspiration, but be creative and try new structure.
+  explore: 'Use the models below as *inspiration*, but be *creative* and *invent* something new. 
+    Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. 
+    You should also *combine* features from several models, and *experiment* with new ideas.'
 
-    Which features of the pairwise interaction correlate with lower loss? Find these
-    features, extrapolate them, and experiment with new functional forms.
+  exploit: 'Use the models below as a *template* to create a new model.   
+    Which features correlate with lower loss? Find these features and *extrapolate* them.     
+    Focus on *exploiting* strengths and *eliminating* weaknesses or *redundancies*. You will be *penalized* for complexity.'
 
-    '
-  exploit: 'Use the parent models as a template to produce a stronger model.
-
-    Extrapolate features associated with lower loss and remove weak or redundant structure.
-
-    You will be penalized for complexity, so keep the model as simple as possible.
-
-    '
   code_guidelines: '**Code Generation Guidelines:**
 
     * Import any packages you use.

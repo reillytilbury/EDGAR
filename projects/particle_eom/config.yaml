@@ -16,7 +16,7 @@ llms:
   jax_model_translator_llm: gemini-2.5-flash-lite
 
 scoring:
-  param_penalty_weight: 0.01
+  param_penalty_weight: 0.00002 # 0.002 / 0.01
 
 # Ground truth (A, B, r_c, mu=1 fixed) lives entirely in project_params — there is no
 # separate "ground truth" file. See journal/2026-06-16_eom_discovery_poc_spec.md,
