@@ -16,7 +16,7 @@ llms:
   jax_model_translator_llm: gemini-2.5-flash-lite
 
 scoring:
-  param_penalty_weight: 0.00002 # 0.002 / 0.01
+  param_penalty_weight: 1.0e-02 #  0.01 x min seed loss 1.011 (noise_D=0.0, C=0.5 regime)
 
 # Ground truth (A, B, r_c, mu=1 fixed) lives entirely in project_params — there is no
 # separate "ground truth" file. See journal/2026-06-16_eom_discovery_poc_spec.md,
@@ -28,12 +28,14 @@ project_params:
   L: 40.0
   A: 1.0
   B: 1.0
+  C: 0.5  # non-reciprocal (asymmetric-attraction) term; induces a parameter-dependent
+          # drift the model must recover despite translation gauge freedom. See journal.
   r_c: 1.5
   dt: 0.001
-  n_steps: 400
+  n_steps: 400 
   record_every: 5
-  n_chunks: 6
-  noise_std_frac: 0.05
+  n_chunks: 400 # keep the same as n_steps - splitting train/test as every other time step
+  noise_D: 0.0 # no noise to start with - noise added to position at each time t at generation
   n_sessions_discover: 12
   n_sessions_validate: 4
   n_eval_sessions: 3

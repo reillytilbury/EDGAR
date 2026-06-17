@@ -22,7 +22,6 @@ _spec.loader.exec_module(_generator)
 sys.modules.setdefault("particle_eom_generator", _generator)
 
 generate_sessions = _generator.generate_sessions
-add_noise = _generator.add_noise
 minimum_image_diff = _generator.minimum_image_diff
 drop_diagonal = _generator.drop_diagonal
 
@@ -70,12 +69,13 @@ def load_data(
     L: float = 40.0,
     A: float = 1.0,
     B: float = 1.0,
+    C: float = 0.0,
     r_c: float = 1.5,
     dt: float = 1e-3,
     n_steps: int = 2000,
     record_every: int = 5,
     n_chunks: int = 6,
-    noise_std_frac: float = 0.05,
+    noise_D: float = 0.0,
     n_sessions_discover: int = 12,
     n_sessions_validate: int = 4,
     n_eval_sessions: int = 3,
@@ -104,6 +104,8 @@ def load_data(
         L: Periodic domain length.
         A: Ground-truth repulsion strength.
         B: Ground-truth attraction strength.
+        C: Ground-truth non-reciprocity strength (asymmetric-attraction term in `rhs`).
+            0.0 keeps the reciprocal gradient-flow dynamics that relax to a fixed point.
         r_c: Ground-truth interaction cutoff radius.
         dt: Integration timestep.
         n_steps: Total integration steps per session.
@@ -112,8 +114,10 @@ def load_data(
             Odd chunks form the train split, even chunks the test split (≈50/50). Both
             splits contain the same cells — the split is purely along time. A final
             short chunk (when n_recorded doesn't divide evenly) is kept, not dropped.
-        noise_std_frac: Gaussian noise std on the velocity target, as a fraction of the
-            target's std. 0.0 disables noise.
+        noise_D: Diffusion coefficient of the overdamped Langevin position process
+            noise injected during integration (see `generator.simulate_session`). The
+            velocity target stays the noiseless drift; noise only enriches the visited
+            positions. 0.0 gives deterministic relaxation.
         n_sessions_discover: Number of sessions in the discover split.
         n_sessions_validate: Number of sessions in the validate split.
         n_eval_sessions: Number of discover sessions used for the fingerprint subset.
@@ -140,10 +144,9 @@ def load_data(
         n_steps=n_steps,
         record_every=record_every,
         seed=seed,
+        noise_D=noise_D,
+        C=C,
     )  # each (n_sessions, n_recorded, n_cells)
-
-    noise_rng = np.random.default_rng(seed + 1000)
-    velocities = add_noise(velocities, noise_std_frac, noise_rng)
 
     neighbor_dx = _build_neighbor_dx(positions, L)  # (n_sessions, n_recorded, n_cells, n_cells-1)
 
