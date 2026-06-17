@@ -13,7 +13,7 @@ dependencies = [
     "fastapi>=0.136.3",
     "google-genai>=1.51.0",
     "ipykernel>=7.2.0",
-    "jax[cuda12]>=0.4.38",
+    "jax[cuda12]==0.10.1",
     "jaxopt>=0.8.5",
     "matplotlib>=3.10.3",
     "networkx>=3.2",

@@ -133,13 +133,11 @@ jax_translator_model:
   exploit: null
   code_guidelines: 'CRITICAL JAX compatibility requirements:
 
-    * Ensure compatibility with jax version 0.4.38.
-
     * Replace all boolean indexing with `jnp.where`.
 
     * Use `jnp` everywhere (no `np`).
 
-    * Use `jnp.clip` for clipping values — do NOT use `jax.lax.clip` (removed in JAX v0.6.0).
+    * Use `jnp.clip` for clipping values — do NOT use `jax.lax.clip`.
 
     * Avoid Python control flow (if/for) that depends on array values.
 
