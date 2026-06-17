@@ -216,8 +216,11 @@ launching — a split that tests the wrong claim usually *looks* wrong the momen
 Use the bundled helper:
 
 ```python
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(".claude/skills/data-loader-helper").resolve()))
 from plot_split import plot_split
-out = load_data(**project_params)            # (X_discover, X_validate, X_eval)
 # If the loader reduces arrays per split (different column counts), pass the in-sample index
 # arrays so held-out positions show as white masks and block-vs-interleave is visible. Omit
 # them if the loader already returns full-width NaN-masked arrays.
