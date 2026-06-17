@@ -11,8 +11,7 @@ def parameter_estimator(data):
                      data['velocity'] shape (n_trials,) (the noisy dx_i/dt target).
 
     Returns:
-        dict: {"k"}
-    """
+        dict: {"k": float}
     feature = np.sum(data["neighbor_dx"], axis=-1)
     target = data["velocity"]
     denom = np.sum(feature**2)
