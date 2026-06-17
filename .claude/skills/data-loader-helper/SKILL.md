@@ -233,7 +233,7 @@ It draws a 2x2 grid — discover/validate × fit(train)/eval(test) — of the **
 values**, each panel's non-member region masked white, with shape/mean/std per panel. Read it
 for: (a) the fit/eval split falling where intended along the in-sample axis (block vs
 interleaved chunks); (b) discover and validate disjoint along the sample axis; (c) no panel
-accidentally empty, constant, or unnormalised. Run `uv run python plot_split.py` once for a
+accidentally empty, constant, or unnormalised. Run `uv run python .claude/skills/data-loader-helper/plot_split.py` once for a
 reference example. Show the figure to the user and confirm it depicts the agreed claim.
 
 ## 5. Deliver
