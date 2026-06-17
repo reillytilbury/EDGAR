@@ -92,9 +92,19 @@ working reference; the latter shows session-as-sample with a (cell, time) trial 
 - `X_eval` (dict) — small subset of `X_disc_train`'s samples, used for model fingerprints.
   Same feature/response keys as the other splits, **plus `_sample_indices`** (a NumPy array
   of integer positions into `X_disc_train`'s sample axis selecting the included samples).
-- All four split dicts share the same keys; values are **JAX arrays** shaped
-  `(n_samples, n_trials)` (a feature may carry extra trailing axes, e.g.
-  `(n_samples, n_trials, n_neighbors)`). Leading axis = samples in that split.
+- All four split dicts share the same keys; values are **JAX arrays** whose **leading
+  axis is samples** in that split. *That is the only axis the engine fixes.* Everything
+  after it is free: the engine `jax.vmap`s the model/loss over axis 0 only and passes the
+  entire remaining shape through to `model()`/`loss_fn()` untouched — it never inspects,
+  reshapes, or assumes the rank of the trailing axes. So a feature may be
+
+  `(n_samples, n_trials)`, `(n_samples, n_trials, n_neighbors)`, or keep several axes
+  distinct, e.g. `(n_samples, n_cell, n_time, n_repeat)`. Whether to keep `(cell, time,
+  repeat)` as separate axes or collapse some/all into one flattened "trial" axis
+  (`(n_samples, n_cell*n_time*n_repeat)`) is **itself a design decision this skill helps
+  make** — a layout/readability choice, not a constraint the engine imposes. The one hard
+  rule is the reduction contract on `loss_fn` below: whatever trailing axes you keep,
+  `loss_fn` must reduce *all* of them to one value per sample.
 - `X_disc_*` and `X_val_*` hold **disjoint sets of samples** (discover/validate split).
   `X_disc_train`/`X_disc_test` (and the val pair) hold the **same samples**, split along
   **trials**.
@@ -102,10 +112,15 @@ working reference; the latter shows session-as-sample with a (cell, time) trial 
   cutoff, RNG seed) should be a named argument with a default.
 
 **`loss_fn(model_output, data) -> JAX array of shape (n_samples,)`**
-- Per-sample loss. It is called on the already-`vmap`'d batch, so reduce over the trials
-  axis (`axis=-1`) and keep the sample axis; `scoring.py` mean-reduces over samples itself.
-- `model_output` shape `(n_samples, n_trials)`; `data` is the split dict (use e.g.
-  `data['velocity']` as the target).
+- Per-sample loss, and **this `(n_samples,)` return is the real contract** (the leading axis
+  is the only thing the engine fixes). It is called on the already-`vmap`'d batch, so it must
+  reduce *every* non-sample axis and keep only the sample axis; `scoring.py` then mean-reduces
+  over samples itself. With a single flattened trial axis that reduction is `axis=-1`; if you
+  kept several trailing axes (e.g. `(n_samples, n_cell, n_time, n_repeat)`), reduce all of them
+  with `axis=tuple(range(1, output.ndim))` rather than a hard-coded `axis=-1`.
+- `model_output` matches the model's per-sample output broadcast over samples (e.g.
+  `(n_samples, n_trials)`, or `(n_samples, n_cell, n_time, n_repeat)` if that's the layout);
+  `data` is the split dict (use e.g. `data['velocity']` as the target).
 
 **Seed models** (`seed_programs/model*.py`) operate on **one sample**: `model(data, params)`
 where `data['key']` has shape `(n_trials, ...)` (no sample axis — vmap removed it), returns
@@ -116,13 +131,68 @@ but the (sample, trial) decision constrains them, so discuss them.
 
 ---
 
+## Part 2b — The running design log (maintain this throughout)
+
+This interview gets long, and the failure mode it guards against — a loader that validates
+cleanly while testing the *wrong* claim — is exactly what an unanchored conversation
+produces: a decision made early drifts by the time you write code. So you keep a **living
+design log** as a real file: your anti-drift anchor, the thing you re-read to re-ground after
+a long exchange, and the end-of-process verification checklist. The fillable template
+(decisions table + invariants checklist) lives next to this file as `design_log_template.md`.
+
+**Lifecycle.**
+1. **At the start of the interview**, copy `design_log_template.md` to
+   `loader_design_scratch.md` in the repo root. (Scratch, because the project isn't
+   scaffolded yet — there's no `projects/<name>/` to write into.)
+2. **After each decision locks**, update the relevant row: fill `Decision` + `Rationale` and
+   flip `Status` `proposed` → `confirmed`. Re-read the whole log before proposing the
+   (sample, trial) mapping (step 6) — that step depends on every earlier row.
+3. **At delivery**, after scaffolding, fold the log into `projects/<name>/DESIGN.md` (its
+   design rationale), tick the invariants checklist against the loader you actually wrote,
+   then delete `loader_design_scratch.md`. Don't commit the scratch file.
+
+---
+
+## Part 2c — Where you're starting from (ask this first)
+
+You can't know the project's state on your own, so **open with two questions**:
+1. **What is the name of the project?**
+2. **Have you already created the project — is there a running or stub `load_data`, or
+   nothing yet?**
+
+Their answer puts you in one of two situations, which begin differently:
+
+**Situation A — there's already a loader to react to** (a `load_data.py` with real content,
+not just the `init-project` stub).
+1. Read `projects/<name>/data_loader/load_data.py` plus the project's `config.yaml`
+   `project_params`, seed models, and any `loss_fn`. Run it if you can — `uv run python` the
+   loader, or `uv run edgar validate <name>` — to see actual shapes and catch errors.
+2. Reverse-engineer the design *it encodes* and fill `loader_design_scratch.md` from it: what
+   it treats as sample vs trial, the trailing-axis layout, pointwise-vs-integrative implied by
+   the loss, the splits. Set each row's `Status` to `confirmed` only where the code clearly
+   satisfies the Part 2b invariant; set it to **`broken`** where it violates a contract or the
+   choice doesn't hold up (record what's wrong in `Rationale`).
+3. Then run the interview (Part 3) **as a review**: walk the user through what their loader
+   actually claims vs. what they intended, focusing on `broken` rows and any invariant the
+   checklist fails. Resolve each to `confirmed`, then fix the loader.
+
+**Situation B — nothing written yet** (no project folder, or only a stub loader). You don't
+have enough to design anything, so start with the cold-start questionnaire in
+`questionaire.md` (data shape/fields/description + the target equation as pseudo-code or
+LaTeX). Work through it conversationally, recording answers into the design log, then proceed
+into the deeper design questions in Part 3.
+
+---
+
 ## Part 3 — Run the interview
 
 Work conversationally and **one or two questions at a time** — this is a Socratic
 back-and-forth, not a form to dump. Use the actual `AskUserQuestion` tool when a decision
 has a small set of discrete options; use plain prose for open-ended elicitation. Lead with
 your recommendation when you have one. Adapt order to what they volunteer; don't interrogate
-mechanically. The goal is to fill in the design below.
+mechanically. The goal is to fill in the design log from Part 2b — open the scratch file
+first (or, in Situation A, the one you reverse-engineered), then update a row each time a
+decision locks.
 
 Things you must extract (and the reasoning each one drives):
 
@@ -196,7 +266,8 @@ Once the design is agreed:
 
 1. Restate the final design compactly: sample = …, trial = …, features/keys + shapes,
    target, loss, splits, pointwise/integrative, and the one-line statement of what
-   train→test and discover→validate each prove.
+   train→test and discover→validate each prove. This is just the Part 2b decisions table
+   read back in prose — if any row is still `proposed`, resolve it before writing code.
 2. Confirm the approach in 2–3 sentences before writing (per repo convention for non-trivial
    changes), then scaffold if needed (`uv run edgar init-project <name>`) and write
    `data_loader/load_data.py` + `loss_fn`, following the `particle_eom` loader's structure
@@ -204,7 +275,10 @@ Once the design is agreed:
 3. Validate it: `uv run edgar validate <name>`, and where feasible a `uv run edgar test
    projects/<name>/config.yaml` smoke run. Don't claim it works if you haven't run it; say
    what's untested (GPU/real-data/UI limits).
-4. Offer to capture the design rationale in the day's journal entry, and (if the
+4. Fold the Part 2b design log into `projects/<name>/DESIGN.md`, tick the invariant
+   checklist against the loader you actually wrote (any unticked box is a blocker, not a
+   footnote), then delete `loader_design_scratch.md`.
+5. Offer to capture the design rationale in the day's journal entry, and (if the
    sample/trial reasoning was non-obvious) suggest a memory note.
 
 Keep responses short and match the user's depth. You are a skeptical collaborator: if their

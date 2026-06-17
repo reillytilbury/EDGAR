@@ -64,17 +64,23 @@ def _first_data_key(split: dict) -> str:
 def _to_2d(arr, key: str):
     """Coerces a split array to a 2-D ``(n_samples, n_positions)`` view for display.
 
-    Keys with trailing feature axes (e.g. ``neighbor_dx`` of shape
-    ``(n_samples, n_positions, n_neighbors)``) are mean-reduced over those axes, since the
-    heatmap only needs a per-position summary. Returns ``(grid, reduced)`` where ``reduced``
-    flags whether any reduction happened, for labelling.
+    **Limitation:** only axis 1 is shown as the in-sample/position axis. Keys with *any*
+    trailing axes beyond that (e.g. ``neighbor_dx`` of shape
+    ``(n_samples, n_positions, n_neighbors)``, or a layout that deliberately keeps
+    ``(n_sample, n_cell, n_time, n_repeat)`` distinct) are **mean-reduced over axes 2+** into a
+    single per-(sample, axis-1-position) summary. So a multi-axis layout still renders, but the
+    heatmap collapses everything past axis 1 — you are *not* seeing those axes resolved. The
+    caller prints exactly which keys/shapes were collapsed so this is never silent.
+
+    Returns ``(grid, orig_shape)``; ``orig_shape`` is the array's original shape (whether or
+    not anything was reduced — reduction happened iff ``len(orig_shape) > 2``).
     """
     arr = np.asarray(arr, dtype=float)
     if arr.ndim < 2:
         raise ValueError(f"key {key!r} must be at least 2-D; got shape {arr.shape}")
     if arr.ndim == 2:
-        return arr, False
-    return np.nanmean(arr, axis=tuple(range(2, arr.ndim))), True
+        return arr, arr.shape
+    return np.nanmean(arr, axis=tuple(range(2, arr.ndim))), arr.shape
 
 
 def _expand(grid, idx, n_positions):
@@ -137,7 +143,7 @@ def plot_split(
         n_positions = int(max(train_idx.max(), test_idx.max())) + 1
         idx_for = {"train": train_idx, "test": test_idx}
 
-    reduced_any = False
+    reduced_shapes: dict[str, tuple] = {}
 
     if axes is None:
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
@@ -147,8 +153,10 @@ def plot_split(
 
     for (label, _, kind), ax in zip(_PANELS, axes.flat):
         group = "discover" if label.startswith("Discovery") else "validate"
-        grid, reduced = _to_2d(splits[group][kind][key], key)
-        reduced_any = reduced_any or reduced
+        grid, orig_shape = _to_2d(splits[group][kind][key], key)
+        reduced = len(orig_shape) > 2
+        if reduced:
+            reduced_shapes[label] = orig_shape
         if reconstruct:
             grid = _expand(grid, idx_for[kind], n_positions)
         if max_samples is not None:
@@ -164,6 +172,17 @@ def plot_split(
         ax.set_title(f"{label}\nShape: {grid.shape}\nMean: {mean:.4g}, Std: {std:.4g}", fontsize=10)
         ax.set_xlabel("in-sample position" + ("  (mean over feature axes)" if reduced else ""))
         ax.set_ylabel("sample")
+
+    if reduced_shapes:
+        shape = next(iter(reduced_shapes.values()))
+        print(
+            f"[plot_split] NOTE: key {key!r} has shape {shape} (> 2-D). The heatmap shows "
+            f"axis 1 (size {shape[1]}) as the in-sample/position axis and MEAN-REDUCES "
+            f"axes 2+ ({shape[2:]}) into it. You are NOT seeing those axes resolved — only "
+            f"a per-(sample, axis-1) average. If those trailing axes are scientifically "
+            f"distinct (e.g. cell vs time vs repeat), pick the axis you most want to "
+            f"inspect, move it to axis 1, and re-plot (or plot each separately)."
+        )
 
     fig.suptitle(suptitle, fontsize=14)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
