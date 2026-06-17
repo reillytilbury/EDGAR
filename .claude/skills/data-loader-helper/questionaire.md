@@ -4,8 +4,8 @@ Use this when the user is **starting from scratch** — no working `load_data` e
 project folder, or a folder with only a stub). It elicits the two things you cannot design
 anything without: **what the data is** and **what equation they want to discover**. Once
 these are answered you have enough to populate the top rows of the design log and move into
-the deeper design questions in `SKILL.md` Part 3 (shared-vs-varies, generalisation axis,
-pointwise-vs-integrative, splits).
+the deeper design questions in `SKILL.md` ("Run the interview": shared-vs-varies,
+generalisation axis, pointwise-vs-integrative, splits).
 
 Ask conversationally, one or two questions at a time — this is a checklist of what you must
 come away knowing, not a form to paste at the user. Record each answer into the matching row
@@ -37,11 +37,11 @@ re-ask it; confirm and move on.
    - Pseudocode: `pred[t] = sum_j force(dx[t,j]; A, B)` over neighbours `j`.
 7. **Parameters: shared vs varying.** For each fitted parameter, must it take the *same value*
    across some set of entities (a global/population constant) or is it free to differ per
-   entity? (This is the hook into Part 3's pivotal sample-definition question — flag it now,
+   entity? (This is the hook into the interview's pivotal sample-definition question — flag it now,
    resolve it there.)
 8. **Known answer?** Is there a ground-truth form you're trying to recover (sanity check /
    synthetic), or is the functional form genuinely unknown (true discovery)?
 
 After A + B you should be able to fill the *Raw data axes + sizes*, *Target equation /
 hypothesis*, and a first-pass *Trailing-axis layout* rows of the design log (status
-`proposed`), and name the candidate features/target keys. Then proceed to Part 3.
+`proposed`), and name the candidate features/target keys. Then proceed to "Run the interview".
