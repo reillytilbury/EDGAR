@@ -169,8 +169,13 @@ def plot_split(
 
         im = ax.imshow(masked, aspect="auto", cmap=cmap, interpolation="none")
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label=key)
-        ax.set_title(f"{label}\nShape: {grid.shape}\nMean: {mean:.4g}, Std: {std:.4g}", fontsize=10)
-        ax.set_xlabel("in-sample position" + ("  (mean over feature axes)" if reduced else ""))
+        ax.set_title(
+            f"{label}\nShape: {grid.shape}\nMean: {mean:.4g}, Std: {std:.4g}",
+            fontsize=10,
+        )
+        ax.set_xlabel(
+            "in-sample position" + ("  (mean over feature axes)" if reduced else "")
+        )
         ax.set_ylabel("sample")
 
     if reduced_shapes:
@@ -215,7 +220,12 @@ def _demo(save_path: str = "split_demo.png"):
         (split(n_val, train_idx), split(n_val, test_idx)),
         None,
     )
-    plot_split(out, key="response", within_sample_index=(train_idx, test_idx), save_path=save_path)
+    plot_split(
+        out,
+        key="response",
+        within_sample_index=(train_idx, test_idx),
+        save_path=save_path,
+    )
     print(f"wrote {save_path}")
 
 
