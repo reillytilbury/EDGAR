@@ -9,7 +9,7 @@ generalisation axis, pointwise-vs-integrative, splits).
 
 Ask conversationally, one or two questions at a time — this is a checklist of what you must
 come away knowing, not a form to paste at the user. Record each answer into the matching row
-of `loader_design_scratch.md` as you go. If the user already volunteered something, don't
+of `projects/<name>/design_log.md` as you go. If the user already volunteered something, don't
 re-ask it; confirm and move on.
 
 ## A. The data
