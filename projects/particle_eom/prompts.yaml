@@ -1,0 +1,158 @@
+model:
+  base: 'You are an AI scientist studying the equation of motion of overdamped, interacting
+    particles. Below are {num_parents} models, sorted from worst to best.
+
+    Each sample is one independently-simulated recording session: many particles observed
+    over many timesteps. A single set of physical constants must explain every particle and
+    every timestep within a session — do not index parameters by particle or by time.
+
+    Your task is to create a new model that has a lower loss than all the models below.
+
+    Analyze the progression of the models, generalize what worked, and create a better model.
+
+    '
+  explore: 'Use the models below as *inspiration*, but be *creative* and *invent* something new. 
+    Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. 
+    You should also *combine* features from several models, and *experiment* with new ideas.'
+
+  exploit: 'Use the models below as a *template* to create a new model.   
+    Which features correlate with lower loss? Find these features and *extrapolate* them.     
+    Focus on *exploiting* strengths and *eliminating* weaknesses or *redundancies*. You will be *penalized* for complexity.'
+
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do not include any text other than the code.
+
+    * Model signature must be `def model(data, params):`. `data` has only one key
+    "neighbor_dx", shape `(n_trials, n_neighbors)`: `neighbor_dx[t, j] = x_j(t) - x_i(t)`,
+    the displacement from this particle to every other particle in the session, at
+    the (particle, time) trial `t`. `params` is a dict of named scalars, shared across
+    every trial.
+
+    * Combine pairwise contributions by reducing over the trailing neighbor axis
+    (`np.sum(..., axis=-1)`). Do not assume a specific value of `n_neighbors` — it is
+    fixed for this dataset but your code should not hardcode it.
+
+    * If your model restricts interactions to nearby particles, implement the cutoff
+    with `np.where(np.abs(data["neighbor_dx"]) < params["r_c"], term, 0.0)` — never use
+    boolean-array indexing or any other dynamic-shape selection, since this breaks
+    downstream JAX translation.
+
+    * Clip any denominator before dividing (e.g.
+    `np.clip(np.abs(data["neighbor_dx"]), 1e-6, None)`) to avoid division by zero.
+
+    * Ensure all free parameters are numeric, not strings. We will perform gradient descent on them, so they must be differentiable.
+
+    * Ensure all string values in function call arguments are properly JSON-escaped
+
+    * You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Use a descriptive name for this model, not a version number.
+
+    * Briefly describe what the model computes.
+
+    '
+  image_analysis_instructions: "**Image Analysis Instructions:**\n
+    The image shows, for a few example recording sessions, a scatter plot of each model's
+    predicted dx/dt against the observed dx/dt for every (particle, time) trial in that
+    session. The black dashed line is y=x (a perfect prediction). The model with lower
+    average loss is plotted in green and the model with higher average loss is plotted
+    in red. Look for systematic deviations from the y=x line — e.g. predictions that are
+    compressed toward zero (missing a term, or the wrong sign), a consistent offset, or
+    a slope that is too shallow or too steep (the interaction strength is mis-scaled).
+    Use this analysis to inform your model generation, in order to create a new model
+    that improves upon these models.\n"
+
+  parent_program_template: '**Model: {name}**
+
+    loss: {program_losses_discover_final}
+
+    {code_model}
+
+    '
+  parent_program_vars:
+  - name
+  - program_losses.discover.final
+  - code.model
+parameter_estimator:
+  base: 'You are an AI scientist studying the equation of motion of overdamped, interacting
+    particles. Your task is to create a simple parameter estimator function to estimate
+    the free parameters of the latest model (shown last below). Also included are previous
+    parent models and their parameter estimators.
+
+    The parameters represent a single set of physical constants shared by every particle
+    and every timestep within one recording session — pool data across all of them when
+    fitting, do not return per-trial estimates. Estimate them directly using statistical
+    principles (e.g. closed-form linear regression for any parameter the model is linear in).
+
+    Analyze the progression of the parameter estimators, generalize the improvements, and
+    create a new parameter estimator that is better than all previous estimators.
+
+    '
+  explore: null
+  exploit: null
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do not include any text other than the code.
+
+    * Function signature must be `def parameter_estimator(data):`. `data` has keys
+    "neighbor_dx" (shape `(n_trials, n_neighbors)`, `neighbor_dx[t, j] = x_j(t) - x_i(t)`)
+    and "velocity" (shape `(n_trials,)`, the noisy observed dx_i/dt for that trial) — this
+    is the regression target you are estimating parameters against.
+
+    * Return a parameter dict with the same keys expected by the model.
+
+    * Your response **must** be less than {max_lines} lines (including imports). If it is longer, it will be immediately rejected.
+
+    * Do not attempt to fit the parameters using complex fitting functions like {swear_words}. We only need a simple, fast initial estimate of the parameters.
+
+    * Do not call the model function in your parameter_estimator code, as you will not have access to it!
+
+    * Ensure all string values in function call arguments are properly JSON-escaped
+
+    * It is VERY IMPORTANT that the returned params dictionary has keys that exactly match the keys expected by the model, and that all values are floats. If the keys do not match, or if any value is not a float, your parameter_estimator will be rejected.
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Briefly describe the estimation method.
+
+    '
+  image_analysis_instructions: null
+  parent_program_template: '**Parent model: {name}**
+
+    loss: {program_losses_discover_final}
+
+    model:
+
+    {code_model}
+
+    parameter_estimator:
+
+    {code_param_est}
+
+    ---
+
+    '
+  parent_program_vars:
+  - name
+  - program_losses.discover.final
+  - code.model
+  - code.param_est
+  current_program_template: '**New model: {name}**
+
+    {code_model}
+
+    -----------
+
+    '
+  current_program_vars:
+  - name
+  - code.model

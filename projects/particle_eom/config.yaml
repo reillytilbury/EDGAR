@@ -1,0 +1,41 @@
+io:
+  data_path: ""
+  save_path: program_databases
+
+evolution:
+  n_generations: 6
+  n_islands: 8
+  batch_size: 4
+  critical_population_size: 12
+  n_migrants: 2
+
+llms:
+  num_parents: 2
+  model_llm: gemini-2.5-flash
+  param_est_llm: gemini-2.5-flash
+  jax_model_translator_llm: gemini-2.5-flash-lite
+
+scoring:
+  param_penalty_weight: 1.0e-02 #  0.01 x min seed loss 1.011 (noise_D=0.0, C=0.5 regime)
+
+# Ground truth (A, B, r_c, mu=1 fixed) lives entirely in project_params — there is no
+# separate "ground truth" file. See journal/2026-06-16_eom_discovery_poc_spec.md,
+# "Design revision" section, for why these are the verified defaults (n_steps/r_c were
+# both tuned empirically, not guessed).
+project_params:
+  seed: 42
+  n_cells: 40
+  L: 40.0
+  A: 1.0
+  B: 1.0
+  C: 0.5  # non-reciprocal (asymmetric-attraction) term; induces a parameter-dependent
+          # drift the model must recover despite translation gauge freedom. See journal.
+  r_c: 1.5
+  dt: 0.001
+  n_steps: 400 
+  record_every: 5
+  n_chunks: 400 # keep the same as n_steps - splitting train/test as every other time step
+  noise_D: 0.0 # no noise to start with - noise added to position at each time t at generation
+  n_sessions_discover: 12
+  n_sessions_validate: 4
+  n_eval_sessions: 3
