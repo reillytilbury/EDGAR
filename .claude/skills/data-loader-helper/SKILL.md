@@ -144,7 +144,7 @@ Their answer puts you in one of two situations:
   loader.
 
 **Situation B — nothing written yet** (no folder, or only a stub). You can't design anything
-yet, so start with the cold-start questionnaire in `questionaire.md` (data shape / fields /
+yet, so start with the cold-start questionnaire in `questionnaire.md` (data shape / fields /
 description + the target equation as pseudo-code or LaTeX), recording answers into the design
 log as you go, then continue into §3.
 

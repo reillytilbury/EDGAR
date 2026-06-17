@@ -148,7 +148,7 @@ program_databases/
 > ```
 >
 > **Not using Claude Code?** The agent is just a prompt — `.claude/skills/data-loader-helper/SKILL.md`
-> (plus `questionaire.md` and `design_log_template.md` in the same folder). Paste `SKILL.md` in as a
+> (plus `questionnaire.md` and `design_log_template.md` in the same folder). Paste `SKILL.md` in as a
 > system/instruction prompt to whatever assistant you use (Codex, Cursor, ChatGPT, etc.) and it will
 > run the same interview, or just read it yourself as a design guide for the steps below.
 
