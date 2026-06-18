@@ -140,6 +140,22 @@ program_databases/
 
 ## Setting Up a New Project
 
+> **EXPERIMENTAL (work in progress): start with the `data-loader-helper` agent.** The hardest part of a new project
+> is deciding *what one sample and one trial are* — get it wrong and the loader trains and
+> validates cleanly while silently testing a different claim. This repo ships an interactive
+> helper that interviews you about your data and intended equation, works out the (sample, trial)
+> mapping and the train/test/discover/validate splits, then writes `data_loader/load_data.py` for
+> you. Run it before doing the manual steps below:
+>
+> ```bash
+> claude '/data-loader-helper'
+> ```
+>
+> **Not using Claude Code?** The agent is just a prompt — `.claude/skills/data-loader-helper/SKILL.md`
+> (plus `questionnaire.md` and `design_log_template.md` in the same folder). Paste `SKILL.md` in as a
+> system/instruction prompt to whatever assistant you use (Codex, Cursor, ChatGPT, etc.) and it will
+> run the same interview, or just read it yourself as a design guide for the steps below.
+
 ### 1. Scaffold
 
 ```bash
