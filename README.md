@@ -136,7 +136,7 @@ program_databases/
 
 ## Setting Up a New Project
 
-> **Recommended: start with the `data-loader-helper` agent.** The hardest part of a new project
+> **EXPERIMENTAL (work in progress): start with the `data-loader-helper` agent.** The hardest part of a new project
 > is deciding *what one sample and one trial are* — get it wrong and the loader trains and
 > validates cleanly while silently testing a different claim. This repo ships an interactive
 > helper that interviews you about your data and intended equation, works out the (sample, trial)

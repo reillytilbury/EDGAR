@@ -12,8 +12,8 @@ The two splits:
    (``X_discover``) drives the evolutionary search; the second, disjoint set
    (``X_validate``) is held out for the final check that a discovered equation *form*
    transfers to fresh samples.
-2. **Within each sample, along the in-sample axis — fit vs eval.** ``*_train`` positions are
-   where each candidate's parameters are fit by gradient descent; ``*_test`` positions are
+2. **Within each sample, along the within-sample axes — fit vs eval.** ``*_train`` positions
+   are where each candidate's parameters are fit by gradient descent; ``*_test`` positions are
    where the fitted model is scored. Whether these are contiguous blocks or interleaved
    chunks is exactly what the masked regions make visible.
 
@@ -22,8 +22,10 @@ region already tells you *where* the split is, and showing the actual numbers un
 catches normalisation/quality problems in the same glance. This mirrors the
 "BZ015 Data Partitions (Normalized & Masked)" figure this helper is modelled on.
 
-Vocabulary: the within-sample axis is the **in-sample position** axis here, not "trial" —
-"trial" is overloaded and blurs the two split levels.
+Vocabulary: a sample's entries are **observations**, living across one or more **within-sample
+axes**. This 2-D heatmap shows axis 1 as the observation-position axis and mean-collapses any
+further within-sample axes (we avoid the word "trial" — it is overloaded and blurs the two
+split levels, and a sample need not be 2-D).
 
 Typical use from the skill (or a scratch cell)::
 
@@ -32,7 +34,7 @@ Typical use from the skill (or a scratch cell)::
     plot_split(out, key="velocity", save_path="split.png")
 
 If the loader splits by *reducing* arrays (train/test have fewer columns each, as in
-``particle_eom``) rather than NaN-masking a full grid, pass the in-sample index arrays you
+``particle_eom``) rather than NaN-masking a full grid, pass the within-sample index arrays you
 used so the four panels are reconstructed onto a shared grid with the held-out region masked
 white — reproducing the reference figure's complementary-mask look and revealing
 block-vs-interleave structure::
@@ -64,8 +66,8 @@ def _first_data_key(split: dict) -> str:
 def _to_2d(arr, key: str):
     """Coerces a split array to a 2-D ``(n_samples, n_positions)`` view for display.
 
-    **Limitation:** only axis 1 is shown as the in-sample/position axis. Keys with *any*
-    trailing axes beyond that (e.g. ``neighbor_dx`` of shape
+    **Limitation:** only axis 1 is shown as the within-sample (observation-position) axis. Keys
+    with *any* trailing axes beyond that (e.g. ``neighbor_dx`` of shape
     ``(n_samples, n_positions, n_neighbors)``, or a layout that deliberately keeps
     ``(n_sample, n_cell, n_time, n_repeat)`` distinct) are **mean-reduced over axes 2+** into a
     single per-(sample, axis-1-position) summary. So a multi-axis layout still renders, but the
@@ -114,10 +116,10 @@ def plot_split(
         key: Which data key to display. Defaults to the first non-``_`` key. Keys with
             trailing feature axes are mean-reduced to ``(n_samples, n_positions)``.
         within_sample_index: Optional ``(train_index, test_index)`` — the 1-D arrays of
-            original in-sample positions used to split. Pass these when the loader *reduces*
-            arrays per split (different column counts) so the panels are reconstructed onto a
-            shared full-width grid with the held-out columns masked. Omit when the loader
-            already returns full-width NaN-masked arrays.
+            original within-sample positions used to split. Pass these when the loader
+            *reduces* arrays per split (different column counts) so the panels are
+            reconstructed onto a shared full-width grid with the held-out columns masked. Omit
+            when the loader already returns full-width NaN-masked arrays.
         max_samples: Cap on the number of sample rows drawn per panel (useful for very tall
             data). ``None`` draws all; start with a small number to keep the figure light.
         cmap: Matplotlib colormap for the data values.
@@ -174,7 +176,8 @@ def plot_split(
             fontsize=10,
         )
         ax.set_xlabel(
-            "in-sample position" + ("  (mean over feature axes)" if reduced else "")
+            "within-sample position (axis 1)"
+            + ("  (mean over further axes)" if reduced else "")
         )
         ax.set_ylabel("sample")
 
@@ -182,11 +185,11 @@ def plot_split(
         shape = next(iter(reduced_shapes.values()))
         print(
             f"[plot_split] NOTE: key {key!r} has shape {shape} (> 2-D). The heatmap shows "
-            f"axis 1 (size {shape[1]}) as the in-sample/position axis and MEAN-REDUCES "
-            f"axes 2+ ({shape[2:]}) into it. You are NOT seeing those axes resolved — only "
-            f"a per-(sample, axis-1) average. If those trailing axes are scientifically "
-            f"distinct (e.g. cell vs time vs repeat), pick the axis you most want to "
-            f"inspect, move it to axis 1, and re-plot (or plot each separately)."
+            f"axis 1 (size {shape[1]}) as the within-sample (observation-position) axis and "
+            f"MEAN-REDUCES axes 2+ ({shape[2:]}) into it. You are NOT seeing those axes "
+            f"resolved — only a per-(sample, axis-1) average. If those within-sample axes are "
+            f"scientifically distinct (e.g. cell vs time vs repeat), pick the axis you most "
+            f"want to inspect, move it to axis 1, and re-plot (or plot each separately)."
         )
 
     fig.suptitle(suptitle, fontsize=14)
@@ -199,7 +202,7 @@ def plot_split(
 def _demo(save_path: str = "split_demo.png"):
     """Self-test: fabricate a reduced-convention ``load_data`` output and render it.
 
-    Uses a chunked-interleave in-sample split (the recommended default for an autocorrelated
+    Uses a chunked-interleave within-sample split (the recommended default for an autocorrelated
     time axis) so the reconstructed masking shows alternating held-out stripes — a quick way
     to confirm the figure renders without needing a real project.
     """

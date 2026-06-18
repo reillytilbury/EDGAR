@@ -1,7 +1,6 @@
 ---
 name: data-loader-helper
-description: Interactive helper for designing and writing a new EDGAR project's data_loader/load_data.py. Use at the preliminary stage of a new equation-discovery project to interview the user about their data and intended equation, work out the right (sample, trial) mapping and train/test/discover/validate splits, then write the loader. Triggers — "new project", "set up a data loader", "how should I structure my data for EDGAR", "what is one sample here", "help me write load_data".
-model: sonnet
+description: Interactive helper for designing and writing a new EDGAR project's data_loader/load_data.py. Use at the preliminary stage of a new equation-discovery project to interview the user about their data and intended equation, work out the right (sample, observation) mapping and train/test/discover/validate splits, then write the loader. Triggers — "new project", "set up a data loader", "how should I structure my data for EDGAR", "what is one sample here", "help me write load_data".
 ---
 
 # data-loader-helper
@@ -11,10 +10,15 @@ equation-discovery project. Don't rush to code: first understand their system, a
 *them* understand EDGAR's fitting architecture, well enough that the resulting
 `data_loader/load_data.py` encodes the scientific claim they actually want to test.
 
-Everything hinges on one decision: **what is one sample, and what is one trial?** Splits,
-loss, and seed models all follow from it, and getting it wrong yields a loader that
+Everything hinges on one decision: **what is one sample, and what is one observation?**
+Splits, loss, and seed models all follow from it, and getting it wrong yields a loader that
 optimises and validates cleanly while silently testing a *different* claim than intended,
 with no error raised. Treat that mapping as the spine of the conversation.
+
+(Throughout, an **observation** is one within-sample unit the per-sample parameter set must
+explain — one entry of `data[i]`. A sample `data[i]` is an arbitrary-rank block
+`(n_1, …, n_N)`; its observations live across one or more **within-sample axes**, not
+necessarily a single flat axis.)
 
 ---
 
@@ -33,41 +37,50 @@ mean over samples of a per-sample loss. Reason from this:
   something the loss enforces.
 - A quantity allowed to **vary** per entity should be its own sample (it gets its own params
   for free).
-- **`params` has no trial axis.** Everything on the trial axis is explained by one shared
-  parameter set per sample — so the trial axis is "what one parameter set must
-  simultaneously explain."
+- **`params` has no within-sample axis.** Every observation in a sample is explained by that
+  one shared parameter set — so the within-sample axes are collectively "what one parameter
+  set must simultaneously explain."
 
 **The two splits, and what each tests.**
-- **Train/test is *within* a sample, along the *trials* axis.** Params are fit on train
-  trials by gradient descent; loss is reported on held-out test trials. So the trials axis
-  is the *only* axis your validation probes generalisation across — every other axis is just
-  "more data," not "more evidence of generalisation."
+- **Train/test is *within* a sample — it partitions the sample's observations.** Params are
+  fit on the train observations by gradient descent; loss is reported on the held-out test
+  observations. The within-sample axes are the *only* axes your validation probes
+  generalisation across — every other axis is just "more data," not "more evidence of
+  generalisation." The partition may run along a single within-sample axis (e.g. retinotopy:
+  one pixel axis, train pixels vs test pixels) **or carve across several axes at once.**
+  Example — trial-to-trial variability, where `data[i]` is `(n_times, n_cells)`: train is the
+  L-shaped majority region and test is a held-out block sitting at the corner where a held-out
+  *time* block intersects a held-out *cell* block, so a *single* train/test split cuts across
+  **both** within-sample axes simultaneously. Don't assume the split lives on one axis.
 - **Discover/validate is *across* samples (disjoint sample sets).** `X_discover` is seen by
   the LLM discovery loop; `X_validate` is never seen during discovery and is the final
   held-out check that the discovered *form* transfers to fresh samples.
 
-**Pointwise vs integrative — decides whether the time/trial axis can be shuffled.**
-- **Pointwise / static map:** each trial's target is computed from that trial's features
-  alone (`f(state_t) -> y_t`) and the loss reduces over trials independently. Trials are
-  exchangeable — shuffle, interleave, or drop freely; train/test splitting is pure index
-  selection (no contiguity, no discontinuity markers, no NaN masks).
-- **Integrative / autoregressive:** the target depends on *neighbouring* trials (velocity by
-  finite-differencing positions, an ODE rollout scored against a trajectory, any recurrence
-  `state_{t+1} = g(state_t)`). Contiguity is now load-bearing: a split that removes interior
-  frames creates real breaks, so each split must stay contiguous runs, or the loss must skip
-  gaps (NaN-masking + NaN-aware loss).
-- **The trap:** "I'm finding a differential equation" does *not* imply integrative. If the
-  target is an analytic instantaneous derivative computed per frame (as in `particle_eom`,
-  where velocity is the instantaneous `dx/dt` and the loss is plain per-frame MSE), it is
-  **pointwise** and frames are fully exchangeable. Probe this explicitly; don't over-engineer
-  discontinuity machinery for a problem that's actually pointwise.
+**Pointwise vs integrative — decides whether observations along an axis can be shuffled.**
+This is judged *per within-sample axis*: an axis the target integrates over is constrained
+even when the others are freely splittable.
+- **Pointwise / static map:** each observation's target is computed from that observation's
+  features alone (`f(state) -> y`) and the loss reduces over observations independently.
+  Observations are exchangeable — shuffle, interleave, or drop freely; train/test splitting is
+  pure index selection (no contiguity, no discontinuity markers, no NaN masks).
+- **Integrative / autoregressive:** the target depends on *neighbouring* observations along
+  some axis (velocity by finite-differencing positions along time, an ODE rollout scored
+  against a trajectory, any recurrence `state_{t+1} = g(state_t)`). Contiguity is now
+  load-bearing **on that axis**: a split that removes interior frames creates real breaks, so
+  each split must stay contiguous runs along it, or the loss must skip gaps (NaN-masking +
+  NaN-aware loss). Other within-sample axes (e.g. cells) the target does *not* integrate over
+  stay freely splittable.
+- **Possible trap:** "I'm finding a differential equation" does not necessarily imply integrative. If the
+  target is an analytic instantaneous derivative computed per frame (e.g. velocity is the
+  instantaneous `dx/dt` and the loss is plain per-frame MSE), it is **pointwise** and frames
+  are fully exchangeable. Probe this explicitly; don't over-engineer discontinuity machinery
+  for a problem that's actually pointwise.
 
-**Split granularity for a time/trial axis** (only once pointwise is confirmed): choose from
-how autocorrelated the frames are and how much the dynamics drift, not from a default
-fraction. Block split → test may be an extrapolation to a later regime (conflates wrong-form
-with different-regime). Per-frame interleave → adjacent train/test frames are near-duplicates
-(leakage, test loss too optimistic). **Chunked interleave** (contiguous blocks, alternate
-whole blocks to train/test) is the usual middle ground.
+**Split granularity for a given within-sample axis** (only once pointwise is confirmed for
+that axis): choose from how autocorrelated entries along it are and how much the dynamics
+drift. Block split / Per-entry interleave / Chunked interleave (contiguous blocks, alternate 
+whole blocks to train/test). With several within-sample axes, pick a granularity per axis 
+(e.g. spatial-block checkerboard on a pixel axis, contiguous time blocks on a time axis).
 
 ---
 
@@ -75,7 +88,7 @@ whole blocks to train/test) is the usual middle ground.
 
 `data_loader/load_data.py` defines two callables. See the README "Setting Up a New Project"
 section and `projects/particle_eom/data_loader/load_data.py` for a complete reference (it
-shows session-as-sample with a (cell, time) trial flattening).
+shows session-as-sample with a (cell, time) observation flattening).
 
 **`load_data(data_path, **kwargs) -> (X_discover, X_validate, X_eval)`**
 - `X_discover = (X_disc_train, X_disc_test)` — seen by the LLM discovery loop.
@@ -87,30 +100,34 @@ shows session-as-sample with a (cell, time) trial flattening).
   samples**. *That is the only axis the engine fixes.* Everything after it is free: vmap maps
   over axis 0 only and passes the entire remaining shape through to `model()`/`loss_fn()`
   untouched — the engine never inspects, reshapes, or assumes the rank of the trailing axes.
-  So a feature may be `(n_samples, n_trials)`, `(n_samples, n_trials, n_neighbors)`, or keep
+  So a feature may be `(n_samples, n_obs)`, `(n_samples, n_obs, n_neighbors)`, or keep
   axes distinct, e.g. `(n_samples, n_cell, n_time, n_repeat)`. Whether to keep those separate
-  or collapse some/all into one flattened trial axis (`(n_samples, n_cell*n_time*n_repeat)`)
-  is **a design decision this skill helps make** — a layout choice, not an engine constraint.
-  The one hard rule is the `loss_fn` reduction contract below.
+  or collapse some/all into one flattened observation axis
+  (`(n_samples, n_cell*n_time*n_repeat)`) is **a design decision this skill helps make** — a
+  layout choice, not an engine constraint. The one hard rule is the `loss_fn` reduction
+  contract below.
 - `X_disc_*` and `X_val_*` hold **disjoint sample sets**; `X_disc_train`/`X_disc_test` (and
-  the val pair) hold the **same samples**, split along **trials**.
+  the val pair) hold the **same samples**, split along the within-sample axes (i.e. into
+  disjoint sets of observations).
 - `kwargs` come from `project_params:` in `config.yaml`, so any knob (noise, counts, cutoff,
   RNG seed) should be a named argument with a default.
 
 **`loss_fn(model_output, data) -> JAX array of shape (n_samples,)`**
 - Per-sample loss — **this `(n_samples,)` return is the real contract.** It is called on the
   already-`vmap`'d batch, so it must reduce *every* non-sample axis and keep only the sample
-  axis; `scoring.py` then mean-reduces over samples. A single flattened trial axis reduces
-  with `axis=-1`; several trailing axes reduce with `axis=tuple(range(1, output.ndim))`.
+  axis; `scoring.py` then mean-reduces over samples. A single flattened observation axis
+  reduces with `axis=-1`; several within-sample axes reduce with
+  `axis=tuple(range(1, output.ndim))`.
 - `model_output` matches the model's per-sample output broadcast over samples; `data` is the
   split dict (use e.g. `data['velocity']` as the target).
 
 **Seed models** (`seed_programs/model*.py`) operate on **one sample**: `model(data, params)`
-where `data['key']` has shape `(n_trials, ...)` (no sample axis — vmap removed it), returns
-`(n_trials,)`, and carries `model.DEFAULT_PARAMS`. Parameter estimators (`param_est*.py`,
+where `data['key']` has the sample's within-sample shape (e.g. `(n_obs, ...)` or
+`(n_cell, n_time, ...)` — no sample axis, vmap removed it), returns the matching per-sample
+output shape, and carries `model.DEFAULT_PARAMS`. Parameter estimators (`param_est*.py`,
 `parameter_estimator(data)`) return the same keys; keep them simple (closed-form / heuristic,
-no `scipy.optimize`). You won't write these here, but the (sample, trial) decision constrains
-them, so discuss them.
+no `scipy.optimize`). You won't write these here, but the (sample, observation) decision
+constrains them, so discuss them.
 
 ---
 
@@ -121,12 +138,9 @@ them, so discuss them.
 You can't know the project's state on your own, so **open by asking**. Two things to learn:
 the project name and the loader state. Match the asking mechanism to the answer's shape:
 
-- **Project name — ask in plain prose.** It's free text, so just ask the user to type the
-  name (or say it's a new project). Do *not* route this through `AskUserQuestion`'s "Other"
-  field — forcing a free-text answer through a discrete-choice menu makes the user navigate
-  and hit Enter before they can type, which is needless friction.
 - **Loader state — ask through `AskUserQuestion`**, since it's a genuine pick from discrete
   options: *a real/working `load_data`* · *an `init-project` stub only* · *nothing yet*.
+- **Project name — ask in plain prose.** Ask the user to type the name (or say it's a new project). 
 
 Their answer puts you in one of two situations:
 
@@ -135,8 +149,7 @@ Their answer puts you in one of two situations:
 - Read `projects/<name>/data_loader/load_data.py` plus the project's `config.yaml`
   `project_params`, seed models, and `loss_fn`. Run it if you can (`uv run python` the loader,
   or `uv run edgar validate <name>`) to see actual shapes and catch errors.
-- Reverse-engineer the design it encodes into the design log (§2): sample vs trial, the
-  trailing-axis layout, pointwise-vs-integrative implied by the loss, the splits. Mark a row
+- Reverse-engineer the design it encodes into the design log (§2). Mark a row
   ✅ (confirmed) only where the code clearly satisfies the relevant contract; mark it ❌ (broken)
   where it violates one (note what's wrong in `Rationale`).
 - Then run the interview (§3) **as a review**: walk the user through what their loader
@@ -147,6 +160,10 @@ Their answer puts you in one of two situations:
 yet, so start with the cold-start questionnaire in `questionaire.md` (data shape / fields /
 description + the target equation as pseudo-code or LaTeX), recording answers into the design
 log as you go, then continue into §3.
+
+**Situation C - a loader stub exists** (from `edgar init-project`), but no real loader yet. You can
+treat it like Situation B, but you can also read the stub to see what the user has already chosen for the sample/observation mapping and splits, and use that as a
+starting point for the interview. Confirm with the user whether those choices are still valid or need to be revised. 
 
 ## 2. Keep a running design log
 
@@ -169,8 +186,8 @@ file.
   root — the log belongs in the project folder from the start.
 - **As each decision locks**, fill that row's `Decision` + `Rationale` in
   `projects/<name>/design_log.md` and flip `Status` 🟡 (proposed) → ✅ (confirmed). Re-read the whole
-  log before proposing the (sample, trial) mapping in §3 — that step depends on every earlier
-  row.
+  log before proposing the (sample, observation) mapping in §3 — that step depends on every
+  earlier row.
 - Ticking the invariants checklist against the loader you actually wrote happens at delivery (§5).
 
 ## 3. Run the interview
@@ -189,20 +206,23 @@ answer updates a design-log row. What you must extract (and the reasoning each d
 2. **The target equation / hypothesis.** The relationship in words; the input (features) and
    output (regression target); known ground truth (synthetic) or not.
 3. **What must be shared vs. what may vary** — *the* pivotal question. "Which quantities take
-   the *same value* across multiple entities (a global constant, a population-level rule), and
-   which differ per entity?" The shared thing's scope defines a sample; a shared constant is
-   only enforced if its scope = one sample.
-4. **The generalisation claim.** "Across which axis do you want to *prove* the equation
-   generalises?" That axis becomes trials; every other axis is just more data.
-5. **Pointwise vs integrative.** Probe how the target is computed — function of one trial, or
-   of neighbours (rollout, finite difference, recurrence)? Resolve the "it's an ODE so it must
-   be integrative" trap directly. Decides exchangeability and whether you need contiguity /
+   the *same value* across multiple samples, and which differ per sample?"
+4. **The generalisation claim.** "Across which axis (or axes) do you want to *prove* the
+   equation generalises?" Those become the within-sample axes you hold observations out along;
+   every other axis is just more data. (More than one axis can carry the claim — e.g. holding
+   out both unseen times *and* unseen cells.)
+5. **Pointwise vs integrative.** Probe how the target is computed — function of one observation,
+   or of neighbours along some axis (rollout, finite difference, recurrence)? Resolve the "it's
+   an ODE so it must be integrative" trap directly, and remember it's judged per within-sample
+   axis. Decides exchangeability and whether you need contiguity /
    NaN-masking.
-6. **Propose the (sample, trial) mapping** from 3–5 and *replay the consequences back*: "With
-   this, train→test tests <X>, and constant <C> is/isn't enforced as shared. Is that the claim
-   you want?" Offer the rejected alternatives and why they're weaker. Iterate until they agree.
-7. **Split details.** Discover/validate sample counts; train/test granularity (block /
-   chunked-interleave / per-frame) justified by autocorrelation/drift; `X_eval` subset size.
+6. **Propose the (sample, observation) mapping** from 3–5 and *replay the consequences back*:
+   "With this, train→test tests <X>, and constant <C> is/isn't enforced as shared. Is that the
+   claim you want?" Offer the rejected alternatives and why they're weaker. Iterate until they
+   agree.
+7. **Split details.** Discover/validate sample counts; train/test granularity per within-sample
+   axis (block / chunked-interleave / per-entry) justified by autocorrelation/drift; `X_eval`
+   subset size.
    For synthetic data, the generator parameters and how ground truth is persisted (usually
    just the `project_params`, already saved in `task_spec.yaml`).
 8. **Seed sanity.** Briefly: what one or two ingredient seed models look like and whether the
@@ -218,9 +238,10 @@ Use the bundled helper:
 ```python
 from plot_split import plot_split
 out = load_data(**project_params)            # (X_discover, X_validate, X_eval)
-# If the loader reduces arrays per split (different column counts), pass the in-sample index
-# arrays so held-out positions show as white masks and block-vs-interleave is visible. Omit
-# them if the loader already returns full-width NaN-masked arrays.
+# If the loader reduces arrays per split (different sizes along the split axis), pass the
+# within-sample index arrays so held-out positions show as white masks and
+# block-vs-interleave is visible. Omit them if the loader already returns full NaN-masked
+# arrays.
 plot_split(out, key="<your_target_key>",
            within_sample_index=(train_idx, test_idx),
            save_path="split.png")
@@ -228,17 +249,20 @@ plot_split(out, key="<your_target_key>",
 
 It draws a 2x2 grid — discover/validate × fit(train)/eval(test) — of the **actual data
 values**, each panel's non-member region masked white, with shape/mean/std per panel. Read it
-for: (a) the fit/eval split falling where intended along the in-sample axis (block vs
+for: (a) the fit/eval split falling where intended along the within-sample axes (block vs
 interleaved chunks); (b) discover and validate disjoint along the sample axis; (c) no panel
-accidentally empty, constant, or unnormalised. Run `uv run python plot_split.py` once for a
-reference example. Show the figure to the user and confirm it depicts the agreed claim.
+accidentally empty, constant, or unnormalised. The heatmap is 2-D: it shows axis 1 as the
+within-sample position axis and mean-collapses any further within-sample axes (the helper
+prints a note when it does), so for a multi-axis layout plot the axis you most want to inspect.
+Run `uv run python plot_split.py` once for a reference example. Show the figure to the user and
+confirm it depicts the agreed claim.
 
 ## 5. Deliver
 
 Once the design is agreed:
 
-1. Restate the final design compactly — the design-log table read back in prose: sample, trial,
-   features/keys + shapes, target, loss, splits, pointwise/integrative, and the one-line
+1. Restate the final design compactly — the design-log table read back in prose: sample,
+   observation, features/keys + shapes, target, loss, splits, pointwise/integrative, and the one-line
    statement of what train→test and discover→validate each prove. Resolve any still-🟡 (proposed)
    row before writing code.
 2. Confirm the approach in 2–3 sentences (repo convention for non-trivial changes), then
@@ -251,7 +275,7 @@ Once the design is agreed:
 4. In `projects/<name>/design_log.md`, tick the invariants checklist against the loader you
    actually wrote (any unticked box is a blocker). The log already lives in the project folder,
    so there's nothing to move or clean up.
-5. If the sample/trial reasoning was non-obvious, suggest capturing it as a memory note.
+5. If the sample/observation reasoning was non-obvious, suggest capturing it as a memory note.
 
 Keep responses short and match the user's depth. You are a skeptical collaborator: if their
 intended mapping would silently test the wrong claim, say so plainly before writing anything.
