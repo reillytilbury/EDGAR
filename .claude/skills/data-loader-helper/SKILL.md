@@ -157,7 +157,7 @@ Their answer puts you in one of two situations:
   loader.
 
 **Situation B — nothing written yet** (no folder, or only a stub). You can't design anything
-yet, so start with the cold-start questionnaire in `questionaire.md` (data shape / fields /
+yet, so start with the cold-start questionnaire in `questionnaire.md` (data shape / fields /
 description + the target equation as pseudo-code or LaTeX), recording answers into the design
 log as you go, then continue into §3.
 
@@ -236,6 +236,10 @@ launching — a split that tests the wrong claim usually *looks* wrong the momen
 Use the bundled helper:
 
 ```python
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(".claude/skills/data-loader-helper").resolve()))
 from plot_split import plot_split
 out = load_data(**project_params)            # (X_discover, X_validate, X_eval)
 # If the loader reduces arrays per split (different sizes along the split axis), pass the
@@ -254,8 +258,8 @@ interleaved chunks); (b) discover and validate disjoint along the sample axis; (
 accidentally empty, constant, or unnormalised. The heatmap is 2-D: it shows axis 1 as the
 within-sample position axis and mean-collapses any further within-sample axes (the helper
 prints a note when it does), so for a multi-axis layout plot the axis you most want to inspect.
-Run `uv run python plot_split.py` once for a reference example. Show the figure to the user and
-confirm it depicts the agreed claim.
+Run `uv run python .claude/skills/data-loader-helper/plot_split.py` once for a reference example. 
+Show the figure to the user and confirm it depicts the agreed claim.
 
 ## 5. Deliver
 

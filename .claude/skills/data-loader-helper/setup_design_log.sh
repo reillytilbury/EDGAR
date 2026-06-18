@@ -10,6 +10,10 @@
 set -euo pipefail
 
 PROJECT_NAME="${1:?usage: setup_design_log.sh <project_name>}"
+if [[ ! "$PROJECT_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+  echo "error: invalid project_name '$PROJECT_NAME' (expected [A-Za-z0-9][A-Za-z0-9_-]*)" >&2
+  exit 2
+fi
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel)"
 PROJECT_DIR="$REPO_ROOT/projects/$PROJECT_NAME"
