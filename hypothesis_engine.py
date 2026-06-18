@@ -845,7 +845,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     combined_dir = os.path.join(base_dir, date_stamp, time_stamp, 'combined')
     os.makedirs(combined_dir, exist_ok=True)
     combined_programs_dataframe = pd.concat(islands, ignore_index=True)
-    combined_programs_dataframe = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss')
+    combined_programs_dataframe = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complex', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss')
     # combined_programs_dataframe = combined_programs_dataframe.sort_values(by='test_loss').reset_index(drop=True)
     # sort by mean loss
     combined_programs_dataframe = combined_programs_dataframe.sort_values(by='mean_loss').reset_index(drop=True)

@@ -5,7 +5,7 @@ import pandas as pd
 import utils
 import itertools
 
-def compare_programs(program_a, program_b, loss_tol=0.02, cosine_tol=0.95, mode='complicated'):
+def compare_programs(program_a, program_b, loss_tol=0.02, cosine_tol=0.95, mode='complex'):
     """
     Compare two programs similarity based on their unique identifiers, code strings, losses, and predictions.
 
@@ -18,11 +18,11 @@ def compare_programs(program_a, program_b, loss_tol=0.02, cosine_tol=0.95, mode=
         program_b (pd.Series): Second program to compare.
         loss_tol (float): Tolerance for loss comparison.
         corr_tol (float): Tolerance for correlation comparison.
-        mode (str): Mode of comparison, can be 'simple' or 'complicated'.
+        mode (str): Mode of comparison, can be 'simple' or 'complex'.
     Returns:
         bool: True if the programs are equivalent.
     """
-    assert mode in ['simple', 'complicated'], "Mode must be either 'simple' or 'complicated'."
+    assert mode in ['simple', 'complex'], "Mode must be either 'simple' or 'complex'."
 
     # return false immediately if the programs have different number of free parameters, regardless of mode
     params_a = program_a['params']
@@ -56,11 +56,11 @@ def compare_programs(program_a, program_b, loss_tol=0.02, cosine_tol=0.95, mode=
     # if we reach here, the programs are equivalent
     return True
 
-def remove_duplicates(island, mode='complicated', loss_tol=0.01, cosine_tol=0.99, loss_type='train_loss'):
+def remove_duplicates(island, mode='complex', loss_tol=0.01, cosine_tol=0.99, loss_type='train_loss'):
     """ Remove duplicate programs within island
     Args:
         island (pd.DataFrame): DataFrame containing programs in the island.
-        mode (str): Mode of comparison, can be 'simple' or 'complicated'.
+        mode (str): Mode of comparison, can be 'simple' or 'complex'.
         loss_tol (float): Tolerance for loss comparison.
         cosine_tol (float): Tolerance for cosine similarity comparison.
         loss_type (str): Type of loss to use for comparison, e.g., 'train_loss' or 'test_loss'.
@@ -88,7 +88,7 @@ def remove_duplicates(island, mode='complicated', loss_tol=0.01, cosine_tol=0.99
     island = island.drop(index=list(indices_to_remove)).reset_index(drop=True)
     return island
 
-def compute_intersection(island_a, island_b, mode='complicated'):
+def compute_intersection(island_a, island_b, mode='complex'):
     # this is symmetric if and only if island_a and island_b do not harbour any duplicates
     duplicate_indices_in_b = []
     n_programs_a, n_programs_b = len(island_a), len(island_b)
@@ -101,7 +101,7 @@ def compute_intersection(island_a, island_b, mode='complicated'):
                 break
     return duplicate_indices_in_b
 
-def perform_island_deduplication(islands, overlap_threshold=6, mode='complicated'):
+def perform_island_deduplication(islands, overlap_threshold=6, mode='complex', min_island_size=2):
     """
     Perform deduplication of programs 1. within each island and 2. between islands
     """
@@ -119,8 +119,8 @@ def perform_island_deduplication(islands, overlap_threshold=6, mode='complicated
         programs_in_j = len(islands[j])
         if len(duplicate_indices_in_j) < overlap_threshold:
             continue
-        # ensure >= 2 programs left after deduplication
-        duplicate_indices_to_drop = [idx for k, idx in enumerate(duplicate_indices_in_j) if k < programs_in_j - 2]
+        # ensure >= min_island_size programs left after deduplication
+        duplicate_indices_to_drop = [idx for k, idx in enumerate(duplicate_indices_in_j) if k < programs_in_j - min_island_size]
         islands[j] = islands[j].drop(index=duplicate_indices_to_drop).reset_index(drop=True)
         logging.info(f"Removed indices {duplicate_indices_to_drop} from island {j} due to overlap with island {i}.")
         print(f"Removed indices {duplicate_indices_to_drop} from island {j} due to overlap with island {i}. \nRemaining programs in island {j}: {len(islands[j])}")
