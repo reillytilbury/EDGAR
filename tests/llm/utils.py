@@ -11,7 +11,7 @@ from edgar.llm.generate import (
 from edgar.llm.prompt_schema import PromptSchema
 from tests.evolution.utils import make_empty_program
 from tests.llm.fakellm import FakeLLM, CyclingModel
-from tests.llm.programs import InvalidProgram, Program1
+from tests.llm.programs import InvalidProgram, Program1, DEFAULT_FAKE_PROGRAMS
 
 
 def make_fake_spec(output_dir: str | None = None) -> SimpleNamespace:
@@ -53,7 +53,7 @@ async def generate_one_fake_model():
         parent_program_template="..",
         parent_program_vars=[],
     )
-    llm = FakeLLM()
+    llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     llm_model = llm.gen_model()  # A TestModel with code for Program1
     await _generate_one_model(
         program, parents, prompt_schema, llm_model, "explore", 1.0
@@ -71,7 +71,7 @@ async def generate_fake_models(n: int):
         parent_program_template="..",
         parent_program_vars=[],
     )
-    llm = FakeLLM()
+    llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     llm_models = CyclingModel([llm.gen_model() for _ in range(n)])
     await generate_models(population, prompt_schema, llm_models, "explore", 1.0)
     return population
@@ -87,7 +87,7 @@ async def generate_one_fake_param_est():
         parent_program_template="..",
         parent_program_vars=[],
     )
-    llm = FakeLLM()
+    llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     llm_model = llm.gen_param_est()  # A TestModel with param_est for Program1
     await _generate_one_param_est(program, [], prompt_schema, llm_model)
     return program

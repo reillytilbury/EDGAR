@@ -10,8 +10,9 @@ git rm --cached -r program_databases
 program_databases/
 figures/gradopt_tests/
 test_output/
+test_output*
 sample_plots/
-journal/ 
+data_test
 
 # Python cache
 __pycache__/

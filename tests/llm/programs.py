@@ -207,3 +207,68 @@ class Seed2:
     default_params = {"a": 1.0, "b": 0.0}
 
     latex_equation = r"y = ax + b"
+
+
+class ProgramArrayParams:
+    model = (
+        "import numpy as np\n\n"
+        "def model(data, params):\n"
+        '\t""" y = a * x + b """\n'
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        "\treturn a * x + b"
+    )
+    # Dynamic default params: returns a dict with 'a' matching x trials
+    default_params = 'lambda data: {"a": np.ones(data["x"].shape[0]), "b": 0.1}'
+    latex_equation = r"y = ax + b"
+
+    model_jax = (
+        "import jax.numpy as jnp\n\n"
+        "def model(data, params):\n"
+        '\t""" y = a * x + b """\n'
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        "\treturn a * x + b"
+    )
+
+    param_est = (
+        "import numpy as np\n\n"
+        "def parameter_estimator(data):\n"
+        '\treturn {"a": np.ones(data["x"].shape[0]), "b": float(0.1)}\n'
+    )
+
+
+class ProgramArrayParamsFallback:
+    model = (
+        "import numpy as np\n\n"
+        "def model(data, params):\n"
+        '\t""" y = a * x + b """\n'
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        "\treturn a * x + b"
+    )
+    # Dynamic default params: returns a dict with 'a' matching x trials
+    default_params = 'lambda data: {"a": np.ones(data["x"].shape[0]), "b": 0.1}'
+    latex_equation = r"y = ax + b"
+
+    model_jax = (
+        "import jax.numpy as jnp\n\n"
+        "def model(data, params):\n"
+        '\t""" y = a * x + b """\n'
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        '\tb = params["b"]\n'
+        "\treturn a * x + b"
+    )
+
+    param_est = (
+        "def parameter_estimator(data):\n"
+        '\traise ValueError("Simulated estimation failure")\n'
+    )
+
+
+DEFAULT_FAKE_PROGRAMS = [Program1, InvalidProgram, ProgramSolution]
+PARAMETER_ARRAY_FAKE_PROGRAMS = [ProgramArrayParams, ProgramArrayParamsFallback]

@@ -94,6 +94,35 @@ def test_setting_default_params_with_invalid_input():
     assert program.default_params is None
 
 
+def test_setting_default_params_with_callable():
+    def default_params_fn(data):
+        return {"a": np.zeros(data["x"].shape), "b": np.ones(data["x"].shape)}
+
+    data = {"x": np.array([1.0, 2.0, 3.0])}
+    program = make_program(data=data, default_params=default_params_fn)
+    assert program.n_params == 6  # a and b each have 3 parameters
+    expected_params = {"a": np.zeros(3), "b": np.ones(3)}
+    assert all(
+        np.array_equal(program.default_params[key], expected_params[key])
+        for key in expected_params
+    )
+
+
+def test_setting_default_params_with_callable_after_initialization():
+    def default_params_fn(data):
+        return {"a": np.zeros(data["x"].shape), "b": np.ones(data["x"].shape)}
+
+    data = {"x": np.array([1.0, 2.0, 3.0])}
+    program = make_program(data=data)
+    program.default_params = default_params_fn
+    assert program.n_params == 6  # a and b each have 3 parameters
+    expected_params = {"a": np.zeros(3), "b": np.ones(3)}
+    assert all(
+        np.array_equal(program.default_params[key], expected_params[key])
+        for key in expected_params
+    )
+
+
 class TestLossesDefaults:
     def test_discover_final_is_none(self):
         program = make_program()
@@ -110,3 +139,28 @@ class TestLossesDefaults:
     def test_validate_init_is_none(self):
         program = make_program()
         assert program.program_losses.validate.init is None
+
+
+def test_setting_callable_default_params_resolution_failure():
+    def faulty_default_params_fn(data):
+        raise ValueError("Simulated resolution error")
+
+    data = {"x": np.array([1.0, 2.0])}
+    program = make_program(data=data)
+    with pytest.warns(UserWarning, match="Failed to resolve dynamic default_params"):
+        with pytest.warns(UserWarning, match="Invalid default_params"):
+            program.default_params = faulty_default_params_fn
+    assert program.n_params is None
+    assert program.default_params is None
+
+
+def test_setting_callable_default_params_without_data_raises_error():
+    def default_params_fn(data):
+        return {"a": 1.0}
+
+    program = make_program(data=None)
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot resolve dynamic default_params.*because program.data is None",
+    ):
+        program.default_params = default_params_fn

@@ -170,6 +170,7 @@ async def run(
                     spec.llms["jax_model_translator_llm"],
                     retry_config=retry_config,
                     max_tokens=config.get("max_tokens"),
+                    output_schema=spec.response_schemas.jax_model,
                     n_items=len(spec.seed_programs),
                 )
                 t_score_seeds(
@@ -224,6 +225,7 @@ async def run(
                     config=config,
                     spec=spec,
                     data=X_discover[1],
+                    output_schema=spec.response_schemas.model,
                     n_items=n_spawn,
                 )
                 await t_generate_param_ests(
@@ -231,6 +233,7 @@ async def run(
                     spec.prompt_schemas.param_est,
                     llms.param_est,
                     config,
+                    output_schema=spec.response_schemas.param_est,
                     n_items=n_spawn,
                 )
                 await t_translate_programs(
@@ -239,6 +242,7 @@ async def run(
                     llms.model_jax,
                     retry_config=retry_config,
                     max_tokens=config.get("max_tokens"),
+                    output_schema=spec.response_schemas.jax_model,
                     n_items=n_spawn,
                 )
                 t_score(

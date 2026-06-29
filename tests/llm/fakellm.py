@@ -13,7 +13,8 @@ the next model in the list, allowing a single Model object to produce different 
 per program without needing to pass per-program LLM lists through the pipeline.
 
 Example usage:
-    fake = FakeLLM()
+    from .programs import DEFAULT_FAKE_PROGRAMS
+    fake = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     cycling = CyclingModel([fake.gen_model() for _ in range(6)])
     result = await call_llm("prompt", llm_model=cycling, output_type=ModelSchema)
 """
@@ -23,17 +24,17 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.settings import ModelSettings
 
-from .programs import Program1, InvalidProgram, ProgramSolution, Seed1, Seed2
+from .programs import Seed1, Seed2
 
 
 class FakeLLM:
     """Returns TestModel instances with predetermined program code instead of calling a real LLM."""
 
-    def __init__(self, offset: float = 0.1):
-        self._programs = (Program1, InvalidProgram, ProgramSolution)
-        self._model_counter = [0, 0, 0]
-        self._model_jax_counter = [0, 0, 0]
-        self._param_est_counter = [0, 0, 0]
+    def __init__(self, programs, offset: float = 0.1):
+        self._programs = programs
+        self._model_counter = [0] * len(programs)
+        self._model_jax_counter = [0] * len(programs)
+        self._param_est_counter = [0] * len(programs)
         self.offset = offset
 
     @staticmethod

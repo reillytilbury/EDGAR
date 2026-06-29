@@ -1,10 +1,15 @@
 import os
 import pytest
 from tests.llm.fakellm import FakeLLM
-from tests.llm.programs import Program1
+from tests.llm.programs import Program1, DEFAULT_FAKE_PROGRAMS
 from tests.llm.utils import run_model_code, run_param_est_code, generate_image_bytes
 from edgar.llm.llm_calling import call_llm
-from edgar.llm.response_schema import ModelSchema, ParamEstSchema, TranslationSchema
+from edgar.llm.response_schema import (
+    ModelSchema,
+    ModelSchemaDynamicDefaultParams,
+    ParamEstSchema,
+    TranslationSchema,
+)
 import numpy as np
 
 LLM_MODEL = "gemini-2.5-flash-lite"  # used for real LLM calls
@@ -18,7 +23,7 @@ PROVIDER_PING_MODELS = [
 
 @pytest.mark.asyncio
 async def test_call_llm_with_fake_model():
-    llm = FakeLLM()
+    llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     model = llm.gen_model()
     result = await call_llm(
         prompt="Fake prompt", llm_model=model, output_type=ModelSchema
@@ -42,7 +47,7 @@ async def test_call_llm_with_fake_model():
 
 @pytest.mark.asyncio
 async def test_call_llm_with_fake_param_est():
-    llm = FakeLLM()
+    llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     param_est = llm.gen_param_est()
     result = await call_llm(
         prompt="Fake prompt", llm_model=param_est, output_type=ParamEstSchema
@@ -60,7 +65,7 @@ async def test_call_llm_with_fake_param_est():
 
 @pytest.mark.asyncio
 async def test_call_llm_with_fake_model_translation():
-    llm = FakeLLM()
+    llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     translation = llm.gen_model_translation()
     result = await call_llm(
         prompt="Fake prompt", llm_model=translation, output_type=TranslationSchema
@@ -106,6 +111,42 @@ async def test_call_llm_live_model_schema():
         result.code, {"x": np.array([0.0, 1.0, 2.0])}, result.default_params
     )
     assert output is not None
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_call_llm_live_model_schema_dynamic_default_params():
+    prompt = (
+        "Write a simple quadratic numpy model.\n"
+        "- data is a dict with key 'x' (1D float array)\n"
+        "- params is a dict with keys 'a' and 'b' where a and b are 1D float arrays of the same size as data['x']\n"
+        "- returns a * x**2 + b * x\n"
+        "- function must be named `model`\n"
+        "- include numpy import"
+    )
+    result = await call_llm(
+        prompt=prompt, llm_model=LLM_MODEL, output_type=ModelSchemaDynamicDefaultParams
+    )
+    print("LLM output: ", result)
+    assert result is not None
+    assert isinstance(result, ModelSchemaDynamicDefaultParams)
+    assert isinstance(result.thought_process, str) and result.thought_process
+    assert isinstance(result.descriptive_name, str) and result.descriptive_name
+    assert isinstance(result.latex_equations, str) and result.latex_equations
+    assert isinstance(result.default_params, str)  # function returned as string
+    print(result.default_params)
+    default_params = eval(result.default_params)
+    assert default_params.__name__ == "<lambda>"
+    data = {"x": np.array([0.0, 1.0, 2.0])}
+    default_params_dict = default_params(data)
+    assert isinstance(default_params_dict, dict)
+    assert default_params_dict["a"].shape == data["x"].shape
+    assert default_params_dict["b"].shape == data["x"].shape
+    compile(result.code, "<ModelSchema.code>", "exec")
+    output = run_model_code(result.code, data, default_params_dict)
+    print(output)
+    assert output is not None
+    assert np.shape(output) == data["x"].shape
 
 
 @pytest.mark.live

@@ -78,11 +78,13 @@ def make_program(
     param_est_code=linear_param_est_code(),
     number=0,
     default_params=None,
+    data=None,
 ):
     return Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
         code=Code(model=model_code, param_est=param_est_code, model_jax=model_code),
         name=f"Program{number}",
+        data=data,
         _default_params=default_params,
     )
 

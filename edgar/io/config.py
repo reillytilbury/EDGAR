@@ -41,6 +41,14 @@ The provider is inferred from the model name prefix (e.g., 'gemini-' for Google,
 """
 
 
+ValidResponseSchemas = Literal[
+    "ModelSchema",
+    "ModelSchemaDynamicDefaultParams",
+    "ParamEstSchema",
+    "TranslationSchema",
+]
+
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 """The root directory of the EDGAR project."""
 
@@ -217,6 +225,9 @@ class LLMsConfig(_LaxModel):
     model_llm: ValidLLMs | list[ValidLLMs]
     param_est_llm: ValidLLMs | list[ValidLLMs]
     jax_model_translator_llm: ValidLLMs | list[ValidLLMs]
+    model_response_schema: ValidResponseSchemas = "ModelSchema"
+    param_est_response_schema: ValidResponseSchemas = "ParamEstSchema"
+    jax_model_response_schema: ValidResponseSchemas = "TranslationSchema"
     log_raw_llm_response: bool
     max_lines: int
     swear_words: list[str]
