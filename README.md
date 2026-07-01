@@ -277,7 +277,21 @@ If this file/function is left as a `pass` stub, no images will be generated or p
 edgar validate my_task
 ```
 
-### 8. Run
+### 8. Visualise the split (recommended)
+
+Before launching a run, render the train/test/discover/validate partition and eyeball it — a
+split that tests the wrong claim usually *looks* wrong the moment you plot it. This standalone
+script works for **any** project with a `load_data` (you don't need the data-loader-helper
+agent): it reads the loader, has Claude generate a project-tailored `plot_split`, runs the real
+`load_data`, and renders the figure to `test_output/plot_split_test/`.
+
+```bash
+uv run python scripts/plot_data_split_prompt.py my_task   # or a path to config.yaml
+```
+
+It makes one real Anthropic API call to generate the plotting code (needs `ANTHROPIC_API_KEY`).
+
+### 9. Run
 
 ```bash
 edgar run projects/my_task/config.yaml

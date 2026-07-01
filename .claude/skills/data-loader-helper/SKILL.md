@@ -224,6 +224,7 @@ answer updates a design-log row. What you must extract (and the reasoning each d
    axis (block / chunked-interleave / per-entry) justified by autocorrelation/drift; `X_eval`
    subset size.
    For synthetic data, the generator parameters and how ground truth is persisted (usually
+
    just the `project_params`, already saved in `task_spec.yaml`).
 8. **Seed sanity.** Briefly: what one or two ingredient seed models look like and whether the
    engine can express the needed primitive (e.g. a sum-over-neighbours). Flag early if the
@@ -233,33 +234,25 @@ answer updates a design-log row. What you must extract (and the reasoning each d
 
 Once you have a runnable `load_data`, **always render the partition and look at it** before
 launching — a split that tests the wrong claim usually *looks* wrong the moment you plot it.
-Use the bundled helper:
+There is no one-size-fits-all helper; the right view is project-specific (scatter over cortical
+coordinates for retinotopy, an imshow heatmap for a cell×stim grid, etc.). 
 
-```python
-import sys
-from pathlib import Path
+Use 'plot_data_split_prompt.py' to generate the bespoke `plot_split`: it reads the project's loader, 
+runs the meta-prompt `plot_split_prompt.md` to generate a tailored python function, executes the 
+real `load_data`, and renders the figure:
 
-sys.path.insert(0, str(Path(".claude/skills/data-loader-helper").resolve()))
-from plot_split import plot_split
-out = load_data(**project_params)            # (X_discover, X_validate, X_eval)
-# If the loader reduces arrays per split (different sizes along the split axis), pass the
-# within-sample index arrays so held-out positions show as white masks and
-# block-vs-interleave is visible. Omit them if the loader already returns full NaN-masked
-# arrays.
-plot_split(out, key="<your_target_key>",
-           within_sample_index=(train_idx, test_idx),
-           save_path="split.png")
+```bash
+uv run python scripts/plot_data_split_prompt.py <project_name>   # or a path to config.yaml
 ```
 
-It draws a 2x2 grid — discover/validate × fit(train)/eval(test) — of the **actual data
-values**, each panel's non-member region masked white, with shape/mean/std per panel. Read it
-for: (a) the fit/eval split falling where intended along the within-sample axes (block vs
-interleaved chunks); (b) discover and validate disjoint along the sample axis; (c) no panel
-accidentally empty, constant, or unnormalised. The heatmap is 2-D: it shows axis 1 as the
-within-sample position axis and mean-collapses any further within-sample axes (the helper
-prints a note when it does), so for a multi-axis layout plot the axis you most want to inspect.
-Run `uv run python .claude/skills/data-loader-helper/plot_split.py` once for a reference example. 
-Show the figure to the user and confirm it depicts the agreed claim.
+It writes both the figure and the generated `plot_split` code under
+`test_output/plot_split_test/` (and makes one real Anthropic API call to generate the code).
+
+The result is a 2x2 grid — discover/validate × fit(train)/eval(test). Read it for: (a) the
+fit/eval split falling where intended along the within-sample axes (block vs interleaved
+chunks); (b) discover and validate disjoint along the sample axis; (c) no panel accidentally
+empty, constant, or unnormalised. Show the figure to the user and confirm it depicts the agreed
+claim.
 
 ## 5. Deliver
 
