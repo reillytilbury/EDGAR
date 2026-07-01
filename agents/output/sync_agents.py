@@ -3,6 +3,7 @@
 to Gemini CLI and Claude Code subagent definitions.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -33,7 +34,8 @@ max_turns: 15
 
 # Claude frontmatter
 CLAUDE_FRONTMATTER = """---
-name: "EDGAR Analyzer 📊"
+name: "edgar-analyzer"
+description: "Analyzes EDGAR run outputs — lists runs, compares model code, and inspects numpy/JAX models and parameter estimators via the edgar_analyzer MCP server. Use when the user wants to study or compare the results of an EDGAR run."
 color: "blue"
 ---
 """
@@ -59,9 +61,44 @@ def sync():
     print(f"Generated Gemini Subagent configuration at: {gemini_path}")
 
     # Generate Claude subagent file
+    # For Claude, replace Gemini/custom MCP tool prefix with Claude's double underscore format
+    claude_instructions = instructions.replace(
+        "mcp_edgar_analyzer_", "mcp__edgar_analyzer__"
+    )
     claude_path.parent.mkdir(parents=True, exist_ok=True)
-    claude_path.write_text(CLAUDE_FRONTMATTER + "\n" + instructions + "\n")
+    claude_path.write_text(CLAUDE_FRONTMATTER + "\n" + claude_instructions + "\n")
     print(f"Generated Claude Subagent configuration at: {claude_path}")
+
+    # Ensure .mcp.json is correctly configured
+    mcp_path = repo_root / ".mcp.json"
+    expected_config = {
+        "command": "uv",
+        "args": ["run", "python", "agents/output/tools/mcp_server.py"],
+    }
+
+    mcp_data = {}
+    if mcp_path.exists():
+        try:
+            mcp_data = json.loads(mcp_path.read_text())
+            if not isinstance(mcp_data, dict):
+                mcp_data = {}
+        except Exception as e:
+            print(
+                f"Warning: Failed to parse existing .mcp.json ({e}). Re-initializing."
+            )
+            mcp_data = {}
+
+    if "mcpServers" not in mcp_data or not isinstance(mcp_data["mcpServers"], dict):
+        mcp_data["mcpServers"] = {}
+
+    current_server_config = mcp_data["mcpServers"].get("edgar_analyzer")
+    if current_server_config != expected_config:
+        mcp_data["mcpServers"]["edgar_analyzer"] = expected_config
+        # Write back updated .mcp.json with pretty formatting
+        mcp_path.write_text(json.dumps(mcp_data, indent=2) + "\n")
+        print(f"Updated .mcp.json configuration at: {mcp_path}")
+    else:
+        print(".mcp.json is already configured correctly.")
 
     print("Subagents successfully synced from master instructions!")
 

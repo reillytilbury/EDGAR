@@ -22,10 +22,11 @@ uv run python agents/output/sync_agents.py
 This automatically builds/updates:
 1. **`.gemini/agents/edgar-analyzer.md`** (Gemini CLI)
 2. **`.claude/agents/edgar-analyzer.md`** (Claude Code CLI)
+3. **`.mcp.json`** (MCP server definition for Claude Code)
 
 ---
 
-### 2. Gemini CLI Subagent Setup (Zero Configuration)
+### 2. Gemini CLI Subagent Setup
 The Gemini CLI subagent utilizes an **inline** MCP server definition in its generated frontmatter. 
 
 No registration commands are required! Simply start your Gemini CLI session in the repository:
@@ -39,23 +40,16 @@ And ask questions using the `@` prefix:
 
 ---
 
-### 3. Claude Code Setup (Two-Step Configuration)
-To make your custom agent and tools available inside Anthropic's **Claude Code** CLI:
+### 3. Claude Code Setup
+The MCP server definition is provided in `mcp.json` in the repo root, which will be automatically configured by `agents/output/sync_agents.py`
 
-#### Step A: Register the MCP Server
-Run the following command in your terminal to register the python FastMCP server globally with Claude Code:
-```bash
-claude mcp add edgar-analyzer -- uv run --with mcp python /home/rajah/repos/EDGAR/agents/output/tools/mcp_server.py
-```
-
-#### Step B: Launch Claude Code
-Start Claude Code in your terminal:
+Start Claude Code in your terminal in the repository:
 ```bash
 claude
 ```
-The custom `.claude/agents/edgar-analyzer.md` subagent will automatically be loaded. You can delegate tasks to it in your session:
-> **You:** "Ask the EDGAR Analyzer subagent to summarize the specs of the run `06-15/17-18-43` and show me the top model."
-
+The custom `.claude/agents/edgar-analyzer.md` subagent will automatically be loaded.
+You can manually activate it using the `\agents` command, or you can delegate tasks to it in your session:
+> **You:** "Ask the edgar-analyzer subagent to summarize the specs of the run `06-15/17-18-43` and show me the top model."
 ---
 
 ## Maintenance & Updating Instructions
