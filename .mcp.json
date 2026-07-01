@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "edgar_analyzer": {
+      "command": "uv",
+      "args": ["run", "python", "agents/output/tools/mcp_server.py"]
+    }
+  }
+}
