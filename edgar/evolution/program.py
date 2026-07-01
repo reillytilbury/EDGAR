@@ -171,7 +171,8 @@ class Program:
     fit_image_path: str | None = None
     idx: int | None = field(default=None, init=False)
     rank: int | None = None
-    _default_params: dict | None = None
+    data: dict | None = field(default=None, repr=False)
+    _default_params: dict | Callable | None = None
 
     def __post_init__(self):
         """Post-initialization hook for Program objects, called after the default dataclass `__init__` method.
@@ -297,33 +298,54 @@ class Program:
                 f"Accessing default_params=None of Program #{self.idx}, default_params was not set, or setting failed",
                 UserWarning,
             )
-            # We don't raise an error as this program will be assigned infinite loss during scoring
         return self._default_params
 
     @default_params.setter
-    def default_params(self, default_params_dict: dict):
-        """Sets the default parameters dictionary for the program.
+    def default_params(self, default_params: dict | Callable):
+        """Sets the default parameters for the program.
+        If params is a callable, attempt to resolve it using self.data.
 
         This setter automatically calculates the total number of free parameters
-        from the provided dictionary and caches it in `self.n_params`.
+        and caches it in `self.n_params.`.
         If an error occurs during this process, a warning is issued, and
         `_default_params` and `n_params` are set to `None`. Programs with
         `n_params=None` will be assigned infinite loss during scoring.
 
         Args:
-            default_params_dict: A dictionary where keys are parameter names
-                and values are their default values (can be numpy arrays or scalars).
+            default_params: A dictionary or callable where `default_params(data)` returns a dictionary.
+            Keys of the dictionary are parameter names and values are their default values (can be numpy arrays or scalars).
         """
-        try:
-            self._default_params = default_params_dict
-            self.n_params = sum(
-                np.asarray(v).size for v in default_params_dict.values()
-            )
-        except Exception as e:
+        # Try to resolve into a dict using data to obtain correct shapes of parameters
+        if callable(default_params):
+            if self.data is not None:
+                try:
+                    default_params = default_params(self.data)
+                except Exception as e:
+                    warnings.warn(
+                        f"Failed to resolve dynamic default_params for Program #{self.idx}: {e}",
+                        UserWarning,
+                    )
+            else:
+                raise RuntimeError(
+                    f"Cannot resolve dynamic default_params for Program #{self.idx} because program.data is None"
+                )
+
+        # Set default_params from dict and count n_params
+        if isinstance(default_params, dict):
+            try:
+                self._default_params = default_params
+                self.n_params = sum(np.asarray(v).size for v in default_params.values())
+            except Exception as e:
+                warnings.warn(
+                    f"Failed to set default_params for Program #{self.idx}: {e}",
+                    UserWarning,
+                )
+                self._default_params = None
+                self.n_params = None
+        else:
             warnings.warn(
-                f"Failed to set default_params for Program #{self.idx}: {e}",
+                f"Invalid default_params for Program #{self.idx}: either passed non-dict, non-callable or failed to resolve callable, type passed: {type(default_params)}. Setting default_params and n_params to None, program will be assigned infinite loss during scoring.",
                 UserWarning,
             )
-            # We don't raise an error as this program will be assigned infinite loss during scoring
             self._default_params = None
             self.n_params = None

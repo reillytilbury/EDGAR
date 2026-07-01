@@ -1,12 +1,5 @@
 """
-Fake-LLM runner for end-to-end pipeline testing without real API calls.
-
-Used by both the pytest suite (tests/system/test_run_fake.py) and the
-`edgar test-fake` CLI command.
-
-Example usage:
-    from tests.system.fake_runner import run_test_fake
-    run_test_fake()
+Fake-LLM runner for testing dynamic default_params without real API calls.
 """
 
 import asyncio
@@ -18,14 +11,16 @@ from edgar.io.config import Config
 from edgar.io.task_spec import TaskSpec
 from edgar.run import run
 from tests.llm.fakellm import CyclingModel, FakeLLM, SeedFakeLLM
-from tests.llm.programs import DEFAULT_FAKE_PROGRAMS
+from tests.llm.programs import PARAMETER_ARRAY_FAKE_PROGRAMS
 
-CONFIG_PATH = Path(__file__).parent / "test_task" / "config.yaml"
-DEFAULT_OUTPUT_DIR = Path(__file__).parents[2] / "test_output"
+CONFIG_PATH = (
+    Path(__file__).parents[1] / "io" / "test_task_array_params" / "config.yaml"
+)
+DEFAULT_OUTPUT_DIR = Path(__file__).parents[2] / "test_output_array_params"
 
 
-def build_fake_spec(output_dir: Path) -> TaskSpec:
-    """Build a TaskSpec wired with fake LLMs, writing outputs to output_dir."""
+def build_array_params_fake_spec(output_dir: Path) -> TaskSpec:
+    """Build a TaskSpec wired with fake LLMs using array-parameter programs."""
     config = Config.from_yaml(CONFIG_PATH)
     spec = TaskSpec.from_config(config)
     shutil.rmtree(output_dir, ignore_errors=True)
@@ -35,7 +30,7 @@ def build_fake_spec(output_dir: Path) -> TaskSpec:
     n_gen = spec.evolution["n_generations"]
     n_per_gen = spec.evolution["batch_size"] * spec.evolution["n_islands"]
     n_seed = len(spec.seed_programs)
-    fake = FakeLLM(DEFAULT_FAKE_PROGRAMS)
+    fake = FakeLLM(PARAMETER_ARRAY_FAKE_PROGRAMS)
     seed_fake = SeedFakeLLM()
 
     spec.llms["model_llm"] = CyclingModel(
@@ -51,8 +46,8 @@ def build_fake_spec(output_dir: Path) -> TaskSpec:
     return spec
 
 
-def run_test_fake(output_dir: Path = DEFAULT_OUTPUT_DIR) -> Path:
-    """Run the fake-LLM pipeline and return the output directory path."""
-    spec = build_fake_spec(output_dir)
+def run_test_array_params(output_dir: Path = DEFAULT_OUTPUT_DIR) -> Path:
+    """Run the array-parameter fake-LLM pipeline and return the output directory path."""
+    spec = build_array_params_fake_spec(output_dir)
     asyncio.run(run(spec))
     return Path(spec.output_dir)

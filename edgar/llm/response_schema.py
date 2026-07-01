@@ -44,10 +44,21 @@ class ModelSchema(BaseModel):
     )
     default_params: dict = Field(
         description=(
-            "A dict of sensible numeric initial values for every free parameter used by the model. "
+            "A dict of sensible numeric initial values for every free parameter used by the model."
             "Keys must exactly match those used in `params` inside the model function. "
-            "Values must be numeric scalars or plain lists (no numpy arrays). "
-            "Example: {'amplitude': 1.0, 'decay_rate': 0.1, 'offset': 0.0}"
+            "Values must be numeric scalars, plain lists or numpy arrays."
+            "Example: {'amplitude': 1.0, 'decay_rate': 0.1}"
+        )
+    )
+
+
+class ModelSchemaDynamicDefaultParams(ModelSchema):
+    default_params: str = Field(
+        description=(
+            "A string containing a Python lambda that takes `data` as an argument and returns a dict of sensible numeric initial values for every free parameter used by the model, with the correct shapes for the parameters. "
+            "Keys must exactly match those used in `params` inside the model function. "
+            "Dynamically returned values must be numeric scalars or numpy arrays."
+            "Example: \"lambda data: {'amplitude': np.ones(data['response'].shape[-1])}\"."
         )
     )
 
@@ -69,3 +80,11 @@ class TranslationSchema(BaseModel):
     code: str = Field(
         description="The translated JAX-compatible code, including imports."
     )
+
+
+RESPONSE_SCHEMAS = {
+    "ModelSchema": ModelSchema,
+    "ModelSchemaDynamicDefaultParams": ModelSchemaDynamicDefaultParams,
+    "ParamEstSchema": ParamEstSchema,
+    "TranslationSchema": TranslationSchema,
+}

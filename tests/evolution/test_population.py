@@ -94,9 +94,6 @@ class TestPopulation:
                 == p_loaded.program_losses.validate.final
             )
             assert p_original.n_params == p_loaded.n_params
-            np.testing.assert_array_equal(
-                p_original.eval_fingerprint, p_loaded.eval_fingerprint
-            )
             assert p_original.idx == p_loaded.idx
             assert p_original.fit_image_path == p_loaded.fit_image_path
             if p_original.params_init is not None:
@@ -104,6 +101,48 @@ class TestPopulation:
                     np.testing.assert_array_equal(
                         p_original.params_init[k], p_loaded.params_init[k]
                     )
+
+    def test_population_save_and_load_with_numpy_array_default_params(self, tmp_path):
+        pop = Population()
+        program = initialize_program(0, linear_model_code(), linear_param_est_code())
+
+        # Manually set resolved _default_params with numpy arrays
+        default_params = {"a": np.array([1.0, 2.0]), "b": np.array([0.5])}
+        program._default_params = default_params
+        # n_params should correspond to the size of the arrays (3)
+        program.n_params = 3
+        pop.add(program)
+
+        pop.save(tmp_path / "population.jsonl")
+        loaded_pop = Population.load(tmp_path / "population.jsonl")
+
+        assert len(loaded_pop) == 1
+        loaded_program = loaded_pop[0]
+
+        # Check _default_params is correctly loaded back with numpy arrays
+        assert isinstance(loaded_program.default_params, dict)
+        np.testing.assert_array_equal(
+            loaded_program.default_params["a"], default_params["a"]
+        )
+        np.testing.assert_array_equal(
+            loaded_program.default_params["b"], default_params["b"]
+        )
+        assert loaded_program.n_params == 3
+
+    def test_population_save_excludes_large_data_and_eval(self, tmp_path):
+        pop = Population()
+        program = initialize_program(0, linear_model_code(), linear_param_est_code())
+        program.data = {"response": np.array([1, 2, 3]), "signal": np.array([4, 5, 6])}
+        pop.add(program)
+
+        jsonl_path = tmp_path / "population.jsonl"
+        pop.save(jsonl_path)
+
+        # Inspect the saved JSON line directly to ensure "data" is not in there
+        with open(jsonl_path) as f:
+            saved_json = json.loads(f.readline().strip())
+            assert "data" not in saved_json
+            assert "eval_fingerprint" not in saved_json
 
     def test_population_prepare_validation_scoring(self):
         pop = Population()

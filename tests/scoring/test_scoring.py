@@ -37,7 +37,13 @@ PARAM_EST_CODE = """
 import jax.numpy as jnp
 
 def parameter_estimator(data):
-    return {'w': jnp.array(1.0)}
+    return {'w': jnp.array([0.9])}
+"""
+
+ARRAY_PARAM_EST_CODE = """
+import jax.numpy as jnp
+def parameter_estimator(data):
+    return {'w': jnp.full(data['x'].shape[-1], 0.9)}
 """
 
 FAILING_PARAM_EST_CODE = """
@@ -59,10 +65,12 @@ BASE_CONFIG_WITH_PARAM_PENALTY = {
 }
 
 
-def _make_program(model_code, default_params={"w": jnp.array(1.0)}):
+def _make_program(
+    model_code, param_est=PARAM_EST_CODE, default_params={"w": jnp.array(0.5)}
+):
     return Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
-        code=Code(param_est=PARAM_EST_CODE, model_jax=model_code),
+        code=Code(param_est=param_est, model_jax=model_code),
         _default_params=default_params,
     )
 
@@ -92,7 +100,7 @@ def test_score_one_model_returns_finite_loss():
 
 
 def test_score_one_model_perfect_fit():
-    """w=1.0 with y=x should give near-zero loss after optimization."""
+    """w=1 with y=x should give near-zero loss after optimization."""
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
     final_loss, _, _, _, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
@@ -109,6 +117,18 @@ def test_score_one_model_perfect_fit_with_param_penalty():
     assert (
         final_loss < BASE_CONFIG_WITH_PARAM_PENALTY["param_penalty_weight"] + 1e-4
     )  # since n_params=1
+
+
+def test_score_one_model_with_array_params():
+    """w=1 with y=x should give near-zero loss after optimization."""
+    data = (_make_data(), _make_data())
+    program = _make_program(
+        FAST_MODEL_CODE,
+        param_est=ARRAY_PARAM_EST_CODE,
+        default_params={"w": jnp.zeros(data[0]["x"].shape[-1])},
+    )
+    final_loss, _, _, _, _, _, _ = _score_one_model(program, data, loss_fn, BASE_CONFIG)
+    assert final_loss < 1e-4
 
 
 def test_score_one_gives_infinite_loss_for_program_with_none_default_params():

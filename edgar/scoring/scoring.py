@@ -122,7 +122,13 @@ def _optimize(model_fn, loss_fn, params_init, data_train, gd_config):
     for step in range(1, gd_config["max_iter"] + 1):
         loss_val, grad = loss_and_grad(flat)  # loss_i, grad_i for parameters_i
         if not jnp.isfinite(loss_val):
+            print(f"  [optimize] Step {step}: Non-finite loss {loss_val}, breaking.")
             break
+
+        if not jnp.all(jnp.isfinite(grad)):
+            print(f"  [optimize] Step {step}: Non-finite gradient detected!")
+            # We don't break here yet to see if loss becomes NaN in next step
+
         if float(loss_val) < best_loss:
             best_loss, best_flat = (
                 float(loss_val),

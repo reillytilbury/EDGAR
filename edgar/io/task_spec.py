@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 from typing import Callable
+from pydantic import BaseModel
 
 import numpy as np
 import yaml
@@ -38,12 +39,14 @@ import yaml
 from ..evolution.program import Program, BirthCertificate, Code
 from ..llm.code_loading import load_function_from_source
 from ..llm.prompt_schema import PromptSchema
+from ..llm.response_schema import RESPONSE_SCHEMAS
 from .config import Config
 from .config import REPO_ROOT
 
 
 LLMs = namedtuple("LLMs", ["model", "param_est", "model_jax"])
 PromptSchemas = namedtuple("PromptSchemas", ["model", "param_est", "jax_model"])
+ResponseSchemas = namedtuple("ResponseSchemas", ["model", "param_est", "jax_model"])
 
 
 def _git_state() -> tuple[str, bool]:
@@ -162,6 +165,26 @@ class TaskSpec:
 
     jax_model_prompt_schema: PromptSchema
 
+    # ── response schemas — one per LLM role, resolved from config strings ──
+    # Pydantic model for the model generation response.
+    model_response_schema: type[BaseModel]
+
+    # Pydantic model for the parameter estimator response.
+    param_est_response_schema: type[BaseModel]
+
+    # Pydantic model for the JAX translation response.
+    jax_model_response_schema: type[BaseModel]
+
+    # ── response schemas — one per LLM role, resolved from config strings ──
+    # Pydantic model for the model generation response.
+    model_response_schema: type[BaseModel]
+
+    # Pydantic model for the parameter estimator response.
+    param_est_response_schema: type[BaseModel]
+
+    # Pydantic model for the JAX translation response.
+    jax_model_response_schema: type[BaseModel]
+
     load_data_fn: Callable
 
     loss_fn: Callable
@@ -220,8 +243,42 @@ class TaskSpec:
         git_sha, git_dirty = _git_state()
 
         seed_dir = config.project_dir / "seed_programs"
+
+        # Pre-extract params to see if we need data for resolution
+        seed_model_paths = sorted(seed_dir.glob("model*.py"))
+        all_default_params = [
+            cls._extract_default_params(p.read_text()) for p in seed_model_paths
+        ]
+
+        # Enforce consistency: all seeds must be dynamic if any are dynamic
+        is_dynamic = [callable(p) for p in all_default_params]
+        if any(is_dynamic) and not all(is_dynamic):
+            static_files = [
+                seed_model_paths[i].name for i, d in enumerate(is_dynamic) if not d
+            ]
+            raise ValueError(
+                f"Mixed seed models detected. If any seed model uses a dynamic (callable) "
+                f"DEFAULT_PARAMS, all seed models must be dynamic. Please update the following "
+                f"static models to be dynamic (e.g., wrap in a lambda): {static_files}"
+            )
+
+        data_for_resolution = None
+        if any(is_dynamic):
+            try:
+                # Load discovery training split for resolution
+                data_path = config.io.data_path
+                (disc_train, _), _, _ = load_data_fn(data_path, **config.project_params)
+                # Take first sample for unbatched data
+                data_for_resolution = {k: v[0] for k, v in disc_train.items()}
+            except Exception as e:
+                import warnings
+
+                warnings.warn(
+                    f"Failed to load data for dynamic parameter resolution: {e}"
+                )
+
         seed_programs = []
-        for batch_idx, model_path in enumerate(sorted(seed_dir.glob("model*.py"))):
+        for batch_idx, model_path in enumerate(seed_model_paths):
             model_num = model_path.stem.replace("model", "")
             param_est_path = seed_dir / f"param_est{model_num}.py"
             seed_programs.append(
@@ -234,7 +291,8 @@ class TaskSpec:
                         param_est=param_est_path.read_text(),
                     ),
                     name=f"Seed Model {model_num}",
-                    _default_params=cls._extract_default_params(model_path.read_text()),
+                    data=data_for_resolution,
+                    _default_params=all_default_params[batch_idx],
                 )
             )
 
@@ -252,6 +310,13 @@ class TaskSpec:
             model_prompt_schema=config.prompts.model,
             param_est_prompt_schema=config.prompts.parameter_estimator,
             jax_model_prompt_schema=config.prompts.jax_translator_model,
+            model_response_schema=RESPONSE_SCHEMAS[config.llms.model_response_schema],
+            param_est_response_schema=RESPONSE_SCHEMAS[
+                config.llms.param_est_response_schema
+            ],
+            jax_model_response_schema=RESPONSE_SCHEMAS[
+                config.llms.jax_model_response_schema
+            ],
             load_data_fn=load_data_fn,
             loss_fn=loss_fn,
             plot_fn=plot_fn,
@@ -300,6 +365,11 @@ class TaskSpec:
                 "model": self.model_prompt_schema.model_dump(),
                 "param_est": self.param_est_prompt_schema.model_dump(),
                 "jax_model": self.jax_model_prompt_schema.model_dump(),
+            },
+            "response_schemas": {
+                "model": self.model_response_schema.__name__,
+                "param_est": self.param_est_response_schema.__name__,
+                "jax_model": self.jax_model_response_schema.__name__,
             },
         }
 
@@ -416,13 +486,27 @@ class TaskSpec:
             jax_model=self.jax_model_prompt_schema,
         )
 
+    @property
+    def response_schemas(self) -> ResponseSchemas:
+        """
+        Get all response schemas as a namedtuple.
+
+        Returns:
+            ResponseSchemas with model, param_est, and jax response schema classes
+        """
+        return ResponseSchemas(
+            model=self.model_response_schema,
+            param_est=self.param_est_response_schema,
+            jax_model=self.jax_model_response_schema,
+        )
+
     @staticmethod
     def _extract_default_params(model_code: str) -> dict:
-        """Reads the `DEFAULT_PARAMS` dictionary attached to a model function's source code.
+        """Read DEFAULT_PARAMS attached to a model function.
 
         By convention, seed model files can attach a `DEFAULT_PARAMS` dictionary
-        as an attribute to their `model` function (often via a decorator). These
-        parameters serve as the initial guess for gradient-descent parameter
+        or lambda function as an attribute to their `model` function (often via a decorator).
+        These parameters serve as the initial guess for gradient-descent parameter
         fitting before a program is scored. This method safely loads the model
         function from its source code and attempts to retrieve this attribute.
 

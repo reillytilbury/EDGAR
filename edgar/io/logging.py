@@ -306,8 +306,10 @@ def log_generation(
     for idx, island in enumerate(islands):
         progs = [population[i] for i in island]
         best = min(progs, key=lambda p: p.program_losses.discover.final or float("inf"))
+        loss_val = best.program_losses.discover.final
+        loss_str = f"{loss_val:.6f}" if isinstance(loss_val, float) else str(loss_val)
         f.write(
-            f"      Island {idx}  size={len(island)}  best=#{best.idx} {best.name!r}  loss={best.program_losses.discover.final:.6f}\n"
+            f"      Island {idx}  size={len(island)}  best=#{best.idx} {best.name!r}  loss={loss_str}\n"
         )
     f.write("\n")
 

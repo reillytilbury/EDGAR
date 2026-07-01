@@ -15,8 +15,10 @@ from __future__ import annotations
 import asyncio
 import warnings
 from typing import Any, TYPE_CHECKING, Callable
+import numpy as np
 
 from pydantic_ai.models import Model
+from pydantic import BaseModel
 
 from ..evolution.program import Program
 from ..evolution.population import Population
@@ -123,6 +125,7 @@ async def _generate_one_model(
     config: dict[str, Any] | None = None,
     spec: TaskSpec | None = None,
     data: dict | None = None,
+    output_schema: type[BaseModel] = ModelSchema,
 ) -> None:
     """Generates the numpy model code for a single program using an LLM.
 
@@ -156,7 +159,7 @@ async def _generate_one_model(
     result = await call_llm(
         prompt=prompt,
         llm_model=llm,
-        output_type=ModelSchema,
+        output_type=output_schema,
         temperature=temperature,
         image_bytes=image_bytes,
         log_raw_llm_response=cfg.get("log_raw_llm_response", False),
@@ -171,7 +174,22 @@ async def _generate_one_model(
         return
     header = f'"""\n{result.thought_process}\n\n{result.latex_equations}\n"""\n\n'
     program.code.model = header + result.code
-    program.default_params = result.default_params
+    default_params = result.default_params
+    if isinstance(default_params, str):
+        try:
+            default_params = eval(default_params, {"np": np})
+            # Debatch data for default_params resolution, since model expects data of shape (n1, n2, ...) not (n_samples, n1, n2, ...)
+            program.data = (
+                {k: v[0] for k, v in data.items()} if data is not None else None
+            )
+        except Exception as e:
+            warnings.warn(
+                f"Failed to evaluate default_params for Program #{program.idx}: {e}",
+                UserWarning,
+            )
+            default_params = None
+
+    program.default_params = default_params
     program.name = result.descriptive_name
     program.birth.llm_name = llm
 
@@ -185,6 +203,7 @@ async def generate_models(
     config: dict[str, Any] | None = None,
     spec: TaskSpec | None = None,
     data: dict | None = None,
+    output_schema: type[BaseModel] = ModelSchema,
 ) -> None:
     """Asynchronously generates numpy model code for all programs that currently lack it.
 
@@ -221,6 +240,7 @@ async def generate_models(
                 config,
                 spec,
                 data,
+                output_schema=output_schema,
             )
             for p in programs
         ]
@@ -238,6 +258,7 @@ async def _generate_one_param_est(
     prompt_schema: PromptSchema,
     llm: str | Model,
     config: dict[str, Any] | None = None,
+    output_schema: type[BaseModel] = ParamEstSchema,
 ) -> None:
     """Generates the numpy parameter estimator code for a single program using an LLM.
 
@@ -268,8 +289,8 @@ async def _generate_one_param_est(
     result = await call_llm(
         prompt=prompt,
         llm_model=llm,
-        output_type=ParamEstSchema,
-        temperature=1.0,  # Parameter estimation prompt uses a fixed temperature
+        output_type=output_schema,
+        temperature=1.0,
         log_raw_llm_response=cfg.get("log_raw_llm_response", False),
         max_tokens=cfg.get("max_tokens"),
         retry_config=cfg.get("retry_config"),
@@ -288,6 +309,7 @@ async def generate_param_ests(
     prompt_schema: PromptSchema,
     llm: str | Model,
     config: dict[str, Any] | None = None,
+    output_schema: type[BaseModel] = ParamEstSchema,
 ) -> None:
     """Asynchronously generates numpy parameter estimator code for programs that need it.
 
@@ -309,7 +331,12 @@ async def generate_param_ests(
     await asyncio.gather(
         *[
             _generate_one_param_est(
-                p, _resolve_parents(population, p), prompt_schema, llm, config
+                p,
+                _resolve_parents(population, p),
+                prompt_schema,
+                llm,
+                config,
+                output_schema=output_schema,
             )
             for p in programs
         ]
@@ -325,6 +352,7 @@ async def _translate_one_model(
     llm: str | Model,
     retry_config: RetryConfig | None = None,
     max_tokens: int | None = None,
+    output_schema: type[BaseModel] = TranslationSchema,
 ) -> None:
     """Translates the numpy model code of a single program into JAX-compatible code using an LLM.
 
@@ -348,8 +376,8 @@ async def _translate_one_model(
     model_result = await call_llm(
         prompt=model_prompt,
         llm_model=llm,
-        output_type=TranslationSchema,
-        temperature=1.0,  # Translation prompt uses a fixed temperature
+        output_type=output_schema,
+        temperature=1.0,
         retry_config=retry_config,
         max_tokens=max_tokens,
         role="jax",
@@ -369,6 +397,7 @@ async def translate_programs(
     llm: str | Model,
     retry_config: RetryConfig | None = None,
     max_tokens: int | None = None,
+    output_schema: type[BaseModel] = TranslationSchema,
 ) -> None:
     """Asynchronously translates all untranslated numpy model code to JAX-compatible code.
 
@@ -390,7 +419,14 @@ async def translate_programs(
     programs = _filter_programs(population, _needs_model_translation)
     await asyncio.gather(
         *[
-            _translate_one_model(p, model_prompt_schema, llm, retry_config, max_tokens)
+            _translate_one_model(
+                p,
+                model_prompt_schema,
+                llm,
+                retry_config,
+                max_tokens,
+                output_schema=output_schema,
+            )
             for p in programs
         ]
     )
