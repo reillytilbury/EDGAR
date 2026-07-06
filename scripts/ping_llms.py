@@ -26,7 +26,7 @@ from edgar.llm.llm_calling import call_llm  # noqa: E402
 PROVIDER_PAIRS = [
     ("gemini-2.5-flash-lite", "GOOGLE_API_KEY"),
     ("claude-haiku-4-5", "ANTHROPIC_API_KEY"),
-    ("opus-4-7", "ANTHROPIC_API_KEY"),
+    ("claude-opus-4-7", "ANTHROPIC_API_KEY"),
 ]
 
 async def main() -> int:

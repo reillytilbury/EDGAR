@@ -45,11 +45,18 @@ llms:
     max_delay: 60.0
     retryable_status_codes: [500, 502, 503, 504]
 
-  # LLMs for different tasks. Each can be a string or a list.
-  # If a list is provided, it is traversed in order by generation (with cycling)
-  model_llm: [gemini-2.5-flash, gemini-2.5-flash, gemini-2.5-flash]
-  param_est_llm: gemini-2.5-flash
-  jax_model_translator_llm: gemini-2.5-flash-lite
+  # Provider switch: "google" (Gemini) or "anthropic" (Claude). Selects the default
+  # model for any role left null below, so a project can switch providers with this
+  # one line. The API actually called is always inferred from the model-name prefix
+  # (gemini-* -> GOOGLE_API_KEY, claude-* -> ANTHROPIC_API_KEY), so you can also mix
+  # providers by naming models explicitly per role.
+  provider: google
+
+  # LLMs for different tasks. Each can be a string or a list; a list is traversed in
+  # order by generation (with cycling). Leave null to inherit the provider's default.
+  model_llm: null
+  param_est_llm: null
+  jax_model_translator_llm: null
   max_tokens: 10000
 
   # Print raw LLM responses (parts, usage, provider_details) for debugging.

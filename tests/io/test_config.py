@@ -1,9 +1,47 @@
 # ruff: noqa: F841
 
 import pytest
-from edgar.io.config import Config
+from edgar.io.config import Config, LLMsConfig, RetryConfig
 from pydantic import ValidationError
 from edgar.io.task_spec import TaskSpec
+
+
+def _llms_kwargs(**overrides):
+    """Minimal valid LLMsConfig kwargs, with optional overrides."""
+    kwargs = dict(
+        num_parents=2,
+        retry=RetryConfig(),
+        log_raw_llm_response=False,
+        max_lines=50,
+        swear_words=[],
+        max_tokens=10000,
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_provider_default_fills_gemini_presets():
+    """With no explicit models and default provider, roles resolve to Gemini presets."""
+    cfg = LLMsConfig(**_llms_kwargs())
+    assert cfg.provider == "google"
+    assert cfg.model_llm == "gemini-2.5-flash"
+    assert cfg.param_est_llm == "gemini-2.5-flash"
+    assert cfg.jax_model_translator_llm == "gemini-2.5-flash-lite"
+
+
+def test_provider_anthropic_fills_claude_presets():
+    """provider: anthropic resolves all unset roles to Claude presets."""
+    cfg = LLMsConfig(**_llms_kwargs(provider="anthropic"))
+    assert cfg.model_llm == "claude-sonnet-4-5"
+    assert cfg.param_est_llm == "claude-sonnet-4-5"
+    assert cfg.jax_model_translator_llm == "claude-haiku-4-5"
+
+
+def test_explicit_model_override_survives_provider():
+    """An explicitly-set role wins over the provider preset; unset roles still fill."""
+    cfg = LLMsConfig(**_llms_kwargs(provider="anthropic", model_llm="gemini-2.5-pro"))
+    assert cfg.model_llm == "gemini-2.5-pro"
+    assert cfg.param_est_llm == "claude-sonnet-4-5"
 
 
 def test_load_perfect_config():
