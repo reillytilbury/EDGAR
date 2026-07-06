@@ -237,12 +237,9 @@ class LLMsConfig(_LaxModel):
             model name prefix, not this field.
         model_llm: The LLM model(s) to use for generating new scientific models
             (numpy `model` code and `default_params`). Can be a single LLM or a list for cycling.
-            If None, defaults to the `provider`'s preset.
-        param_est_llm: The LLM model(s) to use for generating `parameter_estimator` code.
-            Can be a single LLM or a list for cycling. If None, defaults to the `provider`'s preset.
-        jax_model_translator_llm: The LLM model(s) to use for translating numpy `model`
-            code into JAX-compatible code. Can be a single LLM or a list for cycling.
-            If None, defaults to the `provider`'s preset.
+        param_est_llm: The LLM model to use for generating `parameter_estimator` code.
+        jax_model_translator_llm: The LLM model to use for translating numpy `model`
+            code into JAX-compatible code.
         log_raw_llm_response: If True, logs the raw JSON responses from LLM calls
             for debugging purposes.
         max_lines: The maximum number of lines allowed in generated code snippets.
@@ -252,10 +249,9 @@ class LLMsConfig(_LaxModel):
 
     num_parents: int
     retry: RetryConfig
-    provider: Provider = "google"
-    model_llm: ValidLLMs | list[ValidLLMs] | None = None
-    param_est_llm: ValidLLMs | list[ValidLLMs] | None = None
-    jax_model_translator_llm: ValidLLMs | list[ValidLLMs] | None = None
+    model_llm: ValidLLMs | list[ValidLLMs]
+    param_est_llm: ValidLLMs
+    jax_model_translator_llm: ValidLLMs
     model_response_schema: ValidResponseSchemas = "ModelSchema"
     param_est_response_schema: ValidResponseSchemas = "ParamEstSchema"
     jax_model_response_schema: ValidResponseSchemas = "TranslationSchema"
