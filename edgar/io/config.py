@@ -209,10 +209,9 @@ class LLMsConfig(_LaxModel):
         retry: Configuration for retrying failed LLM API calls.
         model_llm: The LLM model(s) to use for generating new scientific models
             (numpy `model` code and `default_params`). Can be a single LLM or a list for cycling.
-        param_est_llm: The LLM model(s) to use for generating `parameter_estimator` code.
-            Can be a single LLM or a list for cycling.
-        jax_model_translator_llm: The LLM model(s) to use for translating numpy `model`
-            code into JAX-compatible code. Can be a single LLM or a list for cycling.
+        param_est_llm: The LLM model to use for generating `parameter_estimator` code.
+        jax_model_translator_llm: The LLM model to use for translating numpy `model`
+            code into JAX-compatible code.
         log_raw_llm_response: If True, logs the raw JSON responses from LLM calls
             for debugging purposes.
         max_lines: The maximum number of lines allowed in generated code snippets.
@@ -223,8 +222,8 @@ class LLMsConfig(_LaxModel):
     num_parents: int
     retry: RetryConfig
     model_llm: ValidLLMs | list[ValidLLMs]
-    param_est_llm: ValidLLMs | list[ValidLLMs]
-    jax_model_translator_llm: ValidLLMs | list[ValidLLMs]
+    param_est_llm: ValidLLMs
+    jax_model_translator_llm: ValidLLMs
     model_response_schema: ValidResponseSchemas = "ModelSchema"
     param_est_response_schema: ValidResponseSchemas = "ParamEstSchema"
     jax_model_response_schema: ValidResponseSchemas = "TranslationSchema"
