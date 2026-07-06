@@ -49,6 +49,30 @@ ValidResponseSchemas = Literal[
 ]
 
 
+Provider = Literal["google", "anthropic"]
+"""The LLM provider a project runs on. Selects which model each role defaults to."""
+
+
+_PROVIDER_MODEL_DEFAULTS: dict[Provider, dict[str, ValidLLMs]] = {
+    "google": {
+        "model_llm": "gemini-2.5-flash",
+        "param_est_llm": "gemini-2.5-flash",
+        "jax_model_translator_llm": "gemini-2.5-flash-lite",
+    },
+    "anthropic": {
+        "model_llm": "claude-sonnet-4-5",
+        "param_est_llm": "claude-sonnet-4-5",
+        "jax_model_translator_llm": "claude-haiku-4-5",
+    },
+}
+"""Default model per role for each provider.
+
+Any role left unset (`None`) in the config inherits its provider's default here,
+so a project can switch providers by setting only `llms.provider`. Individual
+roles can still be overridden with an explicit model name of either provider.
+"""
+
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 """The root directory of the EDGAR project."""
 
@@ -207,6 +231,10 @@ class LLMsConfig(_LaxModel):
         num_parents: The number of parent programs to include in the prompt
             when generating new programs.
         retry: Configuration for retrying failed LLM API calls.
+        provider: The LLM provider ("google" or "anthropic"). Selects the default
+            model for any role left unset below, so a project can switch providers
+            with a single line. The actual API called is always inferred from the
+            model name prefix, not this field.
         model_llm: The LLM model(s) to use for generating new scientific models
             (numpy `model` code and `default_params`). Can be a single LLM or a list for cycling.
         param_est_llm: The LLM model to use for generating `parameter_estimator` code.
@@ -231,6 +259,22 @@ class LLMsConfig(_LaxModel):
     max_lines: int
     swear_words: list[str]
     max_tokens: int
+
+    @model_validator(mode="after")
+    def fill_provider_defaults(self) -> LLMsConfig:
+        """Fills any unset LLM role from the selected provider's preset defaults.
+
+        Roles left as `None` inherit `_PROVIDER_MODEL_DEFAULTS[self.provider]`.
+        Explicitly-set roles (of either provider) are left untouched.
+
+        Returns:
+            The LLMsConfig instance with all roles resolved to concrete models.
+        """
+        presets = _PROVIDER_MODEL_DEFAULTS[self.provider]
+        for role, default in presets.items():
+            if getattr(self, role) is None:
+                setattr(self, role, default)
+        return self
 
 
 class GradientDescentConfig(_LaxModel):

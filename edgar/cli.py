@@ -316,9 +316,12 @@ def init_project(task: str) -> int:
 
         llms:
           num_parents: 2
-          model_llm: gemini-2.5-flash
-          param_est_llm: gemini-2.5-flash
-          jax_model_translator_llm: gemini-2.5-flash-lite
+          # provider: google (Gemini) or anthropic (Claude). Sets the default model
+          # per role; override individual roles below to mix or pick specific models.
+          provider: google
+          # model_llm: gemini-2.5-flash
+          # param_est_llm: gemini-2.5-flash
+          # jax_model_translator_llm: gemini-2.5-flash-lite
 
         scoring:
           param_penalty_weight: 0.01
