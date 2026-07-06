@@ -513,8 +513,8 @@ def test_deduplicate_outer_tie_keeps_lower_island_index():
     assert islands[1] == {3}
 
 
-def test_deduplicate_outer_skips_pair_below_min_island_size():
-    """Island smaller than min_island_size: no removals."""
+def test_deduplicate_outer_initial_min_size_limit():
+    """Islands start smaller than min_island_size: immediately skipped, no removals."""
     pop = make_fingerprint_population(
         [
             (_E0, 1.000),  # 0 — island i
@@ -527,10 +527,47 @@ def test_deduplicate_outer_skips_pair_below_min_island_size():
     assert islands[1] == {1}
 
 
+def test_deduplicate_outer_dynamic_min_size_limit():
+    """Verify that deduplication respects dynamic minimum size limits across 3 islands.
+
+    If we have three islands of initial size 2, and min_island_size is 2:
+    - Island 0: {0, 1} where 0 is _E0 (loss 1.000) and 1 is _E1 (loss 2.000)
+    - Island 1: {2, 3} where 2 is _E0 (loss 1.005, dup of 0) and 3 is _E2 (loss 3.000)
+    - Island 2: {4, 5} where 4 is _E2 (loss 3.005, dup of 3) and 5 is _E0 (loss 1.008, dup of 0)
+
+    Process:
+    - Pair (0, 1): sizes 2 and 2 are >= 2. Dup _E0 is compared. Program 2 is removed from Island 1.
+      Island 1 is now {3} (size 1).
+    - Pair (0, 2): sizes 2 and 2 are >= 2. Dup _E0 is compared. Program 5 is removed from Island 2.
+      Island 2 is now {4} (size 1).
+    - Pair (1, 2): both sizes (1 and 1) are < 2.
+      Under dynamic check, this pair must be skipped, leaving Island 1 as {3} and Island 2 as {4}.
+    """
+    pop = make_fingerprint_population(
+        [
+            (_E0, 1.000),  # 0: Island 0 (best _E0)
+            (_E1, 2.000),  # 1: Island 0
+            (_E0, 1.005),  # 2: Island 1 (dup of 0, higher loss -> removed)
+            (_E2, 3.000),  # 3: Island 1 (best _E2)
+            (
+                _E2,
+                3.005,
+            ),  # 4: Island 2 (dup of 3, higher loss -> left because size fell to 1)
+            (_E0, 1.008),  # 5: Island 2 (dup of 0, higher loss -> removed)
+        ]
+    )
+    islands = [{0, 1}, {2, 3}, {4, 5}]
+    deduplicate_outer(islands, pop, min_island_size=2)
+
+    assert islands[0] == {0, 1}
+    assert islands[1] == {3}  # 2 was removed, but 3 remains
+    assert islands[2] == {4}  # 5 was removed, but 4 remains (not emptied to {})
+
+
 def test_deduplicate_outer_removes_multiple_duplicates():
     """Three duplicate pairs across islands: all three higher-loss copies are removed."""
     pop, islands = make_islands_with_duplicates()
-    deduplicate_outer(islands, pop, min_island_size=4)
+    deduplicate_outer(islands, pop, min_island_size=1)
     assert islands[0] == {0, 1, 2, 3}
     assert islands[1] == {7}  # 4, 5, 6 removed as higher-loss dups
 
@@ -549,25 +586,6 @@ def test_deduplicate_outer_non_duplicates_untouched():
     deduplicate_outer(islands, pop, min_island_size=2)
     assert islands[0] == {0, 1}
     assert islands[1] == {2, 3}
-
-
-def test_deduplicate_outer_three_islands():
-    """With three islands, only the overlapping pair has duplicates removed; third island untouched."""
-    pop = make_fingerprint_population(
-        [
-            (_E0, 0.100),  # 0 — island 0
-            (_E1, 2.000),  # 1 — island 0, unique
-            (_E0, 0.105),  # 2 — island 1, dup of 0, higher loss → removed
-            (_E2, 3.000),  # 3 — island 1, unique
-            (_E3, 4.000),  # 4 — island 2, distinct
-            (_E1, 5.000),  # 5 — island 2, distinct
-        ]
-    )
-    islands = [{0, 1}, {2, 3}, {4, 5}]
-    deduplicate_outer(islands, pop, min_island_size=2)
-    assert islands[0] == {0, 1}
-    assert islands[1] == {3}
-    assert islands[2] == {4, 5}
 
 
 # ─────────────────────────────────────────────────────────────────────────

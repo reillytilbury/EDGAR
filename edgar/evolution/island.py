@@ -437,32 +437,27 @@ def deduplicate_outer(
         cosine_tol: The minimum cosine similarity between `eval_fingerprint` arrays
             to consider programs as duplicates. Defaults to 0.99.
     """
-    # Filter out islands that are too small for outer deduplication.
-    # Note: This is a copy of the list of sets, but not copies of the sets themselves.
-    # So `islands[loser_island].remove(loser_idx)` still modifies the original islands list.
-    filtered_islands = [
-        (idx, island)
-        for idx, island in enumerate(islands)
-        if len(island) >= min_island_size
-    ]
+    for i_idx, j_idx in combinations(range(len(islands)), 2):
+        island_i = islands[i_idx]
+        island_j = islands[j_idx]
 
-    for i_idx, j_idx in combinations(range(len(filtered_islands)), 2):
-        original_idx_i, island_i = filtered_islands[i_idx]
-        original_idx_j, island_j = filtered_islands[j_idx]
+        # Check if either island has fallen below the minimum size constraint
+        if len(island_i) < min_island_size or len(island_j) < min_island_size:
+            continue
 
         snapshot_i = list(island_i)
         snapshot_j = list(island_j)
 
         for idx_j in snapshot_j:
             if (
-                idx_j not in islands[original_idx_j]
+                idx_j not in islands[j_idx]
             ):  # Check if it hasn't been removed by a previous deduplication
                 continue
             p_j = population[idx_j]
 
             for idx_i in snapshot_i:
                 if (
-                    idx_i not in islands[original_idx_i]
+                    idx_i not in islands[i_idx]
                 ):  # Check if it hasn't been removed by a previous deduplication
                     continue
                 p_i = population[idx_i]
@@ -471,12 +466,12 @@ def deduplicate_outer(
                     continue
 
                 if _loss(p_i) < _loss(p_j):
-                    loser_original_island_idx, loser_idx = original_idx_j, idx_j
+                    loser_original_island_idx, loser_idx = j_idx, idx_j
                 elif _loss(p_i) > _loss(p_j):
-                    loser_original_island_idx, loser_idx = original_idx_i, idx_i
+                    loser_original_island_idx, loser_idx = i_idx, idx_i
                 else:
                     # Tie in loss: keep program from the lower-indexed island
-                    loser_original_island_idx, loser_idx = original_idx_j, idx_j
+                    loser_original_island_idx, loser_idx = j_idx, idx_j
 
                 islands[loser_original_island_idx].remove(loser_idx)
                 break  # _deduplicate_inner ensures at most one duplicate of a program on the other island
