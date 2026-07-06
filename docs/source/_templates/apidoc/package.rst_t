@@ -1,0 +1,34 @@
+{%- if show_headings -%}
+{{- qualname | e | heading }}
+{%- endif -%}
+
+{%- if is_namespace -%}
+.. py:module:: {{ qualname }}
+{%- else -%}
+.. automodule:: {{ qualname }}
+   :members:
+   :undoc-members:
+   :show-inheritance:
+{%- endif -%}
+
+{%- if subpackages -%}
+Subpackages
+-----------
+
+.. toctree::
+   :maxdepth: {{ maxdepth }}
+{% for subpkg in subpackages %}
+   {{ subpkg }}
+{%- endfor %}
+{%- endif -%}
+
+{%- if submodules -%}
+Submodules
+----------
+
+.. toctree::
+   :maxdepth: {{ maxdepth }}
+{% for submod in submodules %}
+   {{ submod }}
+{%- endfor %}
+{%- endif -%}

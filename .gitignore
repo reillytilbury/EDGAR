@@ -24,3 +24,8 @@ __pycache__/
 *.egg-info/
 
 *scratchpad.ipynb
+
+# Sphinx documentation output and auto-generated API files
+docs/build/
+docs/source/api/
+
