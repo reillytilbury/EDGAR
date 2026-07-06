@@ -48,18 +48,23 @@ bash scripts/check_env.sh
 ```
 ### 2. Set API key
 
-Add your Gemini API key to `.env` in the project root:
+Add your Google (Gemini) API key to `.env` in the project root:
 
 ```bash
-echo "GEMINI_API_KEY=your_key_here" > .env
+echo "GOOGLE_API_KEY=your_key_here" > .env
 ```
 
 The key is loaded automatically at runtime via `python-dotenv`. You can also export it directly:
 
 ```bash
-export GEMINI_API_KEY=your_key_here
+export GOOGLE_API_KEY=your_key_here
 ```
 You can do the same for an `ANTHROPIC_API_KEY` if using an anthropic model.
+
+To switch a project between providers, set `llms.provider` (`google` or `anthropic`) in its
+`config.yaml` — this picks a sensible default model for each role. You can still override
+individual roles (`model_llm`, `param_est_llm`, `jax_model_translator_llm`) with a specific
+model of either provider; the API called is inferred from the model-name prefix.
 
 Verify your API key is configured correctly by running
 ```bash
