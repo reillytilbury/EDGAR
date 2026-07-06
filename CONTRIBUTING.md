@@ -29,7 +29,7 @@ Upon pushing to remote the following tests are run, and status displayed on gith
 
 ## Branch Structure
 
-At the moment, we are actively working and developing off the branch [gamma](https://github.com/reillytilbury/EDGAR/tree/gamma).
+At the moment, we are actively working and developing off the [main branch](https://github.com/reillytilbury/EDGAR/tree/main).
 Code on this branch should pass pre-commit checks and the `uv run pytest` unit tests.
 
 ## Testing and Validation
