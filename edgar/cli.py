@@ -316,9 +316,9 @@ def init_project(task: str) -> int:
 
         llms:
           num_parents: 2
-          # provider: google (Gemini) or anthropic (Claude). Sets the default model
+          # default_provider: google (Gemini) or anthropic (Claude). Sets the default model
           # per role; override individual roles below to mix or pick specific models.
-          provider: google
+          default_provider: google
           # model_llm: gemini-2.5-flash
           # param_est_llm: gemini-2.5-flash
           # jax_model_translator_llm: gemini-2.5-flash-lite

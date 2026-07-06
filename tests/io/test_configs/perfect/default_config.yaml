@@ -15,6 +15,7 @@ evolution:
 
 llms:
   num_parents: 3
+  default_provider: google
   retry:
     max_retries: 2
     initial_delay: 1.1

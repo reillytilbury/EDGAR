@@ -11,6 +11,7 @@ def _llms_kwargs(**overrides):
     kwargs = dict(
         num_parents=2,
         retry=RetryConfig(),
+        default_provider="google",
         log_raw_llm_response=False,
         max_lines=50,
         swear_words=[],
@@ -23,7 +24,7 @@ def _llms_kwargs(**overrides):
 def test_provider_default_fills_gemini_presets():
     """With no explicit models and default provider, roles resolve to Gemini presets."""
     cfg = LLMsConfig(**_llms_kwargs())
-    assert cfg.provider == "google"
+    assert cfg.default_provider == "google"
     assert cfg.model_llm == "gemini-2.5-flash"
     assert cfg.param_est_llm == "gemini-2.5-flash"
     assert cfg.jax_model_translator_llm == "gemini-2.5-flash-lite"
@@ -31,7 +32,7 @@ def test_provider_default_fills_gemini_presets():
 
 def test_provider_anthropic_fills_claude_presets():
     """provider: anthropic resolves all unset roles to Claude presets."""
-    cfg = LLMsConfig(**_llms_kwargs(provider="anthropic"))
+    cfg = LLMsConfig(**_llms_kwargs(default_provider="anthropic"))
     assert cfg.model_llm == "claude-sonnet-4-5"
     assert cfg.param_est_llm == "claude-sonnet-4-5"
     assert cfg.jax_model_translator_llm == "claude-haiku-4-5"
@@ -39,7 +40,9 @@ def test_provider_anthropic_fills_claude_presets():
 
 def test_explicit_model_override_survives_provider():
     """An explicitly-set role wins over the provider preset; unset roles still fill."""
-    cfg = LLMsConfig(**_llms_kwargs(provider="anthropic", model_llm="gemini-2.5-pro"))
+    cfg = LLMsConfig(
+        **_llms_kwargs(default_provider="anthropic", model_llm="gemini-2.5-pro")
+    )
     assert cfg.model_llm == "gemini-2.5-pro"
     assert cfg.param_est_llm == "claude-sonnet-4-5"
 
@@ -61,6 +64,7 @@ def test_load_perfect_config():
     assert config.evolution.critical_population_size == 12
     assert config.evolution.n_migrants == 2
     assert config.evolution.topology == [1, 2, 3, 4, 5, 6, 7, 0]
+    assert config.llms.default_provider == "google"
     assert config.llms.num_parents == 2
     assert config.llms.retry.max_retries == 3
     assert config.llms.retry.initial_delay == 1.0

@@ -27,7 +27,7 @@ def test_fromconfig():
     }
     assert taskspec.llms == {
         "num_parents": 2,
-        "provider": "google",
+        "default_provider": "google",
         "retry": {
             "max_retries": 3,
             "initial_delay": 10.0,

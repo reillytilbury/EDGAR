@@ -35,9 +35,6 @@ ValidLLMs = Literal[
     "claude-opus-4-7",
 ]
 """Literal type for valid LLM model names.
-
-The provider is inferred from the model name prefix (e.g., 'gemini-' for Google,
-'claude-' for Anthropic).
 """
 
 
@@ -50,7 +47,7 @@ ValidResponseSchemas = Literal[
 
 
 Provider = Literal["google", "anthropic"]
-"""The LLM provider a project runs on. Selects which model each role defaults to."""
+"""Supported default providers"""
 
 
 _PROVIDER_MODEL_DEFAULTS: dict[Provider, dict[str, ValidLLMs]] = {
@@ -231,9 +228,8 @@ class LLMsConfig(_LaxModel):
         num_parents: The number of parent programs to include in the prompt
             when generating new programs.
         retry: Configuration for retrying failed LLM API calls.
-        provider: The LLM provider ("google" or "anthropic"). Selects the default
-            model for any role left unset below, so a project can switch providers
-            with a single line. The actual API called is always inferred from the
+        default_provider: The default LLM provider ("google" or "anthropic"). Selects the default
+            model for any role left unset below. The actual API called is always inferred from the
             model name prefix, not this field.
         model_llm: The LLM model(s) to use for generating new scientific models
             (numpy `model` code and `default_params`). Can be a single LLM or a list for cycling.
@@ -249,9 +245,10 @@ class LLMsConfig(_LaxModel):
 
     num_parents: int
     retry: RetryConfig
-    model_llm: ValidLLMs | list[ValidLLMs]
-    param_est_llm: ValidLLMs
-    jax_model_translator_llm: ValidLLMs
+    default_provider: Provider
+    model_llm: ValidLLMs | list[ValidLLMs] | None = None
+    param_est_llm: ValidLLMs | None = None
+    jax_model_translator_llm: ValidLLMs | None = None
     model_response_schema: ValidResponseSchemas = "ModelSchema"
     param_est_response_schema: ValidResponseSchemas = "ParamEstSchema"
     jax_model_response_schema: ValidResponseSchemas = "TranslationSchema"
@@ -264,13 +261,13 @@ class LLMsConfig(_LaxModel):
     def fill_provider_defaults(self) -> LLMsConfig:
         """Fills any unset LLM role from the selected provider's preset defaults.
 
-        Roles left as `None` inherit `_PROVIDER_MODEL_DEFAULTS[self.provider]`.
+        Roles left as `None` inherit `_PROVIDER_MODEL_DEFAULTS[self.default_provider]`.
         Explicitly-set roles (of either provider) are left untouched.
 
         Returns:
             The LLMsConfig instance with all roles resolved to concrete models.
         """
-        presets = _PROVIDER_MODEL_DEFAULTS[self.provider]
+        presets = _PROVIDER_MODEL_DEFAULTS[self.default_provider]
         for role, default in presets.items():
             if getattr(self, role) is None:
                 setattr(self, role, default)
