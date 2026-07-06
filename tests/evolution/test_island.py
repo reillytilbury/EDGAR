@@ -632,3 +632,59 @@ def test_island_census_round_trip(tmp_path):
     save_island_census(census, path)
     loaded = load_island_census(path)
     assert loaded == census
+
+
+def test_status_after_prune():
+    losses = (0.5, 100.0, 10, None, 0.6, 7)
+    population = make_empty_population(num_programs=len(losses))
+    for program, loss in zip(population, losses):
+        program.program_losses.discover.final = loss
+
+    islands = [{0, 1, 2}, {3, 4, 5}]
+
+    # Run prune
+    prune(
+        islands, population, evolution={"critical_population_size": 3, "n_migrants": 1}
+    )
+
+    # Islands after prune:
+    # islands[0] = {0, 2}  # 1 pruned
+    # islands[1] = {4, 5}  # 3 pruned
+    assert population[0].status == "alive"
+    assert population[1].status == "pruned"
+    assert population[2].status == "alive"
+    assert population[3].status == "pruned"
+    assert population[4].status == "alive"
+    assert population[5].status == "alive"
+
+
+def test_status_after_deduplicate_inner():
+    pop = make_fingerprint_population(
+        [
+            (_E0, 1.000),  # idx 0 — lower loss, kept
+            (_E0, 1.005),  # idx 1 — higher loss, within tol, removed
+            (_E1, 2.000),  # idx 2 — different fingerprint, kept
+        ]
+    )
+    islands = [{0, 1, 2}]
+    deduplicate_inner(islands, pop)
+    assert pop[0].status == "alive"
+    assert pop[1].status == "deduplicated (0)"
+    assert pop[2].status == "alive"
+
+
+def test_status_after_deduplicate_outer():
+    pop = make_fingerprint_population(
+        [
+            (_E0, 1.000),  # 0 — island i, lower loss
+            (_E1, 2.000),  # 1 — island i, unique
+            (_E0, 1.005),  # 2 — island j, dup of 0, higher loss → removed
+            (_E2, 3.000),  # 3 — island j, unique
+        ]
+    )
+    islands = [{0, 1}, {2, 3}]
+    deduplicate_outer(islands, pop, min_island_size=2)
+    assert pop[0].status == "alive"
+    assert pop[1].status == "alive"
+    assert pop[2].status == "deduplicated (0)"
+    assert pop[3].status == "alive"

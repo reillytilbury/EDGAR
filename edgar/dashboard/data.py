@@ -538,6 +538,7 @@ def _program_card(p: Program, alive_idxs: set[int]) -> dict:
         "rank": p.rank,
         "parents": list(p.birth.parent_indices),
         "alive": p.idx in alive_idxs,
+        "status": p.status,
         "has_image": bool(p.image_path),
     }
 

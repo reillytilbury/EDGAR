@@ -150,6 +150,7 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
             specifically `critical_population_size` and `n_migrants`.
     """
     keep_n = evolution["critical_population_size"] - evolution["n_migrants"]
+    all_before = set().union(*islands)
     for i, island in enumerate(islands):
         programs = [population[idx] for idx in island]
         # explicitly handle cases where the loss is None or inf to avoid sorting issues
@@ -162,6 +163,10 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
             ),
         )
         islands[i] = {p.idx for p in ranked[:keep_n]}
+
+    all_after = set().union(*islands)
+    for idx in all_before - all_after:
+        population[idx].status = "pruned"
 
 
 def uniform_sample(
@@ -404,6 +409,8 @@ def deduplicate_inner(
                 else p_k
             )
             to_remove.add(loser.idx)
+            winner = p_k if loser == p_j else p_j
+            loser.status = f"deduplicated ({winner.idx})"
 
         islands[i] = {p.idx for p in programs if p.idx not in to_remove}
 
@@ -467,13 +474,17 @@ def deduplicate_outer(
 
                 if _loss(p_i) < _loss(p_j):
                     loser_original_island_idx, loser_idx = j_idx, idx_j
+                    winner, loser = p_i, p_j
                 elif _loss(p_i) > _loss(p_j):
                     loser_original_island_idx, loser_idx = i_idx, idx_i
+                    winner, loser = p_j, p_i
                 else:
                     # Tie in loss: keep program from the lower-indexed island
                     loser_original_island_idx, loser_idx = j_idx, idx_j
+                    winner, loser = p_i, p_j
 
                 islands[loser_original_island_idx].remove(loser_idx)
+                loser.status = f"deduplicated ({winner.idx})"
                 break  # _deduplicate_inner ensures at most one duplicate of a program on the other island
 
 

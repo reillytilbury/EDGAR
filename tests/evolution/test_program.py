@@ -164,3 +164,8 @@ def test_setting_callable_default_params_without_data_raises_error():
         match="Cannot resolve dynamic default_params.*because program.data is None",
     ):
         program.default_params = default_params_fn
+
+
+def test_status_default_alive():
+    program = make_program()
+    assert program.status == "alive"

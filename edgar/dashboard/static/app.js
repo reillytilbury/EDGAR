@@ -244,6 +244,7 @@ function dashboard() {
       const k = this.sort.key, dir = this.sort.dir === 'asc' ? 1 : -1;
       const big = Number.POSITIVE_INFINITY;
       const get = p => {
+        if (k === 'status') return p.status || (p.alive ? 'alive' : 'pruned');
         const v = p[k];
         if (v === null || v === undefined) return big;
         return v;
@@ -288,7 +289,7 @@ function dashboard() {
             `discover: ${fmtN(p.loss_discover)} · validate: ${fmtN(p.loss_validate)}<br>` +
             `parents: ${(p.parents || []).map(x => '#' + x).join(', ') || '-'}` +
             (p.rank ? `<br>rank: ${p.rank}` : '') +
-            (p.alive ? '' : '<br>(pruned)')
+            `<br>status: ${escapeHtml(p.status || (p.alive ? 'alive' : 'pruned'))}`
           );
           markers.push(nodeColor(loss));
           sizes.push(p.rank === 1 ? 20 : (p.alive ? 13 : 9));

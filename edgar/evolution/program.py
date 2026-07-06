@@ -154,10 +154,12 @@ class Program:
         fit_image_path: Path to an image visualizing the model's fit to data.
         idx: A globally unique index assigned to the program within the `Population`.
         rank: The final rank of the program based on its validation loss.
+        status: The current evolutionary status of the program (e.g., 'alive', 'pruned', 'deduplicated').
         _default_params: Internal storage for the model's default parameters.
     """
 
     birth: BirthCertificate
+    status: str = "alive"
     code: Code = field(default_factory=Code)
     name: str | None = None
     program_losses: Losses = field(default_factory=Losses)

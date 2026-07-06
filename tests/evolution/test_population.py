@@ -95,6 +95,7 @@ class TestPopulation:
             )
             assert p_original.n_params == p_loaded.n_params
             assert p_original.idx == p_loaded.idx
+            assert p_original.status == p_loaded.status
             assert p_original.fit_image_path == p_loaded.fit_image_path
             if p_original.params_init is not None:
                 for k in p_original.params_init:

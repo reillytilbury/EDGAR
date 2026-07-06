@@ -241,6 +241,7 @@ class Population:
 
                 program = Program(
                     birth=BirthCertificate(**d["birth"]),
+                    status=d.get("status", "alive"),
                     code=Code(**d["code"]),
                     name=d["name"],
                     program_losses=Losses(

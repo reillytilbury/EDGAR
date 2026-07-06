@@ -315,6 +315,7 @@
                 <th class="px-3 py-2 cursor-pointer" @click="sortBy('gen')">gen</th>
                 <th class="px-3 py-2 cursor-pointer" @click="sortBy('island')">island</th>
                 <th class="px-3 py-2 cursor-pointer" @click="sortBy('mode')">mode</th>
+                <th class="px-3 py-2 cursor-pointer" @click="sortBy('status')">status</th>
                 <th class="px-3 py-2">parents</th>
               </tr>
             </thead>
@@ -334,6 +335,7 @@
                   <td class="px-3 py-1.5 font-mono" x-text="p.gen"></td>
                   <td class="px-3 py-1.5 font-mono" x-text="p.island"></td>
                   <td class="px-3 py-1.5 text-zinc-400" x-text="p.mode || '-'"></td>
+                  <td class="px-3 py-1.5 text-zinc-400" x-text="p.status || (p.alive ? 'alive' : 'pruned')"></td>
                   <td class="px-3 py-1.5 font-mono text-zinc-400"
                     x-text="(p.parents || []).map(x => '#'+x).join(', ') || '-'"></td>
                 </tr>
@@ -442,7 +444,7 @@
             <div><span class="text-zinc-500">mode</span> <span class="font-mono ml-1" x-text="programDetail.mode || '-'"></span></div>
             <div><span class="text-zinc-500">LLM</span> <span class="font-mono ml-1 text-xs" x-text="programDetail.llm || '-'"></span></div>
             <div><span class="text-zinc-500">n_params</span> <span class="font-mono ml-1" x-text="programDetail.n_params ?? '-'"></span></div>
-            <div><span class="text-zinc-500">alive at end</span> <span class="font-mono ml-1" x-text="programDetail.alive ? 'yes' : 'no'"></span></div>
+            <div><span class="text-zinc-500">status</span> <span class="font-mono ml-1" x-text="programDetail.status || (programDetail.alive ? 'alive' : 'pruned')"></span></div>
           </div>
 
           <div class="border border-zinc-800 rounded">
