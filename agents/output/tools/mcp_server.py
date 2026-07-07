@@ -104,15 +104,17 @@ def get_run_specs(run_id: str, base_dir: Optional[str] = None) -> str:
             config_info = (
                 f"### Evolution Config:\n"
                 f"- **Islands**: {evo_cfg.get('n_islands', 'N/A')}\n"
-                f"- **Population Size**: {evo_cfg.get('population_size', 'N/A')}\n"
                 f"- **Generations**: {evo_cfg.get('n_generations', 'N/A')}\n"
-                f"- **Crossover Rate**: {evo_cfg.get('crossover_rate', 'N/A')}\n"
+                f"- **Programs generated per island per generation**: {evo_cfg.get('batch_size', 'N/A')}\n"
+                f"- **Critical island population size**: {evo_cfg.get('critical_population_size', 'N/A')}\n"
+                f"- **Number of migrants per island per generation**: {evo_cfg.get('n_migrants', 'N/A')}\n"
                 f"\n### LLM Config:\n"
-                f"- **Model LLM**: {llm_cfg.get('model', {}).get('model_name', 'N/A')}\n"
-                f"- **Param Est LLM**: {llm_cfg.get('param_est', {}).get('model_name', 'N/A')}\n"
+                f"- **Model LLM**: {llm_cfg.get('model_llm', 'N/A')}\n"
+                f"- **Param Est LLM**: {llm_cfg.get('param_est_llm', 'N/A')}\n"
+                f"- **JAX translator LLM**: {llm_cfg.get('jax_model_translator_llm', 'N/A')}\n"
                 f"\n### Scoring Config:\n"
-                f"- **Metrics**: {scoring_cfg.get('metrics', 'N/A')}\n"
-                f"- **Optimisation Method**: {scoring_cfg.get('opt_method', 'N/A')}\n"
+                f"- **Parameter penalty**: {scoring_cfg.get('param_penalty_weight', 'N/A')}\n"
+                f"- **Gradient descent params**: {scoring_cfg.get('gradient_descent', {})}\n"
             )
         except Exception as e:
             config_info = f"Failed to parse task_spec.yaml: {e}"
@@ -212,6 +214,187 @@ def inspect_model(run_id: str, index: int, base_dir: Optional[str] = None) -> st
         f"\n### 2. Model (Numpy):\n```python\n{prog.code.model}\n```\n"
         f"\n### 3. Parameter Estimator:\n```python\n{prog.code.param_est}\n```\n"
     )
+
+
+@mcp.tool()
+def filter_models_by_parameters(
+    run_id: str, n_params: int, base_dir: Optional[str] = None
+) -> str:
+    """Filters the programs of an EDGAR run by their exact number of parameters.
+
+    Args:
+        run_id: The identifier of the run folder.
+        n_params: The exact number of parameters to filter by.
+        base_dir: Optional custom base directory path for runs.
+
+    Returns:
+        A formatted string listing the population indices, names, lineages,
+        and losses of matching models.
+    """
+    try:
+        run_dir = _find_run_dir(run_id, base_dir=base_dir)
+    except FileNotFoundError as e:
+        return str(e)
+
+    pop_file = run_dir / "population.jsonl"
+    if not pop_file.exists():
+        return f"No population found in run directory: {run_dir}"
+
+    try:
+        pop = Population.load(str(pop_file))
+    except Exception as e:
+        return f"Failed to load population: {e}"
+
+    matching = []
+    for idx, prog in enumerate(pop._programs):
+        if prog.n_params == n_params:
+            matching.append((idx, prog))
+
+    if not matching:
+        return f"No models found with exactly {n_params} parameters in run `{run_id}`."
+
+    output = [
+        f"### Found {len(matching)} models with exactly {n_params} parameters in run `{run_id}`:\n"
+    ]
+    for idx, prog in matching:
+        disc_loss = prog.program_losses.discover.final
+        val_loss = prog.program_losses.validate.final
+        name = prog.name or "Unnamed Model"
+        output.append(
+            f"- **Population Index**: `{idx}`\n"
+            f"  - **Name**: {name}\n"
+            f"  - **Lineage**: Gen {prog.birth.generation}, Island {prog.birth.island}\n"
+            f"  - **Loss**: Discover={disc_loss} | Validate={val_loss}"
+        )
+
+    return "\n".join(output)
+
+
+@mcp.tool()
+def compare_model_syntax_trees(
+    run_id: str,
+    n_params: Optional[int] = None,
+    indices: Optional[str] = None,
+    base_dir: Optional[str] = None,
+) -> str:
+    """Compares the Python abstract syntax trees of selected programs to find unique mathematical implementations.
+
+    It strips docstrings, comments, and formatting to group programs that are
+    mathematically/structurally identical. You can filter by parameter count
+    or provide a comma-separated list of population indices.
+
+    Args:
+        run_id: The identifier of the run folder.
+        n_params: Optional parameter count to filter and compare.
+        indices: Optional comma-separated string of population indices to compare (e.g., "2,5,10").
+        base_dir: Optional custom base directory path for runs.
+
+    Returns:
+        A structured string report detailing the unique variations, their frequency,
+        indices, and the canonical code for each variation.
+    """
+    import ast
+    import collections
+
+    try:
+        run_dir = _find_run_dir(run_id, base_dir=base_dir)
+    except FileNotFoundError as e:
+        return str(e)
+
+    pop_file = run_dir / "population.jsonl"
+    if not pop_file.exists():
+        return f"No population found in run directory: {run_dir}"
+
+    try:
+        pop = Population.load(str(pop_file))
+    except Exception as e:
+        return f"Failed to load population: {e}"
+
+    programs_to_compare = []
+
+    # 1. Resolve which programs to compare
+    if indices is not None:
+        try:
+            target_indices = [int(x.strip()) for x in indices.split(",") if x.strip()]
+        except ValueError:
+            return "Invalid format for indices. Please provide a comma-separated list of integers (e.g., '2,5,10')."
+
+        for idx in target_indices:
+            if idx < 0 or idx >= len(pop._programs):
+                return f"Index {idx} is out of bounds for population of size {len(pop._programs)}."
+            programs_to_compare.append((idx, pop._programs[idx]))
+    elif n_params is not None:
+        for idx, prog in enumerate(pop._programs):
+            if prog.n_params == n_params:
+                programs_to_compare.append((idx, prog))
+    else:
+        return "Please specify either 'n_params' or 'indices' to compare."
+
+    if not programs_to_compare:
+        return "No programs found matching the comparison criteria."
+
+    # 2. Canonical AST normalization helper
+    def clean_code(code_str: str) -> str:
+        try:
+            tree = ast.parse(code_str)
+            # Remove docstrings from functions, classes, and module
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Module)):
+                    if (
+                        node.body
+                        and isinstance(node.body[0], ast.Expr)
+                        and isinstance(node.body[0].value, ast.Constant)
+                        and isinstance(node.body[0].value.value, str)
+                    ):
+                        node.body.pop(0)
+            return ast.unparse(tree).strip()
+        except Exception:
+            # Fallback to simple cleaning if AST parsing fails
+            lines = [line.strip() for line in code_str.strip().splitlines()]
+            return "\n".join([l for l in lines if l and not l.startswith("#")])
+
+    # 3. Group by canonical AST string
+    groups = collections.defaultdict(list)
+    for idx, prog in programs_to_compare:
+        norm_code = clean_code(prog.model_code)
+        groups[norm_code].append((idx, prog))
+
+    # Helper to find the chronologically earliest member of a group in the evolutionary algorithm
+    def get_earliest_member(members_list):
+        return min(
+            members_list,
+            key=lambda x: (
+                x[1].birth.generation if x[1].birth.generation is not None else 9999,
+                x[0],
+            ),
+        )
+
+    # 4. Generate report
+    total_progs = len(programs_to_compare)
+    output = [
+        f"## AST Syntax Tree Comparison Report for Run `{run_id}`",
+        f"- Compared a total of **{total_progs}** programs.",
+        f"- Found **{len(groups)}** unique mathematical code variations.\n",
+        f"{'=' * 80}\n",
+    ]
+
+    # Sort groups by count descending
+    sorted_groups = sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)
+    for g_idx, (canonical_code, members) in enumerate(sorted_groups):
+        earliest_idx, earliest_prog = get_earliest_member(members)
+        member_indices = [idx for idx, _ in members]
+        output.append(
+            f"### VARIATION {g_idx + 1}:\n"
+            f"- **Occurrence Count**: {len(members)} ({(len(members) / total_progs) * 100:.1f}% of compared)\n"
+            f"- **Earliest Discovery**: Population Index `{earliest_idx}` (Gen {earliest_prog.birth.generation}, Island {earliest_prog.birth.island})\n"
+            f"- **Associated Indices**: {member_indices}\n"
+            f"- **Representative Model Name**: {earliest_prog.name or 'Unnamed'}\n"
+            f"- **Canonical Code (AST Normalized)**:\n"
+            f"```python\n{canonical_code}\n```\n"
+            f"{'-' * 80}\n"
+        )
+
+    return "\n".join(output)
 
 
 if __name__ == "__main__":
