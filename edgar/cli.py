@@ -410,7 +410,7 @@ def _apply_overrides(spec, overrides: list[str]) -> None:
     Apply dotted key=value overrides to a TaskSpec in-place.
 
     Each override must be of the form section.key=value, where section is one of
-    io, evolution, llms, scoring, project_params. Values are parsed as Python
+    io, evolution, llms, scoring, project_params, run. Values are parsed as Python
     literals where possible (int, float, bool), otherwise kept as strings.
 
     Example:
@@ -423,7 +423,7 @@ def _apply_overrides(spec, overrides: list[str]) -> None:
     Raises:
         ValueError: If an override is not in the correct format or specifies an unknown section.
     """
-    sections = {"io", "evolution", "llms", "scoring", "project_params"}
+    sections = {"io", "evolution", "llms", "scoring", "project_params", "run"}
     for override in overrides:
         if not override.startswith("--"):
             continue
@@ -640,8 +640,8 @@ def build_parser() -> argparse.ArgumentParser:
     Builds and returns the ArgumentParser for the EDGAR command-line interface.
 
     This function defines all the available commands (`init-project`, `validate`, `run`,
-    `test`, `test-fake`, `dashboard`) and their respective arguments, help messages,
-    and argument parsing logic.
+    `test`, `test-fake`, `dashboard`, `launch-gcp`) and their respective arguments, help
+    messages, and argument parsing logic.
 
     Returns:
         argparse.ArgumentParser: The configured argument parser.
@@ -717,6 +717,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-open", action="store_true", help="don't auto-open the browser"
     )
 
+    p_gcp = sub.add_parser(
+        "launch-gcp",
+        help="Launch a multi-run sweep on GCP (one GPU VM per run) from a launch spec",
+    )
+    p_gcp.add_argument(
+        "spec",
+        type=str,
+        help="Path to a GCP launch spec YAML (see projects/gcp_launch.example.yaml)",
+    )
+    p_gcp.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the gcloud/gsutil commands and startup script without executing",
+    )
+    p_gcp.add_argument(
+        "--teardown",
+        action="store_true",
+        help="Delete this user's EDGAR VMs instead of launching",
+    )
+    p_gcp.add_argument(
+        "--fetch",
+        action="store_true",
+        help="Download results from the bucket to program_databases/ instead of launching",
+    )
+
     return parser
 
 
@@ -765,6 +790,15 @@ def run_cli(argv=None) -> int:
             port=args.port,
             host=args.host,
             no_open=args.no_open,
+        )
+    if args.command == "launch-gcp":
+        from .cloud.launch_gcp import launch_gcp
+
+        return launch_gcp(
+            args.spec,
+            teardown=args.teardown,
+            dry_run=args.dry_run,
+            fetch=args.fetch,
         )
     parser.error("Unknown command")
     return 2

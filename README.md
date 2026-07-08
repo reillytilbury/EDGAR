@@ -148,6 +148,51 @@ program_databases/
 
 ---
 
+## GCP Cloud Runs
+
+Launch runs on Google Cloud, one GPU VM per run. Each VM builds its environment with
+`uv sync --frozen`, runs `edgar run` under a wall-clock watchdog, syncs results to a GCS
+bucket, and self-deletes. GCP auth is your local `gcloud auth login` plus the VM's default
+service account — no keys are sent for GCP itself; only your `.env` (`GOOGLE_API_KEY` /
+`ANTHROPIC_API_KEY`) is uploaded to a private bucket path and pulled by each VM.
+
+**One-time setup**
+
+```bash
+gcloud auth login && gcloud config set project <PROJECT_ID>
+gcloud services enable compute.googleapis.com storage.googleapis.com
+gsutil mb -l <REGION> gs://<BUCKET>          # private bucket
+# ensure GPU quota in your zone, and that .env holds your API key(s)
+```
+
+**Write a spec and launch**
+
+```bash
+cp projects/gcp_launch.example.yaml gcp_launch.yaml   # gitignored; edit the gcp: block
+uv run edgar launch-gcp gcp_launch.yaml --dry-run      # prints gcloud/gsutil cmds + startup script
+uv run edgar launch-gcp gcp_launch.yaml                # launch
+```
+
+Each spec run becomes one VM (`n_replicas` fans out to several with distinct seeds).
+Overrides use the same `section.key: value` form as `edgar run` (e.g.
+`evolution.n_generations: 20`).
+
+**Monitor / fetch / teardown**
+
+```bash
+gcloud compute ssh <vm> --zone=<ZONE> --command='tail -f /var/log/edgar-startup.log'
+gsutil ls -r gs://<BUCKET>/results/                   # watch results land
+uv run edgar launch-gcp gcp_launch.yaml --fetch       # rsync results -> program_databases/
+uv run edgar launch-gcp gcp_launch.yaml --teardown    # delete your VMs (they also self-delete)
+```
+
+Fetched runs drop into `program_databases/MM-DD/HH-MM-SS/`, so `edgar dashboard` and
+`edgar resume` work on them unchanged. Each VM writes a `STATUS` sentinel
+(`SUCCESS`/`FAILED`/`TIMEOUT`) next to its results. The remote `task_spec.yaml` shows
+`git_sha: unknown` by design — code provenance (SHA + diff) is in `gs://<BUCKET>/code/MANIFEST.txt`.
+
+---
+
 ## Setting Up a New Project
 
 > **EXPERIMENTAL (work in progress): start with the `data-loader-helper` agent.** The hardest part of a new project
