@@ -663,44 +663,21 @@ def _teardown(spec: dict, dry_run: bool) -> int:
     return 0
 
 
-def _gsutil_subdirs(uri: str) -> list[str]:
-    """List the immediate sub-'directories' of a ``gs://`` prefix (empty on error)."""
-    try:
-        out = subprocess.run(
-            ["gsutil", "ls", uri.rstrip("/") + "/"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-    except Exception:  # noqa: BLE001 - missing prefix / no access -> nothing to fetch
-        return []
-    return [ln for ln in out.splitlines() if ln.endswith("/")]
-
-
 def fetch_results(spec: dict, dry_run: bool) -> int:
-    """Download each run's results into ``program_databases/<YYYY-MM-DD>/<run_name>/``.
+    """Download each run's results into ``program_databases/<run_name>/YYYY-MM-DD/HH-MM-SS/``.
 
     On the bucket a run is stored at ``results/<run_name>/<YYYY-MM-DD>/<HH-MM-SS>/`` —
     edgar's own ``<save_path>/<date>/<time>`` layout under the VM's per-run save_path.
-    This reorders it into the local ``<date>/<run_name>`` convention (so a run keeps its
-    name instead of colliding with other runs on a shared timestamp) and flattens the
-    ``HH-MM-SS`` level away.
+    Mirroring it under a local ``<run_name>/`` dir keeps the run name (so different runs
+    don't collide) and preserves the date/time subdirs, so the same run name launched
+    several times in a day stays separated by timestamp.
     """
     bucket = spec["gcp"]["bucket"]
     for f in flatten_runs(spec):
         run_name = f["run_name"]
-        run_uri = f"gs://{bucket}/results/{run_name}"
-        if dry_run:
-            print(
-                f"[dry-run] fetch {run_uri}/<date>/<time>/ "
-                f"-> program_databases/<date>/{run_name}/"
-            )
-            continue
-        for date_uri in _gsutil_subdirs(run_uri):
-            date = date_uri.rstrip("/").rsplit("/", 1)[-1]
-            dest = f"program_databases/{date}/{run_name}"
-            for ts_uri in _gsutil_subdirs(date_uri):
-                _run(["gsutil", "-m", "rsync", "-r", ts_uri, dest])
+        src = f"gs://{bucket}/results/{run_name}"
+        dest = f"program_databases/{run_name}"
+        _run(["gsutil", "-m", "rsync", "-r", src, dest], dry_run=dry_run)
     return 0
 
 
