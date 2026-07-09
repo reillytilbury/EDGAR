@@ -15,7 +15,7 @@ DATA_DIR = "/opt/edgar_data"
 # ``@@TOKEN@@`` placeholders (not str.format braces) so the bash ``${...}`` and ``$(...)``
 # below need no escaping. ``render`` substitutes them.
 STARTUP_TEMPLATE = r"""#!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 exec > >(tee -a /var/log/edgar-startup.log) 2>&1
 echo "=== edgar startup $(date -u) ==="
 
@@ -23,7 +23,7 @@ CODE_DIR="@@CODE_DIR@@"
 DATA_DIR="@@DATA_DIR@@"
 
 md() {
-  curl -s -H "Metadata-Flavor: Google" \
+  curl -fsS -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/$1"
 }
 
