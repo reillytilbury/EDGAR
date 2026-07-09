@@ -334,11 +334,11 @@ def _root_for(run_dir: Path) -> Path:
 
     This helper function is used to determine the top-level directory where
     multiple EDGAR runs are organized (e.g., '/path/to/program_databases').
-    It assumes a structure like `<root>/MM-DD/HH-MM-SS/`.
+    It assumes a structure like `<root>/YYYY-MM-DD/HH-MM-SS/`.
 
     Args:
         run_dir: The `Path` object of an EDGAR run directory
-            (e.g., `program_databases/01-01/12-34-56`).
+            (e.g., `program_databases/2023-01-01/12-34-56`).
 
     Returns:
         The `Path` object representing the root directory (e.g.,

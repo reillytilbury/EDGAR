@@ -141,7 +141,7 @@ uv run edgar launch-gcp gcp_launch.yaml --fetch       # rsync results -> program
 uv run edgar dashboard                                # view the fetched run
 ```
 
-Fetched runs land in `program_databases/MM-DD/HH-MM-SS/`, so `edgar dashboard` and
+Fetched runs land in `program_databases/YYYY-MM-DD/{BUCKET}/`, so `edgar dashboard` and
 `edgar resume` work on them unchanged.
 
 ## Secrets (Secret Manager)

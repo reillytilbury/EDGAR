@@ -326,7 +326,7 @@ def _run_card(run_dir: Path) -> dict:
 
 
 def _run_id(run_dir: Path) -> str:
-    """Stable URL-safe id for a run: MM-DD_HH-MM-SS or the dir name as a fallback."""
+    """Stable URL-safe id for a run: YYYY-MM-DD_HH-MM-SS or the dir name as a fallback."""
     parts = run_dir.parts
     if len(parts) >= 2:
         return f"{parts[-2]}_{parts[-1]}"

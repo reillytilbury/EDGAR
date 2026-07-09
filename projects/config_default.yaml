@@ -8,7 +8,7 @@ io:
   # Path to task data. Override in each project config.
   data_path: /home/USER/data.npy
 
-  # Base directory for run outputs. Each run lands in <save_path>/MM-DD/HH-MM-SS/.
+  # Base directory for run outputs. Each run lands in <save_path>/YYYY-MM-DD/HH-MM-SS/.
   save_path: program_databases
 
 evolution:
