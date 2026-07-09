@@ -114,17 +114,17 @@ edgar dashboard {data_directory}
 
 A run which failed can be resume via, for example:
 ```bash
-edgar resume program_databases/mm-dd/hh-mm-ss
+edgar resume program_databases/yyyy-mm-dd/hh-mm-ss
 ```
 ---
 
 ## Run Output
 
-By default, each run writes to `program_databases/MM-DD/HH-MM-SS/`:
+By default, each run writes to `program_databases/YYYY-MM-DD/HH-MM-SS/`:
 
 ```text
 program_databases/
-└── MM-DD/
+└── YYYY-MM-DD/
     └── HH-MM-SS/
         ├── task_spec.yaml          # Full config + git SHA + prompt schemas + seed code. Read-only.
         ├── population.jsonl        # All Programs — code, losses, params, lineage. Main scientific output.

@@ -269,7 +269,7 @@ def list_runs(roots: list[Path]) -> list[dict]:
     """Scan roots for runs and return a summary list, newest first.
 
     A "run" is any directory containing a task_spec.yaml file. Conventionally
-    these are organised as program_databases/MM-DD/HH-MM-SS/.
+    these are organised as program_databases/YYYY-MM-DD/HH-MM-SS/.
     """
     out: list[dict] = []
     seen: set[str] = set()

@@ -130,7 +130,7 @@ class TaskSpec:
             LLM image-feedback prompts. None if the project does not provide
             `image_feedback/plot.py`.
         creation_timestamp (str): Timestamp set at construction, used to create the
-            hierarchical on-disk layout `<save_path>/MM-DD/HH-MM-SS/`.
+            hierarchical on-disk layout `<save_path>/YYYY-MM-DD/HH-MM-SS/`.
         seed_programs (list[Program]): Hand-written seed programs (typically 2) that
             bootstrap the initial population. These programs are loaded from
             `<project_dir>/seed_programs/modelN.py + param_estN.py` pairs.
@@ -192,7 +192,7 @@ class TaskSpec:
     plot_fn: Callable | None
 
     creation_timestamp: str = field(
-        default_factory=lambda: datetime.now().strftime("%m-%d/%H-%M-%S")
+        default_factory=lambda: datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
     )
 
     seed_programs: list[Program] = field(default_factory=list)
