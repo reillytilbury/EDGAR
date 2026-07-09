@@ -1,6 +1,11 @@
 # Environment variables
 .env
-.vscode/ 
+.vscode/
+
+# GCP launch specs (per-user; keep only gcp_launch.example.yaml)
+gcp_launch.yaml
+gcp_launch.*.yaml
+!gcp_launch.example.yaml
 
 CLAUDE.md
 .codex

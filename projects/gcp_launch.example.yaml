@@ -1,0 +1,36 @@
+# GCP launch spec for EDGAR. Copy to gcp_launch.yaml (gitignored) and edit `gcp:`.
+#   Dry run:  uv run edgar launch-gcp gcp_launch.yaml --dry-run
+#   Launch:   uv run edgar launch-gcp gcp_launch.yaml
+#   Fetch:    uv run edgar launch-gcp gcp_launch.yaml --fetch
+#   Teardown: uv run edgar launch-gcp gcp_launch.yaml --teardown
+
+gcp:
+  project_id: my-gcp-project      # REQUIRED
+  bucket: my-edgar-bucket         # REQUIRED (name, no gs://; must already exist, private)
+  zone: us-central1-a             # REQUIRED (must have GPU quota)
+  machine_type: g2-standard-8     # default; pairs with nvidia-l4
+  gpu_type: nvidia-l4             # default; e.g. nvidia-tesla-t4
+  gpu_count: 1                    # default
+  spot: true                      # default; cheap + preemptible (periodic sync covers it)
+  boot_disk_size_gb: 200          # default
+  image_family: common-cu129-ubuntu-2204-nvidia-580      # default (Deep Learning VM, CUDA 12)
+  image_project: deeplearning-platform-release
+  name_prefix: edgar              # default; VM names = <prefix>-<run-name>
+  max_hours: 12                   # default; wall-clock watchdog per VM
+  secret_name: edgar-env          # default; Secret Manager secret holding your .env (API keys)
+
+# Optional defaults applied to every run unless the run overrides them.
+defaults:
+  overrides: {}                   # flat dotted keys, e.g. {evolution.n_generations: 20}
+  base_seed: 0                    # replica i gets base_seed + i
+
+runs:
+  - config: projects/synthetic_data/config.yaml   # REQUIRED, repo-relative
+    run_name: synth                                # optional; default = project dir name
+    n_replicas: 2                                  # optional; default 1
+    overrides:                                     # optional; merged over defaults
+      evolution.n_generations: 4
+
+  - config: projects/orientation_tuning/config.yaml
+    overrides:
+      llms.model_llm: claude-sonnet-4-5

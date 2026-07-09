@@ -114,17 +114,17 @@ edgar dashboard {data_directory}
 
 A run which failed can be resume via, for example:
 ```bash
-edgar resume program_databases/mm-dd/hh-mm-ss
+edgar resume program_databases/yyyy-mm-dd/hh-mm-ss
 ```
 ---
 
 ## Run Output
 
-By default, each run writes to `program_databases/MM-DD/HH-MM-SS/`:
+By default, each run writes to `program_databases/YYYY-MM-DD/HH-MM-SS/`:
 
 ```text
 program_databases/
-└── MM-DD/
+└── YYYY-MM-DD/
     └── HH-MM-SS/
         ├── task_spec.yaml          # Full config + git SHA + prompt schemas + seed code. Read-only.
         ├── population.jsonl        # All Programs — code, losses, params, lineage. Main scientific output.
@@ -145,6 +145,32 @@ program_databases/
   To in order to help with analyzing results we have configured a subagent for use with claude code or gemini cli in `agents/output`. See `agents/output/README.md` for further information on how to use this.
   The idea is to be able to use natural language to query results, e.g: **YOU:** Summarize the top models from the most recent run and identify common features which led to an improved score. 
   Additions to the instructions and tools in the mcp server are very welcome.
+
+---
+
+## GCP Cloud Runs
+
+Run EDGAR on Google Cloud with `edgar launch-gcp` — one GPU VM per run, each building its
+environment with `uv sync --frozen`, running `edgar run`, syncing results to a Cloud Storage
+bucket, and self-deleting. API keys are stored in Secret Manager (never in the bucket) and
+fetched by each VM's service account; no keys are sent for GCP itself.
+
+```bash
+# one-time
+gcloud auth login && gcloud config set project <PROJECT_ID>
+gcloud services enable compute.googleapis.com storage.googleapis.com secretmanager.googleapis.com
+gcloud storage buckets create gs://<BUCKET> --location=<REGION>
+
+# each launch
+cp projects/gcp_launch.example.yaml gcp_launch.yaml     # gitignored; edit the gcp: block
+uv run edgar launch-gcp gcp_launch.yaml --dry-run        # inspect; runs nothing
+uv run edgar launch-gcp gcp_launch.yaml                  # launch
+uv run edgar launch-gcp gcp_launch.yaml --fetch          # pull results -> program_databases/
+```
+
+See **[docs/source/gcp_cloud_runs.md](docs/source/gcp_cloud_runs.md)** for the full guide:
+how it works (architecture, secrets, provenance), writing specs, monitoring sweeps, storage
+cost and cleanup, and troubleshooting (GPU quota, spot stockouts, image families).
 
 ---
 

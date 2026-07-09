@@ -78,7 +78,7 @@ This module handles all input/output operations, configuration, and run state ma
     *   `from_config` factory method initializes the `TaskSpec` from a `Config` object, setting up the `rng` with a `random_seed` and loading seed programs.
     *   `save` method writes a read-only `task_spec.yaml` to the run directory, preserving the exact configuration and source references. Write permissions are stripped (`os.chmod(path, stat.S_IREAD)`) to prevent accidental modification.
     *   `schedule` determines the `mode` (explore/exploit), `temperature` (decaying from 2 to ~1.37 on a Gemini-scale), and specific LLM models to use for each generation, potentially cycling through lists of LLMs. It handles Anthropic-specific rescaling of temperatures in `llm_calling.py`.
-    *   `output_dir` defines the hierarchical run output path (`<save_path>/MM-DD/HH-MM-SS/`).
+    *   `output_dir` defines the hierarchical run output path (`<save_path>/YYYY-MM-DD/HH-MM-SS/`).
     *   `flat_config` provides a merged dictionary of configuration parameters for convenient lookup by prompt templating.
     *   `prompt_schemas` provides namedtuple access to `model_prompt_schema`, `param_est_prompt_schema`, and `jax_model_prompt_schema`.
 

@@ -81,7 +81,7 @@ edgar run projects/orientation_tuning/config.yaml
 
 Uses every setting from `projects/orientation_tuning/config.yaml` merged on top
 of `projects/config_default.yaml`. Output lands in
-`program_databases/MM-DD/HH-MM-SS/`. `Ctrl-C` is safe — the population is
+`program_databases/YYYY-MM-DD/HH-MM-SS/`. `Ctrl-C` is safe — the population is
 written to `population.jsonl` as the run progresses, so a killed run still
 leaves a partial inspectable run dir.
 
@@ -105,11 +105,11 @@ crashed runs alike*. Passing that file instead of `config.yaml` reproduces the
 run **exactly** — same config, same seeds, same LLM names:
 
 ```bash
-edgar run program_databases/05-24/17-17-45/task_spec.yaml
+edgar run program_databases/2026-05-24/17-17-45/task_spec.yaml
 ```
 
 The relaunch gets a fresh `creation_timestamp`, so it lands in a new dir
-(`program_databases/MM-DD/HH-MM-SS/`); the original run dir is never
+(`program_databases/YYYY-MM-DD/HH-MM-SS/`); the original run dir is never
 overwritten.
 
 **Important:** this is "re-run from scratch using the same recipe", not
@@ -209,7 +209,7 @@ edgar run projects/orientation_tuning/config.yaml \
 | ---------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `run`            | `random_seed`                    | Seeds spawn/migration RNG; `null` for non-deterministic                                                                                                         |
 | `io`             | `data_path`                      | Input data file (`.npy`) consumed by `load_data`                                                                                                                |
-| `io`             | `save_path`                      | Output base dir; runs land in `<save_path>/MM-DD/HH-MM-SS/`                                                                                                     |
+| `io`             | `save_path`                      | Output base dir; runs land in `<save_path>/YYYY-MM-DD/HH-MM-SS/`                                                                                                     |
 | `evolution`      | `n_generations`                  | Outer loop iterations                                                                                                                                           |
 | `evolution`      | `n_islands`                      | Independent populations evolving in parallel                                                                                                                    |
 | `evolution`      | `batch_size`                     | Children per island per generation (= LLM call fan-out)                                                                                                         |
@@ -242,7 +242,7 @@ for nested dicts — easier to edit it directly in the project's `config.yaml`.
 Every successful run writes:
 
 ```
-program_databases/MM-DD/HH-MM-SS/
+program_databases/YYYY-MM-DD/HH-MM-SS/
 ├── task_spec.yaml         # frozen config + git sha + seed source (re-runnable, read-only)
 ├── population.jsonl       # one Program per line: birth, code, losses, fitted params
 ├── island_census.jsonl    # per-generation per-island membership (single JSON doc despite the name)
@@ -272,7 +272,7 @@ tail -f "$(ls -td test_output/*/*/ | head -1)run.log"
 open -a "Google Chrome" "$(ls -td program_databases/*/*/ | head -1)family_tree.html"
 ```
 
-Run directories are nested two deep (`<save_path>/MM-DD/HH-MM-SS/`), so any
+Run directories are nested two deep (`<save_path>/YYYY-MM-DD/HH-MM-SS/`), so any
 manual glob needs **two** stars: `program_databases/*/*/run.log`, not `*/run.log`.
 zsh errors on no-match by default — quote the `$(...)` substitution as shown
 above to sidestep that.

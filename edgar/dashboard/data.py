@@ -269,7 +269,7 @@ def list_runs(roots: list[Path]) -> list[dict]:
     """Scan roots for runs and return a summary list, newest first.
 
     A "run" is any directory containing a task_spec.yaml file. Conventionally
-    these are organised as program_databases/MM-DD/HH-MM-SS/.
+    these are organised as program_databases/YYYY-MM-DD/HH-MM-SS/.
     """
     out: list[dict] = []
     seen: set[str] = set()
@@ -326,7 +326,7 @@ def _run_card(run_dir: Path) -> dict:
 
 
 def _run_id(run_dir: Path) -> str:
-    """Stable URL-safe id for a run: MM-DD_HH-MM-SS or the dir name as a fallback."""
+    """Stable URL-safe id for a run: YYYY-MM-DD_HH-MM-SS or the dir name as a fallback."""
     parts = run_dir.parts
     if len(parts) >= 2:
         return f"{parts[-2]}_{parts[-1]}"

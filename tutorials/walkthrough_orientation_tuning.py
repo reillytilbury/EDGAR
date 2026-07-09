@@ -187,7 +187,7 @@ if __name__ == "__main__":
 # ─────────────────────────────────────────────────────────────────────────
 # Cell A7: Create output directory and persist the (overridden) task spec
 # ─────────────────────────────────────────────────────────────────────────
-# `spec.output_dir` is `<save_path>/MM-DD/HH-MM-SS/`. Saving the spec there
+# `spec.output_dir` is `<save_path>/YYYY-MM-DD/HH-MM-SS/`. Saving the spec there
 # first means even if the tutorial crashes you'll have the exact config that
 # produced the partial run. The saved file is chmod'd read-only (see
 # TaskSpec.save).
