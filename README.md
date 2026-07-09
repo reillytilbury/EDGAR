@@ -181,7 +181,7 @@ Overrides use the same `section.key: value` form as `edgar run` (e.g.
 
 ```bash
 gcloud compute ssh <vm> --zone=<ZONE> --command='tail -f /var/log/edgar-startup.log'
-gsutil ls -r gs://<BUCKET>/results/                   # watch results land
+gcloud storage ls -r gs://<BUCKET>/results/                   # watch results land
 uv run edgar launch-gcp gcp_launch.yaml --fetch       # rsync results -> program_databases/
 uv run edgar launch-gcp gcp_launch.yaml --teardown    # delete your VMs (they also self-delete)
 ```

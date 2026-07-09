@@ -40,7 +40,7 @@ GCP_DEFAULTS = {
     "gpu_count": 1,
     "spot": True,
     "boot_disk_size_gb": 200,
-    "image_family": "common-cu123",
+    "image_family": "common-cu129-ubuntu-2204-nvidia-580",
     "image_project": "deeplearning-platform-release",
     "name_prefix": "edgar",
     "max_hours": 12,
