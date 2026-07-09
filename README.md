@@ -150,50 +150,27 @@ program_databases/
 
 ## GCP Cloud Runs
 
-Launch runs on Google Cloud, one GPU VM per run. Each VM builds its environment with
-`uv sync --frozen`, runs `edgar run` under a wall-clock watchdog, syncs results to a GCS
-bucket, and self-deletes. GCP auth is your local `gcloud auth login` plus the VM's default
-service account — no keys are sent for GCP itself. Your `.env` (`GOOGLE_API_KEY` /
-`ANTHROPIC_API_KEY`) is stored in **Secret Manager** (never in the bucket); the launcher
-grants the VM's service account read access and each VM fetches it at runtime.
-
-**One-time setup**
+Run EDGAR on Google Cloud with `edgar launch-gcp` — one GPU VM per run, each building its
+environment with `uv sync --frozen`, running `edgar run`, syncing results to a Cloud Storage
+bucket, and self-deleting. API keys are stored in Secret Manager (never in the bucket) and
+fetched by each VM's service account; no keys are sent for GCP itself.
 
 ```bash
+# one-time
 gcloud auth login && gcloud config set project <PROJECT_ID>
 gcloud services enable compute.googleapis.com storage.googleapis.com secretmanager.googleapis.com
-gcloud storage buckets create gs://<BUCKET> --location=<REGION>   # private bucket
-# ensure GPU quota in your zone, and that .env holds your API key(s)
+gcloud storage buckets create gs://<BUCKET> --location=<REGION>
+
+# each launch
+cp projects/gcp_launch.example.yaml gcp_launch.yaml     # gitignored; edit the gcp: block
+uv run edgar launch-gcp gcp_launch.yaml --dry-run        # inspect; runs nothing
+uv run edgar launch-gcp gcp_launch.yaml                  # launch
+uv run edgar launch-gcp gcp_launch.yaml --fetch          # pull results -> program_databases/
 ```
 
-**Write a spec and launch**
-
-```bash
-cp projects/gcp_launch.example.yaml gcp_launch.yaml   # gitignored; edit the gcp: block
-uv run edgar launch-gcp gcp_launch.yaml --dry-run      # prints gcloud/gsutil cmds + startup script
-uv run edgar launch-gcp gcp_launch.yaml                # launch
-```
-
-Each spec run becomes one VM (`n_replicas` fans out to several with distinct seeds).
-Overrides use the same `section.key: value` form as `edgar run` (e.g.
-`evolution.n_generations: 20`).
-
-**Monitor / fetch / teardown**
-
-```bash
-gcloud compute ssh <vm> --zone=<ZONE> --command='tail -f /var/log/edgar-startup.log'
-gcloud storage ls -r gs://<BUCKET>/results/                   # watch results land
-uv run edgar launch-gcp gcp_launch.yaml --fetch       # rsync results -> program_databases/
-uv run edgar launch-gcp gcp_launch.yaml --teardown    # delete your VMs (they also self-delete)
-```
-
-Fetched runs drop into `program_databases/MM-DD/HH-MM-SS/`, so `edgar dashboard` and
-`edgar resume` work on them unchanged. Each VM writes a `STATUS` sentinel
-(`SUCCESS`/`FAILED`/`TIMEOUT`) next to its results. The remote `task_spec.yaml` shows
-`git_sha: unknown` by design — code provenance (SHA + diff) is in `gs://<BUCKET>/code/MANIFEST.txt`.
-Your API keys live in the `edgar-env` Secret Manager secret (overridable via `gcp.secret_name`);
-a new version is added only when your local `.env` changes. Remove it with
-`gcloud secrets delete edgar-env` when you're done.
+See **[docs/source/gcp_cloud_runs.md](docs/source/gcp_cloud_runs.md)** for the full guide:
+how it works (architecture, secrets, provenance), writing specs, monitoring sweeps, storage
+cost and cleanup, and troubleshooting (GPU quota, spot stockouts, image families).
 
 ---
 

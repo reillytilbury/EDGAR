@@ -11,6 +11,12 @@ Welcome to EDGAR's Documentation!
 
 .. toctree::
    :maxdepth: 2
+   :caption: Guides
+
+   gcp_cloud_runs
+
+.. toctree::
+   :maxdepth: 2
    :caption: Developer Guide
 
    contributing
