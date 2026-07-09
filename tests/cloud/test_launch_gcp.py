@@ -208,3 +208,20 @@ def test_apply_overrides_accepts_run_random_seed():
     )
     _apply_overrides(spec, ["--run.random_seed=42"])
     assert spec.run["random_seed"] == 42
+
+
+def test_apply_overrides_rejects_default_provider():
+    spec = SimpleNamespace(
+        io={}, evolution={}, llms={}, scoring={}, project_params={}, run={}
+    )
+    with pytest.raises(ValueError, match="default_provider"):
+        _apply_overrides(spec, ["--llms.default_provider=anthropic"])
+
+
+def test_validate_spec_rejects_default_provider_override():
+    raw = _spec()
+    raw["runs"] = [
+        {"config": SYNTH_CONFIG, "overrides": {"llms.default_provider": "anthropic"}}
+    ]
+    with pytest.raises(ValueError, match="default_provider"):
+        validate_spec(raw)

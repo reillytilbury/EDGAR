@@ -13,7 +13,7 @@ gcp:
   gpu_count: 1                    # default
   spot: true                      # default; cheap + preemptible (periodic sync covers it)
   boot_disk_size_gb: 200          # default
-  image_family: common-cu123      # default (Deep Learning VM, CUDA 12)
+  image_family: common-cu129-ubuntu-2204-nvidia-580      # default (Deep Learning VM, CUDA 12)
   image_project: deeplearning-platform-release
   name_prefix: edgar              # default; VM names = <prefix>-<run-name>
   max_hours: 12                   # default; wall-clock watchdog per VM
@@ -33,4 +33,4 @@ runs:
 
   - config: projects/orientation_tuning/config.yaml
     overrides:
-      llms.default_provider: anthropic
+      llms.model_llm: claude-sonnet-4-5

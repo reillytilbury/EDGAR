@@ -434,6 +434,13 @@ def _apply_overrides(spec, overrides: list[str]) -> None:
         section, key = dotted.split(".", 1)
         if section not in sections:
             raise ValueError(f"Unknown section '{section}'. Must be one of {sections}")
+        if section == "llms" and key == "default_provider":
+            raise ValueError(
+                "cannot override 'llms.default_provider': it only fills unset roles at "
+                "config load, so it has no effect applied as an override. Set the role "
+                "models directly (e.g. llms.model_llm=...) or change default_provider in "
+                "config.yaml."
+            )
         try:
             import ast
 
@@ -488,6 +495,12 @@ def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> No
     spec = TaskSpec.from_config(config)
     if overrides:
         _apply_overrides(spec, overrides)
+        # spec.rng was seeded from the pre-override config in TaskSpec.from_config;
+        # rebuild it so a --run.random_seed override actually takes effect and the
+        # seed recorded in task_spec.yaml matches the one the run uses.
+        import numpy as np
+
+        spec.rng = np.random.default_rng(spec.run["random_seed"])
     asyncio.run(run(spec, log_level=log_level))
 
 
