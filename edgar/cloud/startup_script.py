@@ -32,6 +32,7 @@ RUN_NAME=$(md attributes/edgar-run-name)
 CONFIG=$(md attributes/edgar-config)
 DATA_URI=$(md attributes/edgar-data-uri)
 MAX_HOURS=$(md attributes/edgar-max-hours)
+SECRET_NAME=$(md attributes/edgar-secret-name)
 VM_NAME=$(md name)
 ZONE=$(basename "$(md zone)")
 
@@ -62,8 +63,14 @@ until nvidia-smi; do echo "waiting for GPU driver..."; sleep 5; done
 # Pull code, secrets, and (optionally) the data file.
 mkdir -p "$CODE_DIR" "$DATA_DIR"
 gsutil -m rsync -r "gs://${BUCKET}/code" "$CODE_DIR"
-gsutil cp "gs://${BUCKET}/secrets/.env" "${CODE_DIR}/.env" \
-  || echo "WARN: no .env in bucket; LLM calls will fail"
+# API keys come from Secret Manager (never staged in the bucket), fetched via the VM's
+# service account. The secret holds the .env contents; write them back to disk for dotenv.
+if [ -n "$SECRET_NAME" ]; then
+  gcloud secrets versions access latest --secret="$SECRET_NAME" > "${CODE_DIR}/.env" \
+    || echo "WARN: could not access secret ${SECRET_NAME}; LLM calls will fail"
+else
+  echo "WARN: no secret configured; LLM calls will fail"
+fi
 if [ -n "$DATA_URI" ]; then
   gsutil cp "$DATA_URI" "${DATA_DIR}/$(basename "$DATA_URI")"
 fi

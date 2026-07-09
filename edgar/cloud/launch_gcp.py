@@ -9,7 +9,8 @@ GCP auth is the caller's ``gcloud auth login`` plus the VM's default service acc
 no keys are transmitted for GCP itself.
 
 The provider only needs ``GOOGLE_API_KEY`` (and optionally ``ANTHROPIC_API_KEY``) in a
-local ``.env``, which is uploaded to a private bucket path and pulled by each VM.
+local ``.env``, which is stored in Secret Manager (never in the bucket) and fetched by
+each VM's service account at runtime.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +46,7 @@ GCP_DEFAULTS = {
     "image_project": "deeplearning-platform-release",
     "name_prefix": "edgar",
     "max_hours": 12,
+    "secret_name": "edgar-env",
 }
 REQUIRED_GCP = ("project_id", "bucket", "zone")
 
@@ -321,12 +324,156 @@ def upload_manifest(bucket: str, dry_run: bool) -> None:
         os.unlink(tmp)
 
 
-def upload_env(bucket: str, dry_run: bool) -> None:
+def _wait_secretmanager_ready(project: str, attempts: int = 12, delay: int = 8) -> None:
+    """Poll until the Secret Manager API is usable after enabling it.
+
+    Enabling an API returns before it is fully propagated, so the first ``secrets``
+    call can still fail with ``SERVICE_DISABLED``. Poll a cheap read until it succeeds
+    (or a different error surfaces, which the real command will then report).
+    """
+    for _ in range(attempts):
+        r = subprocess.run(
+            ["gcloud", "secrets", "list", f"--project={project}", "--limit=1"],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode == 0 or "SERVICE_DISABLED" not in (r.stderr or ""):
+            return
+        time.sleep(delay)
+    print("WARN: Secret Manager API still not ready after enabling; continuing anyway")
+
+
+def _compute_service_account(project_id: str) -> str | None:
+    """Return the project's default Compute Engine service account email, or None."""
+    try:
+        num = subprocess.run(
+            [
+                "gcloud",
+                "projects",
+                "describe",
+                project_id,
+                "--format=value(projectNumber)",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return None
+    return f"{num}-compute@developer.gserviceaccount.com" if num else None
+
+
+def ensure_secret(gcp: dict, dry_run: bool) -> str | None:
+    """Store the local ``.env`` in Secret Manager and grant the VM's SA read access.
+
+    The key never lands in the bucket: the secret is created if missing, a new version
+    is added only when the local ``.env`` differs from the stored one, and the project's
+    default Compute Engine service account (which each VM runs as) is granted
+    ``secretAccessor`` on the secret. The VM fetches it at runtime with
+    ``gcloud secrets versions access``.
+
+    Args:
+        gcp: Validated gcp infra dict (uses ``project_id`` and ``secret_name``).
+        dry_run: If True, print what would happen and return the secret name.
+
+    Returns:
+        The secret name the VM should fetch, or None if there is no local ``.env``.
+    """
     env = REPO_ROOT / ".env"
+    secret = gcp["secret_name"]
+    project = gcp["project_id"]
     if not env.exists():
         print("WARN: no local .env found; remote runs will have no API keys")
-        return
-    _run(["gsutil", "cp", str(env), f"gs://{bucket}/secrets/.env"], dry_run=dry_run)
+        return None
+    if dry_run:
+        print(
+            f"[dry-run] ensure Secret Manager secret '{secret}' holds .env and grant the "
+            "compute service account secretAccessor"
+        )
+        return secret
+
+    _run(
+        [
+            "gcloud",
+            "services",
+            "enable",
+            "secretmanager.googleapis.com",
+            f"--project={project}",
+        ]
+    )
+    _wait_secretmanager_ready(project)
+
+    exists = (
+        subprocess.run(
+            ["gcloud", "secrets", "describe", secret, f"--project={project}"],
+            capture_output=True,
+            text=True,
+        ).returncode
+        == 0
+    )
+    if not exists:
+        _run(
+            [
+                "gcloud",
+                "secrets",
+                "create",
+                secret,
+                "--replication-policy=automatic",
+                f"--project={project}",
+            ]
+        )
+
+    # Add a new version only if the stored value differs (avoids version bloat).
+    try:
+        current = subprocess.run(
+            [
+                "gcloud",
+                "secrets",
+                "versions",
+                "access",
+                "latest",
+                f"--secret={secret}",
+                f"--project={project}",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except Exception:  # noqa: BLE001
+        current = None
+    if current is None or current.strip() != env.read_text().strip():
+        _run(
+            [
+                "gcloud",
+                "secrets",
+                "versions",
+                "add",
+                secret,
+                f"--data-file={env}",
+                f"--project={project}",
+            ]
+        )
+    else:
+        print(f"Secret '{secret}' already up to date.")
+
+    sa = _compute_service_account(project)
+    if sa:
+        _run(
+            [
+                "gcloud",
+                "secrets",
+                "add-iam-policy-binding",
+                secret,
+                f"--member=serviceAccount:{sa}",
+                "--role=roles/secretmanager.secretAccessor",
+                f"--project={project}",
+            ]
+        )
+    else:
+        print(
+            "WARN: could not resolve the default compute service account; grant secretAccessor manually"
+        )
+    return secret
 
 
 # ── VM creation ──
@@ -348,7 +495,7 @@ def build_overrides(flat_run: dict, data_basename: str | None) -> list[str]:
     return overrides
 
 
-def create_vm(gcp, flat_run, data_uri, launch_id, user, dry_run) -> str:
+def create_vm(gcp, flat_run, data_uri, secret_name, launch_id, user, dry_run) -> str:
     """Create one GPU VM for a flattened run and return its instance name."""
     run_name = flat_run["run_name"]
     vm_name = _normalize_name(f"{gcp['name_prefix']}-{run_name}")[:63].strip("-")
@@ -360,6 +507,7 @@ def create_vm(gcp, flat_run, data_uri, launch_id, user, dry_run) -> str:
             f"edgar-config={flat_run['config_rel']}",
             f"edgar-data-uri={data_uri or ''}",
             f"edgar-max-hours={gcp['max_hours']}",
+            f"edgar-secret-name={secret_name or ''}",
         ]
     )
     overrides_text = "\n".join(flat_run["overrides_list"]) + "\n"
@@ -556,7 +704,7 @@ def launch_gcp(spec_path: str, *, teardown=False, dry_run=False, fetch=False) ->
 
     rsync_code(bucket, dry_run)
     upload_manifest(bucket, dry_run)
-    upload_env(bucket, dry_run)
+    secret_name = ensure_secret(gcp, dry_run)
 
     # Upload each unique config's data file once (skip-if-present).
     data_cache: dict[str, tuple[str | None, str | None]] = {}
@@ -584,7 +732,7 @@ def launch_gcp(spec_path: str, *, teardown=False, dry_run=False, fetch=False) ->
         _uri, basename = data_cache[f["config_rel"]]
         f["overrides_list"] = build_overrides(f, basename)
         data_uri = data_cache[f["config_rel"]][0]
-        vm = create_vm(gcp, f, data_uri, launch_id, user, dry_run)
+        vm = create_vm(gcp, f, data_uri, secret_name, launch_id, user, dry_run)
         summary.append((f["run_name"], vm, f"gs://{bucket}/results/{f['run_name']}"))
 
     _print_summary(summary, gcp, dry_run)

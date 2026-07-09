@@ -32,6 +32,7 @@ def test_validate_spec_fills_gcp_defaults():
     spec = validate_spec(_spec())
     assert spec["gcp"]["machine_type"] == GCP_DEFAULTS["machine_type"]
     assert spec["gcp"]["spot"] is True
+    assert spec["gcp"]["secret_name"] == "edgar-env"
     assert spec["runs"][0]["run_name"] == "synthetic-data"  # from dir name, normalized
 
 
@@ -190,6 +191,7 @@ def test_render_contains_key_steps():
         "trap delete_vm EXIT",
         "timeout",
         "mapfile -t OVERRIDES",
+        "gcloud secrets versions access latest",
         'gsutil cp - "${RESULTS_URI}/STATUS"',
         "gcloud compute instances delete",
     ]:

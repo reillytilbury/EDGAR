@@ -153,15 +153,16 @@ program_databases/
 Launch runs on Google Cloud, one GPU VM per run. Each VM builds its environment with
 `uv sync --frozen`, runs `edgar run` under a wall-clock watchdog, syncs results to a GCS
 bucket, and self-deletes. GCP auth is your local `gcloud auth login` plus the VM's default
-service account — no keys are sent for GCP itself; only your `.env` (`GOOGLE_API_KEY` /
-`ANTHROPIC_API_KEY`) is uploaded to a private bucket path and pulled by each VM.
+service account — no keys are sent for GCP itself. Your `.env` (`GOOGLE_API_KEY` /
+`ANTHROPIC_API_KEY`) is stored in **Secret Manager** (never in the bucket); the launcher
+grants the VM's service account read access and each VM fetches it at runtime.
 
 **One-time setup**
 
 ```bash
 gcloud auth login && gcloud config set project <PROJECT_ID>
-gcloud services enable compute.googleapis.com storage.googleapis.com
-gsutil mb -l <REGION> gs://<BUCKET>          # private bucket
+gcloud services enable compute.googleapis.com storage.googleapis.com secretmanager.googleapis.com
+gcloud storage buckets create gs://<BUCKET> --location=<REGION>   # private bucket
 # ensure GPU quota in your zone, and that .env holds your API key(s)
 ```
 
@@ -190,6 +191,9 @@ Fetched runs drop into `program_databases/MM-DD/HH-MM-SS/`, so `edgar dashboard`
 `edgar resume` work on them unchanged. Each VM writes a `STATUS` sentinel
 (`SUCCESS`/`FAILED`/`TIMEOUT`) next to its results. The remote `task_spec.yaml` shows
 `git_sha: unknown` by design — code provenance (SHA + diff) is in `gs://<BUCKET>/code/MANIFEST.txt`.
+Your API keys live in the `edgar-env` Secret Manager secret (overridable via `gcp.secret_name`);
+a new version is added only when your local `.env` changes. Remove it with
+`gcloud secrets delete edgar-env` when you're done.
 
 ---
 

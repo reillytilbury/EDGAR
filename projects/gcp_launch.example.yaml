@@ -17,6 +17,7 @@ gcp:
   image_project: deeplearning-platform-release
   name_prefix: edgar              # default; VM names = <prefix>-<run-name>
   max_hours: 12                   # default; wall-clock watchdog per VM
+  secret_name: edgar-env          # default; Secret Manager secret holding your .env (API keys)
 
 # Optional defaults applied to every run unless the run overrides them.
 defaults:
