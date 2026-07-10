@@ -53,6 +53,37 @@ delete_vm() {
   [ "$RUN_RC" = "0" ] && status="SUCCESS"
   [ "$RUN_RC" = "124" ] && status="TIMEOUT"
   echo "${status} rc=${RUN_RC} $(date -u)" | gsutil cp - "${RESULTS_URI}/STATUS"
+
+  # Send optional completion/failure notification to Slack
+  if [ -f "${CODE_DIR}/.env" ]; then
+    local WEBHOOK
+    WEBHOOK=$(grep -E "^SLACK_WEBHOOK_URL=" "${CODE_DIR}/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')
+    if [ -n "$WEBHOOK" ]; then
+      local icon="🚀"
+      [ "$status" = "SUCCESS" ] && icon="✅"
+      [ "$status" = "FAILED" ] && icon="❌"
+      [ "$status" = "TIMEOUT" ] && icon="⚠️"
+
+      # Dynamically find the YYYY-MM-DD/HH-MM-SS subdirectory inside SAVE_ROOT
+      local ts_dir=""
+      for d in "$SAVE_ROOT"/*/*; do
+        if [ -d "$d" ] && [[ "$(basename "$(dirname "$d")")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [[ "$(basename "$d")" =~ ^[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]]; then
+          ts_dir="$(basename "$(dirname "$d")")/$(basename "$d")"
+          break
+        fi
+      done
+
+      local results_gcs_path="$RESULTS_URI"
+      if [ -n "$ts_dir" ]; then
+        results_gcs_path="${RESULTS_URI}/${ts_dir}"
+      fi
+
+      curl -s -X POST -H 'Content-type: application/json' \
+        --data "{\"text\":\"${icon} *EDGAR Run Finished!*\\n• *Run Name:* \`${RUN_NAME}\`\\n• *Status:* \`${status}\` (rc=${RUN_RC})\\n• *Timestamp:* \`${ts_dir:-N/A}\`\\n• *GCS Location:* \`${results_gcs_path}\`\"}" \
+        "$WEBHOOK" || true
+    fi
+  fi
+
   gcloud compute instances delete "$VM_NAME" --zone="$ZONE" --quiet
 }
 trap delete_vm EXIT

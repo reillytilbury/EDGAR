@@ -134,6 +134,30 @@ For a sweep: VMs still shown by `instances list` are still running; an empty lis
 `STATUS` per run means everything finished. (An interactive SSH session drops when the VM
 self-deletes at the end — that's expected, not an error.)
 
+## Slack Notifications (Optional)
+
+You can receive real-time Slack alerts on your job outcomes (success, failure, or timeout) straight from the VM before it self-deletes. This is fully opt-in and zero-infrastructure:
+
+1. **Create an Incoming Webhook:**
+   - Go to your [Slack API Apps Console](https://api.slack.com/apps), select **Create New App** -> **From scratch**.
+   - Add it to the workspace containing the channel where you want it to notify. I set it up to DM me in my main work workspace.
+   - Enable **Incoming Webhooks** under Features and click **Add New Webhook to Workspace**.
+   - Select the channel or DM where you want your alerts, click Allow, and copy the Webhook URL.
+
+2. **Add the Webhook URL to Your local `.env`:**
+   Add this to your git-ignored `.env` file at the root of your repo:
+   ```env
+   SLACK_WEBHOOK_URL="https://hooks.slack.com/services/YOUR/OWN/WEBHOOK"
+   ```
+
+When your run finishes, the VM will automatically detect your webhook URL, identify the run's execution timestamp, and post a structured message to Slack with a direct link to the run results on GCS:
+
+> ✅ **EDGAR Run Finished!**
+> • **Run Name:** `synth-r0`
+> • **Status:** `SUCCESS` (rc=0)
+> • **Timestamp:** `2026-07-10/12-30-45`
+> • **GCS Location:** `gs://my-bucket/results/synth-r0/2026-07-10/12-30-45`
+
 ## Fetching results
 
 ```bash
