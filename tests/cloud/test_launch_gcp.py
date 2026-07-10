@@ -1,10 +1,8 @@
 import hashlib
 import re
-from types import SimpleNamespace
 
 import pytest
 
-from edgar.cli import _apply_overrides
 from edgar.cloud.launch_gcp import (
     CODE_EXCLUDE,
     GCP_DEFAULTS,
@@ -200,22 +198,6 @@ def test_render_contains_key_steps():
 
 
 # ── CLI override regression (needs the new "run" section) ──
-
-
-def test_apply_overrides_accepts_run_random_seed():
-    spec = SimpleNamespace(
-        io={}, evolution={}, llms={}, scoring={}, project_params={}, run={}
-    )
-    _apply_overrides(spec, ["--run.random_seed=42"])
-    assert spec.run["random_seed"] == 42
-
-
-def test_apply_overrides_rejects_default_provider():
-    spec = SimpleNamespace(
-        io={}, evolution={}, llms={}, scoring={}, project_params={}, run={}
-    )
-    with pytest.raises(ValueError, match="default_provider"):
-        _apply_overrides(spec, ["--llms.default_provider=anthropic"])
 
 
 def test_validate_spec_rejects_default_provider_override():

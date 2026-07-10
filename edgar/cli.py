@@ -405,19 +405,19 @@ def validate_project(task: str) -> int:
     return 0
 
 
-def _apply_overrides(spec, overrides: list[str]) -> None:
+def _apply_overrides(config, overrides: list[str]) -> None:
     """
-    Apply dotted key=value overrides to a TaskSpec in-place.
+    Apply dotted key=value overrides to a Config in-place.
 
     Each override must be of the form section.key=value, where section is one of
     io, evolution, llms, scoring, project_params, run. Values are parsed as Python
     literals where possible (int, float, bool), otherwise kept as strings.
 
     Example:
-        _apply_overrides(spec, ["evolution.n_generations=1", "io.data_path=/data/foo.npy"])
+        _apply_overrides(config, ["evolution.n_generations=1", "io.data_path=/data/foo.npy"])
 
     Args:
-        spec: The TaskSpec object to apply overrides to. This object is modified in-place.
+        config: The Config object to apply overrides to. This object is modified in-place.
         overrides (list[str]): A list of string overrides in the format "--section.key=value".
 
     Raises:
@@ -447,7 +447,12 @@ def _apply_overrides(spec, overrides: list[str]) -> None:
             value = ast.literal_eval(value_str)
         except (ValueError, SyntaxError):
             value = value_str
-        getattr(spec, section)[key] = value
+
+        if section == "project_params":
+            config.project_params[key] = value
+        else:
+            sub_model = getattr(config, section)
+            setattr(sub_model, key, value)
 
 
 TEST_OVERRIDES = [
@@ -472,7 +477,7 @@ def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> No
 
     This function initializes a `Config` object from the provided `config_path`
     (either a `config.yaml` or a saved `task_spec.yaml`), then creates a `TaskSpec`.
-    Any command-line `overrides` are applied to the `TaskSpec` before
+    Any command-line `overrides` are applied to the `Config` before
     the main asynchronous `run` function is invoked.
 
     Args:
@@ -492,15 +497,9 @@ def _build_and_run(config_path: str, overrides: list[str], log_level: str) -> No
         if path.name == "task_spec.yaml"
         else Config.from_yaml(path)
     )
-    spec = TaskSpec.from_config(config)
     if overrides:
-        _apply_overrides(spec, overrides)
-        # spec.rng was seeded from the pre-override config in TaskSpec.from_config;
-        # rebuild it so a --run.random_seed override actually takes effect and the
-        # seed recorded in task_spec.yaml matches the one the run uses.
-        import numpy as np
-
-        spec.rng = np.random.default_rng(spec.run["random_seed"])
+        _apply_overrides(config, overrides)
+    spec = TaskSpec.from_config(config)
     asyncio.run(run(spec, log_level=log_level))
 
 
