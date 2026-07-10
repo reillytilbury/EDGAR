@@ -36,8 +36,8 @@ TIMESTAMP=$(date +%Y-%m-%d-%H-%M-%S)
 
 # Read NUM_RUNS and per-config run_names from run_configs.py (no heavy deps needed)
 SCRIPT_DIR="$(dirname "$0")"
-NUM_RUNS=$(python3 -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from run_configs import RUN_CONFIGS; print(len(RUN_CONFIGS))")
-mapfile -t RUN_NAMES < <(python3 -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from run_configs import RUN_CONFIGS; [print(cfg['run_name']) for cfg in RUN_CONFIGS]")
+NUM_RUNS=$(/home/reilly/miniconda3/envs/ai_scientist/bin/python -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from run_configs import RUN_CONFIGS; print(len(RUN_CONFIGS))")
+mapfile -t RUN_NAMES < <(/home/reilly/miniconda3/envs/ai_scientist/bin/python -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from run_configs import RUN_CONFIGS; [print(cfg['run_name']) for cfg in RUN_CONFIGS]")
 echo "Detected ${NUM_RUNS} remote configs."
 
 if [[ "${1:-}" == "teardown" ]]; then
@@ -80,6 +80,8 @@ mkdir -p "/home/reilly/datasets/ali data"
 gsutil -m rsync -r "gs://${BUCKET}/datasets/ali data" "/home/reilly/datasets/ali data"
 mkdir -p "/home/reilly/datasets/hayley_data"
 gsutil -m rsync -r "gs://${BUCKET}/datasets/hayley_data" "/home/reilly/datasets/hayley_data"
+mkdir -p "/home/reilly/datasets/hayley_data_all"
+gsutil -m rsync -r "gs://${BUCKET}/datasets/hayley_data_all" "/home/reilly/datasets/hayley_data_all"
 mkdir -p "/home/reilly/datasets/hd_cells"
 gsutil -m rsync -r "gs://${BUCKET}/datasets/hd_cells" "/home/reilly/datasets/hd_cells"
 gsutil cp "gs://${BUCKET}/.env" .env
@@ -113,6 +115,7 @@ for i in $(seq 0 $((NUM_RUNS - 1))); do
   DATASET="${RUN_NAMES[$i]}"
   RUN_NAME="${TIMESTAMP}_${DATASET}_${i}"
   INSTANCE_NAME="${INSTANCE_PREFIX}-${TIMESTAMP}-${DATASET}-${i}"
+  INSTANCE_NAME="${INSTANCE_NAME//_/-}"   # GCP names forbid underscores
   echo "Launching ${INSTANCE_NAME} (run-idx=${i})..."
   gcloud compute instances create "${INSTANCE_NAME}" \
     --project="${PROJECT_ID}" \

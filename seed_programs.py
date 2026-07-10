@@ -132,7 +132,7 @@ def parameter_estimator_2(theta, spike_counts):
     tuning_width = full_width_half_max / (2.0 * np.sqrt(2 * np.log(2)))
     return np.array([theta_pref, baseline, amplitude_1, amplitude_2, tuning_width])
 
-def neuron_model_3(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_width=1.0):
+def neuron_model_3(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0, kappa=1.0):
     """
     A neuron model that computes the response based on a von Mises tuning curve.
     Args:
@@ -140,11 +140,15 @@ def neuron_model_3(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0, tuning_wi
         theta_pref (float): Preferred angle in radians.
         baseline (float): Baseline firing rate.
         amplitude (float): Maximum firing rate above baseline.
-        tuning_width (float): Concentration parameter of the von Mises distribution.
+        kappa (float): Concentration parameter of the von Mises distribution.
     Returns:
         np.ndarray: The firing rate of the neuron at angle theta.
     """
-    return baseline + amplitude * np.exp(tuning_width * (np.cos(theta - theta_pref) - 1))
+    baseline = np.clip(baseline, 0, None)
+    amplitude = np.clip(amplitude, 0, None)
+    kappa = np.clip(kappa, 0.1, None)
+
+    return baseline + amplitude * np.exp(kappa * (np.cos(theta - theta_pref) - 1))
 
 def neuron_model_3_jax(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0, kappa=1.0):
     """
@@ -158,6 +162,11 @@ def neuron_model_3_jax(theta, theta_pref=0.0, baseline=0.0, amplitude=1.0, kappa
     Returns:
         jnp.ndarray: The firing rate of the neuron at angle theta.
     """
+
+    baseline = jnp.clip(baseline, 0, None)
+    amplitude = jnp.clip(amplitude, 0, None)
+    kappa = jnp.clip(kappa, 0.1, None)
+
     return baseline + amplitude * jnp.exp(kappa * (jnp.cos(theta - theta_pref) - 1))
 
 def parameter_estimator_3(theta, spike_counts):
@@ -180,10 +189,18 @@ def parameter_estimator_3(theta, spike_counts):
     theta_pref = pref_idx * (2 * np.pi / n_bins)
     baseline = np.min(tuning_curve)
     amplitude = np.max(tuning_curve) - baseline
-    kappa = 1.0 / (np.std(theta) + 1e-8)  # Simple estimate based on standard deviation
+    # Estimate kappa from half-width at half-max of the tuning curve.
+    # For von Mises exp(kappa*(cos(HWHM)-1)) = 0.5  =>  kappa = log(2)/(1-cos(HWHM))
+    half_max = baseline + amplitude / 2.0
+    indices = (np.arange(-n_bins // 2, n_bins // 2) + pref_idx) % n_bins
+    above = tuning_curve[indices] >= half_max
+    fwhm = 2 * np.pi * np.sum(above) / n_bins
+    hwhm = fwhm / 2.0
+    kappa = np.log(2) / max(1 - np.cos(hwhm), 1e-6) if hwhm > 0 else 5.0
+    kappa = np.clip(kappa, 0.1, 100)
     return np.array([theta_pref, baseline, amplitude, kappa])
 
-def neuron_model_4(theta, theta_pref=0.0, baseline=0.0, amplitude1=1.0, amplitude2=0.0, kappa_1=1.0, kappa_2=1.0):
+def neuron_model_4(theta, theta_pref=0.0, baseline=0.0, amplitude1=1.0, amplitude2=0.0, kappa=1.0):
     """
     A neuron model that computes the response based on a double peaked von Mises tuning curve.
     Args:
@@ -192,18 +209,22 @@ def neuron_model_4(theta, theta_pref=0.0, baseline=0.0, amplitude1=1.0, amplitud
         baseline (float): Baseline firing rate.
         amplitude1 (float): Amplitude of the first peak.
         amplitude2 (float): Amplitude of the second peak.
-        kappa_1 (float): Concentration parameter of the first peak.
-        kappa_2 (float): Concentration parameter of the second peak.
+        kappa (float): Concentration parameter of the peaks.
     Returns:
         np.ndarray: The firing rate of the neuron at angle theta.
     """
+    baseline = np.clip(baseline, 0, None)
+    amplitude1 = np.clip(amplitude1, 0, None)
+    amplitude2 = np.clip(amplitude2, 0, None)
+    kappa = np.clip(kappa, 0.1, 100)
+
     rate = (baseline +
-            amplitude1 * np.exp(kappa_1 * (np.cos(theta - theta_pref) - 1)) +
-            amplitude2 * np.exp(kappa_2 * (np.cos(theta - (theta_pref + np.pi)) - 1)))
+            amplitude1 * np.exp(kappa * (np.cos(theta - theta_pref) - 1)) +
+            amplitude2 * np.exp(kappa * (np.cos(theta - (theta_pref + np.pi)) - 1)))
     return rate
 
 
-def neuron_model_4_jax(theta, theta_pref=0.0, baseline=0.0, amplitude1=1.0, amplitude2=0.0, kappa_1=1.0, kappa_2=1.0):
+def neuron_model_4_jax(theta, theta_pref=0.0, baseline=0.0, amplitude1=1.0, amplitude2=0.0, kappa=1.0):
     """
     A JAX implementation of the neuron model that computes the response based on a double peaked von Mises tuning curve.
     Args:
@@ -212,17 +233,18 @@ def neuron_model_4_jax(theta, theta_pref=0.0, baseline=0.0, amplitude1=1.0, ampl
         baseline (float): Baseline firing rate.
         amplitude1 (float): Amplitude of the first peak.
         amplitude2 (float): Amplitude of the second peak.
-        kappa_1 (float): Concentration parameter of the first peak.
-        kappa_2 (float): Concentration parameter of the second peak.
+        kappa (float): Concentration parameter of the peaks.
     Returns:
         jnp.ndarray: The firing rate of the neuron at angle theta.
     """
-    kappa1 = jnp.clip(kappa_1, 1e-8, None)  # Avoid division by zero
-    kappa2 = jnp.clip(kappa_2, 1e-8, None)  # Avoid division by zero
-    # f(theta) = baseline + amplitude1 * exp(kappa_1 * (cos(theta - theta_pref) - 1)) + amplitude2 * exp(kappa_2 * (cos(theta - (theta_pref + pi)) - 1))
+    baseline = jnp.clip(baseline, 0, None)
+    amplitude1 = jnp.clip(amplitude1, 0, None)
+    amplitude2 = jnp.clip(amplitude2, 0, None)
+    kappa = jnp.clip(kappa, 0.1, 100)
+    # f(theta) = baseline + amplitude1 * exp(kappa * (cos(theta - theta_pref) - 1)) + amplitude2 * exp(kappa * (cos(theta - (theta_pref + pi)) - 1))
     rate = (baseline +
-            amplitude1 * jnp.exp(kappa_1 * (jnp.cos(theta - theta_pref) - 1)) +
-            amplitude2 * jnp.exp(kappa_2 * (jnp.cos(theta - (theta_pref + jnp.pi)) - 1)))
+            amplitude1 * jnp.exp(kappa * (jnp.cos(theta - theta_pref) - 1)) +
+            amplitude2 * jnp.exp(kappa * (jnp.cos(theta - (theta_pref + jnp.pi)) - 1)))
     return rate
 
 
@@ -233,7 +255,7 @@ def parameter_estimator_4(theta, spike_counts):
         theta (np.ndarray): Input angles in radians. (n_trials,)
         spike_counts (np.ndarray): Spike counts corresponding to the angles. (n_trials,)
     Returns:
-        np.ndarray: Estimated parameters [theta_pref, baseline, amplitude1, amplitude2, kappa1, kappa2].
+        np.ndarray: Estimated parameters [theta_pref, baseline, amplitude1, amplitude2, kappa].
     """
     # f(theta) = baseline + amplitude1 * exp(kappa * (cos(theta - theta_pref) - 1)) + amplitude2 * exp(kappa * (cos(theta - (theta_pref + pi)) - 1))
     n_bins = 50
@@ -248,21 +270,16 @@ def parameter_estimator_4(theta, spike_counts):
     baseline = np.min(tuning_curve)
     amplitude1 = np.max(tuning_curve) - baseline
     amplitude2 = tuning_curve[(pref_idx + n_bins // 2) % n_bins] - baseline
-    # estimate kappa by seeing how qucikly tuning curve goes from max to halfmax
+    # Estimate kappa from half-width at half-max.
+    # For von Mises exp(kappa*(cos(HWHM)-1)) = 0.5  =>  kappa = log(2)/(1-cos(HWHM))
     half_max = baseline + amplitude1 / 2.0
-    indices = (np.arange(-5, 6) + pref_idx) % n_bins
+    indices = (np.arange(-n_bins // 2, n_bins // 2) + pref_idx) % n_bins
     above_half_max = tuning_curve[indices] >= half_max
-    full_width_half_max = 2 * np.pi * np.sum(above_half_max)
-    tuning_width = full_width_half_max / (2.0 * np.sqrt(2 * np.log(2)))
-    kappa1 = 1.0 / (tuning_width + 1e-8)  # Simple estimate based on tuning width
-    # same for kappa2, but using the second peak
-    half_max2 = baseline + amplitude2 / 2.0
-    indices2 = (np.arange(-5, 6) + (pref_idx + n_bins // 2)) % n_bins
-    above_half_max2 = tuning_curve[indices2] >= half_max2
-    full_width_half_max2 = 2 * np.pi * np.sum(above_half_max2)
-    tuning_width2 = full_width_half_max2 / (2.0 * np.sqrt(2 * np.log(2)))
-    kappa2 = 1.0 / (tuning_width2 + 1e-8)  # Simple estimate based on tuning width
-    return np.array([theta_pref, baseline, amplitude1, amplitude2, kappa1, kappa2])
+    fwhm = 2 * np.pi * np.sum(above_half_max) / n_bins
+    hwhm = fwhm / 2.0
+    kappa = np.log(2) / max(1 - np.cos(hwhm), 1e-6) if hwhm > 0 else 5.0
+    kappa = np.clip(kappa, 0.1, 100)
+    return np.array([theta_pref, baseline, amplitude1, amplitude2, kappa])
 
 
 def neuron_model_trivial(theta, baseline=0.0):

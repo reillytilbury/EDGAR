@@ -857,7 +857,9 @@ def load_data(data_dir: Union[str, List[List[str]]],
               min_repeats: int = 6,
               return_indices: bool = False,
               return_raw: bool = False,
-              nonzero_filter: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, Optional[np.ndarray], Optional[Tuple[np.ndarray, np.ndarray]]]:
+              nonzero_filter: bool = False,
+              max_cells: Optional[int] = 2000,
+              sort_by_sf: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, Optional[np.ndarray], Optional[Tuple[np.ndarray, np.ndarray]]]:
     """
     Load and preprocess neural data, returning normalised binned responses.
 
@@ -893,8 +895,8 @@ def load_data(data_dir: Union[str, List[List[str]]],
     kept_indices : np.ndarray  [only if return_indices=True]
     raw_response, raw_angles   [only if return_raw=True]
     """
-    assert data_type in ['stringer', 'jacob', 'ali', 'hayley', 'hd'], \
-        "data_type must be one of: 'stringer', 'jacob', 'ali', 'hayley', 'hd'"
+    assert data_type in ['stringer', 'jacob', 'jacob_dff', 'ali', 'hayley', 'hd'], \
+        "data_type must be one of: 'stringer', 'jacob', 'jacob_dff', 'ali', 'hayley', 'hd'"
 
     # ------------------------------------------------------------------
     # 1. Load raw data → response (n_cells, n_trials), angles (n_trials,)
@@ -905,6 +907,32 @@ def load_data(data_dir: Union[str, List[List[str]]],
         neural_data = np.load(data_dir, allow_pickle=True).item()
         response    = extract_stimulus_related_response(neural_data, n_pcs=0)
         angles      = neural_data['istim']
+        if shuffle:
+            perm     = np.random.permutation(len(angles))
+            response = response[:, perm]
+            angles   = angles[perm]
+
+    elif data_type == 'jacob_dff':
+        # BZ015-style dF/F data: list of paths to _dff.npy files.
+        # Stimulus timings CSV is inferred by replacing _dff.npy with _stimulus_timings.csv.
+        # Data shape on disk: (n_trials, n_cells) — transposed to (n_cells, n_trials).
+        # Blank trials (contrast == 0) are dropped before any further processing.
+        import pandas as pd
+        assert isinstance(data_dir, list), "jacob_dff data_dir must be a list of _dff.npy paths"
+        responses, angles_list = [], []
+        for path in data_dir:
+            resp  = np.load(path).T.astype(float)           # (n_cells, n_trials)
+            csv   = str(path).replace('_dff.npy', '_stimulus_timings.csv')
+            stim  = pd.read_csv(csv)
+            ang   = stim['orientation'].values               # degrees, continuous
+            mask  = stim['contrast'].values == 1             # drop blank trials
+            resp  = resp[:, mask]
+            ang   = np.deg2rad(ang[mask])
+            responses.append(resp)
+            angles_list.append(ang)
+        # concatenate across experiments (cells axis must match)
+        response = np.concatenate(responses, axis=1)         # (n_cells, n_trials_total)
+        angles   = np.concatenate(angles_list)               # (n_trials_total,)
         if shuffle:
             perm     = np.random.permutation(len(angles))
             response = response[:, perm]
@@ -942,24 +970,79 @@ def load_data(data_dir: Union[str, List[List[str]]],
         angles   = np.repeat(angles, n_blocks)
 
     elif data_type == 'hayley':
-        counts = np.load(data_dir).astype(float)        # (n_cells, 360, 6)
-        n_cells, _, n_rep = counts.shape
-        assert n_rep == 6, f"expected 6 raw repeats for hayley data, got {n_rep}"
-        # Merge repeats 5 and 6 into one via nanmean → 5 repeats for all cells.
-        # Cells whose 6th repeat is NaN fall back to their 5th repeat value.
-        merged = np.nanmean(counts[:, :, 4:], axis=2, keepdims=True)  # (n_cells, 360, 1)
-        counts = np.concatenate([counts[:, :, :4], merged], axis=2)   # (n_cells, 360, 5)
-        # Orientations 180° apart are equivalent — stack as extra repeats to double sample size
-        counts_folded = np.concatenate([counts[:, :180, :], counts[:, 180:, :]], axis=2)
-        n_rep_folded  = counts_folded.shape[2]                         # 10
-        response      = counts_folded.reshape(n_cells, 180 * n_rep_folded)
-        angles        = np.repeat(np.deg2rad(2 * np.arange(180)), n_rep_folded)
-        # response      = counts.reshape(n_cells, 360 * 5)
-        # angles        = np.repeat(np.deg2rad(np.arange(360)), 5)
-        if shuffle:
-            perm     = np.random.permutation(len(angles))
-            response = response[:, perm]
-            angles   = angles[perm]
+        # HB019 drifting-grating data: (n_cells, 180 dirs, 4 phases, 4 blocks).
+        # data_dir should point to spike_counts_HB019_tw2p0.npy; meta npz is inferred.
+        meta_path  = str(data_dir).replace('.npy', '_meta.npz')
+        raw        = np.load(data_dir).astype(float)            # (174, 180, 4, 4)
+        meta       = np.load(meta_path)
+        ori_deg_h  = meta['ori_values'].astype(float)           # 0, 2, …, 358
+        angles_hay = np.deg2rad(ori_deg_h)                      # (180,) radians
+
+        n_cells_h, n_dir_h, n_phase_h, n_block_h = raw.shape
+
+        # Average over starting phases → (n_cells, 180, 4) one repeat per block.
+        # This removes phase-dependent shape variation before normalisation.
+        counts_avg = raw.mean(axis=2)                           # (n_cells, 180, 4)
+        n_rep_h    = n_block_h                                  # 4
+
+        # Per-repeat mean normalisation — removes block-level gain modulation
+        rep_means   = counts_avg.mean(axis=1, keepdims=True)   # (n_cells, 1, 4)
+        counts_norm = counts_avg / (rep_means + 1e-9)          # (n_cells, 180, 4)
+
+        mean_tc_h = counts_norm.mean(axis=2)                   # (n_cells, 180)
+
+        # Cell filtering: OSI (double-angle) and signal fraction
+        r_clip    = np.clip(mean_tc_h, 0, None)
+        denom_h   = r_clip.sum(axis=1)
+        osi_h     = np.where(denom_h > 0,
+                             np.abs((r_clip * np.exp(2j * angles_hay)).sum(axis=1)) / denom_h,
+                             0.0)
+        # R for SF: (4, n_cells, 180)
+        R_h       = counts_norm.transpose(2, 0, 1)
+        sf_h, _   = unbiased_signal_fraction(R_h)
+
+        good_cells_h = np.where((osi_h > conc_thresh) & (sf_h > signal_fraction_thresh))[0]
+        if sort_by_sf:
+            good_cells_h = good_cells_h[np.argsort(sf_h[good_cells_h])[::-1]]
+        print(f"Hayley: selected {len(good_cells_h)} / {n_cells_h} cells "
+              f"(OSI>{conc_thresh}, SF>{signal_fraction_thresh}).")
+
+        counts_norm = counts_norm[good_cells_h]                 # (n_good, 180, 4)
+        kept_indices = good_cells_h
+
+        # Optional rebinning along direction axis
+        if n_bins != n_dir_h:
+            bin_size_h  = n_dir_h // n_bins
+            counts_norm = counts_norm[:, :bin_size_h * n_bins, :].reshape(
+                len(good_cells_h), n_bins, bin_size_h, n_rep_h).mean(axis=2)
+            angles_out_h = np.array([angles_hay[i * bin_size_h:(i + 1) * bin_size_h].mean()
+                                     for i in range(n_bins)])
+        else:
+            angles_out_h = angles_hay
+
+        # Transpose to (n_rep, n_cells, n_bins) and RMS-normalise (pipeline convention)
+        R_out = counts_norm.transpose(2, 0, 1)                  # (16, n_good, n_bins)
+        R_jax = jnp.asarray(R_out)
+        norms_h = jnp.linalg.norm(R_jax, axis=-1, keepdims=True) / jnp.sqrt(R_jax.shape[-1])
+        R_jax   = R_jax / jnp.maximum(norms_h, 1e-12)
+
+        if max_cells is not None and R_jax.shape[1] > max_cells:
+            sel = np.random.default_rng(42).choice(R_jax.shape[1], max_cells, replace=False)
+            R_jax        = R_jax[:, sel, :]
+            kept_indices = kept_indices[sel]
+
+        angles_jax_h = jnp.asarray(angles_out_h)
+
+        extras = ()
+        if return_indices:
+            extras += (kept_indices,)
+        if return_raw:
+            n_kept_h     = R_jax.shape[1]
+            R_norm_h     = np.array(R_jax)
+            raw_response = R_norm_h.transpose(1, 0, 2).reshape(n_kept_h, -1).astype(np.float32)
+            raw_angles   = np.tile(angles_out_h, (n_kept_h, n_rep_h)).astype(np.float32)
+            extras       += (raw_response, raw_angles)
+        return (R_jax, angles_jax_h) + extras
 
     elif data_type == 'hd':
         # Pre-binned data with explicit repeats. npz keys: R (n_rep, n_cells, 180), bin_centres (180,).
@@ -986,6 +1069,8 @@ def load_data(data_dir: Union[str, List[List[str]]],
         good_cells = np.where(
             (firing_probs > activity_thresh) & (conc_hd > conc_thresh) & (sf_hd > signal_fraction_thresh)
         )[0]
+        if sort_by_sf:
+            good_cells = good_cells[np.argsort(sf_hd[good_cells])[::-1]]
         print(f"HD: selected {len(good_cells)} / {n_cells_hd} cells "
               f"(activity>{activity_thresh}, conc>{conc_thresh}, SF>{signal_fraction_thresh}).")
 
@@ -1007,14 +1092,20 @@ def load_data(data_dir: Union[str, List[List[str]]],
         norms        = jnp.linalg.norm(response_jax, axis=-1, keepdims=True) / jnp.sqrt(n_bins)
         response_jax = response_jax / jnp.maximum(norms, 1e-12)
 
+        if max_cells is not None and response_jax.shape[1] > max_cells:
+            sel = np.random.default_rng(42).choice(response_jax.shape[1], max_cells, replace=False)
+            response_jax = response_jax[:, sel, :]
+            kept_indices = kept_indices[sel]
+
         extras = ()
         if return_indices:
             extras += (kept_indices,)
         if return_raw:
             # Unroll repeats as extra trials: (n_cells, n_rep * n_bins), angles (n_rep * n_bins,)
+            n_kept = response_jax.shape[1]
             R_norm = np.array(response_jax)                                      # (n_rep, n_cells, n_bins)
-            raw_response = R_norm.transpose(1, 0, 2).reshape(len(good_cells), -1).astype(np.float32)
-            raw_angles   = np.tile(angles_out, (len(good_cells), n_rep_hd)).astype(np.float32)
+            raw_response = R_norm.transpose(1, 0, 2).reshape(n_kept, -1).astype(np.float32)
+            raw_angles   = np.tile(angles_out, (n_kept, n_rep_hd)).astype(np.float32)
             extras += (raw_response, raw_angles)
         return (response_jax, angles_jax) + extras
 
@@ -1086,11 +1177,13 @@ def load_data(data_dir: Union[str, List[List[str]]],
     response = response / norms[:, :, None]
 
     signal_fraction  = unbiased_signal_fraction(np.array(response))[0]
-    reliable_cells   = jnp.where(signal_fraction > signal_fraction_thresh)[0]
+    reliable_cells   = np.where(signal_fraction > signal_fraction_thresh)[0]
+    if sort_by_sf:
+        reliable_cells = reliable_cells[np.argsort(signal_fraction[reliable_cells])[::-1]]
     n_reliable_cells = len(reliable_cells)
     print(f"Selected {n_reliable_cells} / {len(good_cells)} cells with signal fraction > {signal_fraction_thresh}.")
     response     = response[:, reliable_cells, :]
-    kept_indices = kept_indices[np.array(reliable_cells)]
+    kept_indices = kept_indices[reliable_cells]
 
     if return_raw:
         raw_response = _raw_response[np.array(reliable_cells), :]
@@ -1108,6 +1201,14 @@ def load_data(data_dir: Union[str, List[List[str]]],
             raw_angles   = filtered_angles
         else:
             raw_angles = np.tile(_raw_angles, (len(raw_response), 1)).astype(np.float32)
+
+    if max_cells is not None and response.shape[1] > max_cells:
+        sel          = np.random.default_rng(42).choice(response.shape[1], max_cells, replace=False)
+        response     = response[:, sel, :]
+        kept_indices = kept_indices[sel]
+        if return_raw:
+            raw_response = raw_response[sel, :]
+            raw_angles   = raw_angles[sel, :]
 
     extras = ()
     if return_indices:

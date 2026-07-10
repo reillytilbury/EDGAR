@@ -185,7 +185,7 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
 
     if fit_params:
         # define the loss function wrt params. This will have input shape n_cells * n_params (note that params is flattened) and output shape (1,)
-        loss_param = lambda params: jnp.mean(loss_total(params.reshape(-1, n_params), x_train, y_train))
+        loss_param = lambda params, x_data, y_data: jnp.mean(loss_total(params.reshape(-1, n_params), x_data, y_data))
         loss_param_and_grad = jax.value_and_grad(loss_param)
 
         # solver = jaxopt.ScipyMinimize(
@@ -208,22 +208,23 @@ def objective(neuron_model, param_estimator, loss_func, x, y,
         beta1, beta2  = 0.9, 0.999
         opt = optax.adam(learning_rate, b1=beta1, b2=beta2, eps=1e-8)
         opt_state = opt.init(initial_params.reshape(-1))
-        
-        # 2. jit single step
+
+        # 2. jit single step — x_data/y_data are explicit args so JAX treats them
+        #    as dynamic inputs rather than baking them into the compiled kernel as constants
         @jax.jit
-        def train_step(params, opt_state):
-            loss, grad = loss_param_and_grad(params)
+        def train_step(params, opt_state, x_data, y_data):
+            loss, grad = loss_param_and_grad(params, x_data, y_data)
             updates, opt_state = opt.update(grad, opt_state, params)
             params = optax.apply_updates(params, updates)
             return params, opt_state, loss
-        
+
         # 3.  iterate
         print_every = 50
         params = initial_params.reshape(-1)  # Flatten params for the optimizer
-        initial_loss = loss_param(params)
+        initial_loss = loss_param(params, x_train, y_train)
         best_loss, best_params = initial_loss.copy(), params.copy()
         for step in range(1, max_iter + 1):
-            params, opt_state, loss_val = train_step(params, opt_state)
+            params, opt_state, loss_val = train_step(params, opt_state, x_train, y_train)
             if jnp.isnan(loss_val) or jnp.isinf(loss_val) or jnp.any(jnp.isnan(params)) or jnp.any(jnp.isinf(params)):
                 logging.info(f"Loss is NaN or Inf at step {step}. Stopping optimization.")
                 print(f"Final loss: {loss_val:.4f} at step {step}")
@@ -334,7 +335,6 @@ async def generate_new_parameter_estimator(current_island,
                                                     neuron_model_code_string=neuron_model_code_string,
                                                     llm_type=llm_name[0], max_lines=param_estimator_max_lines,
                                                     use_image=use_image)
-    
     random_programs_crude = random_programs.copy()
     random_programs_crude['params'] = random_programs['initial_params']
     # now try generating an image from the random programs
@@ -471,6 +471,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 exploitation_topology = [1, 2, 3, 4, 5, 6, 7, 0],
                 data_type = 'stringer',
                 signal_fraction_thresh = 0.9, 
+                max_cells = 2_000,
                 n_bins=1024, 
                 min_repeats=3,
                 data_scale_factor=100,
@@ -480,6 +481,10 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                 large_lm_name = 'gemini-2.5-pro',
                 use_large_every = 3,
                 conc_thresh = 0.55, activity_thresh = 0.4,
+                sort_by_sf = False,
+                seed_numpy_programs   = [seed_programs.neuron_model_1,        seed_programs.neuron_model_2],
+                seed_jax_programs     = [seed_programs.neuron_model_1_jax,    seed_programs.neuron_model_2_jax],
+                seed_param_estimators = [seed_programs.parameter_estimator_1, seed_programs.parameter_estimator_2],
                 data_path = '/home/reilly/datasets/stringer_2021/gratings_drifting_GT1_2019_04_12_1.npy'):
     """ 
     Main function to run the hypothesis engine.
@@ -496,7 +501,9 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
                                 n_bins=n_bins, min_repeats=min_repeats,
                                 shuffle=False,
                                 return_raw=True,
-                                nonzero_filter=nonzero_filter)[2:]
+                                nonzero_filter=nonzero_filter,
+                                sort_by_sf=sort_by_sf,
+                                max_cells=max_cells)[2:]
 
     # response and angles are both (n_cells, n_trials) — tiling is handled inside load_data
     n_cells, _ = response.shape
@@ -506,14 +513,19 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     # scale responses
     response = data_scale_factor * response / jnp.linalg.norm(response, axis=1, keepdims=True)  # normalize response
 
-    # split into training and test cells
-    key = jax.random.PRNGKey(42)
-    training_size = n_cells // 2
-    shuffled_indices = jax.random.permutation(key, jnp.arange(n_cells))
-    training_cells, test_cells = shuffled_indices[:training_size], shuffled_indices[training_size:]
+    if not sort_by_sf:
+        # split into training and test cells randomly
+        key = jax.random.PRNGKey(42)
+        training_size = n_cells // 2
+        shuffled_indices = jax.random.permutation(key, jnp.arange(n_cells))
+        training_cells, test_cells = shuffled_indices[:training_size], shuffled_indices[training_size:]
+    else:
+        # interleave train/test to preserve SF distribution (cells are sorted by SF)
+        training_cells = np.arange(0, n_cells, 2)
+        test_cells     = np.arange(1, n_cells, 2)
+
     response_train, response_test = response[training_cells, :], response[test_cells, :]
-    # split angles in the same way
-    angles_train, angles_test = angles[training_cells, :], angles[test_cells, :]
+    angles_train,   angles_test   = angles[training_cells, :],   angles[test_cells, :]
     print(f"Using {len(training_cells)} cells for training and {len(test_cells)} cells for testing.")
 
     # create a dataframe to store the programs in each island
@@ -543,9 +555,9 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     
     # store and compute loss of 2 initial programs
     t_start = time.time()
-    numpy_programs = [seed_programs.neuron_model_1, seed_programs.neuron_model_2]
-    jax_programs = [seed_programs.neuron_model_1_jax, seed_programs.neuron_model_2_jax]
-    param_estimators = [seed_programs.parameter_estimator_1, seed_programs.parameter_estimator_2]
+    numpy_programs   = seed_numpy_programs
+    jax_programs     = seed_jax_programs
+    param_estimators = seed_param_estimators
     seed_losses = np.zeros(2)
     for i in range(2):
         # get the program, parameter estimator, and jax program
@@ -619,6 +631,9 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
     # -----------------------------
     # HYPOTHESIS ENGINE
     # -----------------------------
+    # min train_loss per island per completed iteration (for convergence plot)
+    _island_min_history = {idx: [] for idx in range(n_islands)}
+
     for i in tqdm(range(n_iterations), desc="Hypothesis Engine Iterations"):
         # check if time limit is reached
         if (time.time() - t_start) / 60 > time_limit:  # stop 5 minutes before the time limit to allow for final evaluations and saving
@@ -779,6 +794,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
         # sort each island by loss
         for island_idx in range(n_islands):
             islands[island_idx] = islands[island_idx].sort_values(by='train_loss').reset_index(drop=True)
+            _island_min_history[island_idx].append(float(islands[island_idx]['train_loss'].min()))
         logging.info(f"Iteration {i} complete. The proportion of programs that successfully ran and received a loss is {success_rate:.2f}.")
         logging.info('-' * 50)
         # migrate and prune programs (better here for temperature to be in [0, 1] range)
@@ -837,34 +853,88 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
         np.save(census_path, census_np)
 
     # -----------------------------
+    # convergence plot: min train_loss per island and global min vs iteration
+    # x=0 is the seed loss, x=1 is end of iteration 1, etc.
+    if any(len(v) > 0 for v in _island_min_history.values()):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as _plt
+
+        fig, ax = _plt.subplots(figsize=(8, 4))
+        cmap = _plt.get_cmap('tab10', n_islands)
+
+        seed_loss_val = min(seed_losses)
+
+        all_mins = []
+        for island_idx in range(n_islands):
+            history = _island_min_history[island_idx]
+            if not history:
+                continue
+            # prepend seed loss at x=0
+            full_history = [seed_loss_val] + history
+            all_mins.append(full_history)
+            iters = np.arange(len(full_history))   # 0, 1, 2, …
+            ax.plot(iters, full_history, color=cmap(island_idx), linewidth=1.5,
+                    alpha=0.7, label=f'Island {island_idx}')
+
+        if all_mins:
+            max_len = max(len(h) for h in all_mins)
+            global_min = [min(h[i] for h in all_mins if i < len(h)) for i in range(max_len)]
+            for k in range(1, len(global_min)):
+                global_min[k] = min(global_min[k], global_min[k - 1])
+            iters = np.arange(len(global_min))
+            ax.plot(iters, global_min, color='grey', linewidth=2.5,
+                    alpha=0.5, linestyle='--', label='Global min')
+
+            _delta = 0.01
+            flat = [v for h in all_mins for v in h]
+            y_lo = (1 - _delta) * min(flat)
+            y_hi = (1 + _delta) * seed_loss_val
+            if y_hi > y_lo:
+                ax.set_ylim(y_lo, y_hi)
+
+        # integer-only x ticks
+        max_x = max(len(h) - 1 for h in all_mins) if all_mins else 1
+        ax.set_xticks(np.arange(0, max_x + 1, dtype=int))
+        ax.set_xlabel('Iteration  (0 = seeds)', fontsize=12)
+        ax.set_ylabel('Min train loss', fontsize=12)
+        ax.set_title('Convergence: min train loss per island', fontsize=13)
+        ax.legend(fontsize=8, frameon=False, ncol=2)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        _plt.tight_layout()
+        conv_path = os.path.join(full_dir, 'convergence.png')
+        _plt.savefig(conv_path, dpi=150, bbox_inches='tight')
+        _plt.close(fig)
+        logging.info(f"Saved convergence plot to {conv_path}")
+
+    # -----------------------------
     # now carry out the loss calculation on the test cells
     logging.info("Calculating loss on test set...")
     for island_idx in range(n_islands):
-        logging.info(f"Island {island_idx} programs:")
-        for j in range(len(islands[island_idx])):
-            program = islands[island_idx].iloc[j]
-            neuron_model = program['program']
-            param_estimator = program['parameter_estimator']
-            # compute the test loss
-            _, _, test_loss, optimized_params = objective(neuron_model, param_estimator,
-                                                          loss_func=loss_functions.quadratic_loss,
-                                                          x=angles_test, y=response_test, fit_params=fit_params,
-                                                          max_iter=2_000, 
-                                                          param_penalty_weight=param_penalty_weight, tol=tol,
-                                                          use_param_estimator=use_param_estimator)
-            islands[island_idx].at[j, 'test_loss'] = test_loss
-            islands[island_idx].at[j, 'params'] = optimized_params
-            islands[island_idx].at[j, 'mean_loss'] = np.mean(test_loss)
-            print(f"Test loss: {test_loss:.2f}")
+            logging.info(f"Island {island_idx} programs:")
+            for j in range(len(islands[island_idx])):
+                program = islands[island_idx].iloc[j]
+                neuron_model = program['program']
+                param_estimator = program['parameter_estimator']
+                # compute the test loss
+                _, _, test_loss, optimized_params = objective(neuron_model, param_estimator,
+                                                              loss_func=loss_functions.quadratic_loss,
+                                                              x=angles_test, y=response_test, fit_params=fit_params,
+                                                              max_iter=2_000,
+                                                              param_penalty_weight=param_penalty_weight, tol=tol,
+                                                              use_param_estimator=use_param_estimator)
+                islands[island_idx].at[j, 'test_loss'] = test_loss
+                islands[island_idx].at[j, 'params'] = optimized_params
+                print(f"Test loss: {test_loss:.2f}")
 
     # group all islands together and save
     combined_dir = os.path.join(base_dir, date_stamp, time_stamp, 'combined')
     os.makedirs(combined_dir, exist_ok=True)
     combined_programs_dataframe = pd.concat(islands, ignore_index=True)
-    combined_programs_dataframe = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type='test_loss')
-    # combined_programs_dataframe = combined_programs_dataframe.sort_values(by='test_loss').reset_index(drop=True)
-    # sort by mean loss
-    combined_programs_dataframe = combined_programs_dataframe.sort_values(by='mean_loss').reset_index(drop=True)
+    _sort_col = 'test_loss'
+    combined_programs_dataframe = genetic_helpers.remove_duplicates(combined_programs_dataframe, mode='complicated', loss_tol=0.025, cosine_tol=0.99, loss_type=_sort_col)
+    combined_programs_dataframe = combined_programs_dataframe.sort_values(by=_sort_col).reset_index(drop=True)
     # save the combined programs dataframe, reordering columns to have order:
     # iteration_number, birth_island, batch_index, train_loss, test_loss, program_code_string, parameter_estimator_code_string, program, parameter_estimator, params, parent1_id, parent2_id
     combined_programs_dataframe = combined_programs_dataframe[['iteration_number', 'birth_island', 'batch_index',
@@ -886,7 +956,7 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
         island_df.to_csv(os.path.join(island_dir, 'programs_db.csv'), index=False)
 
     # ---------------------------
-    # save losses plot    
+    # save losses plot
     diagnostic.plot_train_vs_test_loss(programs_df=combined_programs_dataframe,
                                        island_labels=[f'Island {i}' for i in range(n_islands)] + ['garden_of_eden'],
                                        save_path=os.path.join(combined_dir, 'train_vs_test_loss.png'))
@@ -902,15 +972,16 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
 
     for i, df in enumerate(df_list):
         df_sup = config_str
-        df = df.head(3)
-        df = df.sort_values(by='test_loss', ascending=False).reset_index(drop=True)
-        df_sup += "".join([f"model {len(df) - i}: iter {df['iteration_number'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, total loss {0.5 * (df['test_loss'][i] + df['train_loss'][i]):.2f}\n" for i in range(min(3, len(df)))])
+        df = df.sort_values(by='test_loss').head(3).reset_index(drop=True)
+        df_sup += "".join([f"model {len(df) - i}: iter {df['iteration_number'][i]}, birth_island {df['birth_island'][i]}, batch {df['batch_index'][i]}, test loss {df['test_loss'][i]:.2f}\n" for i in range(min(3, len(df)))])
+        _plot_angles   = angles_test
+        _plot_response = response_test
         diagnostic.plot_model_fits(
             programs_df=df,
             loss_function=loss_functions.quadratic_loss,
-            x=angles_test,
-            y=response_test,
-            cell_selection=np.random.choice(response_test.shape[0], size=9, replace=False),
+            x=_plot_angles,
+            y=_plot_response,
+            cell_selection=np.random.choice(_plot_response.shape[0], size=9, replace=False),
             title=df_sup,
             save_path=os.path.join(df_dirs[i], 'top_model_fits.png')
         )
@@ -919,14 +990,14 @@ async def main(n_iterations=9, time_limit=60, k_max=2, n_islands=8, batch_size=6
             birth_island = df['birth_island'][j]
             iteration_number = df['iteration_number'][j]
             batch_index = df['batch_index'][j]
-            cell_selection = np.random.choice(response_test.shape[0], size=9, replace=False)
+            cell_selection = np.random.choice(_plot_response.shape[0], size=9, replace=False)
             diagnostic.plot_single_model_fit(
                 model=df['program'][j],
                 loss_function=loss_functions.quadratic_loss,
-                x=angles_test[cell_selection],
-                y=response_test[cell_selection],
+                x=_plot_angles[cell_selection],
+                y=_plot_response[cell_selection],
                 params=df['params'][j][cell_selection],
-                title=f"Island {birth_island}, Iteration {iteration_number}, Batch {batch_index}, loss: {df['test_loss'][j]:.2f}",
+                title=f"Island {birth_island}, Iteration {iteration_number}, Batch {batch_index}, loss: {df['train_loss'][j]:.2f}",
                 save_path=os.path.join(df_dirs[i], f'top_model_fit_{min(3, len(df)) - j}.png')
             )
 
