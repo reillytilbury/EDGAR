@@ -225,3 +225,38 @@ def test_validate_spec_rejects_default_provider_override():
     ]
     with pytest.raises(ValueError, match="default_provider"):
         validate_spec(raw)
+
+
+# ── fetch_results ──
+
+
+def test_fetch_results_creates_dest_dir(tmp_path):
+    from unittest.mock import patch
+    from edgar.cloud.launch_gcp import fetch_results
+
+    spec = validate_spec(_spec())
+
+    with (
+        patch("edgar.cloud.launch_gcp.REPO_ROOT", tmp_path),
+        patch("edgar.cloud.launch_gcp._run") as mock_run,
+    ):
+        expected_dest_dir = tmp_path / "program_databases" / "synthetic-data"
+        assert not expected_dest_dir.exists()
+
+        code = fetch_results(spec, dry_run=False)
+
+        assert code == 0
+        assert expected_dest_dir.exists()
+        assert expected_dest_dir.is_dir()
+
+        mock_run.assert_called_once_with(
+            [
+                "gsutil",
+                "-m",
+                "rsync",
+                "-r",
+                "gs://b/results/synthetic-data",
+                str(expected_dest_dir),
+            ],
+            dry_run=False,
+        )

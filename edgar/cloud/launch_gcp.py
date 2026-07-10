@@ -677,7 +677,10 @@ def fetch_results(spec: dict, dry_run: bool) -> int:
         run_name = f["run_name"]
         src = f"gs://{bucket}/results/{run_name}"
         dest = f"program_databases/{run_name}"
-        _run(["gsutil", "-m", "rsync", "-r", src, dest], dry_run=dry_run)
+        dest_path = _resolve_repo_path(dest)
+        if not dry_run:
+            dest_path.mkdir(parents=True, exist_ok=True)
+        _run(["gsutil", "-m", "rsync", "-r", src, str(dest_path)], dry_run=dry_run)
     return 0
 
 
