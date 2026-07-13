@@ -27,6 +27,7 @@ import yaml
 from ..evolution.island import load_island_census
 from ..evolution.population import Population
 from ..evolution.program import NotValidated, Program
+from ..scoring.utils import _safe_loss as _scoring_safe_loss
 from ..io.metrics import METRICS_FILENAME, read_metrics
 from ..io.status import read_status
 from ..llm.prompt_schema import PromptSchema
@@ -95,8 +96,7 @@ def _reconstruct_model_prompt(run_dir: Path, pop: Population, idx: int) -> str:
     parents = [pop[i] for i in p.birth.parent_indices if 0 <= i < len(pop)]
 
     def _loss(prog: Program) -> float:
-        v = prog.program_losses.discover.final
-        return float("inf") if (v is None or not isinstance(v, float)) else v
+        return _scoring_safe_loss(prog.program_losses.discover.final)
 
     parents = sorted(parents, key=_loss, reverse=True)
 

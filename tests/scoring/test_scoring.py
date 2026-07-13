@@ -317,3 +317,29 @@ def test_rank():
     expected_rank = (None, 1, 3, 2, 4)
     for i in range(5):
         assert pop[i].rank == expected_rank[i]
+
+
+def test_rank_with_nan():
+    pop = Population()
+    # Add 6 programs
+    for i in range(6):
+        p = _make_program(FAST_MODEL_CODE)
+        p.idx = i
+        pop.add(p)
+
+    # validate losses: contains a NaN and other numbers that would get scrambled if NaN isn't handled
+    validate_losses = (NotValidated(), 0.1, 2.1, float("nan"), 0.5, None)
+    for i, loss in enumerate(validate_losses):
+        pop[i].program_losses.validate.final = loss
+
+    rank(pop)
+    # Ranks:
+    # Index 0: NotValidated -> rank None (not in validated indices)
+    # Index 1 (0.1): rank 1
+    # Index 4 (0.5): rank 2
+    # Index 2 (2.1): rank 3
+    # Index 3 (nan): rank 4 (treated as inf)
+    # Index 5 (None): rank 5 (treated as inf)
+    expected_rank = (None, 1, 3, 4, 2, 5)
+    for i in range(6):
+        assert pop[i].rank == expected_rank[i]

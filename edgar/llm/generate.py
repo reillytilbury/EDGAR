@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from ..evolution.program import Program
 from ..evolution.population import Population
+from ..scoring.utils import _safe_loss
 from ..llm.prompt_schema import PromptSchema
 from ..llm.llm_calling import call_llm
 from ..io.config import RetryConfig
@@ -104,8 +105,7 @@ def _resolve_parents(population: Population, program: Program) -> list[Program]:
     parents = [population[i] for i in program.birth.parent_indices]
 
     def _loss(p: Program) -> float:
-        v = p.program_losses.discover.final
-        return float("inf") if (v is None or not isinstance(v, float)) else v
+        return _safe_loss(p.program_losses.discover.final)
 
     return sorted(parents, key=_loss, reverse=True)
 

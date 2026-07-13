@@ -40,6 +40,7 @@ import numpy as np
 from itertools import combinations
 from .program import Program, BirthCertificate
 from .population import Population
+from ..scoring.utils import _safe_loss
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -156,11 +157,7 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
         # explicitly handle cases where the loss is None or inf to avoid sorting issues
         ranked = sorted(
             programs,
-            key=lambda p: (
-                float("inf")
-                if p.program_losses.discover.final is None
-                else p.program_losses.discover.final
-            ),
+            key=lambda p: _safe_loss(p.program_losses.discover.final),
         )
         islands[i] = {p.idx for p in ranked[:keep_n]}
 
@@ -229,11 +226,8 @@ def boltzmann_sample(
             f"k={k} exceeds number of programs sampled from {len(programs)}"
         )
     losses = np.array(
-        [p.program_losses.discover.final for p in programs], dtype=float
-    )  # dtype = float converts None to nan
-    losses = np.where(
-        np.isnan(losses) | np.isinf(losses), float("inf"), losses
-    )  # convert NaN, +-inf to +inf
+        [_safe_loss(p.program_losses.discover.final) for p in programs], dtype=float
+    )
     finite_losses = losses[np.isfinite(losses)]
     worst_finite = finite_losses.max() if len(finite_losses) > 0 else 0.0
     losses = np.where(
@@ -319,16 +313,15 @@ def migrate(
 
 
 def _loss(p: Program) -> float:
-    """Retrieves the final discover loss of a program, handling None values.
+    """Retrieves the final discover loss of a program, handling None and non-finite values safely.
 
     Args:
         p: The `Program` object.
 
     Returns:
-        The final discover loss as a float. Returns `float("inf")` if the loss is `None`.
+        The final discover loss as a float, mapped to float("inf") if None or non-finite.
     """
-    v = p.program_losses.discover.final
-    return v if v is not None else float("inf")
+    return _safe_loss(p.program_losses.discover.final)
 
 
 def _are_duplicates(

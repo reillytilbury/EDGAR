@@ -44,6 +44,7 @@ from ..evolution.program import (
 )
 from ..evolution.population import Population
 from ..io.metrics import get_active_metrics, stream_line
+from .utils import _safe_loss
 
 
 # ── helpers ──
@@ -571,7 +572,7 @@ def rank(
         if not isinstance(population[i].program_losses.validate.final, NotValidated)
     ]
     validated_program_indices.sort(
-        key=lambda i: population[i].program_losses.validate.final or float("inf")
+        key=lambda i: _safe_loss(population[i].program_losses.validate.final)
     )
     print("Ranking of programs by validate.final loss:")
     for rank, program in enumerate(
