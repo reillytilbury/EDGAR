@@ -601,10 +601,6 @@ def _run_dashboard(target: str | None, port: int, host: str, no_open: bool) -> i
     else:
         roots.append(pdb_default)
 
-    # always include the canonical program_databases/
-    if pdb_default.exists() and pdb_default not in roots:
-        roots.append(pdb_default)
-
     import socket
 
     def _find_free_port(start: int) -> int:
