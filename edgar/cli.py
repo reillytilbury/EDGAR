@@ -410,8 +410,10 @@ def _apply_overrides(config, overrides: list[str]) -> None:
     Apply dotted key=value overrides to a Config in-place.
 
     Each override must be of the form section.key=value, where section is one of
-    io, evolution, llms, scoring, project_params, run. Values are parsed as Python
-    literals where possible (int, float, bool), otherwise kept as strings.
+    io, evolution, llms, scoring, project_params, run. The key may itself be dotted
+    to reach a nested config section, e.g. scoring.gradient_descent.max_iter. Values
+    are parsed as Python literals where possible (int, float, bool), otherwise kept
+    as strings.
 
     Example:
         _apply_overrides(config, ["evolution.n_generations=1", "io.data_path=/data/foo.npy"])
@@ -451,8 +453,11 @@ def _apply_overrides(config, overrides: list[str]) -> None:
         if section == "project_params":
             config.project_params[key] = value
         else:
+            *nested, leaf = key.split(".")
             sub_model = getattr(config, section)
-            setattr(sub_model, key, value)
+            for part in nested:
+                sub_model = getattr(sub_model, part)
+            setattr(sub_model, leaf, value)
 
 
 TEST_OVERRIDES = [
@@ -460,7 +465,7 @@ TEST_OVERRIDES = [
     "--evolution.n_generations=1",
     "--evolution.n_islands=2",
     "--evolution.batch_size=2",
-    "--evolution.num_parents=2",
+    "--llms.num_parents=2",
     "--evolution.topology=[1, 0]",
     "--scoring.gradient_descent.max_iter=100",
     "--scoring.timeout_s=120",
