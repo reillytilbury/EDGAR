@@ -1,6 +1,6 @@
 # ruff: noqa F841
 import pytest
-from edgar.cli import _apply_overrides
+from edgar.cli import TEST_OVERRIDES, _apply_overrides
 from edgar.io.config import Config
 
 PERFECT_CONFIG = "tests/io/test_configs/perfect/config.yaml"
@@ -31,6 +31,26 @@ def test_apply_overrides_success():
     assert config.io.save_path == "/tmp/new_save_path"
     assert config.scoring.timeout_s == 240.0
     assert config.run.random_seed == 12345
+
+
+def test_apply_overrides_nested_key():
+    config = Config.from_yaml(PERFECT_CONFIG, default_path=DEFAULT_CONFIG)
+    assert config.scoring.gradient_descent.max_iter != 100
+
+    _apply_overrides(config, ["--scoring.gradient_descent.max_iter=100"])
+
+    assert config.scoring.gradient_descent.max_iter == 100
+
+
+def test_test_overrides_are_applicable():
+    """Every entry of TEST_OVERRIDES must name a real config field, or `edgar test` dies."""
+    config = Config.from_yaml(PERFECT_CONFIG, default_path=DEFAULT_CONFIG)
+
+    _apply_overrides(config, TEST_OVERRIDES)
+
+    assert config.evolution.n_generations == 1
+    assert config.llms.num_parents == 2
+    assert config.scoring.gradient_descent.max_iter == 100
 
 
 def test_apply_overrides_rejects_default_provider():
