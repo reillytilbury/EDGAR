@@ -165,9 +165,9 @@ uv run edgar launch-gcp gcp_launch.yaml --fetch       # rsync results -> program
 uv run edgar dashboard                                # view the fetched run
 ```
 
-Fetched runs land in `program_databases/<run_name>/YYYY-MM-DD/HH-MM-SS/`, so `edgar dashboard`
-and `edgar resume` work on them unchanged. (The `<run_name>` prefix keeps the same run name
-launched several times a day separated by date/time rather than overwriting.)
+Fetched runs land in `program_databases/<project>/<run_name>/YYYY-MM-DD/HH-MM-SS/`, so `edgar
+dashboard` and `edgar resume` work on them unchanged. (The `<run_name>` level keeps the same run
+name launched several times a day separated by date/time rather than overwriting.)
 
 ## Secrets (Secret Manager)
 

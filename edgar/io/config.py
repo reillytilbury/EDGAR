@@ -145,8 +145,8 @@ class IOConfig(_LaxModel):
 
     Attributes:
         data_path: The path to the directory or file containing the experiment's data.
-        save_path: The base path where all run artifacts (logs, programs,
-            dashboard data) will be saved.
+        save_path: The base path under which all run artifacts (logs, programs,
+            dashboard data) are saved, at `<save_path>/<task_name>/YYYY-MM-DD/HH-MM-SS/`.
     """
 
     data_path: str

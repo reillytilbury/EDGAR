@@ -100,7 +100,7 @@ edgar test projects/orientation_tuning/config.yaml
 Reproduce a previous run from its saved `task_spec.yaml`:
 
 ```bash
-edgar run program_databases/05-06/14-32-10/task_spec.yaml
+edgar run program_databases/my_task/2026-05-06/14-32-10/task_spec.yaml
 ```
 
 To launch the dashboard to view in progress and finished experiments:
@@ -114,31 +114,32 @@ edgar dashboard {data_directory}
 
 A run which failed can be resume via, for example:
 ```bash
-edgar resume program_databases/yyyy-mm-dd/hh-mm-ss
+edgar resume program_databases/my_task/yyyy-mm-dd/hh-mm-ss
 ```
 ---
 
 ## Run Output
 
-By default, each run writes to `program_databases/YYYY-MM-DD/HH-MM-SS/`:
+By default, each run writes to `program_databases/PROJECT_NAME/YYYY-MM-DD/HH-MM-SS/`:
 
 ```text
 program_databases/
-└── YYYY-MM-DD/
-    └── HH-MM-SS/
-        ├── task_spec.yaml          # Full config + git SHA + prompt schemas + seed code. Read-only.
-        ├── population.jsonl        # All Programs — code, losses, params, lineage. Main scientific output.
-        ├── island_census.jsonl     # Island membership at the end of each generation.
-        ├── metrics.jsonl           # Timing, token and retry statistics for the various parts of the algorithm.
-        ├── status.json             # Overall status of the run, read by the dashboard.
-        ├── run.log                 # Human-readable execution trace.
-        └── image_feedback/         # Only present if plot_fn is defined, image_feedback prompt shown to LLM.
-            └── gen_000/
-                └── island_000/
-                    └── batch_000/
-                        └── image.png
-        └── image_fits/             # Only present if plot_fn is defined, plots each program before and after parameter optimization.
-            └── P0000.png 
+└── PROJECT_NAME/
+    └── YYYY-MM-DD/
+        └── HH-MM-SS/
+            ├── task_spec.yaml          # Full config + git SHA + prompt schemas + seed code. Read-only.
+            ├── population.jsonl        # All Programs — code, losses, params, lineage. Main scientific output.
+            ├── island_census.jsonl     # Island membership at the end of each generation.
+            ├── metrics.jsonl           # Timing, token and retry statistics for the various parts of the algorithm.
+            ├── status.json             # Overall status of the run, read by the dashboard.
+            ├── run.log                 # Human-readable execution trace.
+            └── image_feedback/         # Only present if plot_fn is defined, image_feedback prompt shown to LLM.
+                └── gen_000/
+                    └── island_000/
+                        └── batch_000/
+                            └── image.png
+            └── image_fits/             # Only present if plot_fn is defined, plots each program before and after parameter optimization.
+                └── P0000.png 
 ```
 
 > **EXPERIMENTAL (work in progress): edgar-analyzer agent.**
