@@ -28,13 +28,13 @@ run
     Run an experiment from a config.yaml or a task_spec.yaml saved from a previous run:
 
         edgar run projects/my_task/config.yaml
-        edgar run runs/05-01/14-32-10/task_spec.yaml
+        edgar run program_databases/my_task/2026-05-01/14-32-10/task_spec.yaml
 
 resume
     Resume a crashed or interrupted run from its output directory. Picks up at
     the next unfinished generation and writes back into the same directory:
 
-        edgar resume program_databases/05-26/14-54-15/
+        edgar resume program_databases/my_task/2026-05-26/14-54-15/
 
     Control logging verbosity (default: compact):
 

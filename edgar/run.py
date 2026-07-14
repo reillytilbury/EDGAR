@@ -332,10 +332,13 @@ async def run(
 def _prepare_resume(spec: TaskSpec, run_dir: Path) -> None:
     """Restamp ``spec`` so its output_dir resolves to ``run_dir``.
 
-    ``spec.output_dir`` is computed as ``os.path.join(io["save_path"],
-    creation_timestamp)``. Setting save_path to "" and creation_timestamp to
-    the absolute run_dir produces output_dir == str(run_dir).
+    ``spec.output_dir`` is computed as ``os.path.join(io["save_path"], task_name,
+    creation_timestamp)``. Setting save_path to "" and creation_timestamp to the
+    *absolute* run_dir produces output_dir == str(run_dir), because os.path.join
+    discards everything before an absolute component. Resuming a run therefore
+    writes back to its original directory whatever the project's current layout.
     """
+    run_dir = run_dir.resolve()
     if not run_dir.exists():
         raise FileNotFoundError(f"resume_from directory does not exist: {run_dir}")
     if not (run_dir / "task_spec.yaml").exists():

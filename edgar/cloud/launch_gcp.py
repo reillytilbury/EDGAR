@@ -664,19 +664,20 @@ def _teardown(spec: dict, dry_run: bool) -> int:
 
 
 def fetch_results(spec: dict, dry_run: bool) -> int:
-    """Download each run's results into ``program_databases/<run_name>/YYYY-MM-DD/HH-MM-SS/``.
+    """Download each run's results into ``program_databases/<project>/<run_name>/YYYY-MM-DD/HH-MM-SS/``.
 
-    On the bucket a run is stored at ``results/<run_name>/<YYYY-MM-DD>/<HH-MM-SS>/`` —
-    edgar's own ``<save_path>/<date>/<time>`` layout under the VM's per-run save_path.
-    Mirroring it under a local ``<run_name>/`` dir keeps the run name (so different runs
-    don't collide) and preserves the date/time subdirs, so the same run name launched
-    several times in a day stays separated by timestamp.
+    On the bucket a run is stored at ``results/<run_name>/<project>/<YYYY-MM-DD>/<HH-MM-SS>/`` —
+    edgar's own ``<save_path>/<project>/<date>/<time>`` layout under the VM's per-run save_path.
+    Locally the project comes first, matching where local runs land, with the ``<run_name>/``
+    dir below it so different runs don't collide; the date/time subdirs are preserved, so the
+    same run name launched several times in a day stays separated by timestamp.
     """
     bucket = spec["gcp"]["bucket"]
     for f in flatten_runs(spec):
         run_name = f["run_name"]
-        src = f"gs://{bucket}/results/{run_name}"
-        dest = f"program_databases/{run_name}"
+        project = Path(f["config_rel"]).parent.name
+        src = f"gs://{bucket}/results/{run_name}/{project}"
+        dest = f"program_databases/{project}/{run_name}"
         dest_path = _resolve_repo_path(dest)
         if not dry_run:
             dest_path.mkdir(parents=True, exist_ok=True)

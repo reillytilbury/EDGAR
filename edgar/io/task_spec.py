@@ -130,7 +130,7 @@ class TaskSpec:
             LLM image-feedback prompts. None if the project does not provide
             `image_feedback/plot.py`.
         creation_timestamp (str): Timestamp set at construction, used to create the
-            hierarchical on-disk layout `<save_path>/YYYY-MM-DD/HH-MM-SS/`.
+            hierarchical on-disk layout `<save_path>/<task_name>/YYYY-MM-DD/HH-MM-SS/`.
         seed_programs (list[Program]): Hand-written seed programs (typically 2) that
             bootstrap the initial population. These programs are loaded from
             `<project_dir>/seed_programs/modelN.py + param_estN.py` pairs.
@@ -443,12 +443,16 @@ class TaskSpec:
         """Returns the full path to the run's output directory.
 
         This path is constructed by combining the base save path from `io`
-        configuration and the unique `creation_timestamp` of this `TaskSpec`.
+        configuration, the project's `task_name`, and the unique
+        `creation_timestamp` of this `TaskSpec`, giving
+        `<save_path>/<task_name>/YYYY-MM-DD/HH-MM-SS/`.
 
         Returns:
             str: The absolute path to the run's output directory.
         """
-        return os.path.join(self.io["save_path"], self.creation_timestamp)
+        return os.path.join(
+            self.io["save_path"], self.task_name, self.creation_timestamp
+        )
 
     @property
     def flat_config(self) -> dict:

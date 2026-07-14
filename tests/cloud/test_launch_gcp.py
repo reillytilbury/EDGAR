@@ -222,7 +222,9 @@ def test_fetch_results_creates_dest_dir(tmp_path):
         patch("edgar.cloud.launch_gcp.REPO_ROOT", tmp_path),
         patch("edgar.cloud.launch_gcp._run") as mock_run,
     ):
-        expected_dest_dir = tmp_path / "program_databases" / "synthetic-data"
+        expected_dest_dir = (
+            tmp_path / "program_databases" / "synthetic_data" / "synthetic-data"
+        )
         assert not expected_dest_dir.exists()
 
         code = fetch_results(spec, dry_run=False)
@@ -237,7 +239,7 @@ def test_fetch_results_creates_dest_dir(tmp_path):
                 "-m",
                 "rsync",
                 "-r",
-                "gs://b/results/synthetic-data",
+                "gs://b/results/synthetic-data/synthetic_data",
                 str(expected_dest_dir),
             ],
             dry_run=False,
