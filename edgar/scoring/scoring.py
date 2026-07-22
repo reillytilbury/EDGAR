@@ -236,6 +236,11 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
     """
     program = cloudpickle.loads(program_bytes)
     loss_fn = cloudpickle.loads(loss_fn_bytes)
+    if isinstance(loss_fn, tuple):
+        loss_fn_train, loss_fn_test = loss_fn
+    else:
+        loss_fn_train = loss_fn_test = loss_fn
+
     data_train, data_test = data
 
     try:
@@ -256,11 +261,13 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
     try:
         penalty = config["param_penalty_weight"] * program.n_params
         params_init = _get_params(param_est_fn, program.default_params, data_train)
-        initial_loss = _eval_loss(model_fn, loss_fn, params_init, data_test) + penalty
-        params = _optimize(
-            model_fn, loss_fn, params_init, data_train, config["gradient_descent"]
+        initial_loss = (
+            _eval_loss(model_fn, loss_fn_test, params_init, data_test) + penalty
         )
-        final_loss = _eval_loss(model_fn, loss_fn, params, data_test) + penalty
+        params = _optimize(
+            model_fn, loss_fn_train, params_init, data_train, config["gradient_descent"]
+        )
+        final_loss = _eval_loss(model_fn, loss_fn_test, params, data_test) + penalty
     except Exception as e:
         print(f"[scoring] program #{program.idx} failed during optimize/eval: {e}")
         print(f"[scoring] traceback:\n{traceback.format_exc()}")
@@ -278,14 +285,14 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         fingerprint = None
 
     try:
-        sample_losses = _eval_sample_losses(model_fn, loss_fn, params, data_test)
+        sample_losses = _eval_sample_losses(model_fn, loss_fn_test, params, data_test)
     except Exception as e:
         print(f"[scoring] program #{program.idx} sample_losses failed (ignored): {e}")
         sample_losses = None
 
     try:
         sample_losses_init = (
-            _eval_sample_losses(model_fn, loss_fn, params_init, data_test)
+            _eval_sample_losses(model_fn, loss_fn_test, params_init, data_test)
             if split == "discover"
             else None
         )

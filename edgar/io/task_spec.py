@@ -79,6 +79,40 @@ def _git_state() -> tuple[str, bool]:
     return sha, dirty
 
 
+def _load_loss_fn(data_loader_path: Path) -> Callable | tuple[Callable, Callable]:
+    """Load the loss function(s) defined in the file at `data_loader_path`.
+
+    This function attempts to load a single `loss_fn` or a pair of
+    `loss_fn_train` and `loss_fn_test` functions.
+    It raises a ValueError if neither is found.
+
+    Returns:
+        Callable | tuple[Callable, Callable]: The loaded loss function(s).
+    """
+    loss_fn_train = load_function_from_source(
+        data_loader_path.read_text(), "loss_fn_train"
+    )
+    loss_fn_test = load_function_from_source(
+        data_loader_path.read_text(), "loss_fn_test"
+    )
+
+    if (loss_fn_train is not None) != (loss_fn_test is not None):
+        raise ValueError(
+            f"{data_loader_path} must define BOTH 'loss_fn_train' and 'loss_fn_test', "
+            f"or just 'loss_fn'."
+        )
+
+    if loss_fn_train is not None and loss_fn_test is not None:
+        loss_fn = (loss_fn_train, loss_fn_test)
+    else:
+        loss_fn = load_function_from_source(data_loader_path.read_text(), "loss_fn")
+        if loss_fn is None:
+            raise ValueError(
+                f"{data_loader_path} must define either 'loss_fn' or both 'loss_fn_train' and 'loss_fn_test'"
+            )
+    return loss_fn
+
+
 @dataclass
 class TaskSpec:
     """Frozen bundle of everything needed to run (or re-run) an EDGAR experiment.
@@ -187,7 +221,7 @@ class TaskSpec:
 
     load_data_fn: Callable
 
-    loss_fn: Callable
+    loss_fn: Callable | tuple[Callable, Callable]
 
     plot_fn: Callable | None
 
@@ -219,7 +253,7 @@ class TaskSpec:
                 EDGAR experiment.
 
         Raises:
-            ValueError: If `load_data.py` does not define `load_data()` or `loss_fn()`.
+            ValueError: If `load_data.py` does not define `load_data()` or `loss_fn()` (or both 'loss_fn_train' and 'loss_fn_test').
         """
         task_name = config.task_name
 
@@ -229,9 +263,8 @@ class TaskSpec:
         )
         if load_data_fn is None:
             raise ValueError(f"{data_loader_path} must define callable load_data()")
-        loss_fn = load_function_from_source(data_loader_path.read_text(), "loss_fn")
-        if loss_fn is None:
-            raise ValueError(f"{data_loader_path} must define callable loss_fn()")
+
+        loss_fn = _load_loss_fn(data_loader_path)
 
         plot_path = config.project_dir / "image_feedback" / "plot.py"
         plot_fn = (
