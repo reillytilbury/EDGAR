@@ -15,6 +15,9 @@ evolution:
   # Number of generations per run.
   n_generations: 12
 
+  # Point in the run (fraction of total generations) to switch from explore to exploit.
+  exploit_point: 0.5
+
   # Number of islands in the evolutionary system.
   n_islands: 8
 

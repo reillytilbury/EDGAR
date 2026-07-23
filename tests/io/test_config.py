@@ -205,6 +205,26 @@ def test_load_invalid_topology_config():
         )
 
 
+def test_load_invalid_exploit_point_config():
+    """
+    Tests that if a config has an invalid exploit_point (outside [0, 1]), a ValidationError is raised.
+    """
+    with pytest.raises(
+        ValidationError, match="exploit_point .* must be between 0 and 1"
+    ):
+        Config.from_yaml(
+            "tests/io/test_configs/invalid_exploit_point/config_too_high.yaml",
+            default_path="tests/io/test_configs/perfect/default_config.yaml",
+        )
+    with pytest.raises(
+        ValidationError, match="exploit_point .* must be between 0 and 1"
+    ):
+        Config.from_yaml(
+            "tests/io/test_configs/invalid_exploit_point/config_too_low.yaml",
+            default_path="tests/io/test_configs/perfect/default_config.yaml",
+        )
+
+
 def test_load_additional_field():
     """
     Tests that if a config has an additional field, a warning is raised, printing out the unexpected field.

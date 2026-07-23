@@ -168,6 +168,8 @@ class EvolutionConfig(_LaxModel):
         topology: A list of integers representing the migration topology.
             `topology[i]` specifies the island that island `i` will migrate programs to.
             Must be a permutation of `range(n_islands)`.
+        exploit_point: The point in the run (as a fraction of total generations) to transition
+            from "explore" to "exploit" mode. Defaults to 0.5.
     """
 
     n_generations: int
@@ -176,14 +178,16 @@ class EvolutionConfig(_LaxModel):
     critical_population_size: int
     n_migrants: int
     topology: list[int]
+    exploit_point: float
 
     @model_validator(mode="after")
     def check_args(self) -> EvolutionConfig:
-        """Validates the `topology` configuration.
+        """Validates the values of evolution parameters.
 
         Ensures that the length of the `topology` list matches `n_islands` and
         that it contains exactly the indices from 0 to `n_islands - 1` (i.e., it's a
         permutation of island indices).
+        Checks that `exploit_point` is between 0 and 1.
 
         Raises:
             ValueError: If the `topology` length does not match `n_islands` or
@@ -199,6 +203,10 @@ class EvolutionConfig(_LaxModel):
         if set(self.topology) != set(range(self.n_islands)):
             raise ValueError(
                 f"topology must contain exactly the indices 0 to {self.n_islands - 1}"
+            )
+        if not (0 <= self.exploit_point <= 1):
+            raise ValueError(
+                f"exploit_point ({self.exploit_point}) must be between 0 and 1"
             )
         return self
 

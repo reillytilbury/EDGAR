@@ -396,8 +396,10 @@ class TaskSpec:
         rescaling (e.g., mapping [1.37, 2.0] to [0.685, 1.0]) to ensure consistent
         behavior.
 
-        The `mode` transitions from "explore" (first half of generations) to "exploit"
-        (second half), guiding the LLM's behavior towards either novelty or refinement.
+        The `mode` transitions from "explore" to "exploit", guiding the LLM's
+        behavior towards either novelty or refinement. This transition is controlled
+        by the `exploit_point` parameter (fraction of total generations) specified
+        in the configuration.
         LLMs for model generation, parameter estimation, and JAX translation can be
         specified as single models or as lists to cycle through per generation.
 
@@ -406,7 +408,7 @@ class TaskSpec:
 
         Returns:
             tuple[str, float, LLMs]: A tuple containing:
-                - mode (str): "explore" if the generation is in the first half of the run,
+                - mode (str): "explore" if generation < exploit_point * n_generations,
                   "exploit" otherwise.
                 - temperature (float): The Gemini-scale temperature ([1.37, 2.0]) for
                   LLM generation. This value will be rescaled at the call site for
@@ -418,8 +420,9 @@ class TaskSpec:
         import numpy as np
 
         n_generations = self.evolution["n_generations"]
+        exploit_point = self.evolution.get("exploit_point", 0.5)
 
-        mode = "explore" if generation < n_generations // 2 else "exploit"
+        mode = "explore" if generation < exploit_point * n_generations else "exploit"
         temperature = 1 + np.exp(-generation / n_generations)
 
         model_llm = (

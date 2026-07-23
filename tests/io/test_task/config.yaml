@@ -4,6 +4,7 @@ io:
 
 evolution:
   n_generations: 4
+  exploit_point: 0.5
   n_islands: 2
   batch_size: 3
   critical_population_size: 3

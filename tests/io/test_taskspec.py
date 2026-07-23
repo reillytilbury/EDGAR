@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 from edgar.io.config import Config
 from edgar.io.task_spec import TaskSpec
 from edgar.llm.prompt_schema import PromptSchema
@@ -24,6 +25,7 @@ def test_fromconfig():
         "critical_population_size": 3,
         "n_migrants": 1,
         "topology": [1, 0],
+        "exploit_point": 0.5,
     }
     assert taskspec.llms == {
         "num_parents": 2,
@@ -287,8 +289,39 @@ model.DEFAULT_PARAMS = lambda data: {"a": np.ones_like(data["x"])}
     (seed_dir / "param_est2.py").write_text("def parameter_estimator(data): pass")
 
     # Load config and expect ValueError
-    import pytest
 
     config = Config.from_yaml(project_dir / "config.yaml")
     with pytest.raises(ValueError, match="Mixed seed models detected"):
         TaskSpec.from_config(config)
+
+
+def test_schedule_with_custom_exploit_point():
+    """
+    Tests that TaskSpec.schedule correctly transitions mode from explore to exploit
+    based on custom exploit_point parameter configurations.
+    """
+    config = Config.from_yaml("tests/io/test_task/config.yaml")
+
+    # 1. Custom exploit_point of 0.25 on 4 generations -> transition at 1
+    config.evolution.exploit_point = 0.25
+    taskspec = TaskSpec.from_config(config)
+    modes = [taskspec.schedule(gen)[0] for gen in range(4)]
+    assert modes == ["explore", "exploit", "exploit", "exploit"]
+
+    # 2. Custom exploit_point of 0.75 on 4 generations -> transition at 3
+    config.evolution.exploit_point = 0.75
+    taskspec = TaskSpec.from_config(config)
+    modes = [taskspec.schedule(gen)[0] for gen in range(4)]
+    assert modes == ["explore", "explore", "explore", "exploit"]
+
+    # 3. Custom exploit_point of 0.0 -> all exploit
+    config.evolution.exploit_point = 0.0
+    taskspec = TaskSpec.from_config(config)
+    modes = [taskspec.schedule(gen)[0] for gen in range(4)]
+    assert modes == ["exploit", "exploit", "exploit", "exploit"]
+
+    # 4. Custom exploit_point of 1.0 -> all explore
+    config.evolution.exploit_point = 1.0
+    taskspec = TaskSpec.from_config(config)
+    modes = [taskspec.schedule(gen)[0] for gen in range(4)]
+    assert modes == ["explore", "explore", "explore", "explore"]
