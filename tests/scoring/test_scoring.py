@@ -343,3 +343,48 @@ def test_rank_with_nan():
     expected_rank = (None, 1, 3, 4, 2, 5)
     for i in range(6):
         assert pop[i].rank == expected_rank[i]
+
+
+def test_score_one_model_with_separate_train_test_loss_fns():
+    """
+    Tests that scoring uses loss_fn_train for optimization
+    and loss_fn_test for evaluating initial and final losses.
+    """
+    # 1. Setup a standard program
+    program = _make_program(FAST_MODEL_CODE)
+    data = (_make_data(), _make_data())
+
+    # 2. Define train and test loss functions with different optimization targets
+    def loss_fn_train(output, data):
+        # Minimized when output is 2.0 * data["x"]
+        return jnp.mean((output - 2.0 * data["x"]) ** 2, axis=-1)
+
+    def loss_fn_test(output, data):
+        # Minimized when output is 5.0 * data["x"]
+        return jnp.mean((output - 5.0 * data["x"]) ** 2, axis=-1)
+
+    # 3. Call scoring with the separate loss functions
+    loss_fn_tuple = (loss_fn_train, loss_fn_test)
+    custom_config = {
+        "timeout_s": 10.0,
+        "param_penalty_weight": 0.0,
+        "gradient_descent": {"max_iter": 150, "learning_rate": 0.1},
+    }
+    final_loss, initial_loss, _, params, _, _, _ = _score_one_model(
+        program, data, loss_fn_tuple, custom_config
+    )
+
+    # 4. Verify parameter was optimized using loss_fn_train (drives w close to 2.0)
+    w_opt = params["w"]
+    assert jnp.allclose(w_opt, 2.0, atol=1e-2)
+
+    # 5. Verify initial loss was evaluated using loss_fn_test
+    # params_init is {'w': [0.9]}, so output is 0.9 * x.
+    # loss_fn_test evaluates (0.9 * x - 5.0 * x) ** 2, which has a mean of (0.9 - 5.0) ** 2 = 16.81
+    assert jnp.allclose(initial_loss, 16.81, atol=1e-2)
+
+    # 6. Verify final loss was evaluated using loss_fn_test
+    # params is close to {'w': 2.0}, so output is 2.0 * x.
+    # loss_fn_test evaluates (2.0 * x - 5.0 * x) ** 2, which has a mean of (2.0 - 5.0) ** 2 = 9.0
+    expected_final_loss = (w_opt - 5.0) ** 2
+    assert jnp.allclose(final_loss, expected_final_loss, atol=1e-2)

@@ -325,3 +325,161 @@ def test_schedule_with_custom_exploit_point():
     taskspec = TaskSpec.from_config(config)
     modes = [taskspec.schedule(gen)[0] for gen in range(4)]
     assert modes == ["explore", "explore", "explore", "explore"]
+
+
+def _create_minimal_project(project_dir: Path, data_loader_code: str):
+    project_dir.mkdir(parents=True, exist_ok=True)
+    config_yaml = """
+io:
+  data_path: ""
+  save_path: ""
+evolution:
+  n_generations: 1
+  n_islands: 1
+  batch_size: 1
+  critical_population_size: 1
+  n_migrants: 0
+  topology: [0]
+llms:
+  num_parents: 1
+  model_llm: gemini-2.5-flash-lite
+  param_est_llm: gemini-2.5-flash-lite
+  jax_model_translator_llm: gemini-2.5-flash-lite
+  max_lines: 50
+  swear_words: []
+scoring:
+  param_penalty_weight: 0.01
+  timeout_s: 120.0
+run:
+  random_seed: 42
+"""
+    (project_dir / "config.yaml").write_text(config_yaml)
+
+    prompts_yaml = """
+model:
+  base: ""
+  explore: ""
+  code_guidelines: ""
+  docstring_guidelines: ""
+  parent_program_template: ""
+  parent_program_vars: []
+parameter_estimator:
+  base: ""
+  explore: ""
+  code_guidelines: ""
+  docstring_guidelines: ""
+  parent_program_template: ""
+  parent_program_vars: []
+jax_translator_model:
+  base: ""
+  explore: ""
+  code_guidelines: ""
+  docstring_guidelines: ""
+  parent_program_template: ""
+  parent_program_vars: []
+"""
+    (project_dir / "prompts.yaml").write_text(prompts_yaml)
+
+    (project_dir / "data_loader").mkdir(parents=True, exist_ok=True)
+    (project_dir / "data_loader" / "load_data.py").write_text(data_loader_code)
+
+    seed_dir = project_dir / "seed_programs"
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    (seed_dir / "model1.py").write_text("""
+def model(data, params):
+    return data["x"]
+model.DEFAULT_PARAMS = {"a": 1.0}
+""")
+    (seed_dir / "param_est1.py").write_text("def parameter_estimator(data): pass")
+
+
+def test_taskspec_with_single_loss_fn(tmp_path):
+    """
+    Tests that a TaskSpec can be created with only one loss_fn.
+    """
+    project_dir = tmp_path / "single_loss_task"
+    data_loader_code = """
+def load_data(*args, **kwargs):
+    return ({}, {}), {}, {}
+def loss_fn(*args, **kwargs):
+    return 0.0
+"""
+    _create_minimal_project(project_dir, data_loader_code)
+    config = Config.from_yaml(project_dir / "config.yaml")
+    taskspec = TaskSpec.from_config(config)
+    assert callable(taskspec.loss_fn)
+    assert taskspec.loss_fn() == 0.0
+
+
+def test_taskspec_with_separate_train_test_loss_fns(tmp_path):
+    """
+    Tests that a TaskSpec can be created with separate train and test loss functions.
+    """
+    project_dir = tmp_path / "separate_loss_task"
+    data_loader_code = """
+def load_data(*args, **kwargs):
+    return ({}, {}), {}, {}
+def loss_fn_train(*args, **kwargs):
+    return 1.0
+def loss_fn_test(*args, **kwargs):
+    return 2.0
+"""
+    _create_minimal_project(project_dir, data_loader_code)
+    config = Config.from_yaml(project_dir / "config.yaml")
+    taskspec = TaskSpec.from_config(config)
+    assert isinstance(taskspec.loss_fn, tuple)
+    assert len(taskspec.loss_fn) == 2
+    loss_fn_train, loss_fn_test = taskspec.loss_fn
+    assert callable(loss_fn_train)
+    assert callable(loss_fn_test)
+    assert loss_fn_train() == 1.0
+    assert loss_fn_test() == 2.0
+
+
+def test_taskspec_with_invalid_loss_fn_configurations(tmp_path):
+    """
+    Tests that a TaskSpec raises a ValueError for invalid loss function configurations.
+    """
+    # Case A: only loss_fn_train defined
+    project_dir_a = tmp_path / "only_train_loss"
+    data_loader_code_a = """
+def load_data(*args, **kwargs):
+    return ({}, {}), {}, {}
+def loss_fn_train(*args, **kwargs):
+    return 1.0
+"""
+    _create_minimal_project(project_dir_a, data_loader_code_a)
+    config_a = Config.from_yaml(project_dir_a / "config.yaml")
+    with pytest.raises(
+        ValueError, match="must define BOTH 'loss_fn_train' and 'loss_fn_test'"
+    ):
+        TaskSpec.from_config(config_a)
+
+    # Case B: only loss_fn_test defined
+    project_dir_b = tmp_path / "only_test_loss"
+    data_loader_code_b = """
+def load_data(*args, **kwargs):
+    return ({}, {}), {}, {}
+def loss_fn_test(*args, **kwargs):
+    return 2.0
+"""
+    _create_minimal_project(project_dir_b, data_loader_code_b)
+    config_b = Config.from_yaml(project_dir_b / "config.yaml")
+    with pytest.raises(
+        ValueError, match="must define BOTH 'loss_fn_train' and 'loss_fn_test'"
+    ):
+        TaskSpec.from_config(config_b)
+
+    # Case C: neither loss_fn nor (loss_fn_train & loss_fn_test) defined
+    project_dir_c = tmp_path / "no_loss"
+    data_loader_code_c = """
+def load_data(*args, **kwargs):
+    return ({}, {}), {}, {}
+"""
+    _create_minimal_project(project_dir_c, data_loader_code_c)
+    config_c = Config.from_yaml(project_dir_c / "config.yaml")
+    with pytest.raises(
+        ValueError,
+        match="must define either 'loss_fn' or both 'loss_fn_train' and 'loss_fn_test'",
+    ):
+        TaskSpec.from_config(config_c)
