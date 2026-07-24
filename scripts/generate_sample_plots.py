@@ -11,22 +11,28 @@ Usage:
 import sys
 import os
 from pathlib import Path
-import numpy as np
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+_xla_flags = os.environ.get("XLA_FLAGS", "")
+if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
+    os.environ["XLA_FLAGS"] = (_xla_flags + " --xla_gpu_enable_command_buffer=").strip()
 
 from edgar.io.config import Config
 from edgar.io.task_spec import TaskSpec
-from edgar.evolution.program import Program, BirthCertificate, Losses, LossStats
+from edgar.evolution.program import Program, BirthCertificate
+from edgar.evolution.population import Population
+from edgar.scoring.scoring import score
+from edgar.scoring.utils import _safe_loss
 from edgar.io.plotting import generate_feedback_image, generate_program_fits
 
+repo_root = Path(__file__).parent.parent
 
 def generate_samples(project: str):
     print(f"--- Generating sample plots for project: {project} ---")
 
     # 1. Load project spec
-    config_path = Path(f"projects/{project}/config.yaml")
+    config_path = repo_root / "projects" / project / "config.yaml"
     if not config_path.exists():
         print(f"Error: Config not found at {config_path}")
         return
@@ -34,7 +40,7 @@ def generate_samples(project: str):
     config = Config.from_yaml(config_path)
 
     # Set a custom save path so output_dir is predictable
-    sample_dir = Path("sample_plots") / project
+    sample_dir = repo_root / "sample_plots" / project
     config.io.save_path = str(sample_dir)
 
     spec = TaskSpec.from_config(config)
@@ -43,60 +49,38 @@ def generate_samples(project: str):
 
     # 2. Load real data
     print("Loading project data...")
-    X_discover, _, _ = spec.load_data_fn(
+    X_discover, _, X_eval = spec.load_data_fn(
         data_path=spec.io["data_path"], **spec.project_params
     )
     # feedback_image and program_fits usually take the 'test' part of the discovery split
     data = X_discover[1]
-    n_samples = next(iter(data.values())).shape[0]
 
-    # 3. Use seed programs as basis for samples
+    # 3. Score seed programs
     if not spec.seed_programs:
         print("Error: No seed programs found in project to use as samples.")
         return
 
-    programs = []
-    for i, seed_p in enumerate(spec.seed_programs):
-        # Create a copy with necessary fields for plotting
-        p = Program(
-            birth=seed_p.birth,
-            name=seed_p.name,
-            code=seed_p.code,
-        )
-        p.idx = i
-
-        # Ensure model_jax is set for compile_model()
-        if not p.code.model_jax:
-            p.code.model_jax = p.code.model
-
-        # Initialize with dummy parameters and losses to demonstrate plotting
-        model_fn = p.compile_model()
-        default_params = getattr(model_fn, "DEFAULT_PARAMS", {})
-
-        # Mock initial and final parameters (per-sample)
-        p.params_init = {
-            k: np.full(n_samples, v)
-            if isinstance(v, (int, float))
-            else np.repeat(np.asarray(v)[np.newaxis, ...], n_samples, axis=0)
-            for k, v in default_params.items()
-        }
-        p.params = {k: v * 2 for k, v in p.params_init.items()}
-
-        # Mock losses
-        p.sample_losses_init = np.random.uniform(0.5, 1.0, size=n_samples)
-        p.sample_losses = p.sample_losses_init * 0.8
-        p.program_losses = Losses(
-            discover=LossStats(
-                init=float(np.mean(p.sample_losses_init)),
-                final=float(np.mean(p.sample_losses)),
+    population = Population()
+    for seed_p in spec.seed_programs:
+        if not seed_p.code.model_jax:
+            seed_p.code.model_jax = (
+                seed_p.code.model
+                .replace("import numpy as np", "import jax.numpy as jnp")
+                .replace("np.", "jnp.")
             )
-        )
+        population.add(seed_p)
 
-        programs.append(p)
+    print("Scoring seed programs...")
+    score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
+
+    programs = [population[i] for i in range(len(population))]
 
     # 4. Generate Feedback Image (using first 2 as parents)
     print("Generating feedback image...")
-    parents = programs[:2]
+    def _loss(p: Program) -> float:
+            return _safe_loss(p.program_losses.discover.final)
+
+    parents = sorted(programs, key=_loss, reverse=True)
     current = Program(
         birth=BirthCertificate(generation=1, island=0, batch_index=0),
         name="Candidate Model",
