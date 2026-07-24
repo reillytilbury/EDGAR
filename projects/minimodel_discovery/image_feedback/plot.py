@@ -53,7 +53,9 @@ def _whitened_stc_components(
 
     patches = np.stack(
         [
-            _extract_patch(image[..., trial_idx], center_y, center_x, patch_size=patch_size).reshape(-1)
+            _extract_patch(
+                image[..., trial_idx], center_y, center_x, patch_size=patch_size
+            ).reshape(-1)
             for trial_idx in range(n_trials)
         ],
         axis=0,
@@ -67,9 +69,13 @@ def _whitened_stc_components(
     weights = weights / (np.sum(weights) + 1e-6)
     mean_patch = np.mean(patches, axis=0, keepdims=True)
     patches_centered = patches - mean_patch
-    cov = (patches_centered.T @ patches_centered) / max(patches_centered.shape[0] - 1, 1)
+    cov = (patches_centered.T @ patches_centered) / max(
+        patches_centered.shape[0] - 1, 1
+    )
     eps = 1e-3 * float(np.trace(cov) / max(cov.shape[0], 1) + 1e-6)
-    eigvals, eigvecs = np.linalg.eigh(cov + eps * np.eye(cov.shape[0], dtype=np.float32))
+    eigvals, eigvecs = np.linalg.eigh(
+        cov + eps * np.eye(cov.shape[0], dtype=np.float32)
+    )
     inv_sqrt = eigvecs @ np.diag(1.0 / np.sqrt(np.maximum(eigvals, eps))) @ eigvecs.T
     white = patches_centered @ inv_sqrt
 
@@ -96,8 +102,12 @@ def _whitened_stc_components(
     patch_x_start = patch_radius - (center_x - x_start)
     patch_x_stop = patch_x_start + (x_stop - x_start)
 
-    pos_canvas[y_start:y_stop, x_start:x_stop] = pos_patch[patch_y_start:patch_y_stop, patch_x_start:patch_x_stop]
-    neg_canvas[y_start:y_stop, x_start:x_stop] = neg_patch[patch_y_start:patch_y_stop, patch_x_start:patch_x_stop]
+    pos_canvas[y_start:y_stop, x_start:x_stop] = pos_patch[
+        patch_y_start:patch_y_stop, patch_x_start:patch_x_stop
+    ]
+    neg_canvas[y_start:y_stop, x_start:x_stop] = neg_patch[
+        patch_y_start:patch_y_stop, patch_x_start:patch_x_stop
+    ]
     return pos_canvas, neg_canvas, strength
 
 
@@ -179,7 +189,9 @@ def _render_summary_panel(
 def _get_anchor_indices(data: dict[str, np.ndarray], n_anchor: int) -> np.ndarray:
     cell_ids = np.asarray(data["cell_index"][:, 0], dtype=np.int64)
     fev_lookup = _DATASET_CONTEXT.get("fev_lookup", {})
-    scores = np.asarray([fev_lookup.get(int(cell_id), 0.0) for cell_id in cell_ids], dtype=np.float32)
+    scores = np.asarray(
+        [fev_lookup.get(int(cell_id), 0.0) for cell_id in cell_ids], dtype=np.float32
+    )
     order = np.argsort(scores)[::-1]
     take = _select_evenly_spaced_indices(order.size, min(n_anchor, order.size))
     return order[take]
@@ -280,6 +292,7 @@ def plot_model_fits(
     program_names=None,
     params=None,
     title_prefix: str | None = None,
+    **kwargs,
 ):
     if save_path == "":
         raise ValueError("plot_model_fits requires a non-empty save_path")
@@ -288,7 +301,10 @@ def plot_model_fits(
     if losses is None:
         losses = [program.program_losses.discover.final for program in programs]
     if sample_losses is None:
-        sample_losses = [program.sample_losses if program.sample_losses is not None else None for program in programs]
+        sample_losses = [
+            program.sample_losses if program.sample_losses is not None else None
+            for program in programs
+        ]
     if program_names is None:
         program_names = [program.name for program in programs]
     if params is None:
@@ -326,14 +342,22 @@ def plot_model_fits(
 
         for model_idx, (program, model_fn) in enumerate(zip(programs, model_fns)):
             label = program_names[model_idx]
-            params_s = {k: np.asarray(v[sample_idx]) for k, v in params[model_idx].items()}
+            params_s = {
+                k: np.asarray(v[sample_idx]) for k, v in params[model_idx].items()
+            }
             pred = _vectorize_prediction(np.asarray(model_fn(sample, params_s)))
             pred_sorted = pred[order]
 
-            s_loss = sample_losses[model_idx][sample_idx] if sample_losses[model_idx] is not None else float("nan")
+            s_loss = (
+                sample_losses[model_idx][sample_idx]
+                if sample_losses[model_idx] is not None
+                else float("nan")
+            )
             fev_value, feve_value = _feve_for_sample(repeats, pred)
 
-            sub = outer[row_idx, 1 + model_idx].subgridspec(2, 1, height_ratios=[1.0, 1.35], hspace=0.08)
+            sub = outer[row_idx, 1 + model_idx].subgridspec(
+                2, 1, height_ratios=[1.0, 1.35], hspace=0.08
+            )
             ax_top = fig.add_subplot(sub[0, 0])
             ax_trace = fig.add_subplot(sub[1, 0])
 
@@ -346,7 +370,9 @@ def plot_model_fits(
             ax_top.set_title(f"{label} | top predicted images", fontsize=9)
 
             ax_trace.plot(sorted_response, color="black", lw=1.6, label="observed")
-            ax_trace.plot(pred_sorted, color=colors[model_idx], lw=1.6, label="predicted")
+            ax_trace.plot(
+                pred_sorted, color=colors[model_idx], lw=1.6, label="predicted"
+            )
             ax_trace.set_xticks([])
             ax_trace.spines["top"].set_visible(False)
             ax_trace.spines["right"].set_visible(False)
@@ -374,9 +400,15 @@ def plot_model_fits(
 
     title_parts = [title_prefix] if title_prefix else []
     for j, program in enumerate(programs):
-        title_parts.append(f"{program_names[j]}: loss={losses[j]:.3f}" if losses[j] is not None else f"{program_names[j]}: loss=n/a")
+        title_parts.append(
+            f"{program_names[j]}: loss={losses[j]:.3f}"
+            if losses[j] is not None
+            else f"{program_names[j]}: loss=n/a"
+        )
     if title_parts:
         fig.suptitle(" | ".join([p for p in title_parts if p]), fontsize=13)
-    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.03, top=0.92, wspace=0.25, hspace=0.4)
+    fig.subplots_adjust(
+        left=0.02, right=0.98, bottom=0.03, top=0.92, wspace=0.25, hspace=0.4
+    )
     fig.savefig(save_path, dpi=120, bbox_inches="tight")
     plt.close(fig)

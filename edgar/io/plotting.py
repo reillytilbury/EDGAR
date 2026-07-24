@@ -54,7 +54,7 @@ def generate_feedback_image(
     )
     os.makedirs(os.path.dirname(img_path), exist_ok=True)
     try:
-        spec.plot_fn(data, parents, save_path=img_path)
+        spec.plot_fn(data, parents, save_path=img_path, rng=spec.rng)
         program.image_path = img_path
         return open(img_path, "rb").read()
     except Exception as e:
@@ -105,6 +105,7 @@ def generate_program_fits(
                 sample_losses=[p.sample_losses_init, p.sample_losses],
                 program_names=[f"{p.name} (Init)", f"{p.name} (Final)"],
                 params=[p.params_init, p.params],
+                rng=spec.rng,
             )
             p.fit_image_path = str(save_path)
         except Exception as e:

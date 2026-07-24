@@ -10,6 +10,8 @@ def plot_model_fits(
     sample_losses=None,
     program_names=None,
     params=None,
+    *,
+    rng: np.random.Generator,
 ):
     """
     Predicted-vs-observed dx_i/dt scatter for a few example sessions, for each parent
@@ -54,7 +56,7 @@ def plot_model_fits(
     n_sessions = neighbor_dx.shape[0]
 
     n_show = min(4, n_sessions)
-    session_indices = np.random.choice(n_sessions, size=n_show, replace=False)
+    session_indices = rng.choice(n_sessions, size=n_show, replace=False)
     colours = ["tab:red", "tab:green", "tab:orange", "tab:purple"]
 
     model_fns = [program.compile_model() for program in parent_programs]
@@ -68,14 +70,33 @@ def plot_model_fits(
         y_obs = velocity[s]
 
         lims = [y_obs.min(), y_obs.max()]
-        ax.plot(lims, lims, color="black", linewidth=1, linestyle="--", alpha=0.5, label="y=x")
+        ax.plot(
+            lims,
+            lims,
+            color="black",
+            linewidth=1,
+            linestyle="--",
+            alpha=0.5,
+            label="y=x",
+        )
 
         for j, model_fn in enumerate(model_fns):
             params_s = {k: np.asarray(v[s]) for k, v in params[j].items()}
             y_pred = np.asarray(model_fn(sample_data, params_s))
             sl = sample_losses[j][s] if sample_losses[j] is not None else None
-            label = f"{program_names[j]} (loss={sl:.4f})" if sl is not None else program_names[j]
-            ax.scatter(y_obs, y_pred, s=8, alpha=0.4, color=colours[j % len(colours)], label=label)
+            label = (
+                f"{program_names[j]} (loss={sl:.4f})"
+                if sl is not None
+                else program_names[j]
+            )
+            ax.scatter(
+                y_obs,
+                y_pred,
+                s=8,
+                alpha=0.4,
+                color=colours[j % len(colours)],
+                label=label,
+            )
 
         ax.set_title(f"Session {s}")
         ax.set_xlabel("observed dx/dt")
@@ -83,7 +104,9 @@ def plot_model_fits(
         ax.legend(fontsize=8)
 
     title_parts = [
-        f"{program_names[j]}: loss={losses[j]:.4f}" if losses[j] is not None else f"{program_names[j]}: loss=n/a"
+        f"{program_names[j]}: loss={losses[j]:.4f}"
+        if losses[j] is not None
+        else f"{program_names[j]}: loss=n/a"
         for j in range(len(parent_programs))
     ]
     plt.suptitle("  |  ".join(title_parts), fontsize=12)

@@ -3,7 +3,16 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
 
-def plot_model_fits(data, programs, save_path="", losses=None, sample_losses=None, program_names=None, params=None):
+def plot_model_fits(
+    data,
+    programs,
+    rng: np.random.Generator,
+    save_path="",
+    losses=None,
+    sample_losses=None,
+    program_names=None,
+    params=None,
+):
     """
     Plot observed synthetic data and model predictions for up to 9 random samples.
 
@@ -23,18 +32,21 @@ def plot_model_fits(data, programs, save_path="", losses=None, sample_losses=Non
     if losses is None:
         losses = [program.program_losses.discover.final for program in programs]
     if sample_losses is None:
-        sample_losses = [program.sample_losses if program.sample_losses is not None else None for program in programs]
+        sample_losses = [
+            program.sample_losses if program.sample_losses is not None else None
+            for program in programs
+        ]
     if program_names is None:
         program_names = [program.name for program in programs]
     if params is None:
         params = [program.params for program in programs]
 
-    x_arr = np.asarray(data['x'])  # (n_samples, n_trials)
-    y_arr = np.asarray(data['y'])  # (n_samples, n_trials)
+    x_arr = np.asarray(data["x"])  # (n_samples, n_trials)
+    y_arr = np.asarray(data["y"])  # (n_samples, n_trials)
     n_samples = x_arr.shape[0]
     colours = ["tab:red", "tab:green", "tab:orange"]
     n_show = min(9, n_samples)
-    sample_indices = np.random.choice(n_samples, size=n_show, replace=False)
+    sample_indices = rng.choice(n_samples, size=n_show, replace=False)
     model_fns = [program.compile_model() for program in programs]
 
     fig, axes = plt.subplots(3, 3, figsize=(18, 18))
@@ -46,16 +58,34 @@ def plot_model_fits(data, programs, save_path="", losses=None, sample_losses=Non
         x_grid = np.linspace(x_obs.min(), x_obs.max(), 200)
 
         ax.scatter(x_obs, y_obs, s=8, c="black", alpha=0.15, label="Observed")
-        ax.plot(x_grid, _binned_mean(x_obs, y_obs, x_grid), color="deepskyblue",
-                linewidth=3, label="Binned mean", alpha=0.8)
+        ax.plot(
+            x_grid,
+            _binned_mean(x_obs, y_obs, x_grid),
+            color="deepskyblue",
+            linewidth=3,
+            label="Binned mean",
+            alpha=0.8,
+        )
 
         for j, (program, model_fn) in enumerate(zip(programs, model_fns)):
             params_s = {k: np.asarray(v[s]) for k, v in params[j].items()}
-            y_pred = np.asarray(model_fn({'x': jnp.asarray(x_grid)}, params_s)).flatten()
+            y_pred = np.asarray(
+                model_fn({"x": jnp.asarray(x_grid)}, params_s)
+            ).flatten()
             s_loss = sample_losses[j][s] if sample_losses[j] is not None else None
-            label = f"{program_names[j]} (loss={s_loss:.3f})" if s_loss is not None else f"{program_names[j]}"
-            ax.plot(x_grid, y_pred, color=colours[j % len(colours)], linewidth=2.5,
-                    label=label, alpha=0.85)
+            label = (
+                f"{program_names[j]} (loss={s_loss:.3f})"
+                if s_loss is not None
+                else f"{program_names[j]}"
+            )
+            ax.plot(
+                x_grid,
+                y_pred,
+                color=colours[j % len(colours)],
+                linewidth=2.5,
+                label=label,
+                alpha=0.85,
+            )
 
         ax.set_title(f"Sample {s}")
         ax.set_xlabel("x")
@@ -67,7 +97,11 @@ def plot_model_fits(data, programs, save_path="", losses=None, sample_losses=Non
 
     title_parts = []
     for j, program in enumerate(programs):
-        title_parts.append(f"{program_names[j]}: loss={losses[j]:.3f}" if losses[j] is not None else f"{program_names[j]}: loss=n/a")
+        title_parts.append(
+            f"{program_names[j]}: loss={losses[j]:.3f}"
+            if losses[j] is not None
+            else f"{program_names[j]}: loss=n/a"
+        )
     plt.suptitle("Model Fits\n" + "  |  ".join(title_parts), fontsize=16)
 
     plt.tight_layout()
@@ -96,6 +130,11 @@ def _binned_mean(x, y, x_grid):
 
     valid = np.isfinite(y_mean)
     if np.any(valid):
-        return np.interp(x_grid, x_grid[valid], y_mean[valid],
-                         left=float(y_mean[valid][0]), right=float(y_mean[valid][-1]))
+        return np.interp(
+            x_grid,
+            x_grid[valid],
+            y_mean[valid],
+            left=float(y_mean[valid][0]),
+            right=float(y_mean[valid][-1]),
+        )
     return np.zeros_like(x_grid)
