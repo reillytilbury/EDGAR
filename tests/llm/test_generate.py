@@ -60,7 +60,7 @@ async def test_generate_one_model():
         data={},
     )
 
-    header = '"""\nfake thought process\n\n' + Program1.latex_equation + '\n"""\n\n'
+    header = '"""\nfake thought process\n"""\n\n'
     assert program.code.model == header + Program1.model + " + 0.000\n"
     assert program.default_params == Program1.default_params
     assert program.name == "Fake Model 0"
@@ -100,11 +100,7 @@ async def test_generate_one_model_dynamic_params():
         output_schema=ModelSchemaDynamicDefaultParams,
     )
 
-    header = (
-        '"""\nfake thought process\n\n'
-        + ProgramArrayParamsFallback.latex_equation
-        + '\n"""\n\n'
-    )
+    header = '"""\nfake thought process\n"""\n\n'
     assert (
         program.code.model == header + ProgramArrayParamsFallback.model + " + 0.000\n"
     )
@@ -198,11 +194,7 @@ async def test_generate_same_model():
     mutated_programs = 3 * [Program1()]  # Expected programs generated
 
     for i, program in enumerate(population[1:]):
-        header = (
-            '"""\nfake thought process\n\n'
-            + mutated_programs[i].latex_equation
-            + '\n"""\n\n'
-        )
+        header = '"""\nfake thought process\n"""\n\n'
         assert program.code.model == header + mutated_programs[i].model + " + 0.000\n"
         assert program.default_params == mutated_programs[i].default_params
         assert program.name == "Fake Model 0"
@@ -246,9 +238,7 @@ async def test_generate_distinct_models():
     ]  # Expected programs generated
 
     for i, program in enumerate(population[1:]):
-        header = (
-            '"""\nfake thought process\n\n' + programs[i].latex_equation + '\n"""\n\n'
-        )
+        header = '"""\nfake thought process\n"""\n\n'
         assert (
             program.code.model
             == header + programs[i].model + f" + {i // 3 * llm.offset:.3f}\n"
@@ -306,10 +296,7 @@ async def test_generate_param_est():
 
     # Check expected solutions
     programs = [None, Program1(), InvalidProgram(), ProgramSolution(), Program1()]
-    model_headers = [None] + [
-        '"""\nfake thought process\n\n' + programs[i].latex_equation + '\n"""\n\n'
-        for i in range(1, 5)
-    ]
+    model_headers = [None] + ['"""\nfake thought process\n"""\n\n' for i in range(1, 5)]
     model_footers = [None] + [" + 0.000\n" for i in range(1, 5)]
     models = [None] + [
         model_headers[i] + programs[i].model + model_footers[i] for i in range(1, 5)
@@ -348,11 +335,7 @@ async def test_translate_one_model():
     assert program.code.model_jax == Program1.model_jax + " + 0.000\n"
     assert (
         program.code.model
-        == '"""\nfake thought process\n\n'
-        + Program1.latex_equation
-        + '\n"""\n\n'
-        + Program1.model
-        + " + 0.000\n"
+        == '"""\nfake thought process\n"""\n\n' + Program1.model + " + 0.000\n"
     )  # Check model code is unchanged
     assert (
         program.code.param_est == Program1.param_est

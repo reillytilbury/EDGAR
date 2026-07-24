@@ -32,7 +32,6 @@ async def test_call_llm_with_fake_model():
     assert isinstance(result, ModelSchema)
     assert result.thought_process == "fake thought process"
     assert result.descriptive_name == "Fake Model 0"
-    assert result.latex_equations == Program1.latex_equation
     assert result.code.startswith(
         Program1.model
     )  # code added an offset, so check it starts with same
@@ -101,7 +100,6 @@ async def test_call_llm_live_model_schema():
     assert isinstance(result, ModelSchema)
     assert isinstance(result.thought_process, str) and result.thought_process
     assert isinstance(result.descriptive_name, str) and result.descriptive_name
-    assert isinstance(result.latex_equations, str) and result.latex_equations
     assert isinstance(result.default_params, dict)
     assert all(
         isinstance(v, (int, float, list)) for v in result.default_params.values()
@@ -132,7 +130,6 @@ async def test_call_llm_live_model_schema_dynamic_default_params():
     assert isinstance(result, ModelSchemaDynamicDefaultParams)
     assert isinstance(result.thought_process, str) and result.thought_process
     assert isinstance(result.descriptive_name, str) and result.descriptive_name
-    assert isinstance(result.latex_equations, str) and result.latex_equations
     assert isinstance(result.default_params, str)  # function returned as string
     print(result.default_params)
     default_params = eval(result.default_params)
@@ -173,7 +170,6 @@ async def test_call_llm_live_model_schema_with_image():
     assert isinstance(result, ModelSchema)
     assert isinstance(result.thought_process, str) and result.thought_process
     assert isinstance(result.descriptive_name, str) and result.descriptive_name
-    assert isinstance(result.latex_equations, str) and result.latex_equations
     assert isinstance(result.default_params, dict)
     assert all(
         isinstance(v, (int, float, list)) for v in result.default_params.values()

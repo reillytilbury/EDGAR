@@ -172,7 +172,7 @@ async def _generate_one_model(
             f"[generate] Skipping model code for program #{program.idx}: call_llm returned None"
         )
         return
-    header = f'"""\n{result.thought_process}\n\n{result.latex_equations}\n"""\n\n'
+    header = f'"""\n{result.thought_process}\n"""\n\n'
     program.code.model = header + result.code
     default_params = result.default_params
     if isinstance(default_params, str):

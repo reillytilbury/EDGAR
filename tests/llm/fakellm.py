@@ -48,7 +48,6 @@ class FakeLLM:
             self._programs[idx].model,
             self.offset * self._model_counter[idx],
         )
-        latex_equation = self._programs[idx].latex_equation
         default_params = self._programs[idx].default_params
 
         self._model_counter[idx] += 1
@@ -56,7 +55,6 @@ class FakeLLM:
             custom_output_args={
                 "thought_process": "fake thought process",
                 "descriptive_name": f"Fake Model {idx}",
-                "latex_equations": latex_equation,
                 "code": code,
                 "default_params": default_params,
             }

@@ -22,18 +22,11 @@ class ModelSchema(BaseModel):
             "(1) what each parent model does and where it falls short, "
             "(2) what specific changes you are making and why they should reduce loss, "
             "(3) the mathematical and scientific justification for your approach."
-            "Refer to the parent models by their descriptive names, not as Model 1 and Model 2."
         )
     )
     descriptive_name: str = Field(
         description=(
             "A concise, descriptive name for the model (e.g., 'Double Gaussian Model')."
-        )
-    )
-    latex_equations: str = Field(
-        description=(
-            "The complete equation for the model in LaTeX, defining all free parameters and variables. "
-            "Should be a single self-contained expression."
         )
     )
     code: str = Field(
