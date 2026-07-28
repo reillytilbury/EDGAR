@@ -57,9 +57,9 @@ def plot_split(load_data_output, save_path="split.png"):
 
     panels = [
         ("Discover TRAIN", X_discover[0]),
-        ("Discover TEST",  X_discover[1]),
+        ("Discover TEST", X_discover[1]),
         ("Validate TRAIN", X_validate[0]),
-        ("Validate TEST",  X_validate[1]),
+        ("Validate TEST", X_validate[1]),
     ]
 
     vmin, vmax = None, None  # shared range of the colour key across all four panels
