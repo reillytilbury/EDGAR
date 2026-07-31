@@ -266,6 +266,7 @@ class LLMsConfig(_LaxModel):
     max_lines: int
     swear_words: list[str]
     max_tokens: int
+    idea_probability: float
 
     @model_validator(mode="after")
     def fill_provider_defaults(self) -> LLMsConfig:

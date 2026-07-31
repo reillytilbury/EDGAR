@@ -334,8 +334,12 @@ def log_generation(
         parents = [population[i] for i in p.birth.parent_indices]
         mode_p = p.birth.mode or "explore"
         f.write(f"  --- Prompts for Program #{p.idx} ---\n")
+        model_cfg = {
+            **spec.flat_config,
+            "ideas-injection-point": "\n".join(getattr(p.birth, "ideas", []) or []),
+        }
         f.write(
-            f"  [model prompt]\n{spec.model_prompt_schema.build_prompt(mode_p, parents, spec.flat_config)}\n\n"
+            f"  [model prompt]\n{spec.model_prompt_schema.build_prompt(mode_p, parents, model_cfg)}\n\n"
         )
         f.write(
             f"  [param_est prompt]\n{spec.param_est_prompt_schema.build_prompt('explore', parents, spec.flat_config, current_program=p)}\n\n"

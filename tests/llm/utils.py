@@ -56,7 +56,14 @@ async def generate_one_fake_model():
     llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     llm_model = llm.gen_model()  # A TestModel with code for Program1
     await _generate_one_model(
-        program, parents, prompt_schema, llm_model, "explore", 1.0
+        program,
+        parents,
+        prompt_schema,
+        llm_model,
+        "explore",
+        1.0,
+        spec=make_fake_spec(),
+        data={},
     )
     return program
 
@@ -73,7 +80,15 @@ async def generate_fake_models(n: int):
     )
     llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     llm_models = CyclingModel([llm.gen_model() for _ in range(n)])
-    await generate_models(population, prompt_schema, llm_models, "explore", 1.0)
+    await generate_models(
+        population,
+        prompt_schema,
+        llm_models,
+        "explore",
+        1.0,
+        spec=make_fake_spec(),
+        data={},
+    )
     return population
 
 

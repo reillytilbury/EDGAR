@@ -13,6 +13,7 @@ evolution:
 
 llms:
   num_parents: 2
+  idea_probability: 0.0
   retry:
     max_retries: 3
     initial_delay: 1.0

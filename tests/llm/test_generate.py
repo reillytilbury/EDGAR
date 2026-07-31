@@ -182,7 +182,14 @@ async def test_generate_same_model():
     )
     llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     llm_model = llm.gen_model()  # A TestModel with code for Program1
-    await generate_models(population, prompt_schema, llm_model, "explore", 1.0)
+    await generate_models(
+        population,
+        prompt_schema,
+        llm_model,
+        "explore",
+        1.0,
+        spec=make_fake_spec(output_dir="test_output"),
+    )
 
     # Check existing program is unchanged
     assert population[0].code.model == "Existing model code"
@@ -223,7 +230,14 @@ async def test_generate_distinct_models():
     )
     llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     llm_models = CyclingModel([llm.gen_model() for _ in range(9)])
-    await generate_models(population, prompt_schema, llm_models, "explore", 1.0)
+    await generate_models(
+        population,
+        prompt_schema,
+        llm_models,
+        "explore",
+        1.0,
+        spec=make_fake_spec(output_dir="test_output"),
+    )
 
     # Check existing program is unchanged
     assert population[0].code.model == "Existing model code"
@@ -485,3 +499,67 @@ async def test_translate_one_model_with_real_llm():
     assert "jnp" in program.code.model_jax
     assert program.code.model == model_code
     assert load_function_from_source(program.code.model_jax, "model") is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_one_model_with_ideas():
+    from unittest.mock import patch, AsyncMock
+
+    program = make_empty_program()
+    parents = [Program1()]
+    prompt_schema = PromptSchema(
+        base="Placeholder: {ideas-injection-point}",
+        explore="...",
+        code_guidelines="...",
+        docstring_guidelines="...",
+        parent_program_template="..",
+        parent_program_vars=[],
+        ideas=["Use recurrence", "Add multi-scale noise"],
+    )
+    llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
+    llm_model = llm.gen_model()
+
+    # We patch call_llm so we can inspect the exact prompt passed to it!
+    with patch("edgar.llm.generate.call_llm", new_callable=AsyncMock) as mock_call:
+        # Set a dummy return value so it doesn't crash during parsing
+        mock_call.return_value = None  # Simulates call_llm failure or successful mock
+
+        # 1. idea_probability = 1.0 (always select both)
+        await _generate_one_model(
+            program,
+            parents,
+            prompt_schema,
+            llm_model,
+            "explore",
+            1.0,
+            config={"idea_probability": 1.0},
+            spec=make_fake_spec(output_dir="test_output"),
+            data={},
+        )
+        assert program.birth.ideas == ["Use recurrence", "Add multi-scale noise"]
+
+        # Check that the prompt correctly had both ideas injected
+        called_prompt = mock_call.call_args[1]["prompt"]
+        assert "Placeholder: Use recurrence\nAdd multi-scale noise" in called_prompt
+
+    # 2. idea_probability = 0.0 (never select any)
+    program2 = make_empty_program()
+    with patch("edgar.llm.generate.call_llm", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = None
+        await _generate_one_model(
+            program2,
+            parents,
+            prompt_schema,
+            llm_model,
+            "explore",
+            1.0,
+            config={"idea_probability": 0.0},
+            spec=make_fake_spec(output_dir="test_output"),
+            data={},
+        )
+        assert program2.birth.ideas == []
+
+        # Check that the prompt correctly had empty string injected
+        called_prompt = mock_call.call_args[1]["prompt"]
+        assert "Placeholder: " in called_prompt
+        assert "Use recurrence" not in called_prompt

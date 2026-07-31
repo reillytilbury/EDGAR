@@ -104,3 +104,20 @@ def test_build_prompt_exploit_mode():
 
     assert "Be conservative ..." in prompt
     assert "Be creative ..." not in prompt
+
+
+def test_build_prompt_ideas_injection():
+    # Test that placeholder is correctly replaced if present in base prompt
+    schema = _make_schema(base="This has placeholder: {ideas-injection-point}")
+
+    # 1. Without ideas-injection-point in config, should default to empty string
+    prompt = schema.build_prompt(mode="explore", config={"num_parents": 0})
+    assert "This has placeholder: " in prompt
+    assert "{ideas-injection-point}" not in prompt
+
+    # 2. With ideas-injection-point in config, should substitute
+    prompt = schema.build_prompt(
+        mode="explore",
+        config={"num_parents": 0, "ideas-injection-point": "Hello Idea!"},
+    )
+    assert "This has placeholder: Hello Idea!" in prompt

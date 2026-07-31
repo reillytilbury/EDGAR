@@ -37,6 +37,9 @@ llms:
   # Number of parent programs in each prompt
   num_parents: 2
 
+  # Independent probability of injecting a research/model idea into the prompt
+  idea_probability: 0.0
+
   # 500 - Unexpected error on Google's servers, 503 - service temporarily down — all transient per Google's retry guidance, 504 - Request timed out (google gemini server-side 5 min timeout).
   # 429 Rate-limited - because the number of requests we send concurrently is fixed, we should not ignore this error
   # 400 Bad Request, 401 Unauthorized, 403 Forbidden → hard failures, do not retry.

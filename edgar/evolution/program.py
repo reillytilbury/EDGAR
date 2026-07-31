@@ -59,6 +59,7 @@ class BirthCertificate:
         temperature: The sampling temperature used for LLM generation.
         parent_indices: A list of global indices of parent programs.
         llm_name: The name of the LLM model used to generate this program.
+        ideas: A list of ideas included in the prompt to generate the program.
     """
 
     generation: int
@@ -68,6 +69,7 @@ class BirthCertificate:
     temperature: float | None = None
     parent_indices: list[int] = field(default_factory=list)
     llm_name: str | None = None
+    ideas: list[str] | None = None
 
 
 @dataclass

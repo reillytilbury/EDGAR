@@ -53,6 +53,7 @@ def test_fromconfig():
             "curve_fit",
             "sklearn",
         ],
+        "idea_probability": 0.0,
     }
     assert taskspec.scoring == {
         "param_penalty_weight": 0.01,

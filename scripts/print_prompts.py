@@ -7,8 +7,10 @@ Usage:
     uv run python scripts/print_prompts.py <project>
     uv run python scripts/print_prompts.py orientation_tuning
 """
+
 import sys
 from pathlib import Path
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -16,7 +18,9 @@ from edgar.io.config import Config
 from edgar.evolution.program import Program, BirthCertificate, Code, Losses, LossPair
 
 
-def make_parent(name: str, loss: float, model_code: str, param_est_code: str) -> Program:
+def make_parent(
+    name: str, loss: float, model_code: str, param_est_code: str
+) -> Program:
     p = Program(birth=BirthCertificate(generation=0, island=0, batch_index=0))
     p.name = name
     p.code = Code(model=model_code, param_est=param_est_code)
@@ -108,35 +112,67 @@ def print_prompts_for_project(project: str) -> None:
 
     parents = [make_parent(*p) for p in ALL_PARENTS[:num_parents]]
     current = make_current("Asymmetric Von Mises", model_code=CURRENT_MODEL)
-    flat_config = {"num_parents": num_parents, "max_lines": 30, "swear_words": "lstsq, scipy.optimize, curve_fit"}
+
+    flat_config = {
+        "num_parents": num_parents,
+        "max_lines": 30,
+        "swear_words": "lstsq, scipy.optimize, curve_fit",
+        "idea_probability": 1.0,
+    }
+
+    mock_rng = np.random.default_rng(42)
+    prompts.model.select_ideas(flat_config, mock_rng)
 
     print(f"\n{SEP}")
     print(f"PROJECT: {project} — MODEL PROMPT (explore, {num_parents} parents)")
     print(SEP)
-    print(prompts.model.build_prompt("explore", parent_programs=parents, config=flat_config))
+    print(
+        prompts.model.build_prompt(
+            "explore", parent_programs=parents, config=flat_config
+        )
+    )
 
     print(f"\n{SEP}")
     print(f"PROJECT: {project} — MODEL PROMPT (exploit, {num_parents} parents)")
     print(SEP)
-    print(prompts.model.build_prompt("exploit", parent_programs=parents, config=flat_config))
+    print(
+        prompts.model.build_prompt(
+            "exploit", parent_programs=parents, config=flat_config
+        )
+    )
 
     print(f"\n{SEP}")
     print(f"PROJECT: {project} — PARAM_EST PROMPT ({num_parents} parents)")
     print(SEP)
-    print(prompts.parameter_estimator.build_prompt(
-        "explore", parent_programs=parents, config=flat_config, current_program=current
-    ))
+    print(
+        prompts.parameter_estimator.build_prompt(
+            "explore",
+            parent_programs=parents,
+            config=flat_config,
+            current_program=current,
+        )
+    )
 
     print(f"\n{SEP}")
     print(f"PROJECT: {project} — JAX TRANSLATION PROMPT")
     print(SEP)
-    print(prompts.jax_translator_model.build_prompt("explore", current_program=current, config=flat_config))
+    print(
+        prompts.jax_translator_model.build_prompt(
+            "explore", current_program=current, config=flat_config
+        )
+    )
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <project>")
-        print("Available projects:", [p.name for p in Path("projects").iterdir() if (p / "config.yaml").exists()])
+        print(
+            "Available projects:",
+            [
+                p.name
+                for p in Path("projects").iterdir()
+                if (p / "config.yaml").exists()
+            ],
+        )
         sys.exit(1)
     print_prompts_for_project(sys.argv[1])
-

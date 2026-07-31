@@ -16,6 +16,7 @@ evolution:
 
 llms:
   num_parents: 3
+  idea_probability: 0.0
   default_provider: google
   retry:
     max_retries: 2

@@ -7,6 +7,9 @@ model:
   image_analysis_instructions: null
   parent_program_template: 'default_program_detail_template1'
   parent_program_vars: []
+  ideas:
+    - "Idea 1"
+    - "Idea 2"
 parameter_estimator:
   base: 'default_param_est_base1'
   explore: null

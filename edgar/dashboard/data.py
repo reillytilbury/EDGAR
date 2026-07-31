@@ -81,16 +81,17 @@ def _reconstruct_model_prompt(run_dir: Path, pop: Population, idx: int) -> str:
     except Exception:
         return "(error: could not parse PromptSchema from task_spec.yaml)"
 
+    p = pop[idx]
+    if p.birth.generation < 0:
+        return "Seed program: no LLM prompt was used."
+
     # Flatten config for build_prompt (evolution + llms + scoring)
     flat_config = {
         **(spec_doc.get("evolution") or {}),
         **(spec_doc.get("llms") or {}),
         **(spec_doc.get("scoring") or {}),
+        "ideas-injection-point": "\n".join(getattr(p.birth, "ideas", []) or []),
     }
-
-    p = pop[idx]
-    if p.birth.generation < 0:
-        return "Seed program: no LLM prompt was used."
 
     # Retrieve parents. Same sort logic as generate._resolve_parents
     parents = [pop[i] for i in p.birth.parent_indices if 0 <= i < len(pop)]

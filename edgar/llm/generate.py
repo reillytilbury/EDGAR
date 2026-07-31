@@ -154,8 +154,9 @@ async def _generate_one_model(
             and the program's model code generation is skipped.
     """
     image_bytes = generate_feedback_image(spec, data, parents, program)
-    cfg = config or {}
-    prompt = prompt_schema.build_prompt(mode, parents, config)
+    cfg = dict(config or {})
+    program.birth.ideas = prompt_schema.select_ideas(cfg, spec.rng)
+    prompt = prompt_schema.build_prompt(mode, parents, cfg)
     result = await call_llm(
         prompt=prompt,
         llm_model=llm,

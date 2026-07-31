@@ -39,6 +39,7 @@ from typing import Optional, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..evolution.program import Program
+    import numpy as np
 
 
 def _fill_program_vars(program: Any, var_names: list[str]) -> dict[str, Any]:
@@ -122,6 +123,10 @@ class PromptSchema(BaseModel):
         default_factory=list,
         description="A list of dotted-path strings for variables to extract from the current `Program` object, e.g code.model",
     )
+    ideas: list[str] = Field(
+        default_factory=list,
+        description="A list of ideas/bits of text to inject into the prompt with probability idea_probability.",
+    )
 
     def build_prompt(
         self,
@@ -161,6 +166,10 @@ class PromptSchema(BaseModel):
         parent_programs = parent_programs or []
         config = config or {}
 
+        config_copy = dict(config)
+        if "ideas-injection-point" not in config_copy:
+            config_copy["ideas-injection-point"] = ""
+
         sections = [
             self.base,
             getattr(self, mode),
@@ -169,7 +178,7 @@ class PromptSchema(BaseModel):
             self.image_analysis_instructions,
         ]
 
-        prompt_parts = [s.format(**config) for s in sections if s]
+        prompt_parts = [s.format(**config_copy) for s in sections if s]
 
         if parent_programs:
             programs_text = [
@@ -188,3 +197,26 @@ class PromptSchema(BaseModel):
             prompt_parts.append(current_text)
 
         return "\n\n".join(prompt_parts).strip()
+
+    def select_ideas(
+        self,
+        cfg: dict[str, Any],
+        rng: np.random.Generator,
+    ) -> list[str]:
+        """Selects ideas from the ideas pool with independent probability, returning a list of them and mutates cfg in-place with the 'random-text-injection' key.
+
+        Args:
+            cfg: The configuration dictionary to be mutated in-place.
+            rng: The random number generator to use.
+        Returns:
+            A list of selected ideas, which may be empty if no ideas are selected.
+        """
+        idea_probability = cfg.get("idea_probability", 0.0)
+        selected_ideas = []
+        if self.ideas and idea_probability > 0.0:
+            for idea in self.ideas:
+                if rng.random() < idea_probability:
+                    selected_ideas.append(idea)
+
+        cfg["ideas-injection-point"] = "\n".join(selected_ideas)
+        return selected_ideas

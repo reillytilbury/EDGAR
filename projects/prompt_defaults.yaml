@@ -4,6 +4,8 @@
 # Two kinds of template variables:
 #   - config_vars: come from config/spec, passed explicitly (e.g. k, max_lines, swear_words)
 #   - parent_program_vars: dotted paths into Program fields (e.g. "name", "code.model", "program_losses.discover.final")
+# We also support the random injection of ideas into the prompt, where the placeholder {ideas-injection-point} is used. 
+#   The list of ideas specified under model.ideas will be injected with independent probability llms.idea_probability (see config_default.yaml) here.
 
 model:
   base: 'You are an AI scientist. Below are {num_parents} models describing a phenomenon, sorted from worst to best.

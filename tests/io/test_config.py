@@ -16,6 +16,7 @@ def _llms_kwargs(**overrides):
         max_lines=50,
         swear_words=[],
         max_tokens=10000,
+        idea_probability=0.0,
     )
     kwargs.update(overrides)
     return kwargs
@@ -66,6 +67,7 @@ def test_load_perfect_config():
     assert config.evolution.topology == [1, 2, 3, 4, 5, 6, 7, 0]
     assert config.llms.default_provider == "google"
     assert config.llms.num_parents == 2
+    assert config.llms.idea_probability == 0.0
     assert config.llms.retry.max_retries == 3
     assert config.llms.retry.initial_delay == 1.0
     assert config.llms.retry.backoff_multiplier == 2.0
@@ -99,6 +101,7 @@ def test_load_perfect_config():
         config.prompts.model.parent_program_template
         == "default_program_detail_template1"
     )
+    assert config.prompts.model.ideas == ["Idea 1", "Idea 2"]
     assert config.prompts.parameter_estimator.base == "default_param_est_base1"
     assert config.prompts.parameter_estimator.explore is None
     assert config.prompts.parameter_estimator.exploit is None
