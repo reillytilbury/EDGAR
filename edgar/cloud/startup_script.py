@@ -48,7 +48,23 @@ delete_vm() {
   set +e
   [ -n "$SYNC_PID" ] && kill "$SYNC_PID" 2>/dev/null
   [ -d "$SAVE_ROOT" ] && gsutil -m rsync -r "$SAVE_ROOT" "$RESULTS_URI"
-  gsutil cp /var/log/edgar-startup.log "${RESULTS_URI}/startup.log"
+
+  # Dynamically find the YYYY-MM-DD/HH-MM-SS subdirectory inside SAVE_ROOT
+  local ts_dir=""
+  if [ -d "$SAVE_ROOT" ]; then
+    for d in "$SAVE_ROOT"/*/*; do
+      if [ -d "$d" ] && [[ "$(basename "$(dirname "$d")")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [[ "$(basename "$d")" =~ ^[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]]; then
+        ts_dir="$(basename "$(dirname "$d")")/$(basename "$d")"
+        break
+      fi
+    done
+  fi
+
+  #copy startup.log to the timestamped subdirectory
+  if [ -n "$ts_dir" ]; then
+    gsutil cp /var/log/edgar-startup.log "${RESULTS_URI}/${ts_dir}/startup.log"
+  fi
+
   local status="FAILED"
   [ "$RUN_RC" = "0" ] && status="SUCCESS"
   [ "$RUN_RC" = "124" ] && status="TIMEOUT"
@@ -63,15 +79,6 @@ delete_vm() {
       [ "$status" = "SUCCESS" ] && icon="✅"
       [ "$status" = "FAILED" ] && icon="❌"
       [ "$status" = "TIMEOUT" ] && icon="⚠️"
-
-      # Dynamically find the YYYY-MM-DD/HH-MM-SS subdirectory inside SAVE_ROOT
-      local ts_dir=""
-      for d in "$SAVE_ROOT"/*/*; do
-        if [ -d "$d" ] && [[ "$(basename "$(dirname "$d")")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [[ "$(basename "$d")" =~ ^[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]]; then
-          ts_dir="$(basename "$(dirname "$d")")/$(basename "$d")"
-          break
-        fi
-      done
 
       local results_gcs_path="$RESULTS_URI"
       if [ -n "$ts_dir" ]; then
