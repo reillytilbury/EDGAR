@@ -123,6 +123,10 @@ class PromptSchema(BaseModel):
         default_factory=list,
         description="A list of dotted-path strings for variables to extract from the current `Program` object, e.g code.model",
     )
+    ideas_template: str = Field(
+        default="Some ideas you may want to incorporate into your model:\n {ideas-injection-point}",
+        description="Template for injecting ideas into the prompt.",
+    )
     ideas: list[str] = Field(
         default_factory=list,
         description="A list of ideas/bits of text to inject into the prompt with probability idea_probability.",
@@ -167,7 +171,7 @@ class PromptSchema(BaseModel):
         config = config or {}
 
         config_copy = dict(config)
-        if "ideas-injection-point" not in config_copy:
+        if "ideas-injection-point" not in config_copy:  # guard in case not present
             config_copy["ideas-injection-point"] = ""
 
         sections = [
@@ -178,7 +182,15 @@ class PromptSchema(BaseModel):
             self.image_analysis_instructions,
         ]
 
-        prompt_parts = [s.format(**config_copy) for s in sections if s]
+        # Add the ideas template if ideas-injection-point has content (i.e some ideas were randomly selected)
+        if config_copy.get("ideas-injection-point"):
+            sections.insert(
+                1, self.ideas_template
+            )  # place this after base prompt and before explore/exploit instructions
+
+        prompt_parts = [
+            s.format(**config_copy) for s in sections if s
+        ]  # format all the parts of the prompt
 
         if parent_programs:
             programs_text = [
