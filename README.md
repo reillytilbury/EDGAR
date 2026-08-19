@@ -22,6 +22,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ## Quickstart
 
 ### 1. Install
+First clone the repository and checkout the `main` branch
+```bash
+git clone https://github.com/reillytilbury/EDGAR.git
+git checkout main
+``` 
+
+To run the code, it is easiest to setup an environment which can be done in the following ways:
 #### uv (recommended)
 Run the command
 ```bash
@@ -47,6 +54,8 @@ To verify your environment is setup correctly run the script
 bash scripts/check_env.sh
 ```
 ### 2. Set API key
+
+If need to setup a Google AI API key you can do so [here](https://aistudio.google.com/).
 
 Add your Google (Gemini) API key to `.env` in the project root:
 
@@ -117,6 +126,15 @@ A run which failed can be resume via, for example:
 edgar resume program_databases/my_task/yyyy-mm-dd/hh-mm-ss
 ```
 ---
+
+## Important directories
+```text
+- edgar/ #the code used to perform an edgar run
+- projects/ #where the user should specify the configuration for their project
+  # see "Setting up a new project"
+- edgar-experimental/ #experimental features (for inspecting output of edgar runs)
+- scripts/ #some useful scripts for debugging your project configuration
+```
 
 ## Run Output
 
