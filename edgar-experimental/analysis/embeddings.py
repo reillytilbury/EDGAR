@@ -6,7 +6,7 @@ Pairwise Distance, Centroid Dispersion, Participation Ratio, HDBSCAN Cluster Ent
 to analyze similarity and paradigms among evolved programs.
 
 Example:
-    >>> from edgar_analysis.embeddings import embed_programs, analyze_model_diversity
+    >>> from edgar-experimental.analysis.embeddings import embed_programs, analyze_model_diversity
     >>> embeddings_dict = embed_programs(population)
     >>> metrics = analyze_model_diversity(embeddings_dict, program_names)
 """

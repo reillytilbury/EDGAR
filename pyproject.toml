@@ -39,7 +39,7 @@ edgar = "edgar.cli:run_cli"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["edgar*", "edgar_analysis*"]
+include = ["edgar*", "edgar-experimental*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

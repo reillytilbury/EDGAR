@@ -43,8 +43,10 @@ color: "blue"
 
 def sync():
     # Resolve paths relative to repository root
-    repo_root = Path(__file__).resolve().parents[2]
-    instructions_path = repo_root / "agents/output/edgar_analyzer_instructions.md"
+    repo_root = Path(__file__).resolve().parents[3]
+    instructions_path = (
+        repo_root / "edgar-experimental/agents/output/edgar_analyzer_instructions.md"
+    )
     gemini_path = repo_root / ".gemini/agents/edgar-analyzer.md"
     claude_path = repo_root / ".claude/agents/edgar-analyzer.md"
 
