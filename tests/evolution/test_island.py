@@ -711,3 +711,27 @@ def test_status_after_deduplicate_outer():
     assert pop[1].status == "alive"
     assert pop[2].status == "deduplicated (0)"
     assert pop[3].status == "alive"
+
+
+def test_deduplicate_outer_identical_indices_preserves_alive_status():
+    """Verify that when the same program index exists on multiple islands (e.g. migration),
+    it is removed from the higher-indexed island but retains its 'alive' status."""
+    pop = make_fingerprint_population(
+        [
+            (_E0, 1.000),  # 0 — present on both islands
+            (_E1, 2.000),  # 1 — unique on island i
+            (_E2, 3.000),  # 2 — unique on island j
+        ]
+    )
+    islands = [{0, 1}, {0, 2}]
+
+    deduplicate_outer(islands, pop, min_island_size=2)
+
+    # Kept on lower-indexed island 0, removed from island 1
+    assert islands[0] == {0, 1}
+    assert islands[1] == {2}
+
+    # Status should remain 'alive' because it is still alive on island 0
+    assert pop[0].status == "alive"
+    assert pop[1].status == "alive"
+    assert pop[2].status == "alive"

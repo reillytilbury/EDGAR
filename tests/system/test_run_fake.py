@@ -97,7 +97,7 @@ def test_seed_losses(fake_run):
     # Seed 1 losses
     assert round(seed_programs[0]["program_losses"]["discover"]["init"], 4) == 1.0176
     assert round(seed_programs[0]["program_losses"]["discover"]["final"], 4) == 1.0176
-    assert round(seed_programs[0]["program_losses"]["validate"]["final"], 4) == 8.7638
+    assert seed_programs[0]["program_losses"]["validate"]["final"] == "NOTVALIDATED"
 
     # Seed 2 losses
     assert round(seed_programs[1]["program_losses"]["discover"]["init"], 4) == 0.7270
@@ -141,6 +141,42 @@ def test_winning_losses(fake_run):
     assert round(winning_program["program_losses"]["validate"]["final"], 4) == 0.1327, (
         f"Expected winning program validate_loss of 0.1327, found {winning_program['program_losses']['validate']['final']}"
     )
+
+
+def test_validated_programs_ranks_and_scores(fake_run):
+    """Verify that all validated programs match the expected models, ranks, and validation losses."""
+    programs = load_programs(fake_run)
+    ranked = sorted(
+        [p for p in programs if p["rank"] is not None], key=lambda x: x["rank"]
+    )
+
+    assert len(ranked) == 4, (
+        f"Expected exactly 4 validated programs, found {len(ranked)}"
+    )
+
+    # Rank 1
+    assert ranked[0]["rank"] == 1
+    assert ranked[0]["idx"] == 4
+    assert ranked[0]["name"] == "Fake Model 2"
+    assert round(ranked[0]["program_losses"]["validate"]["final"], 4) == 0.1327
+
+    # Rank 2
+    assert ranked[1]["rank"] == 2
+    assert ranked[1]["idx"] == 7
+    assert ranked[1]["name"] == "Fake Model 2"
+    assert round(ranked[1]["program_losses"]["validate"]["final"], 4) == 0.2458
+
+    # Rank 3
+    assert ranked[2]["rank"] == 3
+    assert ranked[2]["idx"] == 13
+    assert ranked[2]["name"] == "Fake Model 2"
+    assert round(ranked[2]["program_losses"]["validate"]["final"], 4) == 1.0277
+
+    # Rank 4
+    assert ranked[3]["rank"] == 4
+    assert ranked[3]["idx"] == 5
+    assert ranked[3]["name"] == "Fake Model 0"
+    assert round(ranked[3]["program_losses"]["validate"]["final"], 4) == 7.3452
 
 
 def test_saves_on_error(tmp_path):

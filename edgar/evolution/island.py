@@ -463,6 +463,12 @@ def deduplicate_outer(
                     continue
                 p_i = population[idx_i]
 
+                if idx_i == idx_j:
+                    # Same program index on both islands (due to migration).
+                    # Keep it only on the lower-indexed island (island_i) and do not mark as deduplicated.
+                    islands[j_idx].remove(idx_j)
+                    break
+
                 if not _are_duplicates(p_i, p_j, loss_tol, cosine_tol):
                     continue
 
