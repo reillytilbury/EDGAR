@@ -25,6 +25,7 @@ from edgar.llm.llm_calling import call_llm  # noqa: E402
 
 PROVIDER_PAIRS = [
     ("gemini-2.5-flash-lite", "GOOGLE_API_KEY"),
+    ("gemini-3.7-flash", "GOOGLE_API_KEY"),
     ("claude-haiku-4-5", "ANTHROPIC_API_KEY"),
     ("claude-opus-4-7", "ANTHROPIC_API_KEY"),
 ]
@@ -40,7 +41,7 @@ async def main() -> int:
                 prompt="Reply with exactly the token 12345 and something else.",
                 llm_model=model_name,
                 output_type=str,
-                max_tokens=20,
+                max_tokens=500,
             )
         except Exception as e:
             print(f"[err ] {model_name}: {type(e).__name__}: {e}")
