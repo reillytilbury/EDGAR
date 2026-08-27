@@ -351,13 +351,13 @@ def _score_one_model(
     jnp.ndarray | None,
     dict | None,
     jnp.ndarray | None,
+    str,
 ]:
     """Scores a single program in a dedicated subprocess, enforcing a timeout.
 
-    This function delegates to `_score_one_with_outcome` to execute the
-    scoring in a separate process, allowing for robust timeout handling.
-    If the worker process does not return a result within `config["timeout_s"]`,
-    it is killed, and the program is assigned an infinite loss.
+    This function executes the scoring in a separate process, allowing for robust
+    timeout handling. If the worker process does not return a result within
+    `config["timeout_s"]`, it is killed, and the program is assigned an infinite loss.
 
     Args:
         program: The `Program` object to be scored.
@@ -370,34 +370,12 @@ def _score_one_model(
         split: The scoring split (e.g., "discover" or "validate").
 
     Returns:
-        A 7-tuple: `(final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init)`.
-        If a timeout occurs or `program.n_params` is `None`, infinite losses and `None`
-        for other results are returned.
-    """
-    result = _score_one_with_outcome(program, data, loss_fn, config, X_eval, split)
-    return result[:7]
-
-
-def _score_one_with_outcome(
-    program: Program,
-    data: tuple,
-    loss_fn,
-    config: dict,
-    X_eval=None,
-    split: str = "discover",
-) -> tuple[
-    float,
-    float,
-    jnp.ndarray,
-    dict | None,
-    jnp.ndarray | None,
-    dict | None,
-    jnp.ndarray | None,
-    str,
-]:
-    """Same as ``_score_one_model`` but also returns an outcome label:
-    ``"ok"`` (finite loss), ``"timeout"`` (subprocess killed), ``"inf"``
-    (worker raised or program has no params), or ``"banned"`` (contained banned strings).
+        A 8-tuple: `(final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init, outcome)`.
+        The `outcome` label is one of:
+        - `"ok"` (finite loss)
+        - `"timeout"` (subprocess killed)
+        - `"inf"` (worker raised or program has no params)
+        - `"banned"` (contained banned strings)
     """
     if program.n_params is None:
         warnings.warn(
@@ -540,7 +518,7 @@ def score(
             params_init,
             sample_losses_init,
             outcome,
-        ) = _score_one_with_outcome(program, X_split, loss_fn, config, X_eval, split)
+        ) = _score_one_model(program, X_split, loss_fn, config, X_eval, split)
         latency_ms = (time.monotonic() - t0) * 1000.0
         latencies_ms.append(latency_ms)
         counters[outcome] += 1
