@@ -270,5 +270,29 @@ class ProgramArrayParamsFallback:
     )
 
 
+class BannedProgram:
+    model = (
+        "import numpy as np\n\n"
+        "def model(data, params):\n"
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        "\t# THIS_IS_BANNED\n"
+        "\treturn a * x"
+    )
+    default_params = {"a": 1.0}
+    latex_equation = r"y = ax"
+
+    model_jax = (
+        "import jax.numpy as jnp\n\n"
+        "def model(data, params):\n"
+        '\tx = data["x"]\n'
+        '\ta = params["a"]\n'
+        "\t# THIS_IS_BANNED\n"
+        "\treturn a * x"
+    )
+
+    param_est = 'def parameter_estimator(data):\n\treturn {"a": float(1)}\n'
+
+
 DEFAULT_FAKE_PROGRAMS = [Program1, InvalidProgram, ProgramSolution]
 PARAMETER_ARRAY_FAKE_PROGRAMS = [ProgramArrayParams, ProgramArrayParamsFallback]

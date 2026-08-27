@@ -170,6 +170,7 @@ def _summarise_metrics(rows: list[dict]) -> dict:
         "n_ok": 0,
         "n_timeout": 0,
         "n_inf": 0,
+        "n_banned": 0,
         "by_role": {},
     }
     for r in rows:
@@ -200,6 +201,7 @@ def _summarise_metrics(rows: list[dict]) -> dict:
         totals["n_ok"] += sc.get("ok", 0) or 0
         totals["n_timeout"] += sc.get("timeout", 0) or 0
         totals["n_inf"] += sc.get("inf", 0) or 0
+        totals["n_banned"] += sc.get("banned", 0) or 0
         mean = (sc.get("latency_ms") or {}).get("mean") or 0
         totals["score_seconds"] += (mean * (sc.get("n", 0) or 0)) / 1000.0
     return totals

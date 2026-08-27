@@ -32,6 +32,7 @@ llms:
 scoring:
   param_penalty_weight: 0.01
   timeout_s: 120.0
+  banned_strings: ['config']
 
   gradient_descent:
     max_iter: 1000

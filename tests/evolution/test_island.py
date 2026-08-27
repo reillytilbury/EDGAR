@@ -658,6 +658,29 @@ def test_status_after_prune():
     assert population[5].status == "alive"
 
 
+def test_status_after_prune_preserves_special_statuses():
+    losses = (0.5, 100.0, 10, None, 0.6, 7)
+    population = make_empty_population(num_programs=len(losses))
+    for program, loss in zip(population, losses):
+        program.program_losses.discover.final = loss
+
+    # Set program 1 to be banned beforehand
+    population[1].status = "banned"
+
+    islands = [{0, 1, 2}, {3, 4, 5}]
+
+    # Run prune
+    prune(
+        islands, population, evolution={"critical_population_size": 3, "n_migrants": 1}
+    )
+
+    # Program 1 should remain "banned" after being pruned
+    assert population[0].status == "alive"
+    assert population[1].status == "banned"
+    assert population[2].status == "alive"
+    assert population[3].status == "pruned"
+
+
 def test_status_after_deduplicate_inner():
     pop = make_fingerprint_population(
         [

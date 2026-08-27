@@ -58,6 +58,7 @@ def test_fromconfig():
     assert taskspec.scoring == {
         "param_penalty_weight": 0.01,
         "timeout_s": 120.0,
+        "banned_strings": [],
         "gradient_descent": {"max_iter": 100, "learning_rate": 0.01},
     }
 

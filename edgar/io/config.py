@@ -305,12 +305,15 @@ class ScoringConfig(_LaxModel):
             added to the loss function. Higher values penalize more complex models.
         timeout_s: The maximum time in seconds allowed for scoring a single program.
             If exceeded, the program is considered to have infinite loss.
+        banned_strings: A list of substrings that must not appear in the JAX-translated model.
+            If any appear, the model is banned and assigned infinite loss.
         gradient_descent: Configuration for the gradient descent optimization
             performed during scoring.
     """
 
     param_penalty_weight: float
     timeout_s: float
+    banned_strings: list[str]
     gradient_descent: GradientDescentConfig
 
 

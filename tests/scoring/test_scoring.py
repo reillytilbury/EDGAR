@@ -13,7 +13,14 @@ if str(ROOT) not in sys.path:
 
 from edgar.evolution.program import Program, BirthCertificate, Code, NotValidated
 from edgar.evolution.population import Population
-from edgar.scoring.scoring import _eval_loss, _optimize, _score_one_model, rank, score
+from edgar.scoring.scoring import (
+    _eval_loss,
+    _optimize,
+    _score_one_model,
+    _score_one_with_outcome,
+    rank,
+    score,
+)
 
 
 # --- shared fixtures ---
@@ -57,6 +64,7 @@ BASE_CONFIG = {
     "timeout_s": 10.0,
     "param_penalty_weight": 0.0,
     "gradient_descent": {"max_iter": 20, "learning_rate": 0.01},
+    "banned_strings": [],
 }
 
 BASE_CONFIG_WITH_PARAM_PENALTY = {
@@ -388,3 +396,80 @@ def test_score_one_model_with_separate_train_test_loss_fns():
     # loss_fn_test evaluates (2.0 * x - 5.0 * x) ** 2, which has a mean of (2.0 - 5.0) ** 2 = 9.0
     expected_final_loss = (w_opt - 5.0) ** 2
     assert jnp.allclose(final_loss, expected_final_loss, atol=1e-2)
+
+
+def test_score_one_model_banned_string():
+    program = _make_program(FAST_MODEL_CODE)
+    data = (_make_data(), _make_data())
+    # Configure w to be a banned string in scoring configuration dict
+    custom_config = {
+        "banned_strings": ["params['w']"],
+        "timeout_s": 10.0,
+        "param_penalty_weight": 0.0,
+    }
+    final_loss, initial_loss, _, _, _, _, _, outcome = _score_one_with_outcome(
+        program, data, loss_fn, custom_config
+    )
+    assert final_loss == float("inf")
+    assert initial_loss == float("inf")
+    assert outcome == "banned"
+    assert program.status == "banned"
+
+
+def test_score_and_prune_banned_program():
+    from edgar.evolution.island import prune
+    from tests.llm.programs import BannedProgram
+
+    # Setup population with Program1 and BannedProgram
+    pop = Population()
+
+    # Program 1 (Normal)
+    p1 = Program(
+        birth=BirthCertificate(generation=0, island=0, batch_index=0),
+        _default_params=Program1.default_params,
+        code=Code(
+            model=Program1.model,
+            model_jax=Program1.model_jax,
+            param_est=Program1.param_est,
+        ),
+    )
+    pop.add(p1)
+
+    # Program 2 (Banned)
+    p2 = Program(
+        birth=BirthCertificate(generation=0, island=0, batch_index=1),
+        _default_params=BannedProgram.default_params,
+        code=Code(
+            model=BannedProgram.model,
+            model_jax=BannedProgram.model_jax,
+            param_est=BannedProgram.param_est,
+        ),
+    )
+    pop.add(p2)
+
+    # Set up island containing both programs
+    islands = [{0, 1}]
+
+    # Score the population with config banning "THIS_IS_BANNED"
+    data = (_make_data(), _make_data())
+    custom_config = {**BASE_CONFIG, "banned_strings": ["THIS_IS_BANNED"]}
+
+    score(pop, data, None, custom_config, loss_fn, split="discover")
+
+    # Verify that the normal program got a finite loss and the banned got infinite loss
+    assert pop[0].program_losses.discover.final < 1e-4
+    assert pop[1].program_losses.discover.final == float("inf")
+    assert pop[1].status == "banned"
+
+    # Prune island down to size 1
+    evolution_cfg = {
+        "critical_population_size": 2,
+        "n_migrants": 1,
+    }
+
+    prune(islands, pop, evolution_cfg)
+
+    # The normal program (idx 0) should remain on the island, and the banned one (idx 1) pruned from island
+    assert islands[0] == {0}
+    # Banned program status must NOT be overwritten to "pruned"
+    assert pop[1].status == "banned"

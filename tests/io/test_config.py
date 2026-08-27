@@ -88,6 +88,7 @@ def test_load_perfect_config():
     ]
     assert config.scoring.param_penalty_weight == 0.01
     assert config.scoring.timeout_s == 120.0
+    assert config.scoring.banned_strings == ["config"]
     assert config.scoring.gradient_descent.max_iter == 1000
     assert config.scoring.gradient_descent.learning_rate == 0.01
     # All prompt fields should be from perfect/prompts.yaml

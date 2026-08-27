@@ -163,7 +163,8 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
 
     all_after = set().union(*islands)
     for idx in all_before - all_after:
-        population[idx].status = "pruned"
+        if population[idx].status == "alive":
+            population[idx].status = "pruned"
 
 
 def uniform_sample(

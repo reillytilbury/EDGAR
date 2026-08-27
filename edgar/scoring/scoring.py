@@ -315,6 +315,24 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
     )
 
 
+def _is_banned(banned_strings: list[str], program: Program) -> bool:
+    """
+    Checks if the program's JAX model code contains any banned strings.
+    Args:
+        banned_strings: A list of strings that are not allowed in the program's JAX model code.
+        program: The Program to check, it's status is set to "banned if a banned string is found.
+    Returns:
+        True if the banned string is found, otherwise False.
+    """
+    if program.code.model_jax is not None:
+        for banned_string in banned_strings:
+            if banned_string in program.code.model_jax:
+                program.status = "banned"
+                return True
+
+    return False
+
+
 # ── per-program ──
 
 
@@ -379,7 +397,7 @@ def _score_one_with_outcome(
 ]:
     """Same as ``_score_one_model`` but also returns an outcome label:
     ``"ok"`` (finite loss), ``"timeout"`` (subprocess killed), ``"inf"``
-    (worker raised or program has no params).
+    (worker raised or program has no params), or ``"banned"`` (contained banned strings).
     """
     if program.n_params is None:
         warnings.warn(
@@ -387,8 +405,11 @@ def _score_one_with_outcome(
             "verify that its default_params were set prior to scoring"
         )
         return (float("inf"), float("inf"), None, None, None, None, None, "inf")
+    if _is_banned(config.get("banned_strings", []), program):
+        return (float("inf"), float("inf"), None, None, None, None, None, "banned")
 
     ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
+
     queue = ctx.Queue()
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
     program_bytes = cloudpickle.dumps(program)
@@ -505,7 +526,7 @@ def score(
     queue = _needs_scoring(population, split)
     n_total = len(queue)
     metrics = get_active_metrics()
-    counters = {"ok": 0, "timeout": 0, "inf": 0}
+    counters = {"ok": 0, "timeout": 0, "inf": 0, "banned": 0}
     latencies_ms: list[float] = []
 
     for k, program in enumerate(queue, start=1):
@@ -550,7 +571,8 @@ def score(
                 metrics,
                 f"  [score {split}] {k}/{n_total}  "
                 f"(avg {avg_s:.1f}s, {counters['ok']} ok, "
-                f"{counters['timeout']} timeout, {counters['inf']} inf)",
+                f"{counters['timeout']} timeout, {counters['inf']} inf, "
+                f"{counters['banned']} banned)",
             )
 
 

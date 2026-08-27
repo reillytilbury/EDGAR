@@ -52,9 +52,10 @@ def test_stage_timer_writes_jsonl_row_with_stage_times(tmp_path: Path):
                     retries=0,
                     ok=True,
                 )
-        with stage_timer(m, "score", n_items=2):
+        with stage_timer(m, "score", n_items=3):
             m.record_score_result(0, ms=8000.0, outcome="ok")
             m.record_score_result(1, ms=15000.0, outcome="timeout")
+            m.record_score_result(2, ms=10.0, outcome="banned")
         row = m.finish_generation()
     log.file.close()
 
@@ -65,9 +66,10 @@ def test_stage_timer_writes_jsonl_row_with_stage_times(tmp_path: Path):
     assert row["llm_calls"]["model"]["ok"] == 4
     assert row["llm_calls"]["model"]["in_tokens_total"] == 800
     assert row["llm_calls"]["model"]["out_tokens_total"] == 200
-    assert row["scoring"]["n"] == 2
+    assert row["scoring"]["n"] == 3
     assert row["scoring"]["ok"] == 1
     assert row["scoring"]["timeout"] == 1
+    assert row["scoring"]["banned"] == 1
     assert row["scoring"]["latency_ms"]["max"] == 15000.0
 
     # Disk: metrics.jsonl is written atomically and round-trips.
@@ -198,6 +200,7 @@ def test_dashboard_state_surfaces_metrics_and_totals(tmp_path: Path):
                 "ok": 3,
                 "timeout": 1,
                 "inf": 0,
+                "banned": 0,
                 "latency_ms": {"p50": 8000, "p90": 12000, "max": 15000, "mean": 9000},
             },
         },
@@ -220,6 +223,7 @@ def test_dashboard_state_surfaces_metrics_and_totals(tmp_path: Path):
                 "ok": 4,
                 "timeout": 0,
                 "inf": 0,
+                "banned": 1,
                 "latency_ms": {"p50": 7500, "p90": 11000, "max": 14000, "mean": 8500},
             },
         },
@@ -258,6 +262,7 @@ def test_dashboard_state_surfaces_metrics_and_totals(tmp_path: Path):
         assert totals["n_ok"] == 7
         assert totals["n_timeout"] == 1
         assert totals["n_inf"] == 0
+        assert totals["n_banned"] == 1
         # LLM and scoring seconds are derived from mean × n
         assert totals["llm_seconds"] == pytest.approx((1100 * 4 + 1300 * 4) / 1000)
         assert totals["score_seconds"] == pytest.approx((9000 * 4 + 8500 * 4) / 1000)
@@ -287,6 +292,7 @@ def test_dashboard_summary_also_exposes_totals(tmp_path: Path):
                 "ok": 0,
                 "timeout": 0,
                 "inf": 0,
+                "banned": 0,
                 "latency_ms": {"p50": None, "p90": None, "max": None, "mean": None},
             },
         }

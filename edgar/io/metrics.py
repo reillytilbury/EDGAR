@@ -82,7 +82,7 @@ class _LLMCall:
 class _ScoreResult:
     idx: int
     ms: float
-    outcome: Literal["ok", "timeout", "inf"]
+    outcome: Literal["ok", "timeout", "inf", "banned"]
 
 
 # ── accumulator ──
@@ -261,6 +261,7 @@ class RunMetrics:
             "ok": sum(1 for r in self._score_results if r.outcome == "ok"),
             "timeout": sum(1 for r in self._score_results if r.outcome == "timeout"),
             "inf": sum(1 for r in self._score_results if r.outcome == "inf"),
+            "banned": sum(1 for r in self._score_results if r.outcome == "banned"),
             "latency_ms": _percentiles([r.ms for r in self._score_results]),
         }
 
