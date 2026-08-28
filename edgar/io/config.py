@@ -183,6 +183,7 @@ class EvolutionConfig(_LaxModel):
     n_migrants: int
     topology: list[int]
     exploit_point: float
+    n_param_ests: int
 
     @model_validator(mode="after")
     def check_args(self) -> EvolutionConfig:
@@ -192,10 +193,11 @@ class EvolutionConfig(_LaxModel):
         that it contains exactly the indices from 0 to `n_islands - 1` (i.e., it's a
         permutation of island indices).
         Checks that `exploit_point` is between 0 and 1.
+        Checks that `n_param_ests` is at least 1.
 
         Raises:
             ValueError: If the `topology` length does not match `n_islands` or
-                if it does not contain valid island indices.
+                if it does not contain valid island indices, or if n_param_ests < 1.
 
         Returns:
             The validated EvolutionConfig instance.
@@ -212,6 +214,8 @@ class EvolutionConfig(_LaxModel):
             raise ValueError(
                 f"exploit_point ({self.exploit_point}) must be between 0 and 1"
             )
+        if self.n_param_ests < 1:
+            raise ValueError(f"n_param_ests ({self.n_param_ests}) must be >= 1")
         return self
 
 

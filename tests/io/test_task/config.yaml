@@ -10,6 +10,8 @@ evolution:
   critical_population_size: 3
   n_migrants: 1
   topology: [1, 0]
+  exploit_point: 0.5
+  n_param_ests: 1
 
 llms:
   num_parents: 2

@@ -106,5 +106,8 @@ async def generate_one_fake_param_est():
     )
     llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     llm_model = llm.gen_param_est()  # A TestModel with param_est for Program1
-    await _generate_one_param_est(program, [], prompt_schema, llm_model)
+    param_est = await _generate_one_param_est(
+        program, [], prompt_schema, llm_model, config={"n_param_ests": 1}
+    )
+    program.code.param_est = param_est
     return program

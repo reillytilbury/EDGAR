@@ -248,7 +248,11 @@ def log_generation(
         return f"{100 * k / n:.0f}%" if n else "n/a"
 
     n_model = sum(1 for p in born if p.code.model is not None)
-    n_param_est = sum(1 for p in born if p.code.param_est is not None)
+    n_param_ests = spec.flat_config.get("n_param_ests", 1)
+    total_param_ests_expected = n * n_param_ests
+    total_param_ests_generated = sum(
+        len(p.code.param_est) for p in born if isinstance(p.code.param_est, list)
+    )
     n_jax = sum(1 for p in born if p.code.model_jax is not None)
     n_scored = sum(
         1 for p in born if p.program_losses.discover.final not in (None, float("inf"))
@@ -263,9 +267,12 @@ def log_generation(
     this_gen_time = elapsed - log.previous_gen_time
     log.previous_gen_time = elapsed
 
+    def pct_gen(k, expected):
+        return f"{100 * k / expected:.0f}%" if expected else "n/a"
+
     f.write(f"└── Gen {gen:3d} summary  ({this_gen_time:.1f}s, total {elapsed:.1f}s)\n")
     f.write(
-        f"    Spawn   {n}  |  model={pct(n_model)}  param_est={pct(n_param_est)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n"
+        f"    Spawn   {n}  |  model={pct(n_model)}  param_est={pct_gen(total_param_ests_generated, total_param_ests_expected)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n"
     )
     f.write(f"    Global best discover loss: {global_best}\n")
 
@@ -322,7 +329,7 @@ def log_generation(
     for p in born:
         f.write(f"  --- Program #{p.idx} (island={p.birth.island}) ---\n")
         f.write(f"  [model]\n{p.code.model or '(none)'}\n")
-        f.write(f"  [param_est]\n{p.code.param_est or '(none)'}\n")
+        f.write(f"  [param_est]\n{p.param_est_code or '(none)'}\n")
         f.write(f"  [model_jax]\n{p.code.model_jax or '(none)'}\n\n")
 
     if log.level != "prompts":
