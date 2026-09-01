@@ -1,5 +1,5 @@
 import pytest
-from edgar.evolution.program import BirthCertificate, Code, LossPair, Losses, Program
+from edgar.evolution.program import BirthCertificate, Code, LossStats, Losses, Program
 import numpy as np
 from edgar.llm.generate import (
     _generate_one_model,
@@ -443,13 +443,13 @@ async def test_generate_one_model_with_real_llm():
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
         code=Code(model=Program1.model),
         name="Program1",
-        program_losses=Losses(discover=LossPair(final=0.5)),
+        program_losses=Losses(discover=LossStats(final=0.5)),
     )
     program2 = Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=1),
         code=Code(model=Program2.model),
         name="Program2",
-        program_losses=Losses(discover=LossPair(final=0.1)),
+        program_losses=Losses(discover=LossStats(final=0.1)),
     )
     parents = [program1, program2]
     await _generate_one_model(
@@ -481,7 +481,7 @@ async def test_generate_one_param_est_with_real_llm():
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
         code=Code(model=Program1.model),
         name="Program1",
-        program_losses=Losses(discover=LossPair(final=0.5)),
+        program_losses=Losses(discover=LossStats(final=0.5)),
     )
     model_code = program.code.model
     prompt_schema = PromptSchema(

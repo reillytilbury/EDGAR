@@ -78,7 +78,7 @@ class Optimizer:
         self,
         carry: tuple[jax.Array, optax.OptState, jax.Array, jax.Array],
         step_idx: jax.Array,
-    ) -> tuple[tuple[jax.Array, optax.OptState, jax.Array, jax.Array], None]:
+    ) -> tuple[tuple[jax.Array, optax.OptState, jax.Array, jax.Array], jax.Array]:
         """Standard step function invoked by jax.lax.scan at each optimization step.
 
         Args:
@@ -90,7 +90,7 @@ class Optimizer:
             step_idx: The step index (unused, but required by jax.lax.scan).
 
         Returns:
-            A tuple containing the next state tuple, and None (no step outputs).
+            A tuple containing the next state tuple, and current step loss values.
         """
         flat_all, opt_state, best_losses, best_flats = carry
 
@@ -106,12 +106,12 @@ class Optimizer:
         best_losses_next = jnp.where(is_better, loss_vals, best_losses)
         best_flats_next = jnp.where(is_better[:, None], flat_all, best_flats)
 
-        return (new_flats, next_opt_state, best_losses_next, best_flats_next), None
+        return (new_flats, next_opt_state, best_losses_next, best_flats_next), loss_vals
 
     @partial(jax.jit, static_argnums=0)
     def run_optimization(
         self, flat_all: jax.Array, opt_state: optax.OptState
-    ) -> jax.Array:
+    ) -> tuple[jax.Array, jax.Array]:
         """JIT-compiled scan loop executing entirely on-device.
 
         Args:
@@ -119,7 +119,9 @@ class Optimizer:
             opt_state: Initial Optax optimizer state.
 
         Returns:
-            The optimized parameters of shape (n_opts, flat_dim) matching the best steps.
+            A tuple of (optimized_parameters, loss_trajectories) of shapes:
+                - (n_opts, flat_dim) matching the best steps.
+                - (max_iter, n_opts) containing step-by-step losses.
         """
         n_opts = flat_all.shape[0]
         best_losses = jnp.full((n_opts,), jnp.inf)
@@ -128,7 +130,7 @@ class Optimizer:
         init_carry = (flat_all, opt_state, best_losses, best_flats)
         steps = jnp.arange(self.gd_config["max_iter"])
 
-        (final_flat_all, _, final_best_losses, final_best_flats), _ = jax.lax.scan(
-            self._step_fn, init_carry, steps
+        (final_flat_all, _, final_best_losses, final_best_flats), loss_trajectories = (
+            jax.lax.scan(self._step_fn, init_carry, steps)
         )
-        return final_best_flats
+        return final_best_flats, loss_trajectories

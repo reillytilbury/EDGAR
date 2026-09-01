@@ -128,8 +128,13 @@ def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config):
         gd_config: Configuration dictionary for gradient descent.
 
     Returns:
-        A list of optimized parameter pytrees.
+        A tuple of (optimized_parameters, loss_trajectories) of shapes:
+            - (n_opts, flat_dim) matching the best steps.
+            - (max_iter, n_opts) containing step-by-step losses.
     """
+    if isinstance(params_inits, dict):
+        params_inits = [params_inits]
+
     _, unflatten = ravel_pytree(
         params_inits[0]
     )  # flatten the leaves of the first parameter set, the unflatten function reconstructs the pytrees of any of the parameter sets
@@ -141,9 +146,11 @@ def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config):
     opt_state = optimizer.opt.init(flat_all)
 
     # Run the JIT-compiled optimization on-device
-    optimized_flats = optimizer.run_optimization(flat_all, opt_state)
+    optimized_flats, loss_trajectories = optimizer.run_optimization(flat_all, opt_state)
 
-    return [unflatten(f) for f in np.asarray(optimized_flats)]
+    trajectories = np.asarray(loss_trajectories).T.tolist()
+
+    return [unflatten(f) for f in np.asarray(optimized_flats)], trajectories
 
 
 def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
@@ -168,8 +175,8 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         split: A string indicating the current scoring split (e.g., "discover" or "validate").
 
     Returns:
-        None. Results are placed on the `queue` as a 10-tuple:
-        `(final_loss, initial_loss, fingerprint, params, sample_losses, params_init, sample_losses_init, all_final, all_init, best_idx)`.
+        None. Results are placed on the `queue` as a 9-tuple:
+        `(final_loss, initial_loss, fingerprint, params, sample_losses, params_init, sample_losses_init, best_idx, trajectories)`.
         If any critical failure occurs (model loading, optimization), infinite
         losses and `None` for other results are returned.
     """
@@ -187,7 +194,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
     except ModelLoadingError as e:
         print(f"[scoring] program #{program.idx} model failed to load: {e}")
         queue.put(
-            (float("inf"), float("inf"), None, None, None, None, None, None, None, None)
+            (float("inf"), float("inf"), None, None, None, None, None, None, None)
         )
         return
 
@@ -211,7 +218,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         ]
 
         # 3. Optimize parameters for each estimator using gradient descent in parallel
-        params_list = _optimize(
+        params_list, trajectories = _optimize(
             model_fn,
             loss_fn_train,
             params_inits,
@@ -233,15 +240,12 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         params = params_list[best_idx]
         params_init = params_inits[best_idx]
 
-        all_init = initial_losses
-        all_final = final_losses
-
     except Exception as e:
         print(f"[scoring] program #{program.idx} failed during optimize/eval: {e}")
         print(f"[scoring] traceback:\n{traceback.format_exc()}")
         print(f"[scoring] code.model_jax:\n{program.code.model_jax}")
         queue.put(
-            (float("inf"), float("inf"), None, None, None, None, None, None, None, None)
+            (float("inf"), float("inf"), None, None, None, None, None, None, None)
         )
         return
 
@@ -285,9 +289,8 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
             sample_losses,
             params_init,
             sample_losses_init,
-            all_final,
-            all_init,
             best_idx,
+            trajectories,
         )
     )
 
@@ -328,9 +331,8 @@ def _score_one_model(
     jnp.ndarray | None,
     dict | None,
     jnp.ndarray | None,
-    list[float] | None,
-    list[float] | None,
     int | None,
+    list[list[float]] | None,
     str,
 ]:
     """Scores a single program in a dedicated subprocess, enforcing a timeout.
@@ -350,7 +352,7 @@ def _score_one_model(
         split: The scoring split (e.g., "discover" or "validate").
 
     Returns:
-        A 11-tuple: `(final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init, all_final, all_init, best_idx, outcome)`.
+        A 10-tuple: `(final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init, best_idx, trajectories, outcome)`.
         The `outcome` label is one of:
         - `"ok"` (finite loss)
         - `"timeout"` (subprocess killed)
@@ -372,14 +374,12 @@ def _score_one_model(
             None,
             None,
             None,
-            None,
             "inf",
         )
     if _is_banned(config.get("banned_strings", []), program):
         return (
             float("inf"),
             float("inf"),
-            None,
             None,
             None,
             None,
@@ -415,7 +415,6 @@ def _score_one_model(
             None,
             None,
             None,
-            None,
             "timeout",
         )
     proc.join()
@@ -427,9 +426,8 @@ def _score_one_model(
         samples,
         params_init,
         samples_init,
-        all_final,
-        all_init,
         best_idx,
+        trajectories,
     ) = result
     # Worker puts (inf, inf, None, None, None, None, None ,....,) on its own exception
     # path. Treat that as "inf" rather than "timeout" so metrics distinguish them.
@@ -442,9 +440,8 @@ def _score_one_model(
         samples,
         params_init,
         samples_init,
-        all_final,
-        all_init,
         best_idx,
+        trajectories,
         outcome,
     )
 
@@ -547,9 +544,8 @@ def score(
             sample_losses,
             params_init,
             sample_losses_init,
-            all_final,
-            all_init,
             best_idx,
+            trajectories,
             outcome,
         ) = _score_one_model(program, X_split, loss_fn, config, X_eval, split)
         latency_ms = (time.monotonic() - t0) * 1000.0
@@ -559,8 +555,7 @@ def score(
         loss_pair = getattr(program.program_losses, split)
         loss_pair.init = initial_loss
         loss_pair.final = final_loss
-        loss_pair.all_init = all_init
-        loss_pair.all_final = all_final
+        loss_pair.trajectories = trajectories
 
         # Record the best parameter estimator string explicitly
         if best_idx is not None and program.code.param_est:

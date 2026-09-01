@@ -1,5 +1,5 @@
 from edgar.llm.prompt_schema import PromptSchema
-from edgar.evolution.program import Program, BirthCertificate, Code, Losses, LossPair
+from edgar.evolution.program import Program, BirthCertificate, Code, Losses, LossStats
 from tests.llm.programs import Program1, Program2
 
 
@@ -19,7 +19,7 @@ def _make_program(model: str, loss: float | None = None) -> Program:
     p = Program(birth=BirthCertificate(generation=0, island=0, batch_index=0))
     p.code = Code(model=model)
     if loss is not None:
-        p.program_losses = Losses(discover=LossPair(final=loss))
+        p.program_losses = Losses(discover=LossStats(final=loss))
     return p
 
 

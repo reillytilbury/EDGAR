@@ -308,6 +308,28 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
             raise HTTPException(404, f"no fit image at {img_path}")
         return FileResponse(img_path, media_type="image/png")
 
+    @app.get("/api/runs/{run_id}/trajectory_image/{idx}")
+    def trajectory_image(run_id: str, idx: int):
+        """Serves optimization trajectory visualization images for individual programs.
+
+        These images show the loss history of all parallel estimators across steps.
+
+        Args:
+            run_id: The unique identifier for the EDGAR run.
+            idx: The global unique index of the program.
+
+        Returns:
+            A `FileResponse` containing the requested image with `media_type="image/png"`.
+
+        Raises:
+            HTTPException: If the `run_id` or the specified trajectory image path does not exist.
+        """
+        run_dir = _resolve(run_id)
+        img_path = run_dir / "image_trajectories" / f"P{idx:04d}_traj.png"
+        if not img_path.exists():
+            raise HTTPException(404, f"no trajectory image at {img_path}")
+        return FileResponse(img_path, media_type="image/png")
+
     # ── static frontend ──
 
     if not STATIC_DIR.exists():

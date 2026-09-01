@@ -20,7 +20,7 @@ from edgar.evolution.program import (
     Program,
     Code,
     Losses,
-    LossPair,
+    LossStats,
 )
 from tests.evolution.utils import make_program, linear_model_code, linear_param_est_code
 
@@ -34,8 +34,8 @@ def initialize_program(i, model_code, param_est_code):
         code=Code(model=model_code, param_est=param_est_code, model_jax=model_code),
         name=f"Program {i}",
         program_losses=Losses(
-            discover=LossPair(init=float(i), final=float(i) / 2),
-            validate=LossPair(init=float(i) * 2, final=float(i)),
+            discover=LossStats(init=float(i), final=float(i) / 2),
+            validate=LossStats(init=float(i) * 2, final=float(i)),
         ),
         n_params=i,
         eval_fingerprint=np.array([i, i + 1, i + 2]),

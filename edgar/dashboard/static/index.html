@@ -372,7 +372,7 @@
 
       <!-- tabs -->
       <div class="flex border-b border-zinc-800 text-sm bg-zinc-900/50">
-        <template x-for="t in ['code','latex','prompt','specs','lineage','fit']" :key="t">
+        <template x-for="t in ['code','latex','prompt','specs','lineage','fit','trajectory']" :key="t">
           <button
             @click="panelTab = t"
             :class="panelTab === t ? 'bg-zinc-800 text-zinc-50 border-b border-emerald-500' : 'text-zinc-400 hover:text-zinc-100'"
@@ -545,6 +545,17 @@
           </div>
           <div x-show="!programDetail.fit_image_url" class="text-zinc-500 italic text-sm">
             No fit image was generated for this program (either not yet scored or plot_fn missing).
+          </div>
+        </div>
+
+        <!-- Trajectory tab -->
+        <div x-show="panelTab === 'trajectory'">
+          <div x-show="programDetail.trajectory_image_url">
+            <img :src="`/api/runs/${runId}/${programDetail.trajectory_image_url}`" alt="optimization trajectory"
+              class="rounded border border-zinc-800 max-w-full" />
+          </div>
+          <div x-show="!programDetail.trajectory_image_url" class="text-zinc-500 italic text-sm">
+            No trajectory image was generated for this program (either not yet scored or optimization failed).
           </div>
         </div>
       </div>

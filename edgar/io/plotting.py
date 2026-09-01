@@ -110,3 +110,86 @@ def generate_program_fits(
             p.fit_image_path = str(save_path)
         except Exception as e:
             warnings.warn(f"[plotting] failed to generate fit plot for P#{p.idx}: {e}")
+
+
+def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> None:
+    """Generates an optimization trajectory plot for each program.
+
+    Plots the loss over gradient descent steps for each parallel estimator.
+    The trajectory with the lowest final loss is highlighted.
+    """
+    import matplotlib.pyplot as plt
+
+    plot_dir = Path(spec.output_dir) / "image_trajectories"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    for p in programs:
+        discover_losses = p.program_losses.discover
+        if not discover_losses or not discover_losses.trajectories:
+            continue
+
+        save_path = plot_dir / f"P{p.idx:04d}_traj.png"
+        try:
+            plt.figure(figsize=(6, 4))
+            trajectories = discover_losses.trajectories
+
+            # Find the best trajectory index based on the final loss step
+            best_estimator_idx = -1
+            best_final_loss = float("inf")
+            for idx, traj in enumerate(trajectories):
+                if traj and traj[-1] < best_final_loss:
+                    best_final_loss = traj[-1]
+                    best_estimator_idx = idx
+
+            # Plot each trajectory
+            for idx, traj in enumerate(trajectories):
+                if not traj:
+                    continue
+                is_best = idx == best_estimator_idx
+                color = (
+                    "#22c55e" if is_best else "#a1a1aa"
+                )  # Green-500 if best, Zinc-400 if other
+                alpha = 1.0 if is_best else 0.5
+                linewidth = 2.0 if is_best else 1.0
+                label = f"Estimator {idx} (Best)" if is_best else f"Estimator {idx}"
+
+                plt.plot(
+                    traj, color=color, alpha=alpha, linewidth=linewidth, label=label
+                )
+
+            plt.title(
+                f"Optimization Trajectories - Program #{p.idx}",
+                fontsize=11,
+                fontweight="semibold",
+            )
+            plt.xlabel("Gradient Descent Step", fontsize=9)
+            plt.ylabel("Training Loss", fontsize=9)
+            plt.yscale("log")
+            plt.grid(True, which="both", ls="-", alpha=0.15)
+            plt.legend(loc="upper right", frameon=True, fontsize=8)
+            plt.tight_layout()
+
+            plt.savefig(save_path, dpi=150)
+            plt.close()
+            p.trajectory_image_path = str(save_path)
+        except Exception as e:
+            warnings.warn(
+                f"[plotting] failed to generate trajectory plot for P#{p.idx}: {e}"
+            )
+
+
+def generate_program_images(
+    spec: TaskSpec, data: dict, programs: list[Program] | Any
+) -> None:
+    """Generates both fit comparison plots and optimization trajectory plots for each program.
+
+    Args:
+        spec: The `TaskSpec` object containing configuration and callable
+            functions, including the `plot_fn`.
+        data: The input data (e.g., `X_discover`) required by the `plot_fn`
+            to render the model's performance.
+        programs: A list of `Program` objects for which comparison and
+            trajectory plots should be generated.
+    """
+    generate_program_fits(spec, data, programs)
+    generate_trajectory_image(spec, programs)

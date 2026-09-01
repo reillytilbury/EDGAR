@@ -15,7 +15,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from edgar.io.config import Config
-from edgar.evolution.program import Program, BirthCertificate, Code, Losses, LossPair
+from edgar.evolution.program import Program, BirthCertificate, Code, Losses, LossStats
 
 
 def make_parent(
@@ -24,7 +24,7 @@ def make_parent(
     p = Program(birth=BirthCertificate(generation=0, island=0, batch_index=0))
     p.name = name
     p.code = Code(model=model_code, param_est=param_est_code)
-    p.program_losses = Losses(discover=LossPair(init=loss + 0.5, final=loss))
+    p.program_losses = Losses(discover=LossStats(init=loss + 0.5, final=loss))
     return p
 
 

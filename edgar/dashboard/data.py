@@ -782,6 +782,7 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
         "image_path": p.image_path,
         "image_url": _image_url_for(p),
         "fit_image_url": _fit_image_url_for(p),
+        "trajectory_image_url": _trajectory_image_url_for(p),
         "parents_detail": [
             {
                 "idx": parent_idx,
@@ -824,6 +825,13 @@ def _fit_image_url_for(p: Program) -> str | None:
     if p.idx is None or p.fit_image_path is None:
         return None
     return f"fit_image/{p.idx}"
+
+
+def _trajectory_image_url_for(p: Program) -> str | None:
+    """Convention from edgar/io/plotting.py: P{idx:04d}_traj.png."""
+    if p.idx is None or getattr(p, "trajectory_image_path", None) is None:
+        return None
+    return f"trajectory_image/{p.idx}"
 
 
 # ── Family Tree ──
