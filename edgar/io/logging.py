@@ -248,7 +248,7 @@ def log_generation(
         return f"{100 * k / n:.0f}%" if n else "n/a"
 
     n_model = sum(1 for p in born if p.code.model is not None)
-    n_param_ests = spec.flat_config.get("n_param_ests", 1)
+    n_param_ests = spec.flat_config.get("n_param_ests")
     total_param_ests_expected = n * n_param_ests
     total_param_ests_generated = sum(
         len(p.code.param_est) for p in born if isinstance(p.code.param_est, list)

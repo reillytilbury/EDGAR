@@ -183,7 +183,6 @@ class EvolutionConfig(_LaxModel):
     n_migrants: int
     topology: list[int]
     exploit_point: float
-    n_param_ests: int
 
     @model_validator(mode="after")
     def check_args(self) -> EvolutionConfig:
@@ -193,11 +192,10 @@ class EvolutionConfig(_LaxModel):
         that it contains exactly the indices from 0 to `n_islands - 1` (i.e., it's a
         permutation of island indices).
         Checks that `exploit_point` is between 0 and 1.
-        Checks that `n_param_ests` is at least 1.
 
         Raises:
             ValueError: If the `topology` length does not match `n_islands` or
-                if it does not contain valid island indices, or if n_param_ests < 1.
+                if it does not contain valid island indices.
 
         Returns:
             The validated EvolutionConfig instance.
@@ -214,8 +212,7 @@ class EvolutionConfig(_LaxModel):
             raise ValueError(
                 f"exploit_point ({self.exploit_point}) must be between 0 and 1"
             )
-        if self.n_param_ests < 1:
-            raise ValueError(f"n_param_ests ({self.n_param_ests}) must be >= 1")
+
         return self
 
 
@@ -313,6 +310,7 @@ class ScoringConfig(_LaxModel):
             If exceeded, the program is considered to have infinite loss.
         banned_strings: A list of substrings that must not appear in the JAX-translated model.
             If any appear, the model is banned and assigned infinite loss.
+        n_param_ests: The number of initial parameter estimators and number of optimizations to run per program (each starting from a different initial parameter estimate).
         gradient_descent: Configuration for the gradient descent optimization
             performed during scoring.
     """
@@ -320,6 +318,7 @@ class ScoringConfig(_LaxModel):
     param_penalty_weight: float
     timeout_s: float
     banned_strings: list[str]
+    n_param_ests: int
     gradient_descent: GradientDescentConfig
 
 

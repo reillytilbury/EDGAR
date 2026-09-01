@@ -457,10 +457,11 @@ def load_live_state(run_dir: Path) -> dict:
     metrics_rows = _load_metrics(run_dir)
     totals = _summarise_metrics(metrics_rows)
 
-    evolution = spec.get("evolution") or {}
+    evolution = spec.get("evolution", {})
+    scoring = spec.get("scoring", {})
     n_gens = evolution.get("n_generations") or 0
     n_islands = evolution.get("n_islands") or 0
-    n_param_ests = evolution.get("n_param_ests", 1)
+    n_param_ests = scoring.get("n_param_ests", 1)
     started_at_ts = status_doc.get("started_at")
     elapsed_s = (time.time() - started_at_ts) if started_at_ts else 0.0
     current_gen = status_doc.get("current_gen")

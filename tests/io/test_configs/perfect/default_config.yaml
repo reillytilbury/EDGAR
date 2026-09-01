@@ -13,7 +13,6 @@ evolution:
   n_migrants: 1
   topology: [1, 2, 3, 4, 5, 0]
   exploit_point: 0.5
-  n_param_ests: 2
 
 llms:
   num_parents: 3
@@ -35,6 +34,7 @@ llms:
   swear_words: []
 
 scoring:
+  n_param_ests: 2
   param_penalty_weight: 0.1
   timeout_s: 100.0
   banned_strings: ['default']

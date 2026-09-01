@@ -26,7 +26,6 @@ def test_fromconfig():
         "n_migrants": 1,
         "topology": [1, 0],
         "exploit_point": 0.5,
-        "n_param_ests": 1,
     }
     assert taskspec.llms == {
         "num_parents": 2,
@@ -57,6 +56,7 @@ def test_fromconfig():
         "idea_probability": 0.0,
     }
     assert taskspec.scoring == {
+        "n_param_ests": 1,
         "param_penalty_weight": 0.01,
         "timeout_s": 120.0,
         "banned_strings": [],

@@ -33,9 +33,6 @@ evolution:
   # Island topology for migration
   topology: [1, 2, 3, 4, 5, 6, 7, 0]
 
-  # Number of parameter estimators to generate and optimize per program
-  n_param_ests: 1
-
 llms:
   # Number of parent programs in each prompt
   num_parents: 2
@@ -74,6 +71,8 @@ llms:
   swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
 
 scoring:
+  # Number of parameter estimators to generate and optimize per program
+  n_param_ests: 1
   # Complexity penalty on parameterized programs.
   param_penalty_weight: 0.01
 
@@ -86,6 +85,5 @@ scoring:
   gradient_descent:
     # Max optimizer iterations for parameter fitting.
     max_iter: 1000
-
     # Parameter optimizer learning rate.
     learning_rate: 0.003

@@ -10,7 +10,6 @@ evolution:
   n_migrants: 2
   topology: [1, 2, 3, 4, 5, 6, 7, 0]
   exploit_point: 0.2
-  n_param_ests: 1
 
 llms:
   num_parents: 2
@@ -31,6 +30,7 @@ llms:
   swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
 
 scoring:
+  n_param_ests: 1
   param_penalty_weight: 0.01
   timeout_s: 120.0
   banned_strings: ['config']
