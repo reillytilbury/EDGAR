@@ -18,7 +18,7 @@ def _safe_loss(val: Any) -> float:
 
 
 def _evaluate_model_output(
-    model_fn: Callable[[Any, Any], jax.Array],
+    model_fn: Callable[[dict, dict], jax.Array],
     params: dict[str, Any],
     data: dict[str, Any],
 ) -> jax.Array:
@@ -35,8 +35,8 @@ def _evaluate_model_output(
 
 
 def _evaluate_sample_losses(
-    model_fn: Callable[[Any, Any], jax.Array],
-    loss_fn: Callable[[jax.Array, Any], jax.Array],
+    model_fn: Callable[[dict, dict], jax.Array],
+    loss_fn: Callable[[jax.Array, dict], jax.Array],
     params: dict[str, Any],
     data: dict[str, Any],
 ) -> jax.Array:
@@ -59,8 +59,8 @@ def _evaluate_sample_losses(
 
 
 def _evaluate_scalar_loss(
-    model_fn: Callable[[Any, Any], jax.Array],
-    loss_fn: Callable[[jax.Array, Any], jax.Array],
+    model_fn: Callable[[dict, dict], jax.Array],
+    loss_fn: Callable[[jax.Array, dict], jax.Array],
     params: dict[str, Any],
     data: dict[str, Any],
 ) -> jax.Array:

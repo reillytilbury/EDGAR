@@ -8,7 +8,6 @@ from edgar.scoring.utils import (
     _evaluate_model_output,
 )
 from edgar.evolution.program import NotValidated
-from edgar.llm.code_loading import load_function_from_source
 
 # _safe_loss
 
@@ -75,21 +74,19 @@ def test_safe_sorting():
 
 
 # _evaluate_model_output
-BASIC_MODEL = """
-def model(data, params):
+# Model functions for testing
+def basic_model(data, params):
     return params["w"] * data["x"]
-"""
-STRICT_MODEL = """
-import jax.numpy as jnp
-def model(data, params):
+
+
+def strict_model(data, params):
     assert data["x"].shape == (3,)
-    assert params["w"].shape == (3,) 
+    assert params["w"].shape == (3,)
     return jnp.dot(params["w"], data["x"])
-"""
 
 
 def test_evaluate_model_output():
-    model_fn = load_function_from_source(BASIC_MODEL, "model")
+    model_fn = basic_model
     # Unbatched params with batched data should raise an error
     params = {"w": 1.0}
     data = {"x": jnp.array([1.0, 2.0])}  # Shape (2,)
@@ -116,7 +113,7 @@ def test_evaluate_model_output():
     assert jnp.allclose(result, jnp.array([2.0, 8.0]))
 
     # Both batched and with strict shape checking in model and array params/data
-    model_fn = load_function_from_source(STRICT_MODEL, "model")
+    model_fn = strict_model
     params = {"w": jnp.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])}  # Shape (2, 3)
     data = {"x": jnp.array([[2.0, 4.0, 6.0], [1.0, 3.0, 5.0]])}  # Shape (2, 3)
     result = _evaluate_model_output(model_fn, params, data)
@@ -125,7 +122,7 @@ def test_evaluate_model_output():
 
 
 def test_evaluate_sample_losses():
-    model_fn = load_function_from_source(BASIC_MODEL, "model")
+    model_fn = basic_model
 
     def loss_fn(output, data):
         assert output.shape[0] == data["y"].shape[0]
@@ -140,7 +137,7 @@ def test_evaluate_sample_losses():
 
 
 def test_evaluate_scalar_loss_expected():
-    model_fn = load_function_from_source(BASIC_MODEL, "model")
+    model_fn = basic_model
 
     def loss_fn(output, data):
         assert output.shape[0] == data["y"].shape[0]
