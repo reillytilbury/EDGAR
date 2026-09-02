@@ -236,8 +236,16 @@ class Population:
                 # see a real NotValidated() instance, not a bare string (which
                 # would crash sorts and break the validate-eligible filter).
                 discover_raw = d["program_losses"]["discover"]
+                if discover_raw.get("trajectories") is not None:
+                    discover_raw["trajectories"] = np.array(
+                        discover_raw["trajectories"]
+                    )
 
                 validate_raw = d["program_losses"]["validate"]
+                if validate_raw.get("trajectories") is not None:
+                    validate_raw["trajectories"] = np.array(
+                        validate_raw["trajectories"]
+                    )
                 if validate_raw.get("final") == "NOTVALIDATED":
                     validate_raw = {**validate_raw, "final": NotValidated()}
 
