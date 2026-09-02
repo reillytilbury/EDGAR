@@ -1,6 +1,8 @@
 # ruff: noqa: E402
 import os
 
+import cloudpickle
+
 # Configure JAX to not preallocate all GPU memory and use platform allocator to avoid OOM errors
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
@@ -10,6 +12,7 @@ if "--xla_gpu_enable_command_buffer=" not in xla_flags:
 import sys
 import time
 from pathlib import Path
+import multiprocessing as mp
 
 import numpy as np
 import jax.numpy as jnp
@@ -25,6 +28,7 @@ from edgar.evolution.population import Population
 from edgar.scoring.scoring import (
     _eval_loss,
     _optimize,
+    _worker,
     _score_one_model,
     rank,
     score,
@@ -32,6 +36,19 @@ from edgar.scoring.scoring import (
 
 
 # --- shared fixtures ---
+
+
+def basic_model_fn(data, params):
+    return params["w"] * data["x"]
+
+
+def _make_basic_data(y_offset=0.0):
+    x = jnp.array([1.0, 2.0, 3.0])
+    return {
+        "x": jnp.stack([x, x]),
+        "y": jnp.stack([x + y_offset, 2 * x + y_offset]),
+    }  # data of shape (2, 3) = (n_samples, n_x)
+
 
 FAST_MODEL_CODE = """
 import jax.numpy as jnp
@@ -117,28 +134,116 @@ def loss_fn(output, data):
     return jnp.mean((output - data["y"]) ** 2, axis=-1)
 
 
-# --- _score_one_model ---
+# --- _optimize ---
+class TestOptimize:
+    # Similar tests to tests/scoring/test_optimizer.py
+    def test_single_param_init(self):
+        model_fn = basic_model_fn
+        params_inits = {"w": jnp.array(2 * [0.1])}
+        data_train = _make_basic_data()
+        gd_config = {"max_iter": 100, "learning_rate": 0.1}
+        optimized_params, loss_trajectories = _optimize(
+            model_fn, loss_fn, params_inits, data_train, gd_config
+        )
+        assert len(optimized_params) == 1
+        assert optimized_params[0]["w"].shape == (data_train["x"].shape[0],)
+        assert jnp.allclose(optimized_params[0]["w"], jnp.array([1.0, 2.0]), atol=0.05)
+
+        assert loss_trajectories.shape == (1, gd_config["max_iter"])
+        initial_loss = loss_trajectories[0, 0]
+        final_loss = loss_trajectories[0, -1]
+        assert final_loss < initial_loss
+
+    def test_multiple_param_init(self):
+        model_fn = basic_model_fn
+        # loss_fn = basic_loss_fn
+        params_inits = [
+            {"w": jnp.array(2 * [0.1])},
+            {"w": jnp.array(2 * [0.5])},
+            {"w": jnp.array(2 * [1.5])},
+            {"w": jnp.array(2 * [2.0])},
+            {"w": jnp.array(2 * [5.0])},
+        ]
+        data_train = _make_basic_data()
+        gd_config = {"max_iter": 100, "learning_rate": 0.1}
+        optimized_params, loss_trajectories = _optimize(
+            model_fn, loss_fn, params_inits, data_train, gd_config
+        )
+        assert len(optimized_params) == 5
+        for p in optimized_params:
+            assert p["w"].shape == (data_train["x"].shape[0],)
+            assert jnp.allclose(
+                p["w"], jnp.array([1.0, 2.0]), atol=0.05
+            )  # Should converge to the true values
+
+        assert loss_trajectories.shape == (5, gd_config["max_iter"])
+        initial_losses = loss_trajectories[:, 0]
+        final_losses = loss_trajectories[:, -1]
+        assert jnp.all(final_losses < initial_losses)
 
 
-def test_score_one_model_returns_finite_loss():
+# --- _worker ---
+def test_worker():
     program = _make_program(FAST_MODEL_CODE)
-    data = (_make_data(), _make_data())
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
-        program, data, loss_fn, BASE_CONFIG
-    )
-    assert jnp.isfinite(final_loss)
-    assert jnp.isfinite(initial_loss)
-    assert jnp.all(jnp.isfinite(jnp.array(trajectories)))
-    assert final_loss >= 0.0
-    assert initial_loss >= 0.0
-    assert jnp.all(jnp.array(trajectories) >= 0.0)
+    # Train on y_offset=0, Test on y_offset=1. Optimization on train data yields y = x as model prediction.
+    data = (_make_basic_data(y_offset=0.0), _make_basic_data(y_offset=1.0))
+    eval_data = _make_basic_data()
+    eval_data["_sample_indices"] = jnp.array([0, 1])
+    config = {
+        "param_penalty_weight": 0.0,
+        "gradient_descent": {"max_iter": 100, "learning_rate": 0.1},
+    }
+    ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
+    queue = ctx.Queue()
+    loss_fn_bytes = cloudpickle.dumps(loss_fn)
+    program_bytes = cloudpickle.dumps(program)
+    _worker(queue, program_bytes, data, loss_fn_bytes, config, eval_data, "discover")
+    result = queue.get()
+    # Optimized model is y = x, same as train data
+    final_loss = result[0]
+    sample_losses = result[4]
+    expected_sample_losses = loss_fn(data[0]["y"], data[1])
+    expected_final_loss = jnp.mean(expected_sample_losses)
+    assert np.isclose(final_loss, expected_final_loss, atol=1e-2)
+    assert np.allclose(sample_losses, expected_sample_losses, atol=1e-2)
+    # Use initial parameters to compute expected initial loss
+    initial_params = {
+        "w": jnp.array([[0.9], [0.9]])
+    }  # from PARAM_EST_CODE, stacked to match n_samples = 2
+    initial_loss = result[1]
+    params_init = result[5]
+    sample_losses_init = result[6]
+    assert np.allclose(initial_params["w"], params_init["w"])
+    expected_sample_losses_init = loss_fn(initial_params["w"] * data[0]["x"], data[1])
+    expected_initial_loss = jnp.mean(expected_sample_losses_init)
+    assert np.isclose(initial_loss, expected_initial_loss, atol=1e-2)
+    assert np.allclose(sample_losses_init, expected_sample_losses_init, atol=1e-2)
+    # Check optimized params are 1, 2
+    optimized_params = result[3]
+    expected_optimized_params = {"w": jnp.array([[1.0], [2.0]])}
+    assert np.allclose(optimized_params["w"], expected_optimized_params["w"], atol=1e-2)
+    # Check fingerprint matches y = x, y = 2*x
+    fingerprint = result[2]
+    expected_fingerprint = eval_data["y"]
+    assert jnp.allclose(fingerprint, expected_fingerprint, atol=1e-2)
+    # Check that best_idx is zero
+    best_idx = result[7]
     assert best_idx == 0
-    assert outcome == "ok"
+    # Check trajectories match initial and final training loss
+    trajectories = result[8]
+    assert trajectories.shape == (1, config["gradient_descent"]["max_iter"])
+    expected_initial_train_loss = jnp.mean(
+        loss_fn(initial_params["w"] * data[0]["x"], data[0])
+    )
+    expected_final_train_loss = 0.0
+    assert np.isclose(trajectories[0][0], expected_initial_train_loss, atol=1e-2)
+    assert np.isclose(trajectories[0][-1], expected_final_train_loss, atol=1e-2)
 
 
+# --- _score_one_model ---
 def test_score_one_model_trajectory_matches_loss():
     program = _make_program(FAST_MODEL_CODE)
-    data = (_make_data(), _make_data())
+    data = (_make_data(), _make_data())  # train and test data are identical here!
     final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )

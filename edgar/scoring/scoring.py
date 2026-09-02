@@ -35,7 +35,6 @@ from .utils import (
     _safe_loss,
 )
 
-
 # ── helpers ──
 
 
@@ -122,7 +121,7 @@ def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config):
     # Initialize the optimizer
     optimizer = Optimizer(model_fn, loss_fn, data_train, gd_config)
     flat_all, opt_state = optimizer.flatten_and_init_params(params_inits)
-    # Run the JIT-compiled optimization on-device
+    # Run the JIT-compiled optimization on-device, this is the only part run on GPU
     optimized_params, loss_trajectories = optimizer.run_optimization(
         flat_all, opt_state
     )
