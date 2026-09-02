@@ -22,12 +22,12 @@ def _evaluate_model_output(
     params: dict[str, Any],
     data: dict[str, Any],
 ) -> jax.Array:
-    """Evaluates the model output for a given sample of parameters and data.
+    """Evaluates the model output, vmapping over the leading axis of data and params leaves.
 
     Args:
-        model_fn: A (compiled) JAX model function of signature (data, params) -> output, where data, params are of unbatched shape, (n_x, ...) and output is of shape (output_shape,)
-        params: PyTree of model parameters, where each leaf has shape (n_samples, n_x, ...)
-        data: PyTree of data, where each leaf has shape (n_samples, n_x, ...)
+        model_fn: A (compiled) JAX model function of signature (data, params) -> output, where data, params are of unbatched shape, (...) and output is of shape (output_shape,)
+        params: PyTree of model parameters, where each leaf has shape (n_samples, ...)
+        data: PyTree of data, where each leaf has shape (n_samples, ...)
     Returns:
         A JAX array of shape (n_samples, output_shape) containing the model output for each sample.
     """
@@ -64,5 +64,5 @@ def _evaluate_scalar_loss(
     params: dict[str, Any],
     data: dict[str, Any],
 ) -> jax.Array:
-    """Computes the mean loss over all samples of the input data and params."""
+    """Computes the mean over all dimensions of loss_fn(model_output, data)."""
     return jnp.mean(_evaluate_sample_losses(model_fn, loss_fn, params, data))
