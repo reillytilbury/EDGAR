@@ -9,6 +9,7 @@ from functools import partial
 from typing import Any, Callable
 
 import jax
+from jax.flatten_util import ravel_pytree
 import jax.numpy as jnp
 import optax
 
@@ -19,13 +20,14 @@ class Optimizer:
     """Gradient descent solver for JAX models.
 
     Holds the model function, loss function, data, and optimizer state to perform parameter optimization across multiple initial parameter values.
+    This is designed to be JIT-compiled and executed entirely on GPU, via run_optimization.
+    The optimized parameters and training loss trajectories are then returned.
     """
 
     def __init__(
         self,
         model_fn: Callable[[Any, Any], jax.Array],
         loss_fn: Callable[[jax.Array, Any], jax.Array],
-        unflatten: Callable[[jax.Array], Any],
         data_train: dict[str, Any],
         gd_config: dict[str, Any],
     ) -> None:
@@ -34,16 +36,32 @@ class Optimizer:
         Args:
             model_fn: The JAX-compiled model function (callable).
             loss_fn: The loss function (callable).
-            unflatten: The PyTree unflattening callable output by jax.flatten_util.ravel_pytree, used to reconstruct the parameter PyTree from a flattened array.
             data_train: The training data dictionary.
             gd_config: Configuration dictionary for gradient descent.
         """
         self.model_fn = model_fn
         self.loss_fn = loss_fn
-        self.unflatten = unflatten
         self.data_train = data_train
         self.gd_config = gd_config
         self.opt = optax.adam(gd_config["learning_rate"])
+
+    def flatten_and_init_params(
+        self,
+        initial_params: list[dict[str, Any]],
+    ):
+        """Flatten the initial parameters and initialize the optax optimizer state.
+
+        Args:
+            initial_params: A list of PyTrees, each element is the initial parameters for a single optimization.
+
+        Returns:
+            flat_all: A 2D JAX array of shape (n_opts, flat_dim) containing the flattened initial parameters
+            opt_state: The initial Optax optimizer state
+        """
+        _, self.unflatten = ravel_pytree(initial_params[0])
+        flat_all = jnp.stack([ravel_pytree(p)[0] for p in initial_params])
+        opt_state = self.opt.init(flat_all)
+        return flat_all, opt_state
 
     def _scalar_loss_single(self, flat_p: jax.Array) -> jax.Array:
         """Computes the mean loss for a single flattened parameter set.
@@ -115,13 +133,13 @@ class Optimizer:
         """JIT-compiled scan loop executing entirely on-device.
 
         Args:
-            flat_all: Stacked flattened parameters.
+            flat_all: Stacked flattened parameters of shape (n_opts, flat_dim)
             opt_state: Initial Optax optimizer state.
 
         Returns:
-            A tuple of (optimized_parameters, loss_trajectories) of shapes:
-                - (n_opts, flat_dim) matching the best steps.
-                - (max_iter, n_opts) containing step-by-step losses.
+            A tuple of (optimized_parameters, loss_trajectories)
+                - optimized_parameters: A len(n_opts) list of PyTrees of optimized parameters, one for each optimization.
+                - loss_trajectories: A 2D JAX array of shape (max_iter, n_opts) containing step-by-step losses during optimization.
         """
         n_opts = flat_all.shape[0]
         best_losses = jnp.full((n_opts,), jnp.inf)
@@ -130,7 +148,7 @@ class Optimizer:
         init_carry = (flat_all, opt_state, best_losses, best_flats)
         steps = jnp.arange(self.gd_config["max_iter"])
 
-        (final_flat_all, _, final_best_losses, final_best_flats), loss_trajectories = (
-            jax.lax.scan(self._step_fn, init_carry, steps)
+        (_, _, _, final_best_flats), loss_trajectories = jax.lax.scan(
+            self._step_fn, init_carry, steps
         )
-        return final_best_flats, loss_trajectories
+        return [self.unflatten(flat) for flat in final_best_flats], loss_trajectories

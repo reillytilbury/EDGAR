@@ -5,20 +5,6 @@ This module provides functionalities for evaluating the performance of generated
 models, mirroring the asynchronous generation pattern found in `edgar/llm/generate.py`.
 It handles the scoring of individual programs within isolated subprocesses
 and orchestrates population-level scoring and ranking.
-
-Key functionalities include:
-- `_score_one_model`: Scores a single program in a dedicated subprocess, ensuring
-  clean JAX initialization and robust timeout enforcement.
-- `score`: Identifies programs requiring evaluation for a specific data split
-  (e.g., 'discover' or 'validate') and updates their performance metrics.
-
-Per-program work runs in a subprocess so JAX initialises cleanly and runaway
-models can be killed on timeout. The subprocess start method defaults to
-"spawn" (safe with the macOS Objective-C runtime / JAX) but can be overridden
-to "fork" via the EDGAR_MP_START_METHOD environment variable. Fork is useful for
-scripts that don't use an `if __name__ == "__main__":` guard (e.g., interactive
-notebooks, tutorial scripts) because it doesn't re-import the parent module
-in each child.
 """
 
 from __future__ import annotations
@@ -32,7 +18,6 @@ import cloudpickle
 import numpy as np
 import jax
 import jax.numpy as jnp
-from jax.flatten_util import ravel_pytree
 from .optimizer import Optimizer
 import warnings
 
@@ -128,29 +113,21 @@ def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config):
         gd_config: Configuration dictionary for gradient descent.
 
     Returns:
-        A tuple of (optimized_parameters, loss_trajectories) of shapes:
-            - (n_opts, flat_dim) matching the best steps.
-            - (max_iter, n_opts) containing step-by-step losses.
+        optimized_params: A list of optimized parameter sets (JAX pytrees), corresponding to the input `params_inits`.
+        loss_trajectories: A numpy array of shape (n_opts, max_iter) containing the losses during optimization.
     """
     if isinstance(params_inits, dict):
         params_inits = [params_inits]
 
-    _, unflatten = ravel_pytree(
-        params_inits[0]
-    )  # flatten the leaves of the first parameter set, the unflatten function reconstructs the pytrees of any of the parameter sets
-    flat_all = jnp.stack(
-        [ravel_pytree(p)[0] for p in params_inits]
-    )  # (n_opts, flattened_param_dims)
     # Initialize the optimizer
-    optimizer = Optimizer(model_fn, loss_fn, unflatten, data_train, gd_config)
-    opt_state = optimizer.opt.init(flat_all)
-
+    optimizer = Optimizer(model_fn, loss_fn, data_train, gd_config)
+    flat_all, opt_state = optimizer.flatten_and_init_params(params_inits)
     # Run the JIT-compiled optimization on-device
-    optimized_flats, loss_trajectories = optimizer.run_optimization(flat_all, opt_state)
-
-    trajectories = np.asarray(loss_trajectories).T.tolist()
-
-    return [unflatten(f) for f in np.asarray(optimized_flats)], trajectories
+    optimized_params, loss_trajectories = optimizer.run_optimization(
+        flat_all, opt_state
+    )
+    loss_trajectories = np.asarray(loss_trajectories).T  # (n_opts, max_iter)
+    return optimized_params, loss_trajectories
 
 
 def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
