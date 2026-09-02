@@ -28,7 +28,6 @@ import warnings
 import datetime
 from dataclasses import dataclass, field
 from typing import Any, Callable, TextIO, TYPE_CHECKING
-from ..evolution.program import NotValidated
 
 if TYPE_CHECKING:
     from ..evolution.population import Population
@@ -258,11 +257,6 @@ def log_generation(
         1 for p in born if p.program_losses.discover.final not in (None, float("inf"))
     )
 
-    all_final = [
-        population[i].program_losses.discover.final for i in range(len(population))
-    ]
-    valid = [l for l in all_final if l is not None and not isinstance(l, NotValidated)]
-    global_best = f"{min(valid):.6f}" if valid else "n/a"
     elapsed = time.monotonic() - log.start_time
     this_gen_time = elapsed - log.previous_gen_time
     log.previous_gen_time = elapsed
@@ -274,7 +268,6 @@ def log_generation(
     f.write(
         f"    Spawn   {n}  |  model={pct(n_model)}  param_est={pct_gen(total_param_ests_generated, total_param_ests_expected)}  jax={pct(n_jax)}  scored={pct(n_scored)}\n"
     )
-    f.write(f"    Global best discover loss: {global_best}\n")
 
     if metrics is not None:
         row = metrics._build_gen_row()

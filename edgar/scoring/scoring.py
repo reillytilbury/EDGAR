@@ -533,9 +533,11 @@ def score(
         loss_pair.final = final_loss
         loss_pair.trajectories = trajectories
 
-        # Record the best parameter estimator string explicitly
-        if best_idx is not None and program.code.param_est:
-            program.code.best_param_est = program.code.param_est[best_idx]
+        # Record the best parameter estimator
+        if best_idx is not None:
+            program.best_estimator_idx = best_idx
+            if program.code.param_est:
+                program.best_param_est = program.code.param_est[best_idx]
 
         if fingerprint is not None:
             program.eval_fingerprint = fingerprint

@@ -125,7 +125,7 @@ def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> 
 
     for p in programs:
         discover_losses = p.program_losses.discover
-        if not discover_losses or not discover_losses.trajectories:
+        if not discover_losses:
             continue
 
         save_path = plot_dir / f"P{p.idx:04d}_traj.png"
@@ -134,17 +134,12 @@ def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> 
             trajectories = discover_losses.trajectories
 
             # Find the best trajectory index based on the final loss step
-            best_estimator_idx = -1
-            best_final_loss = float("inf")
-            for idx, traj in enumerate(trajectories):
-                if traj and traj[-1] < best_final_loss:
-                    best_final_loss = traj[-1]
-                    best_estimator_idx = idx
+            # trajectories is (n_opts, max_iter)
+            best_estimator_idx = p.best_estimator_idx
 
             # Plot each trajectory
-            for idx, traj in enumerate(trajectories):
-                if not traj:
-                    continue
+            for idx in range(trajectories.shape[0]):
+                traj = trajectories[idx]
                 is_best = idx == best_estimator_idx
                 color = (
                     "#22c55e" if is_best else "#a1a1aa"

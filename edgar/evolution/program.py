@@ -127,19 +127,7 @@ class LossStats:
 
     init: float | None = None
     final: float | NotValidated | None = None
-    trajectories: list[list[float]] | None = None
-
-    @property
-    def all_init(self) -> list[float] | None:
-        if self.trajectories is None:
-            return None
-        return [t[0] for t in self.trajectories if t]
-
-    @property
-    def all_final(self) -> list[float] | None:
-        if self.trajectories is None:
-            return None
-        return [t[-1] for t in self.trajectories if t]
+    trajectories: np.ndarray | None = None
 
 
 @dataclass
@@ -206,6 +194,7 @@ class Program:
     trajectory_image_path: str | None = None
     idx: int | None = field(default=None, init=False)
     rank: int | None = None
+    best_estimator_idx: int | None = None
     data: dict | None = field(default=None, repr=False)
     _default_params: dict | Callable | None = None
 

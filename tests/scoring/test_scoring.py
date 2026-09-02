@@ -361,8 +361,8 @@ def test_score_one_model_multiple_param_ests():
         trajectories[1][1:]
     )  # bad param est has higher loss than good one after optimization
 
-    assert initial_loss == trajectories[1][0]  # initial loss is the best one
-    assert final_loss == np.min(trajectories[1])  # final loss is the best one
+    assert np.isclose(initial_loss, trajectories[1][0])  # initial loss is the best one
+    assert np.isclose(final_loss, np.min(trajectories[1]))  # final loss is the best one
     assert best_idx == 1  # best param est is the second one (index 1)
     assert outcome == "ok"
 

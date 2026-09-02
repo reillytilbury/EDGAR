@@ -236,12 +236,8 @@ class Population:
                 # see a real NotValidated() instance, not a bare string (which
                 # would crash sorts and break the validate-eligible filter).
                 discover_raw = d["program_losses"]["discover"]
-                discover_raw.pop("all_init", None)
-                discover_raw.pop("all_final", None)
 
                 validate_raw = d["program_losses"]["validate"]
-                validate_raw.pop("all_init", None)
-                validate_raw.pop("all_final", None)
                 if validate_raw.get("final") == "NOTVALIDATED":
                     validate_raw = {**validate_raw, "final": NotValidated()}
 

@@ -737,6 +737,20 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
                     "max": float(finite_arr.max()),
                 }
 
+    trajectories_summary = None
+    if p.program_losses.discover.trajectories is not None:
+        trajectories = p.program_losses.discover.trajectories
+        trajectories_summary = []
+        for i in range(trajectories.shape[0]):
+            traj = trajectories[i]
+            trajectories_summary.append(
+                {
+                    "idx": i,
+                    "init": float(traj[0]),
+                    "final": float(traj[-1]),
+                }
+            )
+
     fingerprint_shape = None
     if p.eval_fingerprint is not None:
         try:
@@ -758,22 +772,10 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
             "discover": {
                 "init": _safe_loss(p.program_losses.discover.init),
                 "final": _safe_loss(p.program_losses.discover.final),
-                "min_init": _min(p.program_losses.discover.all_init),
-                "max_init": _max(p.program_losses.discover.all_init),
-                "min_final": _min(p.program_losses.discover.all_final),
-                "max_final": _max(p.program_losses.discover.all_final),
-                "std_init": _std(p.program_losses.discover.all_init),
-                "std_final": _std(p.program_losses.discover.all_final),
             },
             "validate": {
                 "init": _safe_loss(p.program_losses.validate.init),
                 "final": _safe_loss(p.program_losses.validate.final),
-                "min_init": _min(p.program_losses.validate.all_init),
-                "max_init": _max(p.program_losses.validate.all_init),
-                "min_final": _min(p.program_losses.validate.all_final),
-                "max_final": _max(p.program_losses.validate.all_final),
-                "std_init": _std(p.program_losses.validate.all_init),
-                "std_final": _std(p.program_losses.validate.all_final),
             },
         },
         "params": params_clean,
