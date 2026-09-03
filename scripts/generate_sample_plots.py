@@ -24,7 +24,7 @@ from edgar.evolution.program import Program, BirthCertificate
 from edgar.evolution.population import Population
 from edgar.scoring.scoring import score
 from edgar.scoring.utils import _safe_loss
-from edgar.io.plotting import generate_feedback_image, generate_program_fits
+from edgar.io.plotting import generate_feedback_image, generate_program_fits, generate_trajectory_image
 
 repo_root = Path(__file__).parent.parent
 
@@ -100,6 +100,14 @@ def generate_samples(project: str):
     print(
         f"  [OK] {fit_count}/{len(programs)} fit images generated in {output_dir}/image_fits/"
     )
+
+    # 6. Generate trajectories plots
+    generate_trajectory_image(spec, programs)
+    fit_count = sum(1 for p in programs if p.trajectory_image_path)
+    print(
+        f"  [OK] {fit_count}/{len(programs)} trajectory images generated in {output_dir}/image_trajectories/"
+    )
+
 
     print(f"\nDone. View plots in: {output_dir}")
 
