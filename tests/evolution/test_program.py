@@ -1,12 +1,5 @@
 """
 Tests for Program in src/evolution/program.py.
-
-Covers:
-- compile_model() / compile_param_est(): return callables for valid code strings
-- compile_model() / compile_param_est(): check outputs against expected values
-- compile_model(): raises ModelLoadingError when model code is missing or has wrong entrypoint
-- compile_param_est(): raises ParamEstLoadingError when param_est code is missing or has wrong entrypoint
-- count_params(): counts number of parameters in the program's param_est output and caches it in n_params
 """
 
 # See conftest.py for make_program() fixture and specification of test model and param_est
@@ -16,7 +9,6 @@ import pytest
 from edgar.evolution.program import (
     NotValidated,
     ModelLoadingError,
-    ParamEstLoadingError,
 )
 from tests.evolution.utils import make_program, wrong_entrypoint_code
 
@@ -25,7 +17,7 @@ class TestCompile:
     def test_compile_returns_callables(self):
         program = make_program()
         model_fn = program.compile_model()
-        param_est_fn = program.compile_param_est()
+        param_est_fn = program.compile_param_ests()[0]
         assert callable(model_fn)
         assert callable(param_est_fn)
 
@@ -33,7 +25,7 @@ class TestCompile:
         data = {"x": np.array([1.0, 2.0])}
         program = make_program()
         model_fn = program.compile_model()
-        param_est_fn = program.compile_param_est()
+        param_est_fn = program.compile_param_ests()[0]
         params = param_est_fn(data)
         assert list(params.values()) == pytest.approx(
             [1.0, 2.0]
@@ -46,20 +38,54 @@ class TestCompile:
         with pytest.raises(ModelLoadingError, match="model"):
             program.compile_model()
 
-    def test_compile_raises_when_param_est_code_missing(self):
-        program = make_program(param_est_code=None)
-        with pytest.raises(ParamEstLoadingError, match="parameter_estimator"):
-            program.compile_param_est()
+    def test_compile_param_ests_partial_failure_warns_and_continues(self):
+        # Estimators: 0 is healthy, 1 is broken, 2 is healthy
+        from tests.evolution.utils import linear_param_est_code
+
+        broken_code = wrong_entrypoint_code()
+        healthy_code = linear_param_est_code()
+
+        program = make_program(param_est_code=[healthy_code, broken_code, healthy_code])
+
+        with pytest.warns(UserWarning, match="Failed to compile parameter estimator 1"):
+            compiled = program.compile_param_ests()
+
+        assert len(compiled) == 2
+        assert callable(compiled[0])
+        assert callable(compiled[1])
 
     def test_compile_raises_when_model_entrypoint_wrong(self):
         program = make_program(model_code=wrong_entrypoint_code())
         with pytest.raises(ModelLoadingError, match="model"):
             program.compile_model()
 
-    def test_compile_raises_when_param_est_entrypoint_wrong(self):
-        program = make_program(param_est_code=wrong_entrypoint_code())
-        with pytest.raises(ParamEstLoadingError, match="parameter_estimator"):
-            program.compile_param_est()
+
+def test_code_param_est_coercion_scenarios():
+    from edgar.evolution.program import Code
+
+    # 1. Assigned as a single string
+    c = Code(param_est="def my_estimator(): ...")
+    assert c.param_est == ["def my_estimator(): ..."]
+
+    # 2. Assigned as a list of strings
+    c = Code(param_est=["est_1", "est_2"])
+    assert c.param_est == ["est_1", "est_2"]
+
+    # 3. Assigned as None
+    c = Code(param_est=None)
+    assert c.param_est is None
+
+
+def test_param_est_code_property():
+    est_1 = "def est_1(): ..."
+    program = make_program(param_est_code=[est_1])
+
+    # 1. Before scoring (best_param_est is None): returns empty string
+    assert program.param_est_code == ""
+
+    # 2. After scoring (best_param_est is set): resolves directly to the best
+    program.code.best_param_est = est_1
+    assert program.param_est_code == est_1
 
 
 def test_no_default_params():

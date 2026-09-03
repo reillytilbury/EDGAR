@@ -56,6 +56,7 @@ def test_fromconfig():
         "idea_probability": 0.0,
     }
     assert taskspec.scoring == {
+        "n_param_ests": 1,
         "param_penalty_weight": 0.01,
         "timeout_s": 120.0,
         "banned_strings": [],

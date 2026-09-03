@@ -4,6 +4,7 @@ import numpy as np
 from edgar.llm.generate import (
     _generate_one_model,
     _generate_one_param_est,
+    _generate_param_ests_for_program,
     generate_models,
     generate_param_ests,
     _translate_one_model,
@@ -277,10 +278,31 @@ async def test_generate_one_param_est():
     )
     llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     llm_model = llm.gen_param_est()  # A TestModel with param_est for Program1
-    await _generate_one_param_est(program, [], prompt_schema, llm_model)
+    generated_param_est = await _generate_one_param_est(
+        program, [], prompt_schema, llm_model, config={"n_param_ests": 1}
+    )
+    assert generated_param_est == Program1.param_est
+    assert program.code.model == model_code  # Check model code is unchanged
 
-    assert program.code.param_est == Program1.param_est
 
+@pytest.mark.asyncio
+async def test_generate_param_ests_for_program():
+    program = await generate_one_fake_model()  # The output of _generate_one_model
+    model_code = program.code.model
+    prompt_schema = PromptSchema(
+        base="...",
+        explore="...",
+        code_guidelines="...",
+        docstring_guidelines="...",
+        parent_program_template="..",
+        parent_program_vars=[],
+    )
+    llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
+    llm_model = llm.gen_param_est()  # A TestModel with param_est for Program1
+    await _generate_param_ests_for_program(
+        program, [], prompt_schema, llm_model, config={}, n_param_ests=2
+    )
+    assert program.code.param_est == [Program1.param_est, Program1.param_est]
     assert program.code.model == model_code  # Check model code is unchanged
 
 
@@ -306,7 +328,9 @@ async def test_generate_param_est():
     llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     llm_models = CyclingModel([llm.gen_param_est() for _ in range(3)])
     population = [no_model] + model_no_param_est + [model_and_param_est]
-    await generate_param_ests(population, prompt_schema, llm_models)
+    await generate_param_ests(
+        population, prompt_schema, llm_models, config={"n_param_ests": 1}
+    )
 
     # Check expected solutions
     programs = [None, Program1(), InvalidProgram(), ProgramSolution(), Program1()]
@@ -322,7 +346,10 @@ async def test_generate_param_est():
 
     # Check param est codes
     for i, program in enumerate(population):
-        assert program.code.param_est == param_ests[i]
+        if param_ests[i] is None:
+            assert program.code.param_est is None
+        else:
+            assert program.code.param_est == [param_ests[i]]
 
 
 # JAX translation
@@ -351,9 +378,9 @@ async def test_translate_one_model():
         program.code.model
         == '"""\nfake thought process\n"""\n\n' + Program1.model + " + 0.000\n"
     )  # Check model code is unchanged
-    assert (
-        program.code.param_est == Program1.param_est
-    )  # Check param est code is unchanged
+    assert program.code.param_est == [
+        Program1.param_est
+    ]  # Check param est code is unchanged
 
 
 @pytest.mark.asyncio
@@ -465,13 +492,15 @@ async def test_generate_one_param_est_with_real_llm():
         parent_program_template="Model: {name}\n\n{code_model}",
         parent_program_vars=["name", "code.model"],
     )
-    await _generate_one_param_est(program, [], prompt_schema, llm=LLM_MODEL)
-    print("Generated param est code:\n", program.code.param_est)
-    assert "def parameter_estimator(data):" in program.code.param_est
-    assert isinstance(program.code.param_est, str)
+    generated_param_est = await _generate_one_param_est(
+        program, [], prompt_schema, llm=LLM_MODEL, config={}
+    )
+    print("Generated param est code:\n", generated_param_est)
+    assert "def parameter_estimator(data):" in generated_param_est
+    assert isinstance(generated_param_est, str)
     assert program.code.model == model_code
     assert (
-        load_function_from_source(program.code.param_est, "parameter_estimator")
+        load_function_from_source(generated_param_est, "parameter_estimator")
         is not None
     )
 

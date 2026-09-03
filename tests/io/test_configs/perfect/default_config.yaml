@@ -34,6 +34,7 @@ llms:
   swear_words: []
 
 scoring:
+  n_param_ests: 2
   param_penalty_weight: 0.1
   timeout_s: 100.0
   banned_strings: ['default']

@@ -212,6 +212,7 @@ class EvolutionConfig(_LaxModel):
             raise ValueError(
                 f"exploit_point ({self.exploit_point}) must be between 0 and 1"
             )
+
         return self
 
 
@@ -309,6 +310,7 @@ class ScoringConfig(_LaxModel):
             If exceeded, the program is considered to have infinite loss.
         banned_strings: A list of substrings that must not appear in the JAX-translated model.
             If any appear, the model is banned and assigned infinite loss.
+        n_param_ests: The number of initial parameter estimators and number of optimizations to run per program (each starting from a different initial parameter estimate).
         gradient_descent: Configuration for the gradient descent optimization
             performed during scoring.
     """
@@ -316,6 +318,7 @@ class ScoringConfig(_LaxModel):
     param_penalty_weight: float
     timeout_s: float
     banned_strings: list[str]
+    n_param_ests: int
     gradient_descent: GradientDescentConfig
 
 

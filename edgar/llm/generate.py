@@ -258,32 +258,25 @@ async def _generate_one_param_est(
     parents: list[Program],
     prompt_schema: PromptSchema,
     llm: str | Model,
-    config: dict[str, Any] | None = None,
+    config: dict[str, Any],
     output_schema: type[BaseModel] = ParamEstSchema,
-) -> None:
+) -> str | None:
     """Generates the numpy parameter estimator code for a single program using an LLM.
 
-    This function builds a prompt, calls the specified LLM, and then updates the
-    program's parameter estimator code based on the LLM's response. The temperature
-    for this LLM call is fixed at 1.0.
+    This function builds a prompt, calls the specified LLM, and then returns the
+    generated parameter estimator code. The temperature for this LLM call is fixed at 1.0.
 
     Args:
         program: The program for which to generate the parameter estimator code.
-            This program object will be mutated with the generated code.
         parents: A list of parent programs used for contextualizing the LLM prompt.
         prompt_schema: The schema used to build the LLM prompt.
         llm: The LLM model name (str) or a pre-configured PydanticAI Model instance.
-        config: Optional configuration dictionary containing LLM call parameters like
+        config: Configuration dictionary containing LLM call parameters like
             `log_raw_llm_response`, `max_tokens`, and `retry_config`.
 
     Returns:
-        None. The `program` object is mutated in-place.
-
-    Raises:
-        UserWarning: If `call_llm` returns None, indicating a failure in LLM interaction,
-            and the program's parameter estimator code generation is skipped.
+        The generated parameter estimator code string, or None if the LLM call fails.
     """
-    cfg = config or {}
     prompt = prompt_schema.build_prompt(
         "explore", parents, config, current_program=program
     )
@@ -292,24 +285,54 @@ async def _generate_one_param_est(
         llm_model=llm,
         output_type=output_schema,
         temperature=1.0,
-        log_raw_llm_response=cfg.get("log_raw_llm_response", False),
-        max_tokens=cfg.get("max_tokens"),
-        retry_config=cfg.get("retry_config"),
+        log_raw_llm_response=config.get("log_raw_llm_response", False),
+        max_tokens=config.get("max_tokens"),
+        retry_config=config.get("retry_config"),
         role="param_est",
     )
     if result is None:
         warnings.warn(
             f"[generate] Skipping param_est for program #{program.idx}: call_llm returned None"
         )
-        return
-    program.code.param_est = result.code
+        return None
+    return result.code
+
+
+async def _generate_param_ests_for_program(
+    program: Program,
+    population: Population,
+    prompt_schema: PromptSchema,
+    llm: str | Model,
+    config: dict[str, Any],
+    n_param_ests: int,
+    output_schema: type[BaseModel] = ParamEstSchema,
+) -> None:
+    """Helper to generate a batch of parameter estimators for a single program.
+
+    Concurrently requests `n_param_ests` estimators and assigns successful results
+    to the program's code object.
+    """
+    tasks = [
+        _generate_one_param_est(
+            program,
+            _resolve_parents(population, program),
+            prompt_schema,
+            llm,
+            config,
+            output_schema=output_schema,
+        )
+        for _ in range(n_param_ests)
+    ]
+    results = await asyncio.gather(*tasks)
+    # Assign the successful code strings directly to the program's param_est
+    program.code.param_est = [r for r in results if r is not None]
 
 
 async def generate_param_ests(
     population: Population,
     prompt_schema: PromptSchema,
     llm: str | Model,
-    config: dict[str, Any] | None = None,
+    config: dict[str, Any],
     output_schema: type[BaseModel] = ParamEstSchema,
 ) -> None:
     """Asynchronously generates numpy parameter estimator code for programs that need it.
@@ -322,21 +345,21 @@ async def generate_param_ests(
             that satisfy `_needs_param_est_code` will be updated.
         prompt_schema: The schema used to build the LLM prompt for parameter estimator generation.
         llm: The LLM model name (str) or a pre-configured PydanticAI Model instance.
-        config: Optional configuration dictionary for LLM calls.
-
-    Returns:
-        None. The `program.code.param_est` field of eligible programs in the `population`
-        is mutated in-place.
+        config: Configuration dictionary for LLM calls.
     """
     programs = _filter_programs(population, _needs_param_est_code)
+    n_param_ests = config["n_param_ests"]
+
+    # Run the generation for all eligible programs concurrently in parallel
     await asyncio.gather(
         *[
-            _generate_one_param_est(
-                p,
-                _resolve_parents(population, p),
-                prompt_schema,
-                llm,
-                config,
+            _generate_param_ests_for_program(
+                program=p,
+                population=population,
+                prompt_schema=prompt_schema,
+                llm=llm,
+                config=config,
+                n_param_ests=n_param_ests,
                 output_schema=output_schema,
             )
             for p in programs

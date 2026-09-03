@@ -78,13 +78,29 @@ class Code:
 
     Attributes:
         model: The numpy source code for the scientific model.
-        param_est: The numpy source code for the parameter estimation function.
+        param_est: The numpy source code for the parameter estimation function(s).
         model_jax: The JAX-compatible source code for the scientific model.
+        best_param_est: The numpy source code for the best (by discover loss) parameter estimation function.
     """
 
     model: str | None = None
-    param_est: str | None = None
+    param_est: list[str] | str | None = None
     model_jax: str | None = None
+    best_param_est: str | None = None
+
+    def __setattr__(self, name, value):
+        # Override so that param_est is always stored as a list of strings, both on initialization or when set later.
+        if name == "param_est":
+            if value is None:
+                super().__setattr__("param_est", None)
+            elif isinstance(value, str):
+                super().__setattr__("param_est", [value])
+            elif isinstance(value, list):
+                super().__setattr__("param_est", list(value))
+            else:
+                super().__setattr__("param_est", [str(value)])
+        else:
+            super().__setattr__(name, value)
 
 
 class NotValidated:
@@ -106,10 +122,14 @@ class LossPair:
         init: The initial loss value before parameter optimization.
         final: The final loss value after parameter optimization. Can be `NotValidated`
             if the program is awaiting validation scoring.
+        all_init: Initial losses for all individual parameter estimators.
+        all_final: Final losses for all individual parameter estimators.
     """
 
     init: float | None = None
     final: float | NotValidated | None = None
+    all_init: list[float] | None = None
+    all_final: list[float] | None = None
 
 
 @dataclass
@@ -210,27 +230,28 @@ class Program:
             )
         return model_fn
 
-    def compile_param_est(self) -> Callable:
-        """Loads and compiles the parameter estimator callable from its source code.
+    def compile_param_ests(self) -> list[Callable]:
+        """Loads and compiles all parameter estimators from their source code.
 
-        This method uses `load_function_from_source` to dynamically load the
-        parameter estimator code (`self.code.param_est`) into a callable function.
+        If compiling any parameter estimator fails or returns None, a warning is
+        issued and we continue attempting to compile the remaining estimators.
 
         Returns:
-            A callable Python function representing the parameter estimator.
-
-        Raises:
-            ParamEstLoadingError: If the parameter estimator source code is missing
-                or cannot be loaded/compiled into a valid function.
+            A list of callable Python functions representing the parameter estimators that
+            compiled successfully.
         """
-        param_est_fn = load_function_from_source(
-            self.code.param_est, PARAM_EST_ENTRYPOINT
-        )
-        if param_est_fn is None:
-            raise ParamEstLoadingError(
-                f"{self.birth}: could not load '{PARAM_EST_ENTRYPOINT}'"
-            )
-        return param_est_fn
+        estimators = self.code.param_est
+        compiled = []
+        for i, est_code in enumerate(estimators):
+            est_fn = load_function_from_source(est_code, PARAM_EST_ENTRYPOINT)
+            if est_fn is not None:
+                compiled.append(est_fn)
+            else:
+                warnings.warn(
+                    f"Program {self.idx}: Failed to compile parameter estimator {i}",
+                    UserWarning,
+                )
+        return compiled
 
     # ── prompt template properties ──
     # These match the parent_program_vars used in prompt_defaults.yaml so that
@@ -275,7 +296,7 @@ class Program:
 
     @property
     def param_est_code(self) -> str:
-        """Returns the numpy source code of the parameter estimator.
+        """Returns the numpy source code of the program's best parameter estimator, which has been previously set.
 
         If the parameter estimator code is None, an empty string is returned.
         This property is used for prompt templating.
@@ -283,7 +304,7 @@ class Program:
         Returns:
             The numpy source code of the parameter estimator.
         """
-        return self.code.param_est or ""
+        return self.code.best_param_est or ""
 
     @property
     def default_params(self) -> dict:

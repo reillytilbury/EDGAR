@@ -457,9 +457,11 @@ def load_live_state(run_dir: Path) -> dict:
     metrics_rows = _load_metrics(run_dir)
     totals = _summarise_metrics(metrics_rows)
 
-    evolution = spec.get("evolution") or {}
+    evolution = spec.get("evolution", {})
+    scoring = spec.get("scoring", {})
     n_gens = evolution.get("n_generations") or 0
     n_islands = evolution.get("n_islands") or 0
+    n_param_ests = scoring.get("n_param_ests", 1)
     started_at_ts = status_doc.get("started_at")
     elapsed_s = (time.time() - started_at_ts) if started_at_ts else 0.0
     current_gen = status_doc.get("current_gen")
@@ -470,7 +472,7 @@ def load_live_state(run_dir: Path) -> dict:
     islands = _islands_payload(pop, census, n_islands, alive_idxs)
     best_per_gen = _best_per_gen(pop)
     best = _best_program(pop)
-    success_rates = _success_rates_latest_gen(pop)
+    success_rates = _success_rates_latest_gen(pop, n_param_ests)
 
     return {
         "status": derived,
@@ -587,7 +589,9 @@ def _best_program(pop: Population | None) -> dict | None:
     }
 
 
-def _success_rates_latest_gen(pop: Population | None) -> dict | None:
+def _success_rates_latest_gen(
+    pop: Population | None, n_param_ests: int = 1
+) -> dict | None:
     """Per-stage success rates among programs born in the last generation."""
     if not pop:
         return None
@@ -599,11 +603,19 @@ def _success_rates_latest_gen(pop: Population | None) -> dict | None:
     n = len(born)
     if n == 0:
         return None
+
+    # Calculate the percentage of successfully generated parameter estimators out of maximum possible (n * n_param_ests)
+    total_expected = n * n_param_ests
+    total_generated = sum(
+        len(p.code.param_est) for p in born if isinstance(p.code.param_est, list)
+    )
+    param_est_rate = total_generated / total_expected if total_expected > 0 else 0.0
+
     return {
         "gen": last_gen,
         "n": n,
         "model": sum(1 for p in born if p.code.model is not None) / n,
-        "param_est": sum(1 for p in born if p.code.param_est is not None) / n,
+        "param_est": param_est_rate,
         "jax": sum(1 for p in born if p.code.model_jax is not None) / n,
         "scored": sum(1 for p in born if _finite(p.program_losses.discover.final)) / n,
     }
@@ -668,6 +680,48 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
 
     children = [c.idx for c in pop if idx in c.birth.parent_indices]
 
+    def _std(lst):
+        if not lst:
+            return None
+        valid = [
+            float(x)
+            for x in lst
+            if x is not None
+            and not isinstance(x, NotValidated)
+            and math.isfinite(float(x))
+        ]
+        if not valid:
+            return None
+        return float(np.std(valid))
+
+    def _min(lst):
+        if not lst:
+            return None
+        valid = [
+            float(x)
+            for x in lst
+            if x is not None
+            and not isinstance(x, NotValidated)
+            and math.isfinite(float(x))
+        ]
+        if not valid:
+            return None
+        return float(np.min(valid))
+
+    def _max(lst):
+        if not lst:
+            return None
+        valid = [
+            float(x)
+            for x in lst
+            if x is not None
+            and not isinstance(x, NotValidated)
+            and math.isfinite(float(x))
+        ]
+        if not valid:
+            return None
+        return float(np.max(valid))
+
     sample_losses_summary = None
     if p.sample_losses is not None:
         arr = np.asarray(p.sample_losses, dtype=float)
@@ -697,17 +751,29 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
         "reconstructed_prompt": _reconstruct_model_prompt(run_dir, pop, idx),
         "code": {
             "model": p.code.model or "",
-            "param_est": p.code.param_est or "",
+            "param_est": p.param_est_code,
             "model_jax": p.code.model_jax or "",
         },
         "losses": {
             "discover": {
                 "init": _safe_loss(p.program_losses.discover.init),
                 "final": _safe_loss(p.program_losses.discover.final),
+                "min_init": _min(p.program_losses.discover.all_init),
+                "max_init": _max(p.program_losses.discover.all_init),
+                "min_final": _min(p.program_losses.discover.all_final),
+                "max_final": _max(p.program_losses.discover.all_final),
+                "std_init": _std(p.program_losses.discover.all_init),
+                "std_final": _std(p.program_losses.discover.all_final),
             },
             "validate": {
                 "init": _safe_loss(p.program_losses.validate.init),
                 "final": _safe_loss(p.program_losses.validate.final),
+                "min_init": _min(p.program_losses.validate.all_init),
+                "max_init": _max(p.program_losses.validate.all_init),
+                "min_final": _min(p.program_losses.validate.all_final),
+                "max_final": _max(p.program_losses.validate.all_final),
+                "std_init": _std(p.program_losses.validate.all_init),
+                "std_final": _std(p.program_losses.validate.all_final),
             },
         },
         "params": params_clean,
