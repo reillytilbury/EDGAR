@@ -29,14 +29,6 @@ def score_seeds(project_name: str):
     X_discover, X_validate, X_eval = spec.load_data_fn(
         data_path=spec.io["data_path"], **spec.project_params
     )
-
-    print(
-        f"Max (X_discover): {np.max(X_discover[1]['response'])}, Min (X_discover): {np.min(X_discover[1]['response'])}"
-    )
-    print(
-        f"Max (X_validate): {np.max(X_validate[1]['response'])}, Min (X_validate): {np.min(X_validate[1]['response'])}"
-    )
-
     # Do naive jax translation
     population = Population()
     for program in spec.seed_programs:

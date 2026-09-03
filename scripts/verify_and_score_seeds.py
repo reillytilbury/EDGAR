@@ -64,7 +64,7 @@ async def main(project_name: str):
 
 
         try:
-            param_est_fn = program.compile_param_est()
+            param_est_fn = program.compile_param_ests()
             print("✓ Compiled param estimator successfully")
         except Exception as e:
             print(f"✗ Failed to compile param estimator: {e}")
@@ -111,9 +111,10 @@ async def main(project_name: str):
             print("Optimizing parameters...")
             gd_config = spec.scoring["gradient_descent"].copy()
             # gd_config["max_iter"] = 100
-            params_opt = _optimize(
+            params_list, _ = _optimize(
                 model_fn, loss_fn_train, params_init, X_discover[0], gd_config
             )
+            params_opt = params_list[0]
             print("✓ Optimization complete")
         except Exception as e:
             print(f"✗ Failed during optimization: {e}")
