@@ -44,7 +44,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 import numpy as np
-from .program import NotValidated, Program, BirthCertificate, Code, LossPair, Losses
+from .program import NotValidated, Program, BirthCertificate, Code, LossStats, Losses
 from ..io.utils import EDGARJSONEncoder
 
 
@@ -235,7 +235,17 @@ class Population:
                 # restore the sentinel so rank() / prepare_validation_scoring
                 # see a real NotValidated() instance, not a bare string (which
                 # would crash sorts and break the validate-eligible filter).
+                discover_raw = d["program_losses"]["discover"]
+                if discover_raw.get("trajectories") is not None:
+                    discover_raw["trajectories"] = np.array(
+                        discover_raw["trajectories"]
+                    )
+
                 validate_raw = d["program_losses"]["validate"]
+                if validate_raw.get("trajectories") is not None:
+                    validate_raw["trajectories"] = np.array(
+                        validate_raw["trajectories"]
+                    )
                 if validate_raw.get("final") == "NOTVALIDATED":
                     validate_raw = {**validate_raw, "final": NotValidated()}
 
@@ -245,8 +255,8 @@ class Population:
                     code=Code(**d["code"]),
                     name=d["name"],
                     program_losses=Losses(
-                        discover=LossPair(**d["program_losses"]["discover"]),
-                        validate=LossPair(**validate_raw),
+                        discover=LossStats(**discover_raw),
+                        validate=LossStats(**validate_raw),
                     ),
                     n_params=d["n_params"],
                     params=_params_from_json(raw_params)
@@ -266,6 +276,7 @@ class Population:
                     else None,
                     image_path=d.get("image_path"),
                     fit_image_path=d.get("fit_image_path"),
+                    trajectory_image_path=d.get("trajectory_image_path"),
                     rank=d.get("rank"),
                 )
                 pop.add(program)

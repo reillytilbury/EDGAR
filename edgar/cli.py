@@ -469,6 +469,7 @@ TEST_OVERRIDES = [
     "--evolution.topology=[1, 0]",
     "--scoring.gradient_descent.max_iter=100",
     "--scoring.timeout_s=120",
+    "--scoring.n_param_ests=1",
     "--llms.model_llm=gemini-2.5-flash",
     "--llms.param_est_llm=gemini-2.5-flash",
     "--llms.jax_model_translator_llm=gemini-2.5-flash-lite",

@@ -5,20 +5,6 @@ This module provides functionalities for evaluating the performance of generated
 models, mirroring the asynchronous generation pattern found in `edgar/llm/generate.py`.
 It handles the scoring of individual programs within isolated subprocesses
 and orchestrates population-level scoring and ranking.
-
-Key functionalities include:
-- `_score_one_model`: Scores a single program in a dedicated subprocess, ensuring
-  clean JAX initialization and robust timeout enforcement.
-- `score`: Identifies programs requiring evaluation for a specific data split
-  (e.g., 'discover' or 'validate') and updates their performance metrics.
-
-Per-program work runs in a subprocess so JAX initialises cleanly and runaway
-models can be killed on timeout. The subprocess start method defaults to
-"spawn" (safe with the macOS Objective-C runtime / JAX) but can be overridden
-to "fork" via the EDGAR_MP_START_METHOD environment variable. Fork is useful for
-scripts that don't use an `if __name__ == "__main__":` guard (e.g., interactive
-notebooks, tutorial scripts) because it doesn't re-import the parent module
-in each child.
 """
 
 from __future__ import annotations
@@ -32,8 +18,7 @@ import cloudpickle
 import numpy as np
 import jax
 import jax.numpy as jnp
-import optax
-from jax.flatten_util import ravel_pytree
+from .optimizer import Optimizer
 import warnings
 
 from ..evolution.program import (
@@ -43,8 +28,12 @@ from ..evolution.program import (
 )
 from ..evolution.population import Population
 from ..io.metrics import get_active_metrics, stream_line
-from .utils import _safe_loss
-
+from .utils import (
+    _evaluate_sample_losses,
+    _evaluate_scalar_loss,
+    _evaluate_model_output,
+    _safe_loss,
+)
 
 # ── helpers ──
 
@@ -86,44 +75,9 @@ def _get_params(param_est_fn, default_params, data_train):
 
 
 def _eval_loss(model_fn, loss_fn, params, data_test):
-    """Computes the overall scalar loss for a model on a given dataset.
-
-    This function calculates the mean of the per-sample losses from the `loss_fn`
-    after running the `model_fn` with the provided parameters on the test data.
-
-    Args:
-        model_fn: The JAX-compiled model function (callable).
-        loss_fn: The loss function (callable) that returns per-sample losses.
-        params: The model parameters (JAX pytree).
-        data_test: A dictionary of test data.
-
-    Returns:
-        The scalar mean loss as a float. Returns `float("inf")` if parameters are `None`.
-    """
     if params is None:
         return float("inf")
-    output = jax.vmap(model_fn, in_axes=(0, 0))(data_test, params)
-    return float(jnp.mean(loss_fn(output, data_test)))
-
-
-def _eval_sample_losses(model_fn, loss_fn, params, data_test):
-    """Computes individual losses for each sample in a dataset.
-
-    This function applies the model and loss function to each sample in the
-    test data to get an array of per-sample loss values, without any
-    complexity penalty.
-
-    Args:
-        model_fn: The JAX-compiled model function (callable).
-        loss_fn: The loss function (callable) that returns per-sample losses.
-        params: The model parameters (JAX pytree).
-        data_test: A dictionary of test data.
-
-    Returns:
-        A NumPy array of per-sample loss values.
-    """
-    output = jax.vmap(model_fn, in_axes=(0, 0))(data_test, params)
-    return np.asarray(loss_fn(output, data_test))
+    return float(_evaluate_scalar_loss(model_fn, loss_fn, params, data_test))
 
 
 def _eval_fingerprint(model_fn, params, X_eval):
@@ -144,7 +98,7 @@ def _eval_fingerprint(model_fn, params, X_eval):
     """
     sample_indices = X_eval["_sample_indices"]
     params_matched = jax.tree_util.tree_map(lambda p: p[sample_indices], params)
-    return jax.vmap(model_fn, in_axes=(0, 0))(X_eval, params_matched)
+    return _evaluate_model_output(model_fn, params_matched, X_eval)
 
 
 def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config):
@@ -158,63 +112,21 @@ def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config):
         gd_config: Configuration dictionary for gradient descent.
 
     Returns:
-        A list of optimized parameter pytrees.
+        optimized_params: A list of optimized parameter sets (JAX pytrees), corresponding to the input `params_inits`.
+        loss_trajectories: A numpy array of shape (n_opts, max_iter) containing the losses during optimization.
     """
-    # All params_inits must have the same structure. Get ravel and unflatten helper from the first one.
-    flat_first, unflatten = ravel_pytree(params_inits[0])
+    if isinstance(params_inits, dict):
+        params_inits = [params_inits]
 
-    # Flatten and stack all parameters into a single array of shape (n_estimators, flat_dim)
-    flat_all = jnp.stack([ravel_pytree(p)[0] for p in params_inits])
-    n_estimators = flat_all.shape[0]
-
-    def total_loss_single(flat_p):
-        p = unflatten(flat_p)
-        output = jax.vmap(model_fn, in_axes=(0, 0))(data_train, p)
-        return jnp.mean(loss_fn(output, data_train))
-
-    # JIT-compile the vmapped value_and_grad of total_loss_single
-    loss_and_grad_batched = jax.jit(jax.vmap(jax.value_and_grad(total_loss_single)))
-
-    opt = optax.adam(gd_config["learning_rate"])
-    opt_states = [opt.init(f) for f in flat_all]
-
-    best_losses = [float("inf")] * n_estimators
-    best_flats = [f.copy() for f in flat_all]
-    active = [True] * n_estimators
-
-    for step in range(1, gd_config["max_iter"] + 1):
-        loss_vals, grads = loss_and_grad_batched(flat_all)
-
-        new_flats = []
-        for i in range(n_estimators):
-            if not active[i]:
-                new_flats.append(flat_all[i])
-                continue
-
-            loss_val = float(loss_vals[i])
-            grad = grads[i]
-
-            if not np.isfinite(loss_val) or not jnp.all(jnp.isfinite(grad)):
-                # Skip updates for this estimator from now on
-                active[i] = False
-                new_flats.append(flat_all[i])
-                continue
-
-            if loss_val < best_losses[i]:
-                best_losses[i] = loss_val
-                best_flats[i] = np.array(flat_all[i])
-
-            updates, opt_state = opt.update(grad, opt_states[i], flat_all[i])
-            opt_states[i] = opt_state
-            new_flat = optax.apply_updates(flat_all[i], updates)
-            new_flats.append(new_flat)
-
-        flat_all = jnp.stack(new_flats)
-
-        if not any(active):
-            break
-
-    return [unflatten(f) for f in best_flats]
+    # Initialize the optimizer
+    optimizer = Optimizer(model_fn, loss_fn, data_train, gd_config)
+    flat_all, opt_state = optimizer.flatten_and_init_params(params_inits)
+    # Run the JIT-compiled optimization on-device, this is the only part run on GPU
+    optimized_params, loss_trajectories = optimizer.run_optimization(
+        flat_all, opt_state
+    )
+    loss_trajectories = np.asarray(loss_trajectories).T  # (n_opts, max_iter)
+    return optimized_params, loss_trajectories
 
 
 def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
@@ -239,8 +151,8 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         split: A string indicating the current scoring split (e.g., "discover" or "validate").
 
     Returns:
-        None. Results are placed on the `queue` as a 10-tuple:
-        `(final_loss, initial_loss, fingerprint, params, sample_losses, params_init, sample_losses_init, all_final, all_init, best_idx)`.
+        None. Results are placed on the `queue` as a 9-tuple:
+        `(final_loss, initial_loss, fingerprint, params, sample_losses, params_init, sample_losses_init, best_idx, trajectories)`.
         If any critical failure occurs (model loading, optimization), infinite
         losses and `None` for other results are returned.
     """
@@ -258,7 +170,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
     except ModelLoadingError as e:
         print(f"[scoring] program #{program.idx} model failed to load: {e}")
         queue.put(
-            (float("inf"), float("inf"), None, None, None, None, None, None, None, None)
+            (float("inf"), float("inf"), None, None, None, None, None, None, None)
         )
         return
 
@@ -282,7 +194,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         ]
 
         # 3. Optimize parameters for each estimator using gradient descent in parallel
-        params_list = _optimize(
+        params_list, trajectories = _optimize(
             model_fn,
             loss_fn_train,
             params_inits,
@@ -304,15 +216,12 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         params = params_list[best_idx]
         params_init = params_inits[best_idx]
 
-        all_init = initial_losses
-        all_final = final_losses
-
     except Exception as e:
         print(f"[scoring] program #{program.idx} failed during optimize/eval: {e}")
         print(f"[scoring] traceback:\n{traceback.format_exc()}")
         print(f"[scoring] code.model_jax:\n{program.code.model_jax}")
         queue.put(
-            (float("inf"), float("inf"), None, None, None, None, None, None, None, None)
+            (float("inf"), float("inf"), None, None, None, None, None, None, None)
         )
         return
 
@@ -326,14 +235,18 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         fingerprint = None
 
     try:
-        sample_losses = _eval_sample_losses(model_fn, loss_fn_test, params, data_test)
+        sample_losses = np.asarray(
+            _evaluate_sample_losses(model_fn, loss_fn_test, params, data_test)
+        )
     except Exception as e:
         print(f"[scoring] program #{program.idx} sample_losses failed (ignored): {e}")
         sample_losses = None
 
     try:
         sample_losses_init = (
-            _eval_sample_losses(model_fn, loss_fn_test, params_init, data_test)
+            np.asarray(
+                _evaluate_sample_losses(model_fn, loss_fn_test, params_init, data_test)
+            )
             if split == "discover"
             else None
         )
@@ -352,9 +265,8 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
             sample_losses,
             params_init,
             sample_losses_init,
-            all_final,
-            all_init,
             best_idx,
+            trajectories,
         )
     )
 
@@ -395,9 +307,8 @@ def _score_one_model(
     jnp.ndarray | None,
     dict | None,
     jnp.ndarray | None,
-    list[float] | None,
-    list[float] | None,
     int | None,
+    list[list[float]] | None,
     str,
 ]:
     """Scores a single program in a dedicated subprocess, enforcing a timeout.
@@ -417,7 +328,7 @@ def _score_one_model(
         split: The scoring split (e.g., "discover" or "validate").
 
     Returns:
-        A 11-tuple: `(final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init, all_final, all_init, best_idx, outcome)`.
+        A 10-tuple: `(final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init, best_idx, trajectories, outcome)`.
         The `outcome` label is one of:
         - `"ok"` (finite loss)
         - `"timeout"` (subprocess killed)
@@ -439,14 +350,12 @@ def _score_one_model(
             None,
             None,
             None,
-            None,
             "inf",
         )
     if _is_banned(config.get("banned_strings", []), program):
         return (
             float("inf"),
             float("inf"),
-            None,
             None,
             None,
             None,
@@ -482,7 +391,6 @@ def _score_one_model(
             None,
             None,
             None,
-            None,
             "timeout",
         )
     proc.join()
@@ -494,9 +402,8 @@ def _score_one_model(
         samples,
         params_init,
         samples_init,
-        all_final,
-        all_init,
         best_idx,
+        trajectories,
     ) = result
     # Worker puts (inf, inf, None, None, None, None, None ,....,) on its own exception
     # path. Treat that as "inf" rather than "timeout" so metrics distinguish them.
@@ -509,9 +416,8 @@ def _score_one_model(
         samples,
         params_init,
         samples_init,
-        all_final,
-        all_init,
         best_idx,
+        trajectories,
         outcome,
     )
 
@@ -614,9 +520,8 @@ def score(
             sample_losses,
             params_init,
             sample_losses_init,
-            all_final,
-            all_init,
             best_idx,
+            trajectories,
             outcome,
         ) = _score_one_model(program, X_split, loss_fn, config, X_eval, split)
         latency_ms = (time.monotonic() - t0) * 1000.0
@@ -626,12 +531,13 @@ def score(
         loss_pair = getattr(program.program_losses, split)
         loss_pair.init = initial_loss
         loss_pair.final = final_loss
-        loss_pair.all_init = all_init
-        loss_pair.all_final = all_final
+        loss_pair.trajectories = trajectories
 
-        # Record the best parameter estimator string explicitly
-        if best_idx is not None and program.code.param_est:
-            program.code.best_param_est = program.code.param_est[best_idx]
+        # Record the best parameter estimator
+        if best_idx is not None:
+            program.best_estimator_idx = best_idx
+            if program.code.param_est:
+                program.best_param_est = program.code.param_est[best_idx]
 
         if fingerprint is not None:
             program.eval_fingerprint = fingerprint

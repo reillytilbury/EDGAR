@@ -44,21 +44,23 @@ from .llm.generate import (
 )
 from .io.config import RetryConfig
 from .scoring.scoring import rank, score
-from .io.plotting import generate_program_fits
+from .io.plotting import generate_program_images
 
 
 # Stage-timed aliases. Wraps the functions for individual timing and logging.
 t_seed = timed("seed", quiet=True)(seed)
 t_translate_seeds = timed("translate_seeds")(translate_programs)
 t_score_seeds = timed("score_seeds")(score)
-t_fits_seeds = timed("generate_program_fits_seeds", quiet=True)(generate_program_fits)
+t_fits_seeds = timed("generate_program_images_seeds", quiet=True)(
+    generate_program_images
+)
 
 t_spawn = timed("spawn", quiet=True)(spawn)
 t_generate_models = timed("generate_models")(generate_models)
 t_generate_param_ests = timed("generate_param_ests")(generate_param_ests)
 t_translate_programs = timed("translate_programs")(translate_programs)
 t_score = timed("score")(score)
-t_fits = timed("generate_program_fits", quiet=True)(generate_program_fits)
+t_fits = timed("generate_program_images", quiet=True)(generate_program_images)
 t_deduplicate = timed("deduplicate", quiet=True)(deduplicate)
 t_prune = timed("prune", quiet=True)(prune)
 t_migrate = timed("migrate", quiet=True)(migrate)

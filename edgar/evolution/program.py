@@ -115,36 +115,34 @@ class NotValidated:
 
 
 @dataclass
-class LossPair:
-    """Stores the initial and final scalar loss values for a given data split.
+class LossStats:
+    """Stores the initial and final scalar loss values, as well as optimization trajectories, for a given data split.
 
     Attributes:
         init: The initial loss value before parameter optimization.
         final: The final loss value after parameter optimization. Can be `NotValidated`
             if the program is awaiting validation scoring.
-        all_init: Initial losses for all individual parameter estimators.
-        all_final: Final losses for all individual parameter estimators.
+        trajectories: Optimization histories (loss values per step) for all individual estimators.
     """
 
     init: float | None = None
     final: float | NotValidated | None = None
-    all_init: list[float] | None = None
-    all_final: list[float] | None = None
+    trajectories: np.ndarray | None = None
 
 
 @dataclass
 class Losses:
-    """Aggregates loss pairs for different data splits (discover and validate).
+    """Aggregates loss stats for different data splits (discover and validate).
 
     Attributes:
-        discover: `LossPair` for the 'discover' data split, used during evolution.
-        validate: `LossPair` for the 'validate' data split, used for final ranking.
+        discover: `LossStats` for the 'discover' data split, used during evolution.
+        validate: `LossStats` for the 'validate' data split, used for final ranking.
             Initialized with `NotValidated` for `final` loss.
     """
 
-    discover: LossPair = field(default_factory=LossPair)
-    validate: LossPair = field(
-        default_factory=lambda: LossPair(init=None, final=NotValidated())
+    discover: LossStats = field(default_factory=LossStats)
+    validate: LossStats = field(
+        default_factory=lambda: LossStats(init=None, final=NotValidated())
     )
 
 
@@ -193,8 +191,10 @@ class Program:
     sample_losses_init: np.ndarray | None = field(default=None, repr=False)
     image_path: str | None = None
     fit_image_path: str | None = None
+    trajectory_image_path: str | None = None
     idx: int | None = field(default=None, init=False)
     rank: int | None = None
+    best_estimator_idx: int | None = None
     data: dict | None = field(default=None, repr=False)
     _default_params: dict | Callable | None = None
 

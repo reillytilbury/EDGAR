@@ -372,17 +372,16 @@
 
       <!-- tabs -->
       <div class="flex border-b border-zinc-800 text-sm bg-zinc-900/50">
-        <template x-for="t in ['code','latex','prompt','specs','lineage','fit']" :key="t">
+        <template x-for="t in ['code','latex','prompt','specs','lineage','fit','optimization']" :key="t">
           <button
             @click="panelTab = t"
             :class="panelTab === t ? 'bg-zinc-800 text-zinc-50 border-b border-emerald-500' : 'text-zinc-400 hover:text-zinc-100'"
             class="px-4 py-2 capitalize"
             x-text="t"></button>
         </template>
-      </div>
+        </div>
 
-      <div class="flex-1 overflow-auto p-4 space-y-3">
-
+        <div class="flex-1 overflow-auto p-4 space-y-3">
         <!-- Code tab -->
         <div x-show="panelTab === 'code'">
           <div class="flex gap-2 mb-2 text-xs">
@@ -450,33 +449,24 @@
           </div>
 
           <div class="border border-zinc-800 rounded">
-            <div class="px-3 py-2 text-xs text-zinc-500 uppercase border-b border-zinc-800">Losses (Estimators Statistics)</div>
-            <div class="p-3 grid grid-cols-6 gap-2 text-xs border-b border-zinc-900 bg-zinc-900/10">
+            <div class="px-3 py-2 text-xs text-zinc-500 uppercase border-b border-zinc-800">Losses</div>
+            <div class="p-3 grid grid-cols-3 gap-2 text-xs border-b border-zinc-900 bg-zinc-900/10">
               <div class="text-zinc-500 font-semibold uppercase">Split</div>
               <div class="text-zinc-500 font-semibold uppercase">Stage</div>
               <div class="text-zinc-500 font-semibold uppercase">Value</div>
-              <div class="text-zinc-500 font-semibold uppercase text-right">Min</div>
-              <div class="text-zinc-500 font-semibold uppercase text-right">Max</div>
-              <div class="text-zinc-500 font-semibold uppercase text-right">Std</div>
             </div>
-            <div class="p-3 grid grid-cols-6 gap-x-2 gap-y-3 text-sm">
+            <div class="p-3 grid grid-cols-3 gap-x-2 gap-y-3 text-sm">
               <template x-for="split in ['discover','validate']" :key="split">
                 <div class="contents">
                   <!-- Row 1: init -->
                   <div class="text-zinc-300 font-semibold align-middle" x-text="split"></div>
                   <div class="text-zinc-500">init</div>
                   <div class="font-mono font-semibold" :class="lossClass(programDetail.losses?.[split]?.init)" x-text="fmt(programDetail.losses?.[split]?.init)"></div>
-                  <div class="font-mono text-zinc-400 text-right" x-text="fmt(programDetail.losses?.[split]?.min_init)"></div>
-                  <div class="font-mono text-zinc-400 text-right" x-text="fmt(programDetail.losses?.[split]?.max_init)"></div>
-                  <div class="font-mono text-zinc-400 text-right font-medium" x-text="fmt(programDetail.losses?.[split]?.std_init)"></div>
                   
                   <!-- Row 2: final -->
                   <div></div>
                   <div class="text-zinc-500">final</div>
                   <div class="font-mono font-semibold" :class="lossClass(programDetail.losses?.[split]?.final)" x-text="fmt(programDetail.losses?.[split]?.final)"></div>
-                  <div class="font-mono text-zinc-400 text-right" x-text="fmt(programDetail.losses?.[split]?.min_final)"></div>
-                  <div class="font-mono text-zinc-400 text-right" x-text="fmt(programDetail.losses?.[split]?.max_final)"></div>
-                  <div class="font-mono text-zinc-400 text-right font-medium" x-text="fmt(programDetail.losses?.[split]?.std_final)"></div>
                 </div>
               </template>
             </div>
@@ -545,6 +535,17 @@
           </div>
           <div x-show="!programDetail.fit_image_url" class="text-zinc-500 italic text-sm">
             No fit image was generated for this program (either not yet scored or plot_fn missing).
+          </div>
+        </div>
+
+        <!-- Optimization tab -->
+        <div x-show="panelTab === 'optimization'">
+          <div x-show="programDetail.trajectory_image_url">
+            <img :src="`/api/runs/${runId}/${programDetail.trajectory_image_url}`" alt="optimization trajectory"
+              class="rounded border border-zinc-800 max-w-full" />
+          </div>
+          <div x-show="!programDetail.trajectory_image_url" class="text-zinc-500 italic text-sm">
+            No trajectory image was generated for this program (either not yet scored or optimization failed).
           </div>
         </div>
       </div>
