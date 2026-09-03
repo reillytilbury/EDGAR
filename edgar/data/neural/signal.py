@@ -4,8 +4,30 @@ import numpy as np
 def extract_stimulus_related(
     data: dict, n_pcs: int = 8, z_score: bool = False, spont_mean_removal: bool = False
 ) -> np.ndarray:
-    """
-    Extracts the stimulus-related response from the data.
+    """Extracts the stimulus-related response from neural data.
+
+    This function preprocesses neural response data by optionally removing spontaneous
+    activity, projecting out principal components, and z-scoring. It aims to isolate
+    the signal component correlated with external stimuli.
+
+    Args:
+        data: A dictionary containing the neural response data. Expected keys are:
+            - "sresp": (np.ndarray) Stimulus response data, typically with shape
+              (n_neurons, n_trials).
+            - "mean_spont": (np.ndarray, optional) Mean spontaneous activity
+              per neuron, shape (n_neurons,). Required if `spont_mean_removal` is True.
+            - "u_spont": (np.ndarray, optional) Principal components of spontaneous
+              activity, shape (n_neurons, n_components). Required if `n_pcs > 0`.
+        n_pcs: The number of principal components of spontaneous activity to project
+            out from the stimulus response. If 0, no PCA projection is performed.
+        z_score: If True, the stimulus response is z-scored along the second axis
+            (per neuron) after other preprocessing steps.
+        spont_mean_removal: If True, the mean spontaneous activity is subtracted from
+            the stimulus response.
+
+    Returns:
+        A `np.ndarray` representing the preprocessed stimulus-related response,
+        typically with the same shape as the input "sresp".
     """
     sresp = np.asarray(data["sresp"])
 
@@ -26,8 +48,41 @@ def extract_stimulus_related(
 
 
 def _unbiased_fraction(R, min_repeats=2):
-    """
-    Compute unbiased fraction of stimulus-related variance (Sahani & Linden, 2003)
+    """Computes the unbiased fraction of stimulus-related variance.
+
+    This function implements the method described by Sahani & Linden (2003)
+    to estimate the fraction of variance in neural responses that is attributable
+    to the stimulus, unbiased by noise.
+
+    The signal-to-noise ratio is estimated by:
+    $$ S^2 = \\frac{1}{N} \\sum_{i=1}^{N} (\\mu_i - \\bar{f})^2 - \\frac{N-1}{N^2} \\sum_{i=1}^{N} \\frac{\\sigma_i^2}{R_s} $$
+    $$ V^2 = \\frac{1}{N} \\sum_{i=1}^{N} \\frac{\\sigma_i^2}{R_s} $$
+    where $\\mu_i$ is the mean response for stimulus $i$, $\\bar{f}$ is the
+    overall mean response, $\\sigma_i^2$ is the variance of responses for stimulus $i$,
+    $R_s$ is the number of repeats for stimulus $i$, and $N$ is the number of stimuli.
+    The unbiased signal fraction is then $S^2 / (S^2 + V^2)$.
+
+    Args:
+        R: A `np.ndarray` of neural responses with shape
+            (n_repeats, n_cells, n_angles), where `n_repeats` is the number of
+            trials per stimulus angle, `n_cells` is the number of neurons, and
+            `n_angles` is the number of stimulus angles.
+        min_repeats: The minimum number of repeats required per angle. If `R` has
+            fewer repeats than this, a ValueError is raised.
+
+    Returns:
+        A tuple containing:
+        - `signal_fraction`: A `np.ndarray` of shape (n_cells,) representing the
+          unbiased fraction of stimulus-related variance for each neuron, clipped
+          to the range [0, 1].
+        - `dict`: A dictionary containing intermediate computed values:
+            - "S2": Signal variance (np.ndarray of shape (n_cells,)).
+            - "V2": Noise variance (np.ndarray of shape (n_cells,)).
+            - "mu_angles": Mean response per angle (np.ndarray of shape (n_cells, n_angles)).
+            - "var_angles": Variance per angle (np.ndarray of shape (n_cells, n_angles)).
+
+    Raises:
+        ValueError: If the number of repeats per angle is less than `min_repeats`.
     """
     n_repeats, n_cells, n_angles = R.shape
     if n_repeats < min_repeats:
@@ -65,8 +120,30 @@ def binned_mean(
     x_grid: np.ndarray,
     return_indices: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-    """
-    Bin y by proximity to each x_grid point and return per-bin means.
+    """Bins `y` values based on their corresponding `x` values and a specified `x_grid`.
+
+    For each point in `x_grid`, this function defines a bin (interval) and calculates
+    the mean of all `y` values whose corresponding `x` falls into that bin. This
+    is useful for discretizing continuous data and computing average responses
+    within defined ranges.
+
+    Args:
+        x: A `np.ndarray` representing the independent variable for binning.
+            The last dimension is used for binning.
+        y: A `np.ndarray` representing the dependent variable(s) to be averaged.
+            The last dimension should correspond to the `x` values.
+        x_grid: A `np.ndarray` of sorted values defining the centers of the bins.
+            The bins are constructed such that each `x_grid` point is the center
+            of an interval whose edges are halfway between adjacent `x_grid` points.
+        return_indices: If True, in addition to the binned means, the function also
+            returns a `np.ndarray` of the bin indices for each `x` value.
+
+    Returns:
+        A `np.ndarray` representing the mean of `y` for each bin defined by `x_grid`.
+        The shape will be `y.shape[:-1] + (x_grid.size,)`.
+        If `return_indices` is True, returns a tuple `(y_mean, bin_idx)`, where
+        `bin_idx` is a `np.ndarray` of the same shape as `x`, containing the
+        assigned bin index for each element in `x`.
     """
     if x_grid.size == 0:
         return (x_grid, np.array([])) if return_indices else x_grid

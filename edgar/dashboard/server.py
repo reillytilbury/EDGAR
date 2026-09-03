@@ -32,13 +32,15 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
 
     Args:
         run_roots: A list of base directories where EDGAR run data (e.g.,
-            'program_databases/') can be found.
+            'program_databases/') can be found. These directories are scanned
+            to discover available EDGAR experiments.
         default_run_dir: An optional default run directory to be loaded
             automatically when the dashboard starts. Its root will be added to
-            `run_roots` if not already present.
+            `run_roots` if not already present, ensuring it is discoverable.
 
     Returns:
-        A configured FastAPI application instance.
+        A configured FastAPI application instance ready to serve the EDGAR
+        dashboard.
     """
     run_roots = [Path(r).resolve() for r in run_roots if Path(r).exists()]
     if default_run_dir is not None:
@@ -53,15 +55,20 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
     def _resolve(run_id: str) -> Path:
         """Resolves a run_id to its corresponding on-disk directory.
 
+        This helper function maps a unique run identifier (e.g., a timestamped
+        directory name) to its absolute file system path within the configured
+        `run_roots`.
+
         Args:
-            run_id: The unique identifier for an EDGAR run.
+            run_id: The unique identifier for an EDGAR run (e.g., '2023-10-27/15-30-00').
 
         Returns:
             The `Path` object pointing to the resolved run directory.
 
         Raises:
             HTTPException: If the `run_id` does not correspond to an existing
-                run directory within the configured `run_roots`.
+                run directory within the configured `run_roots`, a 404 Not Found
+                error is raised.
         """
         run_dir = dd.resolve_run_dir(run_id, run_roots)
         if run_dir is None:
@@ -75,11 +82,11 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
         """Returns a simple health check status of the dashboard server.
 
         This endpoint can be used to verify that the server is running and
-        identify the configured `run_roots`.
+        identify the configured `run_roots` that the dashboard is monitoring.
 
         Returns:
-            A dictionary indicating the server's status and its configured
-            root directories.
+            A dictionary indicating the server's operational status and a list
+            of the absolute paths to its configured root directories.
         """
         return {"ok": True, "roots": [str(r) for r in run_roots]}
 
@@ -87,11 +94,13 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
     def config():
         """Returns the dashboard's current configuration.
 
-        This includes the list of `run_roots` and the `default_run_id` if one
-        was specified at startup.
+        This includes the list of `run_roots` that are being monitored and the
+        `default_run_id` if one was specified at startup, which is used to
+        automatically load a specific run.
 
         Returns:
-            A dictionary containing the dashboard's configuration details.
+            A dictionary containing the dashboard's configuration details,
+            including `roots` (list of paths) and `default_run_id` (string or None).
         """
         return {
             "roots": [str(r) for r in run_roots],
@@ -105,11 +114,13 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
         """Returns a list of all discoverable EDGAR runs.
 
         The runs are identified by scanning the configured `run_roots` for
-        directories containing `task_spec.yaml` files.
+        directories that contain a `task_spec.yaml` file, which signifies
+        an EDGAR experiment.
 
         Returns:
             A list of dictionaries, where each dictionary represents an EDGAR
-            run with its ID and potentially other summary information.
+            run with its ID and potentially other summary information suitable
+            for display in a list view.
         """
         return dd.list_runs(run_roots)
 
@@ -117,8 +128,10 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
     def summary(run_id: str):
         """Returns a summary of a specific EDGAR run.
 
-        This includes high-level information such as start time, number of
-        programs, best loss, Git status, and LLM configuration.
+        This includes high-level information such as the experiment's start time,
+        the total number of programs generated, the best overall loss achieved,
+        Git status at the time of the run, and the LLM configuration used.
+        It is primarily for overview cards in the dashboard.
 
         Args:
             run_id: The unique identifier for the EDGAR run.
@@ -127,7 +140,8 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
             A dictionary containing the summary details for the specified run.
 
         Raises:
-            HTTPException: If the `run_id` is not found.
+            HTTPException: If the `run_id` is not found within the configured
+                `run_roots`, a 404 Not Found error is raised.
         """
         return dd.load_run_summary(_resolve(run_id))
 
@@ -136,8 +150,9 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
         """Returns the live state of a specific EDGAR run.
 
         This endpoint provides real-time metrics and progress indicators, such as
-        current generation, best programs, and success rates per island,
-        making it suitable for live monitoring.
+        the current generation number, information about the best programs found
+        so far, and success rates for LLM generations per island. It is designed
+        for live monitoring and updates in the dashboard.
 
         Args:
             run_id: The unique identifier for the EDGAR run.
@@ -146,7 +161,8 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
             A dictionary containing the live state information for the specified run.
 
         Raises:
-            HTTPException: If the `run_id` is not found.
+            HTTPException: If the `run_id` is not found within the configured
+                `run_roots`, a 404 Not Found error is raised.
         """
         return dd.load_live_state(_resolve(run_id))
 
@@ -154,18 +170,20 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
     def programs(run_id: str):
         """Returns a list of all programs generated in a specific EDGAR run.
 
-        The programs are sorted by rank, then loss, then index, providing an
-        ordered view of the evolutionary progress.
+        The programs are returned as a sorted list, primarily by their final
+        rank, then by their validation loss, and finally by their global index.
+        This provides an ordered view of the evolutionary progress and outcomes.
 
         Args:
             run_id: The unique identifier for the EDGAR run.
 
         Returns:
             A list of dictionaries, where each dictionary represents a program
-            with its key attributes.
+            with its key attributes such as index, name, and losses.
 
         Raises:
-            HTTPException: If the `run_id` is not found.
+            HTTPException: If the `run_id` is not found within the configured
+                `run_roots`, a 404 Not Found error is raised.
         """
         return dd.load_program_list(_resolve(run_id))
 
@@ -173,17 +191,21 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
     def family_tree(run_id: str):
         """Returns data for the family tree (lineage) visualization.
 
-        Provides hierarchical layout positions, parent-child edges, and
-        node metadata for rendering a lineage graph in the dashboard.
+        This endpoint provides the necessary data to render a lineage graph,
+        including hierarchical layout positions for programs, parent-child
+        relationships (edges), and metadata for each program node, which can
+        be used for visualizing the evolutionary history of programs.
 
         Args:
             run_id: The unique identifier for the EDGAR run.
 
         Returns:
-            A dictionary containing Plotly-compatible trace data and a parent map.
+            A dictionary containing Plotly-compatible trace data and a parent
+            map suitable for lineage visualization.
 
         Raises:
-            HTTPException: If the `run_id` is not found.
+            HTTPException: If the `run_id` is not found within the configured
+                `run_roots`, a 404 Not Found error is raised.
         """
         return dd.load_family_tree_data(_resolve(run_id))
 
@@ -191,8 +213,9 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
     def program_detail(run_id: str, idx: int):
         """Returns detailed information for a specific program within an EDGAR run.
 
-        This includes the program's code, losses, parameters, birth certificate,
-        and paths to associated images.
+        This includes comprehensive details such as the program's source code,
+        various loss values, optimized parameters, its `BirthCertificate`
+        (origin and lineage), and paths to any associated visualization images.
 
         Args:
             run_id: The unique identifier for the EDGAR run.
@@ -202,7 +225,8 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
             A dictionary containing detailed information for the specified program.
 
         Raises:
-            HTTPException: If the `run_id` or `idx` is not found.
+            HTTPException: If the `run_id` or `idx` is not found within the
+                configured `run_roots` or population, a 404 Not Found error is raised.
         """
         det = dd.load_program_detail(_resolve(run_id), idx)
         if det is None:
@@ -213,24 +237,28 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
     async def program_latex(run_id: str, idx: int, force: bool = False):
         """Generates or retrieves the LaTeX mathematical representation of a program's model.
 
-        This function leverages an LLM to translate the program's source code
-        into a LaTeX equation, caching the result for future requests. It can
-        optionally force regeneration even if a cached version exists.
+        This function leverages an LLM (specifically the `jax_model_translator_llm`
+        configured in the `task_spec.yaml`) to translate the program's JAX-compatible
+        model source code into a mathematical equation in LaTeX format. The result
+        is aggressively cached on disk to ensure fast, free retrieval for subsequent
+        requests. It can optionally force regeneration even if a cached version exists.
 
         Args:
             run_id: The unique identifier for the EDGAR run.
             idx: The global unique index of the program.
             force: If True, forces the regeneration of the LaTeX equation,
-                bypassing the cache.
+                bypassing the cache and re-querying the LLM.
 
         Returns:
             A dictionary containing the generated or retrieved LaTeX string.
 
         Raises:
             HTTPException:
-                - 404: If the `run_id` or `idx` is not found.
+                - 404: If the `run_id` or `idx` is not found within the configured
+                  `run_roots` or population.
                 - 502: If there's an issue with the LLM API (e.g., missing
-                  API key, quota limits) during LaTeX generation.
+                  API key, quota limits, or unexpected model behavior) during
+                  LaTeX generation, providing a clean error message.
         """
         run_dir = _resolve(run_id)
         det = dd.load_program_detail(run_dir, idx)
@@ -249,23 +277,25 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
     def image(run_id: str, gen: str, island: str, batch: str):
         """Serves LLM image feedback plots generated during the evolutionary process.
 
-        These images are provided to LLMs as multimodal input to guide the
-        generation of new programs. The path components (gen, island, batch)
-        are expected to be integers, allowing for zero-padded or non-padded formats.
+        These images are typically provided to LLMs as multimodal input to guide the
+        generation of new programs, often showing model predictions against data.
+        The path components (`gen`, `island`, `batch`) are expected to be integers,
+        allowing for zero-padded (e.g., `gen_001`) or non-padded formats. The images
+        are stored in a structured directory: `image_feedback/gen_NNN/island_NNN/batch_NNN/image.png`.
 
         Args:
             run_id: The unique identifier for the EDGAR run.
-            gen: The generation number.
-            island: The island index.
-            batch: The batch index within the island and generation.
+            gen: The generation number, as a string (e.g., '1' or '001').
+            island: The island index, as a string (e.g., '0' or '000').
+            batch: The batch index within the island and generation, as a string.
 
         Returns:
             A `FileResponse` containing the requested image with `media_type="image/png"`.
 
         Raises:
             HTTPException:
-                - 404: If the `run_id` or the specified image path does not exist.
-                - 400: If `gen`, `island`, or `batch` are not valid integers.
+                - 404: If the `run_id` is not found or the specified image path does not exist.
+                - 400: If `gen`, `island`, or `batch` are not valid integers, indicating a malformed request.
         """
         run_dir = _resolve(run_id)
         # path components are zero-padded ints; accept either "0" or "000"
@@ -290,7 +320,9 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
         """Serves model fit visualization images for individual programs.
 
         These images typically show the initial and optimized model fits against
-        the experimental data, providing a visual assessment of the program's performance.
+        the experimental data, providing a visual assessment of the program's performance
+        and how well it captures the underlying patterns. The images are stored at
+        `image_fits/P{idx:04d}.png`.
 
         Args:
             run_id: The unique identifier for the EDGAR run.
@@ -300,7 +332,7 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
             A `FileResponse` containing the requested image with `media_type="image/png"`.
 
         Raises:
-            HTTPException: If the `run_id` or the specified fit image path does not exist.
+            HTTPException: If the `run_id` is not found or the specified fit image path does not exist.
         """
         run_dir = _resolve(run_id)
         img_path = run_dir / "image_fits" / f"P{idx:04d}.png"
@@ -312,7 +344,10 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
     def trajectory_image(run_id: str, idx: int):
         """Serves optimization trajectory visualization images for individual programs.
 
-        These images show the loss history of all parallel estimators across steps.
+        These images show the loss history of all parallel estimators during the
+        gradient descent optimization process, highlighting how different
+        initial parameter sets converge (or fail to converge) and indicating the
+        best-performing trajectory. The images are stored at `image_trajectories/P{idx:04d}_traj.png`.
 
         Args:
             run_id: The unique identifier for the EDGAR run.
@@ -322,7 +357,7 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
             A `FileResponse` containing the requested image with `media_type="image/png"`.
 
         Raises:
-            HTTPException: If the `run_id` or the specified trajectory image path does not exist.
+            HTTPException: If the `run_id` is not found or the specified trajectory image path does not exist.
         """
         run_dir = _resolve(run_id)
         img_path = run_dir / "image_trajectories" / f"P{idx:04d}_traj.png"
@@ -339,10 +374,12 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
     def root_index():
         """Serves the main `index.html` file for the Single Page Application (SPA) frontend.
 
-        This is the entry point for the EDGAR dashboard's user interface.
+        This is the entry point for the EDGAR dashboard's user interface,
+        loading the core application logic and presentation.
 
         Returns:
-            A `FileResponse` containing the `index.html` file.
+            A `FileResponse` containing the `index.html` file located in the
+            `static` directory.
         """
         return FileResponse(STATIC_DIR / "index.html")
 
@@ -355,20 +392,31 @@ def _root_for(run_dir: Path) -> Path:
     """Given a run directory path, return its corresponding 'program_databases' root.
 
     This helper function is used to determine the top-level directory where
-    multiple EDGAR runs are organized (e.g., '/path/to/program_databases').
-    It assumes a structure like `<root>/YYYY-MM-DD/HH-MM-SS/`.
+    multiple EDGAR runs are organized. It assumes a hierarchical structure for
+    run directories, typically `<root>/<task_name>/YYYY-MM-DD/HH-MM-SS/`.
+
+    For example, given `program_databases/my_task/2023-01-01/12-34-56`, it
+    would return `program_databases/my_task`. If the path structure does not
+    match the expected pattern, it attempts to return a reasonable parent
+    directory as a fallback.
 
     Args:
         run_dir: The `Path` object of an EDGAR run directory
-            (e.g., `program_databases/2023-01-01/12-34-56`).
+            (e.g., `program_databases/my_task/2023-01-01/12-34-56`).
 
     Returns:
         The `Path` object representing the root directory (e.g.,
-        `program_databases/`). If the path structure does not match the expected
+        `program_databases/my_task`). If the path structure does not match the expected
         pattern, it returns the parent directory of `run_dir` or `run_dir` itself
         as a fallback.
     """
     parts = run_dir.parts
-    if len(parts) >= 2:
-        return Path(*parts[:-2])
+    # Expected structure: <root>/<task_name>/YYYY-MM-DD/HH-MM-SS/
+    # So, we expect at least 4 parts from the conceptual root, meaning
+    # we need to go up 3 levels to reach <root>/<task_name>
+    if len(parts) >= 3: # Corrected from 2 to 3 to get `<root>/<task_name>`
+        # This will return `program_databases/my_task` for the example
+        return Path(*parts[:-3])
     return run_dir.parent
+
+```

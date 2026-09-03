@@ -90,11 +90,31 @@ def _run(cmd, dry_run=False, capture=False):
 
 
 def _resolve_repo_path(p: str) -> Path:
+    """Resolve a path relative to the repository root.
+
+    Args:
+        p: The path string to resolve. Can be absolute or relative.
+
+    Returns:
+        A `Path` object representing the absolute path within the repository.
+    """
     path = Path(p)
     return path if path.is_absolute() else (REPO_ROOT / path)
 
 
 def _repo_relative(path: Path, what: str) -> str:
+    """Get the repository-relative path for a given Path object.
+
+    Args:
+        path: The absolute path to convert to a repository-relative path.
+        what: A descriptive string for the path's purpose, used in error messages.
+
+    Returns:
+        A string representing the path relative to the repository root.
+
+    Raises:
+        ValueError: If the provided path is not within the repository.
+    """
     try:
         return path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
     except ValueError as e:
@@ -114,6 +134,15 @@ def _label(value: str) -> str:
 
 
 def _fmt_value(v) -> str:
+    """Format a Python value as a string suitable for command-line arguments.
+
+    Args:
+        v: The value to format. Can be a boolean, list, tuple, or other type.
+
+    Returns:
+        A string representation of the value. Booleans are 'True'/'False', lists/tuples
+        are `str(list(v))` with no spaces, and other types are `str(v)`.
+    """
     if isinstance(v, bool):
         return str(v)
     if isinstance(v, (list, tuple)):
@@ -122,6 +151,14 @@ def _fmt_value(v) -> str:
 
 
 def _resolve_data_path(data_path: str) -> Path:
+    """Resolve a data path, ensuring it's absolute or relative to the repository root.
+
+    Args:
+        data_path: The data path string.
+
+    Returns:
+        A `Path` object representing the resolved data path.
+    """
     p = Path(data_path)
     return p if p.is_absolute() else (REPO_ROOT / p)
 
@@ -130,11 +167,31 @@ def _resolve_data_path(data_path: str) -> Path:
 
 
 def load_spec(path: str) -> dict:
-    """Load a launch spec YAML into a dict."""
+    """Load a launch spec YAML into a dict.
+
+    Args:
+        path: Path to the launch spec YAML file.
+
+    Returns:
+        A dictionary parsed from the YAML file. Returns an empty dict if the file
+        is empty or contains no YAML.
+    """
     return yaml.safe_load(Path(path).read_text()) or {}
 
 
 def _validate_override_keys(overrides: dict) -> None:
+    """Validate that override keys are in the correct '<section>.<name>' format.
+
+    Ensures that override keys target known configuration sections and do not attempt
+    to modify `llms.default_provider`, which has no effect after config loading.
+
+    Args:
+        overrides: A dictionary of override keys and their values.
+
+    Raises:
+        ValueError: If an override key is malformed or attempts to modify
+            'llms.default_provider'.
+    """
     for key in overrides:
         if "." not in key or key.split(".", 1)[0] not in OVERRIDE_SECTIONS:
             raise ValueError(
@@ -154,16 +211,23 @@ def _validate_override_keys(overrides: dict) -> None:
 def validate_spec(spec: dict) -> dict:
     """Validate and normalize a launch spec, filling defaults.
 
+    This function takes a raw launch specification, applies default GCP settings,
+    validates required fields, resolves configuration paths, normalizes run names,
+    and expands run replicas.
+
     Args:
         spec: Raw spec dict from ``load_spec``.
 
     Returns:
-        A dict ``{"gcp": <infra dict>, "runs": [<run dict>, ...]}`` where each run has
-        ``config_rel``, ``config_path``, ``run_name``, ``n_replicas``, ``seed``,
-        ``overrides``.
+        A validated and normalized dictionary with two top-level keys:
+        - "gcp": A dictionary of Google Cloud Platform infrastructure settings.
+        - "runs": A list of dictionaries, each representing a single EDGAR run,
+          including 'config_rel', 'config_path', 'run_name', 'n_replicas', 'seed',
+          and 'overrides'.
 
     Raises:
-        ValueError: On missing required fields, absent configs, or bad override keys.
+        ValueError: On missing required GCP fields, if no runs are defined, if a
+            run's configuration file is missing, or if override keys are invalid.
     """
     gcp = {**GCP_DEFAULTS, **(spec.get("gcp") or {})}
     missing = [k for k in REQUIRED_GCP if not gcp.get(k)]
@@ -205,7 +269,22 @@ def validate_spec(spec: dict) -> dict:
 
 
 def flatten_runs(spec: dict) -> list[dict]:
-    """Expand ``n_replicas`` into individual runs with unique names and per-replica seeds."""
+    """Expand ``n_replicas`` into individual runs with unique names and per-replica seeds.
+
+    If `n_replicas` for a run is greater than 1, new run entries are created with
+    suffixes (e.g., '-r0', '-r1') and incremented seeds.
+
+    Args:
+        spec: The validated launch specification dictionary containing "gcp" and "runs".
+
+    Returns:
+        A list of dictionaries, where each dictionary represents a single,
+        fully specified EDGAR run (no ``n_replicas`` field). Each run has a unique
+        'run_name' and 'seed'.
+
+    Raises:
+        ValueError: If duplicate run names are generated after normalization and expansion.
+    """
     flat = []
     for r in spec["runs"]:
         n = r["n_replicas"]
@@ -231,6 +310,16 @@ def flatten_runs(spec: dict) -> list[dict]:
 
 
 def _sha256_file(path: Path) -> str:
+    """Compute the SHA256 hash of a file.
+
+    Reads the file in chunks to efficiently handle large files.
+
+    Args:
+        path: The `Path` object of the file to hash.
+
+    Returns:
+        A hexadecimal string representing the SHA256 hash of the file's content.
+    """
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -239,12 +328,33 @@ def _sha256_file(path: Path) -> str:
 
 
 def data_object_uri(bucket: str, data_path: str) -> tuple[str, str]:
-    """Return ``(gs_uri, basename)`` for a data file, keyed by content hash."""
+    """Return ``(gs_uri, basename)`` for a data file, keyed by content hash.
+
+    The GCS URI includes the SHA256 hash of the file's content, ensuring that
+    only unique data files are stored and uploaded when content changes.
+
+    Args:
+        bucket: The name of the GCS bucket.
+        data_path: The local path to the data file.
+
+    Returns:
+        A tuple containing:
+        - gs_uri (str): The Google Cloud Storage URI for the data object.
+        - basename (str): The base name of the data file.
+    """
     p = _resolve_data_path(data_path)
     return f"gs://{bucket}/data/{_sha256_file(p)}/{p.name}", p.name
 
 
 def _gcs_exists(uri: str) -> bool:
+    """Check if a Google Cloud Storage URI exists.
+
+    Args:
+        uri: The Google Cloud Storage URI to check.
+
+    Returns:
+        True if the URI exists, False otherwise.
+    """
     try:
         subprocess.run(["gsutil", "-q", "stat", uri], check=True, capture_output=True)
         return True
@@ -253,7 +363,21 @@ def _gcs_exists(uri: str) -> bool:
 
 
 def ensure_data_uploaded(bucket: str, data_path: str, dry_run: bool) -> tuple[str, str]:
-    """Upload the data file to the bucket only if the content-hashed object is absent."""
+    """Upload the data file to the bucket only if the content-hashed object is absent.
+
+    If `dry_run` is True, it will print the intended action without performing the upload.
+    If the data file is missing locally, a warning is issued during dry-run.
+
+    Args:
+        bucket: The name of the GCS bucket.
+        data_path: The local path to the data file to be uploaded.
+        dry_run: If True, simulate the upload without executing `gsutil` commands.
+
+    Returns:
+        A tuple containing:
+        - uri (str): The GCS URI where the data would be or is stored.
+        - basename (str): The base name of the data file.
+    """
     p = _resolve_data_path(data_path)
     if dry_run and not p.exists():
         print(f"[dry-run] data file missing locally: {p} (would hash + upload)")
@@ -274,7 +398,15 @@ def ensure_data_uploaded(bucket: str, data_path: str, dry_run: bool) -> tuple[st
 
 
 def rsync_code(bucket: str, dry_run: bool) -> None:
-    """Mirror the local working tree (minus excludes) to ``gs://BUCKET/code``."""
+    """Mirror the local working tree (minus excludes) to ``gs://BUCKET/code``.
+
+    Uses `gsutil rsync` to synchronize the local repository with the GCS bucket,
+    excluding specified paths like `.git/`, `__pycache__`, and `program_databases/`.
+
+    Args:
+        bucket: The name of the GCS bucket to sync code to.
+        dry_run: If True, print the `gsutil` command without executing it.
+    """
     _run(
         [
             "gsutil",
@@ -292,7 +424,16 @@ def rsync_code(bucket: str, dry_run: bool) -> None:
 
 
 def build_manifest() -> str:
-    """Provenance record: HEAD sha, dirty flag, and the full working-tree diff."""
+    """Provenance record: HEAD sha, dirty flag, and the full working-tree diff.
+
+    Captures the current git state (commit SHA, dirty status) and the full
+    `git diff --stat` and `git diff` outputs.
+
+    Returns:
+        A string containing the git SHA, dirty flag, generation timestamp, and
+        the full git diff, providing a detailed provenance record. Returns
+        error messages if git commands fail.
+    """
 
     def git(*args) -> str:
         try:
@@ -317,6 +458,14 @@ def build_manifest() -> str:
 
 
 def upload_manifest(bucket: str, dry_run: bool) -> None:
+    """Upload the provenance manifest to ``gs://BUCKET/code/MANIFEST.txt``.
+
+    The manifest includes git SHA, dirty status, and a full diff of the working tree.
+
+    Args:
+        bucket: The name of the GCS bucket to upload the manifest to.
+        dry_run: If True, print the upload command without executing it.
+    """
     content = build_manifest()
     if dry_run:
         print(
@@ -338,6 +487,11 @@ def _wait_secretmanager_ready(project: str, attempts: int = 12, delay: int = 8) 
     Enabling an API returns before it is fully propagated, so the first ``secrets``
     call can still fail with ``SERVICE_DISABLED``. Poll a cheap read until it succeeds
     (or a different error surfaces, which the real command will then report).
+
+    Args:
+        project: The GCP project ID.
+        attempts: The number of times to poll for API readiness.
+        delay: The delay in seconds between polling attempts.
     """
     for _ in range(attempts):
         r = subprocess.run(
@@ -352,7 +506,15 @@ def _wait_secretmanager_ready(project: str, attempts: int = 12, delay: int = 8) 
 
 
 def _compute_service_account(project_id: str) -> str | None:
-    """Return the project's default Compute Engine service account email, or None."""
+    """Return the project's default Compute Engine service account email, or None.
+
+    Args:
+        project_id: The Google Cloud Project ID.
+
+    Returns:
+        The email address of the default Compute Engine service account for the
+        given project, or None if it cannot be determined.
+    """
     try:
         num = subprocess.run(
             [
@@ -385,7 +547,12 @@ def ensure_secret(gcp: dict, dry_run: bool) -> str | None:
         dry_run: If True, print what would happen and return the secret name.
 
     Returns:
-        The secret name the VM should fetch, or None if there is no local ``.env``.
+        The name of the secret in Secret Manager that the VM should fetch.
+        Returns None if there is no local ``.env`` file.
+
+    Raises:
+        subprocess.CalledProcessError: If any `gcloud` command fails during secret
+            creation, versioning, or IAM binding.
     """
     env = REPO_ROOT / ".env"
     secret = gcp["secret_name"]
@@ -493,6 +660,15 @@ def build_overrides(flat_run: dict, data_basename: str | None) -> list[str]:
     Pins ``io.save_path`` to a unique VM-side dir (so the whole subtree is syncable),
     overrides ``io.data_path`` to the downloaded file when data is present, sets the
     per-replica seed, then appends the user overrides.
+
+    Args:
+        flat_run: A dictionary representing a single flattened EDGAR run, containing
+            'run_name', 'seed', and 'overrides'.
+        data_basename: The basename of the data file, if applicable. None if no data.
+
+    Returns:
+        A list of strings, where each string is a command-line override in the format
+        '--section.key=value'.
     """
     overrides = [f"--io.save_path={CODE_DIR}/out/{flat_run['run_name']}"]
     if data_basename:
@@ -503,8 +679,28 @@ def build_overrides(flat_run: dict, data_basename: str | None) -> list[str]:
     return overrides
 
 
-def create_vm(gcp, flat_run, data_uri, secret_name, launch_id, user, dry_run) -> str:
-    """Create one GPU VM for a flattened run and return its instance name."""
+def create_vm(
+    gcp: dict, flat_run: dict, data_uri: str, secret_name: str | None, launch_id: str, user: str, dry_run: bool
+) -> str:
+    """Create one GPU VM for a flattened run and return its instance name.
+
+    The VM is configured with specified machine type, GPU, boot disk size, and image.
+    It includes metadata for EDGAR's startup script and applies provisioning model
+    and instance termination actions based on the 'spot' configuration.
+
+    Args:
+        gcp: A dictionary of Google Cloud Platform infrastructure settings.
+        flat_run: A dictionary representing a single flattened EDGAR run,
+            including 'run_name', 'config_rel', 'overrides_list'.
+        data_uri: The GCS URI of the data file, or an empty string if no data.
+        secret_name: The name of the secret in Secret Manager, or None if no secret.
+        launch_id: A unique identifier for this launch operation.
+        user: The normalized username of the launching user.
+        dry_run: If True, print the `gcloud` command without executing it.
+
+    Returns:
+        The name of the created (or planned) VM instance.
+    """
     run_name = flat_run["run_name"]
     vm_name = _normalize_name(f"{gcp['name_prefix']}-{run_name}")[:63].strip("-")
     metadata = ",".join(
@@ -564,6 +760,15 @@ def preflight(spec: dict, dry_run: bool) -> None:
 
     Under ``--dry-run`` problems are warnings so the plan prints on any machine;
     otherwise they raise.
+
+    Args:
+        spec: The validated launch specification dictionary.
+        dry_run: If True, issues are reported as warnings instead of raising errors.
+
+    Raises:
+        RuntimeError: If `dry_run` is False and preflight checks reveal problems
+            with local tooling, GCP authentication, bucket accessibility, or
+            missing data files.
     """
     problems = []
     for tool in ("gcloud", "gsutil"):
@@ -622,7 +827,15 @@ def preflight(spec: dict, dry_run: bool) -> None:
 
 
 def _teardown(spec: dict, dry_run: bool) -> int:
-    """Delete all VMs labelled with the current user (only your launches)."""
+    """Delete all VMs labelled with the current user (only your launches).
+
+    Args:
+        spec: The validated launch specification dictionary. Used to get GCP details.
+        dry_run: If True, print the delete commands without executing them.
+
+    Returns:
+        Process exit code (always 0 on success, even if no VMs are found).
+    """
     gcp = spec["gcp"]
     user = _label(getpass.getuser())
     result = _run(
@@ -671,6 +884,14 @@ def fetch_results(spec: dict, dry_run: bool) -> int:
     Locally the project comes first, matching where local runs land, with the ``<run_name>/``
     dir below it so different runs don't collide; the date/time subdirs are preserved, so the
     same run name launched several times in a day stays separated by timestamp.
+
+    Args:
+        spec: The validated launch specification dictionary. Used to get bucket details
+            and flattened run configurations.
+        dry_run: If True, print the `gsutil rsync` commands without executing them.
+
+    Returns:
+        Process exit code (0 on success).
     """
     bucket = spec["gcp"]["bucket"]
     for f in flatten_runs(spec):
@@ -685,7 +906,17 @@ def fetch_results(spec: dict, dry_run: bool) -> int:
     return 0
 
 
-def _print_summary(summary, gcp, dry_run) -> None:
+def _print_summary(summary: list[tuple[str, str, str]], gcp: dict, dry_run: bool) -> None:
+    """Prints a summary of the launched or planned runs.
+
+    Includes details on each run's name, VM instance, and results bucket path.
+    Also provides instructions for monitoring, fetching, and tearing down runs.
+
+    Args:
+        summary: A list of tuples, where each tuple contains (run_name, vm_name, results_uri).
+        gcp: A dictionary of Google Cloud Platform infrastructure settings, used for zone.
+        dry_run: If True, indicates that the summary is for a dry run.
+    """
     tag = "[dry-run] " if dry_run else ""
     print(f"\n{tag}Launched {len(summary)} run(s):")
     for run_name, vm, results in summary:

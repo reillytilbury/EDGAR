@@ -69,7 +69,8 @@ def _params_from_json(params: dict) -> dict:
     """Converts a dictionary from JSON format back to a JAX pytree of parameters.
 
     Python lists that were originally numpy arrays are converted back to numpy arrays.
-    Other elements remain unchanged.
+    Other elements remain unchanged. This facilitates the reconstruction of
+    `Program` objects during loading.
 
     Args:
         params: A dictionary loaded from JSON, where lists might represent
@@ -85,10 +86,11 @@ def _params_from_json(params: dict) -> dict:
 class Population:
     """Manages the collection of all `Program` instances throughout an EDGAR experiment.
 
-    This class is an append-only list, automatically assigning a stable global
-    index (`program.idx`) to each `Program` upon addition. It handles the
-    persistence of all program data, including numpy arrays for fingerprints and
-    parameters, to a JSONL file (`population.jsonl`) using atomic writes.
+    This class serves as an append-only list, automatically assigning a stable
+    global index (`program.idx`) to each `Program` upon addition. It is
+    responsible for the persistence of all program data, including numpy arrays
+    for parameters and sample losses, to a JSONL file (`population.jsonl`)
+    using atomic writes to ensure data integrity.
     """
 
     def __init__(self) -> None:
@@ -100,7 +102,8 @@ class Population:
 
         The `program.idx` attribute is automatically set to the current size
         of the population before the program is appended. This ensures a
-        unique and stable global identifier for each program.
+        unique and stable global identifier for each program within the
+        EDGAR experiment.
 
         Args:
             program: The `Program` instance to add to the population.
@@ -123,21 +126,22 @@ class Population:
         """Returns the total number of programs in the population.
 
         Returns:
-            The integer count of programs.
+            The integer count of programs in the population.
         """
         return len(self._programs)
 
     def prepare_validation_scoring(self, islands: list) -> None:
         """Prepares programs for final validation scoring.
 
-        This method identifies all programs that are "alive" (i.e., currently
-        members of an island) and sets their `program_losses.validate.final`
-        attribute from `NotValidated` to `None`. This makes them eligible for
-        validation scoring by the `_needs_scoring` filter in `scoring.py`.
+        This method identifies all programs that are currently "alive" (i.e.,
+        members of any island) and sets their `program_losses.validate.final`
+        attribute from `NotValidated` to `None`. This makes them eligible
+        for validation scoring during the final phase of an EDGAR run, as
+        they will then pass the `_needs_scoring` filter in `scoring.py`.
 
         Args:
             islands: A list of sets of program indices, representing the current
-                state of all islands in the evolutionary algorithm.
+                membership of programs on each island in the evolutionary algorithm.
         """
         alive_indices = set()
         for island in islands:
@@ -150,15 +154,17 @@ class Population:
         """Atomically writes the entire population to a JSONL file.
 
         Each `Program` object is serialized into a JSON string on a new line.
-        Numpy arrays (e.g., `params`, `sample_losses`) are
-        converted to Python lists for JSON compatibility. The `NotValidated`
-        sentinel is converted to the string "NOTVALIDATED". LLM model names
-        which might be objects are converted to strings.
+        Attributes that are not meant for serialization, such as `data` and
+        `eval_fingerprint`, are explicitly removed. Numpy arrays (e.g., `params`,
+        `sample_losses`) are converted to Python lists for JSON compatibility.
+        The `NotValidated` sentinel is converted to the string "NOTVALIDATED".
+        LLM model names, which might be objects during runtime (e.g., `CyclingModel`),
+        are converted to their string representations.
 
         The method uses a write-to-temporary-file-then-rename strategy
-        (`atomic_write_text` from `edgar.io.status`) to ensure that any
+        (via `atomic_write_text` from `edgar.io.status`) to ensure that any
         dashboard or external process polling this file never observes a
-        partially written or corrupted state.
+        partially written or corrupted state, guaranteeing data integrity.
 
         Args:
             path: The file path where the population should be saved.
@@ -197,12 +203,13 @@ class Population:
         """Returns a new list of programs sorted by their final rank.
 
         Programs are sorted in ascending order based on their `rank` attribute.
-        Programs with `None` ranks (meaning they haven't been ranked yet) are
-        treated as having an infinite rank and are placed at the end.
+        Programs that have not yet been ranked (i.e., `rank` is `None`) are
+        treated as having an infinite rank and are placed at the end of the list.
 
         Raises:
             RuntimeError: If `scoring.rank()` has not been called on the population
-                and therefore no programs have a `rank` assigned.
+                and, consequently, no programs have a `rank` assigned, indicating
+                that the population cannot be sorted by rank.
 
         Returns:
             A new list containing `Program` objects, sorted by rank.
@@ -222,8 +229,13 @@ class Population:
         Each line in the file is parsed as a JSON object, representing a
         serialized `Program`. The `idx` attribute is intentionally ignored
         from the loaded JSON, as `add()` will re-assign new, correct indices
-        during the loading process. Numpy arrays and `NotValidated` sentinels
-        are reconstructed to their original types.
+        during the loading process. This ensures consistent global indexing.
+
+        Numpy arrays for `params`, `params_init`, `_default_params`,
+        `sample_losses`, and `sample_losses_init` are reconstructed from their
+        list representations. The `NotValidated` sentinel is restored from its
+        "NOTVALIDATED" string representation, and `LossStats.trajectories`
+        are converted back to numpy arrays.
 
         Args:
             path: The file path to the JSONL file containing the serialized population.
@@ -293,3 +305,4 @@ class Population:
                 )
                 pop.add(program)
         return pop
+"""

@@ -13,10 +13,16 @@ Top-level fields:
 - n_params: total number of model parameters, set by count_params()
 - eval_fingerprint: array of model outputs used for deduplication
 - idx: global Population index, set automatically when added to a Population
+- status: The current evolutionary status of the program (e.g., 'alive', 'pruned', 'deduplicated').
+- image_path: Path to a generated feedback image for the LLM.
+- fit_image_path: Path to an image visualizing the model's fit to data.
+- trajectory_image_path: Path to an image visualizing the model's optimization trajectories.
+- best_estimator_idx: The index of the parameter estimator (from `code.param_est`) that yielded the best score.
+- data: The data used for parameter resolution, if applicable.
 
 Methods:
 - compile_model: parse JAX model source string into a callable function.
-- compile_param_est: parse parameter estimator source string into a callable function.
+- compile_param_ests: parse all parameter estimator source strings into callable functions.
 - default_params: property for getting and setting default parameters, which
   automatically calculates `n_params`.
 
@@ -157,6 +163,7 @@ class Program:
 
     Attributes:
         birth: A `BirthCertificate` object detailing the program's lineage.
+        status: The current evolutionary status of the program (e.g., 'alive', 'pruned', 'deduplicated').
         code: A `Code` object holding the program's source code components.
         name: A descriptive name for the model, often provided by the LLM.
         program_losses: A `Losses` object containing scalar loss values for
@@ -172,10 +179,13 @@ class Program:
             for the initial parameters.
         image_path: Path to a generated feedback image for the LLM.
         fit_image_path: Path to an image visualizing the model's fit to data.
+        trajectory_image_path: Path to an image visualizing the model's optimization trajectories.
         idx: A globally unique index assigned to the program within the `Population`.
         rank: The final rank of the program based on its validation loss.
-        status: The current evolutionary status of the program (e.g., 'alive', 'pruned', 'deduplicated').
-        _default_params: Internal storage for the model's default parameters.
+        best_estimator_idx: The index of the parameter estimator (from `code.param_est`) that yielded the best score.
+        data: The data dictionary used for resolving dynamic default parameters.
+        _default_params: Internal storage for the model's default parameters,
+            which can be a dictionary or a callable.
     """
 
     birth: BirthCertificate
@@ -233,8 +243,11 @@ class Program:
     def compile_param_ests(self) -> list[Callable]:
         """Loads and compiles all parameter estimators from their source code.
 
-        If compiling any parameter estimator fails or returns None, a warning is
-        issued and we continue attempting to compile the remaining estimators.
+        This method iterates through the list of parameter estimator source
+        codes (`self.code.param_est`) and attempts to load each one into a
+        callable function using `load_function_from_source`. If compiling
+        any parameter estimator fails or returns None, a warning is
+        issued, and the process continues with the remaining estimators.
 
         Returns:
             A list of callable Python functions representing the parameter estimators that
@@ -242,6 +255,10 @@ class Program:
         """
         estimators = self.code.param_est
         compiled = []
+        # @docbot: Add check for estimators being None before iterating
+        if estimators is None:
+            return []
+
         for i, est_code in enumerate(estimators):
             est_fn = load_function_from_source(est_code, PARAM_EST_ENTRYPOINT)
             if est_fn is not None:
@@ -298,11 +315,11 @@ class Program:
     def param_est_code(self) -> str:
         """Returns the numpy source code of the program's best parameter estimator, which has been previously set.
 
-        If the parameter estimator code is None, an empty string is returned.
+        If the best parameter estimator code is None, an empty string is returned.
         This property is used for prompt templating.
 
         Returns:
-            The numpy source code of the parameter estimator.
+            The numpy source code of the best parameter estimator.
         """
         return self.code.best_param_est or ""
 
@@ -310,8 +327,7 @@ class Program:
     def default_params(self) -> dict:
         """Returns the dictionary of default parameters for the model.
 
-        If `default_params` was not set or setting failed, a warning is issued,
-        and `None` might be returned (though it's usually `None` if not set).
+        If `_default_params` was not set or setting failed, a warning is issued.
         Programs without valid default parameters will typically be assigned
         infinite loss during scoring.
 
@@ -328,17 +344,22 @@ class Program:
     @default_params.setter
     def default_params(self, default_params: dict | Callable):
         """Sets the default parameters for the program.
-        If params is a callable, attempt to resolve it using self.data.
+
+        If `default_params` is a callable, this setter attempts to resolve it
+        into a dictionary using `self.data`. If `self.data` is `None` when
+        `default_params` is callable, a `RuntimeError` is raised.
 
         This setter automatically calculates the total number of free parameters
-        and caches it in `self.n_params.`.
-        If an error occurs during this process, a warning is issued, and
-        `_default_params` and `n_params` are set to `None`. Programs with
-        `n_params=None` will be assigned infinite loss during scoring.
+        from the resolved dictionary and caches it in `self.n_params`.
+        If an error occurs during resolution of a callable, or if `default_params`
+        is not a dictionary after resolution, or if `n_params` calculation fails,
+        a warning is issued, and `_default_params` and `n_params` are set to `None`.
+        Programs with `n_params=None` will be assigned infinite loss during scoring.
 
         Args:
-            default_params: A dictionary or callable where `default_params(data)` returns a dictionary.
-            Keys of the dictionary are parameter names and values are their default values (can be numpy arrays or scalars).
+            default_params: A dictionary of parameter names to default values
+                (can be numpy arrays or scalars), or a callable where
+                `default_params(data)` returns such a dictionary.
         """
         # Try to resolve into a dict using data to obtain correct shapes of parameters
         if callable(default_params):
@@ -350,6 +371,9 @@ class Program:
                         f"Failed to resolve dynamic default_params for Program #{self.idx}: {e}",
                         UserWarning,
                     )
+                    self._default_params = None
+                    self.n_params = None
+                    return
             else:
                 raise RuntimeError(
                     f"Cannot resolve dynamic default_params for Program #{self.idx} because program.data is None"
@@ -374,3 +398,4 @@ class Program:
             )
             self._default_params = None
             self.n_params = None
+"""

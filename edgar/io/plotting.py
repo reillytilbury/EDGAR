@@ -115,8 +115,17 @@ def generate_program_fits(
 def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> None:
     """Generates an optimization trajectory plot for each program.
 
-    Plots the loss over gradient descent steps for each parallel estimator.
-    The trajectory with the lowest final loss is highlighted.
+    For each program, this function visualizes the loss over gradient descent
+    steps for all parallel parameter estimations. The trajectory corresponding
+    to the best-performing estimator (with the lowest final loss) is
+    highlighted. The plots are saved to the `image_trajectories` directory
+    within the run output and are used for post-hoc analysis and dashboard
+    display. The y-axis (Training Loss) is displayed on a logarithmic scale.
+
+    Args:
+        spec: The `TaskSpec` object containing configuration.
+        programs: A list of `Program` objects for which trajectory plots
+            should be generated.
     """
     import matplotlib.pyplot as plt
 

@@ -48,6 +48,7 @@ ValidResponseSchemas = Literal[
     "ParamEstSchema",
     "TranslationSchema",
 ]
+"""Literal type for valid response schema names expected from LLMs."""
 
 
 Provider = Literal["google", "anthropic"]
@@ -104,11 +105,14 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 class _LaxModel(BaseModel):
-    """Pydantic BaseModel which raises a warning if there are unexpected fields.
+    """Pydantic BaseModel that issues a warning for unexpected fields.
 
-    This model is used as a base for configuration sections to allow for
-    forward compatibility and to provide helpful warnings when unknown
-    configuration fields are encountered, rather than raising errors.
+    This base model is used for configuration sections to provide forward
+    compatibility. Instead of raising an error for unknown fields, it logs
+    a warning, allowing the system to continue processing configurations
+    with new or custom parameters that are not explicitly defined in the
+    schema. Project-specific parameters should be placed under
+    `project_params`.
     """
 
     model_config = ConfigDict(extra="ignore")  # Doesnt raise an error if extra fields
@@ -118,11 +122,16 @@ class _LaxModel(BaseModel):
     def warn_extra_fields(cls, values: dict) -> dict:
         """Warns if the input dictionary contains any unexpected fields for the model.
 
+        This validator runs before Pydantic's default validation and checks for
+        keys in the input dictionary (`values`) that are not defined as fields
+        in the `_LaxModel` subclass. If such extra fields are found, a warning
+        is issued to the user, indicating which fields will be ignored.
+
         Args:
             values: The dictionary of values to validate.
 
         Returns:
-            The original dictionary of values.
+            The original dictionary of values, unchanged.
         """
         if isinstance(values, dict):
             extra = set(values.keys()) - set(cls.model_fields.keys())
@@ -190,17 +199,19 @@ class EvolutionConfig(_LaxModel):
     def check_args(self) -> EvolutionConfig:
         """Validates the values of evolution parameters.
 
-        Ensures that the length of the `topology` list matches `n_islands` and
-        that it contains exactly the indices from 0 to `n_islands - 1` (i.e., it's a
-        permutation of island indices).
-        Checks that `exploit_point` is between 0 and 1.
+        This validator ensures the structural integrity of the evolutionary
+        algorithm's configuration. It verifies that the `topology` list's
+        length matches `n_islands` and that it forms a complete permutation
+        of island indices (0 to `n_islands - 1`). It also checks that
+        `exploit_point` is a valid fraction between 0 and 1, inclusive.
 
         Raises:
-            ValueError: If the `topology` length does not match `n_islands` or
-                if it does not contain valid island indices.
+            ValueError: If the `topology` length does not match `n_islands`,
+                if it does not contain valid island indices, or if
+                `exploit_point` is outside the [0, 1] range.
 
         Returns:
-            The validated EvolutionConfig instance.
+            The validated `EvolutionConfig` instance.
         """
         if len(self.topology) != self.n_islands:
             raise ValueError(
@@ -275,13 +286,19 @@ class LLMsConfig(_LaxModel):
 
     @model_validator(mode="after")
     def fill_provider_defaults(self) -> LLMsConfig:
-        """Fills any unset LLM role from the selected provider's preset defaults.
+        """Fills any unset LLM role with the selected provider's default model.
 
-        Roles left as `None` inherit `_PROVIDER_MODEL_DEFAULTS[self.default_provider]`.
-        Explicitly-set roles (of either provider) are left untouched.
+        If `model_llm`, `param_est_llm`, or `jax_model_translator_llm` are
+        `None` in the configuration, this method automatically assigns the
+        corresponding default model based on the `default_provider` (e.g.,
+        "google" or "anthropic"). This allows users to switch providers
+        globally without explicitly setting every LLM model for each role.
+        Explicitly set LLM roles (whether from the default provider or
+        another) are not modified.
 
         Returns:
-            The LLMsConfig instance with all roles resolved to concrete models.
+            The `LLMsConfig` instance with all LLM roles resolved to concrete
+            model names.
         """
         presets = _PROVIDER_MODEL_DEFAULTS[self.default_provider]
         for role, default in presets.items():
@@ -342,23 +359,30 @@ class PromptsConfig(_LaxModel):
 
 
 class Config(BaseModel):
-    """
-    All settings needed to construct a TaskSpec, in plain-dict form.
+    """A comprehensive, flat, and serializable bundle of all EDGAR settings.
 
-    Constructed via from_yaml (live run) or from_taskspec (reproduce a past run).
-    TaskSpec.from_config(config) turns this into a TaskSpec.
+    This class serves as the central container for all configuration
+    parameters required to build a `TaskSpec` and execute an EDGAR run.
+    It is designed to be easily constructed from YAML files for live runs
+    or extracted from saved `task_spec.yaml` files for reproducibility.
 
     Attributes:
-        task_name: The name of the current scientific task or project.
-        project_dir: The path to the project directory containing task-specific files.
-        io: I/O configuration settings.
-        evolution: Evolutionary algorithm configuration settings.
-        llms: Large Language Model configuration settings.
-        scoring: Model scoring configuration settings.
-        run: Run-specific configuration settings.
-        project_params: A dictionary for arbitrary project-specific parameters
-            that are not covered by other structured config sections.
-        prompts: Prompt schemas for various LLM generation tasks.
+        task_name: The unique identifier for the current scientific task or project.
+        project_dir: The file system path to the root directory of the EDGAR project,
+            where task-specific files (e.g., data, seed models) are located.
+        io: Input/output configuration settings, defining paths for data and saving results.
+        evolution: Configuration parameters governing the evolutionary algorithm,
+            including generations, islands, batch size, and migration.
+        llms: Settings for interactions with Large Language Models,
+            such as parent selection, retry policies, and model choices.
+        scoring: Configuration for evaluating model performance, including
+            loss penalties, timeouts, and gradient descent settings.
+        run: General run-specific configuration, such as the random seed.
+        project_params: A flexible dictionary for arbitrary, user-defined
+            project-specific parameters that do not fit into the structured
+            configuration sections.
+        prompts: Collection of `PromptSchema` objects used to construct
+            LLM prompts for various generation tasks.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -377,21 +401,36 @@ class Config(BaseModel):
     def from_yaml(
         cls, path: Path | str, default_path: Path | str | None = None
     ) -> Config:
-        """Loads configuration from a YAML file, merging with project defaults.
+        """Loads configuration from a YAML file, merging with project and prompt defaults.
 
-        This method loads a `config.yaml` specific to a task and merges it with
-        a default configuration (`projects/config_default.yaml`). It also loads
-        and merges prompt configurations from `prompt_defaults.yaml` and a
-        task-specific `prompts.yaml`.
+        This method is the primary constructor for a `Config` object when
+        initiating a new EDGAR run. It performs a hierarchical merge of
+        configuration settings:
+        1. Loads a base default configuration from `REPO_ROOT/projects/config_default.yaml`.
+        2. Merges this with a task-specific `config.yaml` (provided by `path`),
+           where the task-specific settings override defaults.
+        3. Similarly, it loads default prompt schemas from
+           `default_dir/prompt_defaults.yaml` and merges them with any
+           task-specific prompt overrides from `project_dir/prompts.yaml`.
+
+        This ensures a robust and flexible configuration system where users can
+        override global defaults for specific projects or tasks. Any top-level
+        fields in the `config.yaml` that are not explicitly defined in the
+        `Config` model (i.e., not `io`, `evolution`, `llms`, etc.) will trigger
+        a warning and be ignored, with a suggestion to place custom parameters
+        under `project_params`.
 
         Args:
-            path: Path to the project's `config.yaml` file.
-            default_path: Optional path to a default `config.yaml` to merge with
-                before loading the project config. If None, it defaults to
-                `REPO_ROOT / "projects" / "config_default.yaml"`.
+            path: The file system path to the project's `config.yaml` file.
+                This path can be relative to `REPO_ROOT` or absolute.
+            default_path: An optional file system path to an alternative
+                default `config.yaml`. If `None`, it defaults to
+                `REPO_ROOT/projects/config_default.yaml`. This path can also be
+                relative to `REPO_ROOT` or absolute.
 
         Returns:
-            A `Config` object populated with the merged configuration settings.
+            A `Config` object populated with the merged configuration settings,
+            ready to be used for `TaskSpec` construction.
         """
         path = Path(path)
         if not path.is_absolute():
@@ -449,16 +488,26 @@ class Config(BaseModel):
     def from_taskspec(cls, path: Path) -> Config:
         """Extracts configuration settings from a previously saved `task_spec.yaml`.
 
-        This method is used to reconstruct the configuration of a past EDGAR run.
-        Callables, git state, and creation timestamp
-        are regenerated when `TaskSpec.from_config` is later called; only the
-        configuration dictionaries are preserved from the `task_spec.yaml`.
+        This method is designed to reconstruct the exact configuration of a
+        past EDGAR run, facilitating reproducibility and post-hoc analysis.
+        It loads the `task_spec.yaml` file, which contains a snapshot of all
+        configuration parameters at the time the run was initiated.
+
+        Note that callables (e.g., `load_data_fn`, `loss_fn`), git state,
+        and the run's creation timestamp are regenerated when a `TaskSpec` is
+        later constructed from this `Config` object using `TaskSpec.from_config`.
+        Only the raw configuration dictionaries are preserved directly from
+        the `task_spec.yaml`.
 
         Args:
-            path: Path to a `task_spec.yaml` file.
+            path: The file system path to a `task_spec.yaml` file, typically
+                found in a previous run's output directory. This path can be
+                relative to `REPO_ROOT` or absolute.
 
         Returns:
-            A `Config` object populated with settings extracted from the `task_spec.yaml`.
+            A `Config` object populated with the settings extracted from the
+            `task_spec.yaml`, enabling the reproduction of the original run's
+            configuration.
         """
         path = Path(path)
         if not path.is_absolute():
@@ -469,7 +518,7 @@ class Config(BaseModel):
         prompts = {
             "model": schemas["model"],
             "parameter_estimator": schemas["param_est"],
-            "jax_translator_model": schemas["jax_model"],
+            "jax_model_translator_model": schemas["jax_model"],
         }
         return cls(
             task_name=record["task_name"],

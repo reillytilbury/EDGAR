@@ -1,22 +1,22 @@
 """
-src/io/logging.py
+edgar/io/logging.py
 
 Human-readable run logging for EDGAR experiments.
 
-Creates a single run.log file. The runner emits a streaming generation banner
-+ per-stage start/end lines (via ``edgar.io.metrics.stage_timer``) and one
-summary block at the END of each generation via ``log_generation``.
+Creates a single `run.log` file. The runner emits a streaming generation banner
+and per-stage start/end lines (via `edgar.io.metrics.stage_timer`). One
+summary block is appended at the end of each generation via `log_generation`.
 
-Verbosity is controlled by the level argument:
+Verbosity is controlled by the `level` argument:
 
-  compact  — streaming progress + end-of-gen summary
-  code     — compact + generated code for each program born this generation
-  prompts  — code + reconstructed LLM prompts and image paths
+*   **`compact`**: streaming progress + end-of-generation summary.
+*   **`code`**: `compact` + generated code for each program born this generation.
+*   **`prompts`**: `code` + reconstructed LLM prompts and image paths.
 
 Prompts are reconstructed post-hoc from program birth metadata and the spec's
 prompt schemas.
 
-Warnings emitted via warnings.warn() during a generation are buffered and
+Warnings emitted via `warnings.warn()` during a generation are buffered and
 appended to the end of that generation's block in the log.
 """
 
@@ -54,8 +54,21 @@ def print_and_log(log: RunLog, message: str) -> None:
 
 
 def _llm_display(v: Any) -> str:
-    """Coerce an LLM field (string name OR a pydantic-ai Model instance) into
-    a short display string. Falls back to the type name for opaque objects."""
+    """Coerces an LLM field into a short display string.
+
+    This function handles cases where the LLM field is either a string name
+    or a Pydantic-AI `Model` instance, providing a concise representation.
+    If neither a string nor a `model_name` attribute is found, it falls back
+    to the object's type name.
+
+    Args:
+        v: The value representing an LLM, which can be a string (its name)
+            or an instance of a Pydantic-AI `Model` (or similar object
+            with a `model_name` attribute).
+
+    Returns:
+        A short string representing the LLM for display purposes.
+    """
     if isinstance(v, str):
         return v
     name = getattr(v, "model_name", None)
@@ -73,9 +86,25 @@ def gen_banner(
     llms: Any,
     n_spawn: int,
 ) -> None:
-    """Banner written at the START of each generation. Includes the schedule
-    so the user can correlate behaviour shifts (explore→exploit, temp decay,
-    LLM rotation) with what they see in the log.
+    """Writes a banner to the log at the start of each generation.
+
+    This banner provides a high-level overview of the current generation's
+    configuration, including the evolutionary `mode`, `temperature`,
+    number of programs to `spawn`, and the LLMs selected for model
+    generation, parameter estimation, and JAX translation. It helps users
+    correlate shifts in behavior (e.g., explore/exploit transition,
+    temperature decay, LLM rotation) with the log entries.
+
+    Args:
+        log: The `RunLog` object managing the log file.
+        gen: The current generation index (0-based).
+        n_gens: The total number of generations planned for the run.
+        mode: The evolutionary mode for the current generation (e.g., "explore", "exploit").
+        temperature: The sampling temperature for LLM generation in the current generation.
+        llms: An object (likely from `LLMsConfig`) containing the LLM models
+            configured for model generation, parameter estimation, and JAX translation.
+            Can be a single model or a list of models for rotation.
+        n_spawn: The number of new programs to be spawned in this generation.
     """
     model_llm = (
         llms.model[gen % len(llms.model)]
@@ -99,14 +128,13 @@ class RunLog:
     """A dataclass to hold the state and file handle for the EDGAR run log.
 
     Attributes:
-        file: A file-like object (TextIO) opened for writing the log.
-        level: The verbosity level of the log ("compact", "code", or "prompts").
-        start_time: The monotonic time when the log was opened, used for
-            calculating total elapsed time.
+        file: A file-like object (`TextIO`) opened for writing the log.
+        level: The verbosity level of the log, must be one of "compact", "code", or "prompts".
+        start_time: The monotonic time when the log was opened, used to calculate total elapsed time.
         previous_gen_time: The monotonic time at the end of the previous
             generation, used to calculate generation-specific elapsed time.
         warnings_buffer: A list of buffered warning messages to be flushed
-            at the end of each generation.
+            at the end of each generation's log block.
         prev_showwarning: Stores the original `warnings.showwarning` hook
             to restore it when the log is closed.
     """
@@ -208,32 +236,35 @@ def log_generation(
     This function compiles and writes a comprehensive summary of the current
     evolutionary generation to the `run.log` file. All statistics and details
     are dynamically derived from the `population`, `islands`, and `spec`
-    objects, eliminating the need for intermediate state capture.
+    objects.
 
     The verbosity of the logged information depends on `log.level`:
-    *   **"compact"**: Logs generation index, mode, temperature, elapsed times,
-        LLM names, program spawning success rates, and the global best discover
-        loss, along with the best program on each island.
-    *   **"code"**: Includes all "compact" information, plus the generated
+    *   **`compact`**: Logs generation index, mode, temperature, elapsed times,
+        LLM names, program spawning success rates (model, parameter estimator,
+        JAX translation, and scoring), the global best discover loss, and
+        the best program on each island.
+    *   **`code`**: Includes all `compact` information, plus the generated
         `model`, `parameter_estimator`, and JAX `model_jax` code for all
         programs born in this generation.
-    *   **"prompts"**: Includes all "code" information, plus the reconstructed
+    *   **`prompts`**: Includes all `code` information, plus the reconstructed
         LLM prompts (for model, parameter estimator, and JAX translation)
         used to generate each new program, along with paths to any associated
         feedback images.
 
-    If ``metrics`` is provided, also surfaces per-stage timing, per-role LLM
-    token totals + retry counts, and scoring outcome breakdown from the
-    active accumulator's bucket for this generation.
+    If `metrics` is provided, it also surfaces per-stage timing, per-role LLM
+    token totals, retry counts, and a breakdown of scoring outcomes (e.g.,
+    `ok`, `timeout`, `inf`, `banned`) for the active accumulator's bucket
+    for this generation.
 
     Args:
-        log: The `RunLog` handle obtained from `open_log()`.
+        log: The `RunLog` object managing the log file, obtained from `open_log()`.
         gen: The current generation index (0-based).
         population: The current `Population` object containing all evolved programs.
         islands: A list of sets, where each set contains the indices of programs
-            currently residing on a specific island (after pruning and deduplication).
+            currently residing on a specific island after pruning and deduplication.
         spec: The `TaskSpec` object containing global configuration and callables for the run.
-        metrics: optional RunMetrics — used to surface live per-gen stats.
+        metrics: An optional `RunMetrics` object used to surface live per-generation
+            statistics, including stage timings, LLM call details, and scoring outcomes.
     """
     f = log.file
     born = [
@@ -333,11 +364,11 @@ def log_generation(
     for p in born:
         parents = [population[i] for i in p.birth.parent_indices]
         mode_p = p.birth.mode or "explore"
-        f.write(f"  --- Prompts for Program #{p.idx} ---\n")
         model_cfg = {
             **spec.flat_config,
             "ideas-injection-point": "\n".join(getattr(p.birth, "ideas", []) or []),
         }
+        f.write(f"  --- Prompts for Program #{p.idx} ---\n")
         f.write(
             f"  [model prompt]\n{spec.model_prompt_schema.build_prompt(mode_p, parents, model_cfg)}\n\n"
         )
@@ -353,3 +384,4 @@ def log_generation(
 
     _flush_warnings(log)
     f.flush()
+"""

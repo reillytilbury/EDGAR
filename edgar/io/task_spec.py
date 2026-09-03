@@ -80,14 +80,25 @@ def _git_state() -> tuple[str, bool]:
 
 
 def _load_loss_fn(data_loader_path: Path) -> Callable | tuple[Callable, Callable]:
-    """Load the loss function(s) defined in the file at `data_loader_path`.
+    """Loads the loss function(s) defined in the specified data loader file.
 
-    This function attempts to load a single `loss_fn` or a pair of
-    `loss_fn_train` and `loss_fn_test` functions.
-    It raises a ValueError if neither is found.
+    This function attempts to load either a single `loss_fn` or a pair of
+    `loss_fn_train` and `loss_fn_test` callables from the provided Python file.
+    It ensures that if either `loss_fn_train` or `loss_fn_test` is defined,
+    both must be defined. If neither pair nor a single `loss_fn` is found,
+    a `ValueError` is raised.
+
+    Args:
+        data_loader_path: The path to the Python file containing the loss function(s).
 
     Returns:
         Callable | tuple[Callable, Callable]: The loaded loss function(s).
+            Returns a single `Callable` if `loss_fn` is defined, or a `tuple`
+            of `(loss_fn_train, loss_fn_test)` if both are defined.
+
+    Raises:
+        ValueError: If the file defines only one of `loss_fn_train` or `loss_fn_test`,
+            or if it defines neither a single `loss_fn` nor the pair.
     """
     loss_fn_train = load_function_from_source(
         data_loader_path.read_text(), "loss_fn_train"
@@ -113,7 +124,7 @@ def _load_loss_fn(data_loader_path: Path) -> Callable | tuple[Callable, Callable
     return loss_fn
 
 
-@dataclass
+@dataclass(frozen=True)
 class TaskSpec:
     """Frozen bundle of everything needed to run (or re-run) an EDGAR experiment.
 
@@ -155,11 +166,15 @@ class TaskSpec:
             generating parameter estimator functions.
         jax_model_prompt_schema (PromptSchema): Schema defining the prompt structure for
             translating NumPy models to JAX.
+        model_response_schema (type[BaseModel]): Pydantic model for the model generation response.
+        param_est_response_schema (type[BaseModel]): Pydantic model for the parameter estimator response.
+        jax_model_response_schema (type[BaseModel]): Pydantic model for the JAX translation response.
         load_data_fn (Callable): Function to load training, validation, and evaluation
             data for the project. Signature:
             `load_data(data_path, **project_params) -> (X_disc, X_val, X_eval)`.
-        loss_fn (Callable): Project-specific loss function used by the scoring
-            sandbox to evaluate model predictions against held-out data.
+        loss_fn (Callable | tuple[Callable, Callable]): Project-specific loss function(s)
+            used by the scoring sandbox to evaluate model predictions against held-out data.
+            Can be a single callable `loss_fn` or a tuple `(loss_fn_train, loss_fn_test)`.
         plot_fn (Callable | None): Optional function to render model-fit images for
             LLM image-feedback prompts. None if the project does not provide
             `image_feedback/plot.py`.
@@ -209,16 +224,6 @@ class TaskSpec:
     # Pydantic model for the JAX translation response.
     jax_model_response_schema: type[BaseModel]
 
-    # ── response schemas — one per LLM role, resolved from config strings ──
-    # Pydantic model for the model generation response.
-    model_response_schema: type[BaseModel]
-
-    # Pydantic model for the parameter estimator response.
-    param_est_response_schema: type[BaseModel]
-
-    # Pydantic model for the JAX translation response.
-    jax_model_response_schema: type[BaseModel]
-
     load_data_fn: Callable
 
     loss_fn: Callable | tuple[Callable, Callable]
@@ -244,6 +249,11 @@ class TaskSpec:
         and initializes seed programs. It serves as the primary way to create a
         `TaskSpec` for either a new run or to reproduce a past run.
 
+        If any seed model has a dynamic `DEFAULT_PARAMS` (a callable), this method
+        will attempt to load a single sample of discovery training data to resolve
+        these dynamic parameters. A warning will be issued if data loading for
+        dynamic parameter resolution fails.
+
         Args:
             config: A `Config` object, typically built from `Config.from_yaml` for
                 a new run or `Config.from_taskspec` to reproduce a past run.
@@ -253,7 +263,11 @@ class TaskSpec:
                 EDGAR experiment.
 
         Raises:
-            ValueError: If `load_data.py` does not define `load_data()` or `loss_fn()` (or both 'loss_fn_train' and 'loss_fn_test').
+            ValueError: If `load_data.py` does not define `load_data()`.
+            ValueError: If `data_loader/load_data.py` does not define `loss_fn()`
+                or both `loss_fn_train()` and `loss_fn_test()`.
+            ValueError: If there is a mix of dynamic and static `DEFAULT_PARAMS`
+                across seed models.
         """
         task_name = config.task_name
 
@@ -366,7 +380,8 @@ class TaskSpec:
         timestamp, project directory, seed programs, and prompt schemas into a YAML
         file. After writing, it strips write permissions from the file to prevent
         accidental modification, ensuring the saved specification accurately reflects
-        the experiment that produced it.
+        the experiment that produced it. This atomic operation guarantees that the
+        saved `task_spec.yaml` is a true, immutable record of the run.
 
         Args:
             run_dir: The directory where the `task_spec.yaml` file should be saved.
@@ -528,11 +543,15 @@ class TaskSpec:
 
     @property
     def response_schemas(self) -> ResponseSchemas:
-        """
-        Get all response schemas as a namedtuple.
+        """Retrieves all response schemas as a namedtuple for convenient access.
+
+        This property provides an ergonomic way to access the Pydantic model classes
+        that define the expected structure of LLM responses for model generation,
+        parameter estimator generation, and JAX model translation.
 
         Returns:
-            ResponseSchemas with model, param_est, and jax response schema classes
+            ResponseSchemas: A namedtuple containing the Pydantic model classes for
+                `model`, `param_est`, and `jax_model` responses.
         """
         return ResponseSchemas(
             model=self.model_response_schema,
@@ -542,7 +561,7 @@ class TaskSpec:
 
     @staticmethod
     def _extract_default_params(model_code: str) -> dict:
-        """Read DEFAULT_PARAMS attached to a model function.
+        """Reads the `DEFAULT_PARAMS` attribute attached to a model function.
 
         By convention, seed model files can attach a `DEFAULT_PARAMS` dictionary
         or lambda function as an attribute to their `model` function (often via a decorator).
@@ -561,3 +580,4 @@ class TaskSpec:
         func = load_function_from_source(model_code, "model")
         default_params = getattr(func, "DEFAULT_PARAMS", None)
         return default_params
+"""
