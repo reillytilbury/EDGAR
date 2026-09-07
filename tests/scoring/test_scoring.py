@@ -593,6 +593,29 @@ def test_score_skips_programs_without_code():
     assert pop[0].program_losses.discover.final is None
 
 
+def test_score_assigns_best_param_est():
+    pop = Population()
+    program = _make_program(
+        FAST_MODEL_CODE,
+        param_est=[BAD_PARAM_EST_CODE, PARAM_EST_CODE, BROKEN_PARAM_EST_CODE],
+        default_params={"w": jnp.array(1.0)},
+    )
+    pop.add(program)
+    data = (_make_data(), _make_data())
+
+    score(pop, data, None, BASE_CONFIG, loss_fn, split="discover")
+
+    # The best param est is the second one (index 1)
+    assert pop[0].best_estimator_idx == 1
+    assert pop[0].code.param_est == [
+        BAD_PARAM_EST_CODE,
+        PARAM_EST_CODE,
+        BROKEN_PARAM_EST_CODE,
+    ]
+    assert pop[0].code.best_param_est == PARAM_EST_CODE
+    assert pop[0].param_est_code == PARAM_EST_CODE
+
+
 # --- rank ---
 def test_rank():
     pop = Population()

@@ -31,16 +31,28 @@ def initialize_program(i, model_code, param_est_code):
     """
     return Program(
         birth=BirthCertificate(generation=i, island=i, batch_index=i),
-        code=Code(model=model_code, param_est=param_est_code, model_jax=model_code),
+        status="alive",
+        code=Code(
+            model=model_code,
+            param_est=param_est_code,
+            model_jax=model_code,
+            best_param_est=param_est_code,
+        ),
         name=f"Program {i}",
         program_losses=Losses(
             discover=LossStats(init=float(i), final=float(i) / 2),
             validate=LossStats(init=float(i) * 2, final=float(i)),
         ),
         n_params=i,
-        eval_fingerprint=np.array([i, i + 1, i + 2]),
         params_init={"w": np.array([float(i)])},
+        sample_losses=np.array([float(i), float(i + 1)]),
+        sample_losses_init=np.array([float(i + 2), float(i + 3)]),
+        image_path=f"path/to/image_{i}.png",
         fit_image_path=f"path/to/fit_{i}.png",
+        trajectory_image_path=f"path/to/trajectory_{i}.png",
+        rank=i,
+        best_estimator_idx=0,
+        _default_params={"w": np.array([float(i)])},
     )
 
 
@@ -74,8 +86,8 @@ class TestPopulation:
         # Check saved and loaded programs have the same attributes
         for p_original, p_loaded in zip(pop._programs, loaded_pop._programs):
             assert p_original.birth == p_loaded.birth
+            assert p_original.status == p_loaded.status
             assert p_original.code == p_loaded.code
-            assert p_original.code.model_jax == p_loaded.code.model_jax
             assert p_original.name == p_loaded.name
             assert (
                 p_original.program_losses.discover.init
@@ -94,14 +106,18 @@ class TestPopulation:
                 == p_loaded.program_losses.validate.final
             )
             assert p_original.n_params == p_loaded.n_params
-            assert p_original.idx == p_loaded.idx
-            assert p_original.status == p_loaded.status
+            assert np.allclose(p_original.params_init["w"], p_loaded.params_init["w"])
+            assert np.allclose(p_original.sample_losses, p_loaded.sample_losses)
+            assert np.allclose(
+                p_original.sample_losses_init, p_loaded.sample_losses_init
+            )
+            assert p_original.image_path == p_loaded.image_path
             assert p_original.fit_image_path == p_loaded.fit_image_path
-            if p_original.params_init is not None:
-                for k in p_original.params_init:
-                    np.testing.assert_array_equal(
-                        p_original.params_init[k], p_loaded.params_init[k]
-                    )
+            assert p_original.trajectory_image_path == p_loaded.trajectory_image_path
+            assert p_original.rank == p_loaded.rank
+            assert p_original.best_estimator_idx == p_loaded.best_estimator_idx
+            assert p_original.idx == p_loaded.idx
+            assert p_original.default_params == p_loaded.default_params
 
     def test_population_save_and_load_with_numpy_array_default_params(self, tmp_path):
         pop = Population()

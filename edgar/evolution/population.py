@@ -278,6 +278,7 @@ class Population:
                     fit_image_path=d.get("fit_image_path"),
                     trajectory_image_path=d.get("trajectory_image_path"),
                     rank=d.get("rank"),
+                    best_estimator_idx=d.get("best_estimator_idx"),
                 )
                 pop.add(program)
         return pop

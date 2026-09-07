@@ -537,7 +537,7 @@ def score(
         if best_idx is not None:
             program.best_estimator_idx = best_idx
             if program.code.param_est:
-                program.best_param_est = program.code.param_est[best_idx]
+                program.code.best_param_est = program.code.param_est[best_idx]
 
         if fingerprint is not None:
             program.eval_fingerprint = fingerprint
