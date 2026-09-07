@@ -11,6 +11,9 @@ io:
   # Base directory for run outputs. Each run lands in <save_path>/YYYY-MM-DD/HH-MM-SS/.
   save_path: program_databases
 
+  # Whether to save optimization trajectories of programs in population.jsonl (saving them can make the output population.jsonl large).
+  save_trajectories: false
+
 evolution:
   # Number of generations per run.
   n_generations: 12

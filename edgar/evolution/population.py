@@ -146,7 +146,7 @@ class Population:
         for i in alive_indices:
             self[i].program_losses.validate.final = None
 
-    def save(self, path: str) -> None:
+    def save(self, path: str, save_trajectories: bool = False) -> None:
         """Atomically writes the entire population to a JSONL file.
 
         Each `Program` object is serialized into a JSON string on a new line.
@@ -162,6 +162,8 @@ class Population:
 
         Args:
             path: The file path where the population should be saved.
+            save_trajectories: If False, program optimization trajectories
+                are not saved to the file, which reduces file size.
         """
         from io import StringIO
 
@@ -174,6 +176,15 @@ class Population:
             d.pop(
                 "eval_fingerprint", None
             )  # Do not serialize fingerprint, which is also potentially large
+
+            # Optionally remove trajectories to save space
+            if not save_trajectories:
+                if "program_losses" in d:
+                    if "discover" in d["program_losses"]:
+                        d["program_losses"]["discover"].pop("trajectories", None)
+                    if "validate" in d["program_losses"]:
+                        d["program_losses"]["validate"].pop("trajectories", None)
+
             if isinstance(d["program_losses"]["validate"]["final"], NotValidated):
                 d["program_losses"]["validate"]["final"] = "NOTVALIDATED"
             llm = d["birth"]["llm_name"]

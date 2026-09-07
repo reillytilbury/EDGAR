@@ -17,7 +17,7 @@ def test_fromconfig():
     assert taskspec.project_dir == Path("tests/io/test_task").resolve()
     # Check config parameters correctly loaded in
     assert taskspec.run == {"random_seed": 42}
-    assert taskspec.io == {"data_path": "", "save_path": ""}
+    assert taskspec.io == {"data_path": "", "save_path": "", "save_trajectories": False}
     assert taskspec.evolution == {
         "n_generations": 4,
         "n_islands": 2,

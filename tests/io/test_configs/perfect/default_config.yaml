@@ -4,6 +4,7 @@ run:
 io:
   data_path: "a"
   save_path: "b"
+  save_trajectories: false
 
 evolution:
   n_generations: 10

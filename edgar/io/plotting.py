@@ -125,7 +125,7 @@ def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> 
 
     for p in programs:
         discover_losses = p.program_losses.discover
-        if not discover_losses:
+        if not discover_losses or discover_losses.trajectories is None:
             continue
 
         save_path = plot_dir / f"P{p.idx:04d}_traj.png"

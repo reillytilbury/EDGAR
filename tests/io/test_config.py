@@ -59,6 +59,7 @@ def test_load_perfect_config():
     # All fields should be from perfect/config.yaml
     assert config.io.data_path == ""
     assert config.io.save_path == ""
+    assert config.io.save_trajectories
     assert config.evolution.n_generations == 12
     assert config.evolution.n_islands == 8
     assert config.evolution.batch_size == 6

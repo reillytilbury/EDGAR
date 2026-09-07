@@ -80,7 +80,7 @@ class TestPopulation:
                 i, linear_model_code(), linear_param_est_code()
             )
             pop.add(program)
-        pop.save(tmp_path / "population.jsonl")
+        pop.save(tmp_path / "population.jsonl", save_trajectories=True)
         loaded_pop = Population.load(tmp_path / "population.jsonl")
         assert len(loaded_pop) == len(pop)
         # Check saved and loaded programs have the same attributes
@@ -160,6 +160,33 @@ class TestPopulation:
             saved_json = json.loads(f.readline().strip())
             assert "data" not in saved_json
             assert "eval_fingerprint" not in saved_json
+
+    def test_population_save_with_save_trajectories_false(self, tmp_path):
+        pop = Population()
+        program = initialize_program(0, linear_model_code(), linear_param_est_code())
+        # Set some trajectories
+        program.program_losses.discover.trajectories = np.array([1.2, 0.9, 0.5])
+        program.program_losses.validate.trajectories = np.array([2.4, 1.8, 1.0])
+        pop.add(program)
+
+        jsonl_path = tmp_path / "population_no_trajectories.jsonl"
+        # Save with save_trajectories=False
+        pop.save(jsonl_path, save_trajectories=False)
+
+        # 1. Verify JSON file does not contain trajectories
+        with open(jsonl_path) as f:
+            saved_json = json.loads(f.readline().strip())
+            assert "trajectories" not in saved_json["program_losses"]["discover"]
+            assert "trajectories" not in saved_json["program_losses"]["validate"]
+
+        # 2. Verify loading back successfully handles missing trajectories
+        loaded_pop = Population.load(jsonl_path)
+        assert len(loaded_pop) == 1
+        loaded_program = loaded_pop[0]
+        assert loaded_program.program_losses.discover.trajectories is None
+        assert loaded_program.program_losses.validate.trajectories is None
+        # Other values should load correctly
+        assert loaded_program.program_losses.discover.init == 0.0
 
     def test_population_prepare_validation_scoring(self):
         pop = Population()

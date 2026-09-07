@@ -185,7 +185,9 @@ async def run(
                     n_items=len(spec.seed_programs),
                 )
                 t_fits_seeds(spec, X_discover[1], population)
-                population.save(pop_path)
+                population.save(
+                    pop_path, save_trajectories=spec.io.get("save_trajectories", False)
+                )
                 save_island_census(census, census_path)
                 metrics.finish_generation()
                 write_status(
@@ -272,7 +274,9 @@ async def run(
                 log_generation(log, gen, population, islands, spec, metrics=metrics)
 
                 # Save each generation
-                population.save(pop_path)
+                population.save(
+                    pop_path, save_trajectories=spec.io.get("save_trajectories", False)
+                )
                 save_island_census(census, census_path)
                 metrics.finish_generation()
                 write_status(
@@ -314,7 +318,9 @@ async def run(
                     f"***** Output directory: {spec.output_dir} *****",
                 )
             # Final save, even if run failed
-            population.save(pop_path)
+            population.save(
+                pop_path, save_trajectories=spec.io.get("save_trajectories", False)
+            )
             save_island_census(census, census_path)
             write_status(
                 spec.output_dir,

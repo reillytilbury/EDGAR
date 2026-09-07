@@ -1,6 +1,7 @@
 io:
   data_path: ""
   save_path: ""
+  save_trajectories: true
 
 evolution:
   n_generations: 12

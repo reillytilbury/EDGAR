@@ -151,10 +151,12 @@ class IOConfig(_LaxModel):
         data_path: The path to the directory or file containing the experiment's data.
         save_path: The base path under which all run artifacts (logs, programs,
             dashboard data) are saved, at `<save_path>/<task_name>/YYYY-MM-DD/HH-MM-SS/`.
+        save_trajectories: Whether to save program optimization trajectories to population.jsonl.
     """
 
     data_path: str
     save_path: str
+    save_trajectories: bool
 
 
 class EvolutionConfig(_LaxModel):
