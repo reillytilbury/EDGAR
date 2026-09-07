@@ -384,4 +384,3 @@ def log_generation(
 
     _flush_warnings(log)
     f.flush()
-"""

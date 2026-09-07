@@ -613,4 +613,3 @@ def _write_metrics_jsonl(path: Path, rows: list[dict]) -> None:
     """
     payload = "".join(json.dumps(r) + "\n" for r in rows)
     atomic_write_text(path, payload)
-"""

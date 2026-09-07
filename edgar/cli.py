@@ -426,8 +426,6 @@ def validate_project(task: str) -> int:
     necessary files (e.g., `model1.py`, `load_data.py`, `config.yaml`). It also
     verifies that these files define the expected functions (`model`,
     `parameter_estimator`, `load_data`, `loss_fn`, `plot_model_fits`).
-    This validation step is crucial to ensure a correct setup before an
-    experiment is run.
 
     Args:
         task (str): The name of the project to validate.
@@ -932,4 +930,3 @@ def run_cli(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(run_cli())
-"""

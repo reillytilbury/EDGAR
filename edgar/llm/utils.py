@@ -2,9 +2,7 @@ def translate_to_jax(code: str) -> str:
     """Translates numpy-based code to JAX-compatible code.
 
     This function replaces `import numpy as np` with `import jax.numpy as jnp`
-    and all instances of `np.` with `jnp.`. This is a utility for converting
-    LLM-generated Python code, which often uses `numpy`, into a format
-    compatible with JAX for efficient execution and gradient computation within EDGAR.
+    and all instances of `np.` with `jnp.`.
 
     Args:
         code (str): The Python source code string containing numpy references.

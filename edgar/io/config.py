@@ -107,8 +107,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
 class _LaxModel(BaseModel):
     """Pydantic BaseModel that issues a warning for unexpected fields.
 
-    This base model is used for configuration sections to provide forward
-    compatibility. Instead of raising an error for unknown fields, it logs
+    Instead of raising an error for unknown fields, it logs
     a warning, allowing the system to continue processing configurations
     with new or custom parameters that are not explicitly defined in the
     schema. Project-specific parameters should be placed under

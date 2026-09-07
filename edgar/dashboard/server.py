@@ -414,9 +414,7 @@ def _root_for(run_dir: Path) -> Path:
     # Expected structure: <root>/<task_name>/YYYY-MM-DD/HH-MM-SS/
     # So, we expect at least 4 parts from the conceptual root, meaning
     # we need to go up 3 levels to reach <root>/<task_name>
-    if len(parts) >= 3: # Corrected from 2 to 3 to get `<root>/<task_name>`
+    if len(parts) >= 3:  # Corrected from 2 to 3 to get `<root>/<task_name>`
         # This will return `program_databases/my_task` for the example
         return Path(*parts[:-3])
     return run_dir.parent
-
-```
