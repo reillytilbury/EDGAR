@@ -116,6 +116,11 @@ Updated File Content:
                     print(f"  Finish reason: {response.candidates[0].finish_reason}")
                 continue
 
+            # Strip any trailing triple quotes appended by Gemini if the original file did not have them
+            updated_content = updated_content.strip()
+            if updated_content.endswith('"""') and not content.strip().endswith('"""'):
+                updated_content = updated_content[:-3].strip()
+
             # Simple safety check: ensure the LLM didn't just return garbage
             # Relaxed for __init__.py which might be empty or just docstrings
             is_init = file_path.endswith("__init__.py")
