@@ -52,9 +52,11 @@ delete_vm() {
   # Dynamically find the YYYY-MM-DD/HH-MM-SS subdirectory inside SAVE_ROOT
   local ts_dir=""
   if [ -d "$SAVE_ROOT" ]; then
-    for d in "$SAVE_ROOT"/*/*; do
+    for d in "$SAVE_ROOT"/*/*/*; do
       if [ -d "$d" ] && [[ "$(basename "$(dirname "$d")")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [[ "$(basename "$d")" =~ ^[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]]; then
-        ts_dir="$(basename "$(dirname "$d")")/$(basename "$d")"
+        local project_dir
+        project_dir="$(basename "$(dirname "$(dirname "$d")")")"
+        ts_dir="${project_dir}/$(basename "$(dirname "$d")")/$(basename "$d")"
         break
       fi
     done
