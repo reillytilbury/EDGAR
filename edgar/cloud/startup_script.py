@@ -128,6 +128,7 @@ uv sync --frozen
   while true; do
     sleep 120
     [ -d "$SAVE_ROOT" ] && gsutil -m rsync -r "$SAVE_ROOT" "$RESULTS_URI"
+    gsutil cp /var/log/edgar-startup.log "${RESULTS_URI}/startup.log" || true
   done
 ) &
 SYNC_PID=$!
