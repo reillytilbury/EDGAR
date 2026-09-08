@@ -680,7 +680,13 @@ def build_overrides(flat_run: dict, data_basename: str | None) -> list[str]:
 
 
 def create_vm(
-    gcp: dict, flat_run: dict, data_uri: str, secret_name: str | None, launch_id: str, user: str, dry_run: bool
+    gcp: dict,
+    flat_run: dict,
+    data_uri: str,
+    secret_name: str | None,
+    launch_id: str,
+    user: str,
+    dry_run: bool,
 ) -> str:
     """Create one GPU VM for a flattened run and return its instance name.
 
@@ -906,7 +912,9 @@ def fetch_results(spec: dict, dry_run: bool) -> int:
     return 0
 
 
-def _print_summary(summary: list[tuple[str, str, str]], gcp: dict, dry_run: bool) -> None:
+def _print_summary(
+    summary: list[tuple[str, str, str]], gcp: dict, dry_run: bool
+) -> None:
     """Prints a summary of the launched or planned runs.
 
     Includes details on each run's name, VM instance, and results bucket path.

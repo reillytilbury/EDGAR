@@ -233,4 +233,3 @@ class Optimizer:
         # Unflatten the final best parameters back into their original PyTree structure
         # for each parallel optimization.
         return [self.unflatten(flat) for flat in final_best_flats], loss_trajectories
-

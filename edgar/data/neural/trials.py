@@ -3,6 +3,7 @@
 This module provides functions for manipulating experimental trial data,
 specifically for shuffling multiple arrays consistently along a specified axis.
 """
+
 import numpy as np
 
 
