@@ -371,9 +371,6 @@ class Program:
                         f"Failed to resolve dynamic default_params for Program #{self.idx}: {e}",
                         UserWarning,
                     )
-                    self._default_params = None
-                    self.n_params = None
-                    return
             else:
                 raise RuntimeError(
                     f"Cannot resolve dynamic default_params for Program #{self.idx} because program.data is None"

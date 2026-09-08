@@ -517,7 +517,7 @@ class Config(BaseModel):
         prompts = {
             "model": schemas["model"],
             "parameter_estimator": schemas["param_est"],
-            "jax_model_translator_model": schemas["jax_model"],
+            "jax_translator_model": schemas["jax_model"],
         }
         return cls(
             task_name=record["task_name"],

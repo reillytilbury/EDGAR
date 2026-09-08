@@ -1,5 +1,5 @@
 """
-TaskSpec: A frozen bundle containing all configuration and callables needed to run an EDGAR experiment.
+TaskSpec: Object containing all configuration and callables needed to run an EDGAR experiment.
 
 TaskSpec serves two purposes:
 1. Load project callables and seed programs from a Config into ready-to-use fields.
@@ -124,9 +124,9 @@ def _load_loss_fn(data_loader_path: Path) -> Callable | tuple[Callable, Callable
     return loss_fn
 
 
-@dataclass(frozen=True)
+@dataclass
 class TaskSpec:
-    """Frozen bundle of everything needed to run (or re-run) an EDGAR experiment.
+    """Object containing everything needed to run (or re-run) an EDGAR experiment.
 
     TaskSpec serves two primary purposes:
     1.  **Initialization**: Loads and merges all configuration parameters, project-specific

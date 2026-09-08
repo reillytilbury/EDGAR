@@ -122,6 +122,9 @@ def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> 
     within the run output and are used for post-hoc analysis and dashboard
     display. The y-axis (Training Loss) is displayed on a logarithmic scale.
 
+    If a program does not have any trajectory data (e.g., because
+    `save_trajectories` is disabled in the configuration), no plot is produced.
+
     Args:
         spec: The `TaskSpec` object containing configuration.
         programs: A list of `Program` objects for which trajectory plots
