@@ -60,6 +60,10 @@ Updated File Content:
 
             updated_content = updated_content.strip()
 
+            # Strip any trailing triple quotes appended by Gemini if the original file did not have them
+            if updated_content.endswith('"""') and not content.strip().endswith('"""'):
+                updated_content = updated_content[:-3].strip()
+
             # Simple check to avoid overwriting with garbage
             if (
                 "def " in updated_content

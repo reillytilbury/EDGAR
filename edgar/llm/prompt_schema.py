@@ -109,7 +109,7 @@ class PromptSchema(BaseModel):
         description="Instructions for the LLM on how to interpret and use multimodal image feedback.",
     )
     parent_program_template: str = Field(
-        description="A template string for formatting information about parent programs, variables defined as e.g {code_model} are filled with the corresponding dotted variable from parent_program_vars (e.g code.model)"
+        description="A template string for formatting information about parent programs. Template variables (e.g., `{code_model}`) are filled from `parent_program_vars`."
     )
     parent_program_vars: list[str] = Field(
         default_factory=list,
@@ -117,7 +117,7 @@ class PromptSchema(BaseModel):
     )
     current_program_template: Optional[str] = Field(
         None,
-        description="A template string for formatting information about the program currently being generated/modified, variables defined as e.g {code_model} are filled with the corresponding dotted variable from current_program_vars (e.g code.model)",
+        description="A template string for formatting information about the program currently being generated/modified. Template variables (e.g., `{code_model}`) are filled from `current_program_vars`.",
     )
     current_program_vars: list[str] = Field(
         default_factory=list,
@@ -215,11 +215,15 @@ class PromptSchema(BaseModel):
         cfg: dict[str, Any],
         rng: np.random.Generator,
     ) -> list[str]:
-        """Selects ideas from the ideas pool with independent probability, returning a list of them and mutates cfg in-place with the 'random-text-injection' key.
+        """Selects a subset of ideas from the ideas pool based on a given probability and updates the configuration.
+
+        Each idea in the `ideas` list is selected with an independent probability `idea_probability`
+        (from `cfg`). The selected ideas are then joined by newlines and stored in the `cfg` dictionary
+        under the key `'ideas-injection-point'`, to be included in the prompt by `build_prompt`.
 
         Args:
-            cfg: The configuration dictionary to be mutated in-place.
-            rng: The random number generator to use.
+            cfg: The configuration dictionary to be mutated in-place with selected ideas.
+            rng: The random number generator to use for probabilistic selection.
         Returns:
             A list of selected ideas, which may be empty if no ideas are selected.
         """

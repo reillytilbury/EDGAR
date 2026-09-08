@@ -1,6 +1,8 @@
 def translate_to_jax(code: str) -> str:
-    """Translates numpy-based code to JAX-compatible code by replacing
-    `import numpy as np` with `import jax.numpy as jnp` and all instances of `np.` with `jnp.`.
+    """Translates numpy-based code to JAX-compatible code.
+
+    This function replaces `import numpy as np` with `import jax.numpy as jnp`
+    and all instances of `np.` with `jnp.`.
 
     Args:
         code (str): The Python source code string containing numpy references.

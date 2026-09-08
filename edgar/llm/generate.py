@@ -90,10 +90,12 @@ def _filter_programs(
 
 
 def _resolve_parents(population: Population, program: Program) -> list[Program]:
-    """Resolves and sorts the parent programs for a given program.
+    """Resolves and sorts a program's parents by their `discover.final` loss.
 
-    Parents are sorted by their `discover.final` loss in descending order (highest loss first).
-    Programs with `None` or non-float losses are treated as having infinite loss.
+    Parents are retrieved from the population using their indices and then sorted
+    in descending order of their final loss on the `discover` split. Programs with
+    `None`, `NaN`, or non-finite losses are treated as having infinite loss for
+    sorting purposes.
 
     Args:
         population: The entire population of programs, used to retrieve parent programs by index.
@@ -129,29 +131,39 @@ async def _generate_one_model(
 ) -> None:
     """Generates the numpy model code for a single program using an LLM.
 
-    This function constructs a prompt using the provided `prompt_schema`, potentially including
-    image-based feedback, calls the specified LLM, and then updates the program's model code,
-    default parameters, and descriptive name based on the LLM's response.
+    This function prepares a prompt for the LLM, optionally injecting ideas and image-based
+    feedback, dispatches the LLM call, and then parses the response to update the program's
+    model code, descriptive name, and default parameters.
 
     Args:
-        program: The program for which to generate the model code. This program object
+        program: The program for which to generate the model code. This object
             will be mutated with the generated code and metadata.
         parents: A list of parent programs used for contextualizing the LLM prompt.
-        prompt_schema: The schema used to build the LLM prompt.
-        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance.
-        mode: The generation mode (e.g., "explore" or "exploit"), affecting prompt content.
-        temperature: The sampling temperature for the LLM.
-        config: Optional configuration dictionary containing LLM call parameters like
-            `log_raw_llm_response`, `max_tokens`, and `retry_config`.
-        spec: The `TaskSpec` object, required for generating image feedback.
-        data: The data dictionary, required for generating image feedback.
+        prompt_schema: The schema used to build the LLM prompt. It defines the structure
+            and content of the prompt, including placeholders for program details.
+        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance to use.
+        mode: The generation mode (e.g., "explore" or "exploit"), which can affect the
+            content of the generated prompt via `prompt_schema`.
+        temperature: The sampling temperature for the LLM, controlling the randomness of
+            the generation.
+        config: Optional configuration dictionary containing LLM call parameters such as
+            `log_raw_llm_response`, `max_tokens`, and `retry_config`. Also used to store
+            `idea_probability` for prompt schema.
+        spec: The `TaskSpec` object, providing access to necessary experiment
+            configurations, including the `rng` for selecting ideas and the `plot_fn`
+            for image feedback generation.
+        data: The data dictionary (e.g., `X_discover`), used to generate image feedback for
+            the LLM if `spec` is provided. The data is debatched for `default_params` resolution.
+        output_schema: The Pydantic model to parse the LLM's structured output. Defaults
+            to `ModelSchema`.
 
     Returns:
-        None. The `program` object is mutated in-place.
+        None. The `program` object is mutated in-place by updating its `code.model`,
+        `default_params`, `name`, and `birth.llm_name` fields.
 
     Raises:
         UserWarning: If `call_llm` returns None, indicating a failure in LLM interaction,
-            and the program's model code generation is skipped.
+            or if `default_params` cannot be evaluated, generation is skipped or partial.
     """
     image_bytes = generate_feedback_image(spec, data, parents, program)
     cfg = dict(config or {})
@@ -206,27 +218,30 @@ async def generate_models(
     data: dict | None = None,
     output_schema: type[BaseModel] = ModelSchema,
 ) -> None:
-    """Asynchronously generates numpy model code for all programs that currently lack it.
+    """Asynchronously generates numpy model code for programs needing it within a population.
 
-    This function identifies programs requiring model code, resolves their parents, and
-    then dispatches concurrent LLM calls via `_generate_one_model`.
+    This function identifies programs without model code using `_needs_model_code`,
+    resolves their parent programs, and then concurrently dispatches asynchronous LLM calls
+    via `_generate_one_model` for each eligible program.
 
     Args:
         population: The entire population of programs. Programs within this population
             that satisfy `_needs_model_code` will be updated.
         prompt_schema: The schema used to build the LLM prompt for model generation.
-        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance.
+        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance to use.
         mode: The generation mode (e.g., "explore" or "exploit").
         temperature: The sampling temperature for the LLM.
-        config: Optional configuration dictionary for LLM calls.
-        spec: The `TaskSpec` object, used for generating prompt images and accessing
-            the output directory.
-        data: The data dictionary, used for generating prompt images.
+        config: Optional configuration dictionary for LLM calls, including settings like
+            `log_raw_llm_response`, `max_tokens`, and `retry_config`.
+        spec: The `TaskSpec` object, used for generating image feedback for the LLMs.
+        data: The data dictionary, used for generating image feedback for the LLMs.
+        output_schema: The Pydantic model to parse the LLM's structured output. Defaults
+            to `ModelSchema`.
 
     Returns:
         None. The `program` objects within the `population` are mutated in-place:
-        `program.code.model`, `program.name`, `program.birth.llm_name`,
-        and `program.image_path` (if image feedback is enabled) are updated.
+        `program.code.model`, `program.name`, `program.birth.llm_name`, and
+        `program.default_params` are updated.
     """
     programs = _filter_programs(population, _needs_model_code)
     await asyncio.gather(
@@ -263,19 +278,22 @@ async def _generate_one_param_est(
 ) -> str | None:
     """Generates the numpy parameter estimator code for a single program using an LLM.
 
-    This function builds a prompt, calls the specified LLM, and then returns the
-    generated parameter estimator code. The temperature for this LLM call is fixed at 1.0.
+    This function constructs a prompt tailored for parameter estimator generation, calls
+    the specified LLM with a fixed temperature of 1.0, and returns the generated code string.
 
     Args:
         program: The program for which to generate the parameter estimator code.
         parents: A list of parent programs used for contextualizing the LLM prompt.
         prompt_schema: The schema used to build the LLM prompt.
-        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance.
+        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance to use.
         config: Configuration dictionary containing LLM call parameters like
             `log_raw_llm_response`, `max_tokens`, and `retry_config`.
+        output_schema: The Pydantic model to parse the LLM's structured output. Defaults
+            to `ParamEstSchema`.
 
     Returns:
-        The generated parameter estimator code string, or None if the LLM call fails.
+        The generated parameter estimator code string, or None if the LLM call fails
+        or returns no result.
     """
     prompt = prompt_schema.build_prompt(
         "explore", parents, config, current_program=program
@@ -307,10 +325,26 @@ async def _generate_param_ests_for_program(
     n_param_ests: int,
     output_schema: type[BaseModel] = ParamEstSchema,
 ) -> None:
-    """Helper to generate a batch of parameter estimators for a single program.
+    """Generates a batch of parameter estimators for a single program concurrently.
 
-    Concurrently requests `n_param_ests` estimators and assigns successful results
-    to the program's code object.
+    This helper function initiates `n_param_ests` parallel requests to the LLM for
+    parameter estimator code. It collects the successful code strings and assigns
+    them to the program's `code.param_est` list.
+
+    Args:
+        program: The program for which to generate parameter estimators. This object
+            will be mutated.
+        population: The entire population of programs, used to resolve parent programs.
+        prompt_schema: The schema used to build the LLM prompt for parameter estimator generation.
+        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance to use.
+        config: Configuration dictionary containing LLM call parameters.
+        n_param_ests: The number of parameter estimators to attempt to generate for the program.
+        output_schema: The Pydantic model to parse the LLM's structured output. Defaults
+            to `ParamEstSchema`.
+
+    Returns:
+        None. The `program.code.param_est` field is mutated in-place with a list
+        of successfully generated estimator code strings.
     """
     tasks = [
         _generate_one_param_est(
@@ -335,17 +369,26 @@ async def generate_param_ests(
     config: dict[str, Any],
     output_schema: type[BaseModel] = ParamEstSchema,
 ) -> None:
-    """Asynchronously generates numpy parameter estimator code for programs that need it.
+    """Asynchronously generates numpy parameter estimator code for programs that require it.
 
-    This function identifies programs with existing model code but no parameter estimator,
-    resolves their parents, and then dispatches concurrent LLM calls via `_generate_one_param_est`.
+    This function identifies programs with existing model code but no parameter estimators
+    using `_needs_param_est_code`. It then dispatches concurrent calls to `_generate_param_ests_for_program`
+    for each eligible program, generating multiple estimators per program as specified by `n_param_ests`
+    in the configuration.
 
     Args:
         population: The entire population of programs. Programs within this population
             that satisfy `_needs_param_est_code` will be updated.
         prompt_schema: The schema used to build the LLM prompt for parameter estimator generation.
-        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance.
-        config: Configuration dictionary for LLM calls.
+        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance to use.
+        config: Configuration dictionary for LLM calls, including `n_param_ests` to determine
+            how many estimators to generate per program.
+        output_schema: The Pydantic model to parse the LLM's structured output. Defaults
+            to `ParamEstSchema`.
+
+    Returns:
+        None. The `program.code.param_est` fields of eligible programs in the `population`
+        are mutated in-place.
     """
     programs = _filter_programs(population, _needs_param_est_code)
     n_param_ests = config["n_param_ests"]
@@ -380,21 +423,23 @@ async def _translate_one_model(
 ) -> None:
     """Translates the numpy model code of a single program into JAX-compatible code using an LLM.
 
-    This function builds a translation prompt, calls the specified LLM, and if the
-    translation is successful and verifiable (i.e., `load_function_from_source`
-    can load a 'model' function from it), updates the program's JAX model code.
-    The temperature for this LLM call is fixed at 1.0.
+    This function constructs a translation prompt, calls the specified LLM with a fixed
+    temperature of 1.0, and validates the generated JAX code by attempting to load the
+    'model' function from it. If successful, the program's `model_jax` code is updated.
 
     Args:
-        program: The program whose numpy model code needs translation. This program object
+        program: The program whose numpy model code needs translation. This object
             will be mutated with the translated JAX code.
         model_prompt_schema: The schema used to build the LLM prompt for JAX translation.
-        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance.
+        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance to use.
         retry_config: Optional retry configuration for the LLM call.
         max_tokens: Optional maximum number of tokens for the LLM response.
+        output_schema: The Pydantic model to parse the LLM's structured output. Defaults
+            to `TranslationSchema`.
 
     Returns:
-        None. The `program` object is mutated in-place if translation is successful.
+        None. The `program.code.model_jax` field is mutated in-place if translation
+        is successful and the generated code is valid.
     """
     model_prompt = model_prompt_schema.build_prompt("explore", current_program=program)
     model_result = await call_llm(
@@ -423,22 +468,25 @@ async def translate_programs(
     max_tokens: int | None = None,
     output_schema: type[BaseModel] = TranslationSchema,
 ) -> None:
-    """Asynchronously translates all untranslated numpy model code to JAX-compatible code.
+    """Asynchronously translates untranslated numpy model code to JAX-compatible code for programs.
 
-    This function identifies programs requiring JAX translation and then dispatches
-    concurrent LLM calls via `_translate_one_model`.
+    This function identifies programs requiring JAX translation using `_needs_model_translation`
+    and then dispatches concurrent asynchronous LLM calls via `_translate_one_model` for
+    each eligible program.
 
     Args:
         population: The entire population of programs. Programs within this population
             that satisfy `_needs_model_translation` will be updated.
         model_prompt_schema: The schema used to build the LLM prompt for JAX translation.
-        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance.
+        llm: The LLM model name (str) or a pre-configured PydanticAI Model instance to use.
         retry_config: Optional retry configuration for the LLM calls.
         max_tokens: Optional maximum number of tokens for the LLM responses.
+        output_schema: The Pydantic model to parse the LLM's structured output. Defaults
+            to `TranslationSchema`.
 
     Returns:
         None. The `program.code.model_jax` field of eligible programs in the `population`
-        is mutated in-place.
+        is mutated in-place with the translated JAX code if successful.
     """
     programs = _filter_programs(population, _needs_model_translation)
     await asyncio.gather(

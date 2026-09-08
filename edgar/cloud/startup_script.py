@@ -3,10 +3,17 @@
 The VM's Deep Learning image runs ``STARTUP_TEMPLATE`` as root on first boot. Per-run
 values (bucket, run name, config path, data URI, overrides, runtime cap) are read from
 the instance metadata server, so the rendered script is byte-identical across every VM
-in a launch. The script waits for the GPU driver, pulls the code/secrets/data from GCS,
-builds the environment with ``uv sync --frozen``, runs ``edgar run`` under a wall-clock
-watchdog, and self-deletes via an ``EXIT`` trap that always flushes results and writes a
-``SUCCESS``/``FAILED``/``TIMEOUT`` sentinel to the bucket.
+in a launch.
+
+The script ensures robust execution with `set -euo pipefail`, waits for the GPU driver,
+pulls the EDGAR code, secrets, and optional data from GCS. It then builds the Python
+environment using `uv sync --frozen`, runs `edgar run` under a wall-clock watchdog,
+and periodically syncs results to GCS for resilience against preemption.
+
+Upon completion, failure, or timeout, an `EXIT` trap always flushes all results,
+including the `startup.log`, to the GCS bucket, writes a `SUCCESS`/`FAILED`/`TIMEOUT`
+sentinel file, and optionally sends a Slack notification if configured. Finally, it
+self-deletes the VM to prevent billing leakage.
 """
 
 CODE_DIR = "/opt/edgar"

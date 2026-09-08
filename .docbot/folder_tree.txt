@@ -1,12 +1,24 @@
 edgar/
 ├── __init__.py
 ├── cli.py
+├── cloud/
+│   ├── __init__.py
+│   ├── launch_gcp.py
+│   └── startup_script.py
 ├── dashboard/
 │   ├── __init__.py
 │   ├── data.py
 │   ├── latex_cache.py
 │   ├── server.py
 │   └── static/
+├── data/
+│   ├── __init__.py
+│   └── neural/
+│       ├── __init__.py
+│       ├── filtering.py
+│       ├── normalization.py
+│       ├── signal.py
+│       └── trials.py
 ├── evolution/
 │   ├── __init__.py
 │   ├── island.py
@@ -16,18 +28,22 @@ edgar/
 │   ├── __init__.py
 │   ├── config.py
 │   ├── logging.py
+│   ├── metrics.py
 │   ├── plotting.py
 │   ├── status.py
-│   └── task_spec.py
+│   ├── task_spec.py
+│   └── utils.py
 ├── llm/
 │   ├── __init__.py
 │   ├── code_loading.py
 │   ├── generate.py
 │   ├── llm_calling.py
 │   ├── prompt_schema.py
-│   └── response_schema.py
+│   ├── response_schema.py
+│   └── utils.py
 ├── run.py
 └── scoring/
     ├── __init__.py
-    ├── hello.py
-    └── scoring.py
+    ├── optimizer.py
+    ├── scoring.py
+    └── utils.py

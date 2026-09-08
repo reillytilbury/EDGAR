@@ -22,8 +22,6 @@ def run_tests():
 def generate_report(
     client: genai.Client,
     updated_files: list,
-    old_summary: str,
-    new_summary: str,
     tree_str: str,
     test_status: str,
 ):
@@ -31,28 +29,20 @@ def generate_report(
     files_list = "\n".join([f"- {f}" for f in updated_files])
 
     prompt = f"""
-You are an expert technical coordinator. 
 The EDGAR Documentation Bot has just finished updating the repository's documentation.
-
-PREVIOUS Global Summary:
-{old_summary}
-
-UPDATED Global Summary:
-{new_summary}
-
-Current file structure:
-{tree_str}
 
 List of files updated with new docstrings:
 {files_list}
+
+Tree structure of the repository:
+{tree_str}
 
 Test Status Output:
 {test_status}
 
 Instructions:
-1. Generate a short, descriptive git commit message title (max 70 characters).
-2. Generate a detailed Pull Request description (body) that summarizes:
-   - Key changes in the architectural/mathematical summary (compare PREVIOUS vs UPDATED).
+1. Generate a short git commit message title summarizing what documentation was added/updated  (max 70 characters).
+2. Generate a more detailed Pull Request description (body) that summarizes: 
    - Which files were documented.
    - The status of the tests (Passed or Failed). If they failed, briefly mention that manual review is needed.
 3. Use Markdown for the PR description.
@@ -161,9 +151,7 @@ def main():
     if updated_files or (old_summary != new_summary):
         print("\n[Step 5/5] Generating Change Report...")
         try:
-            generate_report(
-                client, updated_files, old_summary, new_summary, tree_str, test_summary
-            )
+            generate_report(client, updated_files, tree_str, test_summary)
         except Exception as e:
             print(f"Error during report generation: {e}")
 

@@ -86,36 +86,43 @@ async def run(
         status tracking.
     2.  **Data Loading**: Loads the scientific problem data into `X_discover`, `X_validate`,
         and `X_eval` splits using the `spec.load_data_fn`.
-    3.  **Seed Phase**:
-        *   Seed programs are loaded and optionally translated.
-        *   Seed programs are scored to establish a baseline.
+    3.  **Seed Phase**: Initializes the `Population` with seed programs. These programs are
+        translated into JAX, scored on the `discover` split, and their initial fit and
+        trajectory visualizations are generated. The initial `Population` and `Island`
+        census are then saved.
     4.  **Generational Loop**: For each generation:
-        *   New program variants are `spawn`ed from the current population.
-        *   LLMs generate new model architectures (`generate_models`) and parameter
-            estimation logic (`generate_param_ests`).
-        *   Programs are `translate`d to JAX.
-        *   Programs are `score`ed and `rank`ed.
-        *   The population is `deduplicate`d, `prune`d, and survivors `migrate` between islands.
-    5.  **Finalization**:
-        *   The final population and island census are saved.
-        *   Programs are `rank`ed based on their final validation losses.
+        *   New program variants are `spawn`ed on islands from the current population,
+            selecting parents using Boltzmann or uniform sampling.
+        *   LLMs are called to generate new model architectures (`generate_models`) and
+            parameter estimation logic (`generate_param_ests`) for the spawned programs.
+            Image feedback is provided to the LLMs.
+        *   Programs are `translate`d from numpy to JAX-compatible code.
+        *   Programs are `score`ed on the `discover` split, involving parameter estimation
+            and gradient descent. Program fit and trajectory images are generated.
+        *   Evolutionary operations are applied: programs are `deduplicate`d within and
+            across islands, islands are `prune`d to maintain size limits, and programs
+            `migrate` between islands based on a Boltzmann distribution.
+        *   Generation details, population state, and island census are logged and persisted.
+    5.  **Final Validation**: After the generational loop, programs are prepared for final
+        scoring on the `validate` split. They are then `rank`ed based on their validation
+        performance.
     6.  **Error Handling**: A `finally` block ensures that the `Population`, `census`, and
         `status.json` are always saved, even if an exception occurs during the run. Any exceptions
         are captured, logged with their traceback, and the run status is updated to 'failed'.
 
     Resuming Runs:
         If `resume_from` is provided:
-              - The population and census are loaded from the specified directory.
-              - The run starts from the next generation (max(population.birth.gen) + 1).
-              - run.log is opened in append mode with a RESUMED banner.
-              - started_at is preserved from the original status.json so total
-                wall time across resumes is recoverable from gen timings.
+            - The population and census are loaded from the specified directory.
+            - The run starts from the next generation (max(population.birth.gen) + 1).
+            - `run.log` is opened in append mode with a RESUMED banner.
+            - `started_at` is preserved from the original `status.json` so total
+              wall time across resumes is recoverable from generation timings.
 
-            Caveats:
-              - ``spec.rng`` state is lost. With a fixed run.random_seed the
-                resumed spawning/migration draws differ from a continuous run.
-                LLM responses are non-deterministic anyway.
-              - The original task_spec.yaml is reused as-is (chmod read-only).
+        Caveats:
+            - ``spec.rng`` state is lost. With a fixed `run.random_seed` the
+              resumed spawning/migration draws may differ from a continuous run.
+              LLM responses are non-deterministic anyway.
+            - The original `task_spec.yaml` is reused as-is (chmod read-only).
 
     Args:
         spec: A `TaskSpec` object containing all configuration, data, and callable functions
@@ -338,13 +345,22 @@ async def run(
 
 
 def _prepare_resume(spec: TaskSpec, run_dir: Path) -> None:
-    """Restamp ``spec`` so its output_dir resolves to ``run_dir``.
+    """Restamps `spec` so its output directory resolves to `run_dir`.
 
-    ``spec.output_dir`` is computed as ``os.path.join(io["save_path"], task_name,
-    creation_timestamp)``. Setting save_path to "" and creation_timestamp to the
-    *absolute* run_dir produces output_dir == str(run_dir), because os.path.join
-    discards everything before an absolute component. Resuming a run therefore
-    writes back to its original directory whatever the project's current layout.
+    `spec.output_dir` is computed as `os.path.join(io["save_path"], task_name,
+    creation_timestamp)`. Setting `save_path` to "" and `creation_timestamp` to the
+    *absolute* `run_dir` causes `output_dir` to resolve to `str(run_dir)`, because
+    `os.path.join` discards everything before an absolute component. This ensures
+    that resuming a run writes back to its original directory, irrespective of
+    the project's current layout or any `save_path` specified in the config.
+
+    Args:
+        spec: The `TaskSpec` object whose output directory is to be reconfigured.
+        run_dir: The absolute path to the previous run's output directory.
+
+    Raises:
+        FileNotFoundError: If `run_dir` does not exist or if `task_spec.yaml`
+            is missing within `run_dir`.
     """
     run_dir = run_dir.resolve()
     if not run_dir.exists():
@@ -359,15 +375,19 @@ def _prepare_resume(spec: TaskSpec, run_dir: Path) -> None:
 
 
 def _drop_trailing_unscored(population: Population) -> int:
-    """Drop programs from the end of population whose discover.final loss is None.
+    """Drops programs from the end of the population whose discover.final loss is None.
 
-    These are stale spawn shells from a crashed generation: spawn() added them
-    but score() never got the chance to set their loss. Dropping them keeps
-    population.jsonl free of ghost entries after resume. Pruned-but-completed
-    programs from earlier gens are preserved because they have a non-None
-    final loss (or inf if scoring failed cleanly).
+    These programs represent stale spawn shells from a crashed generation: they were
+    added by `spawn()` but `score()` never had the chance to set their loss. Dropping
+    them keeps `population.jsonl` free of ghost entries after a resume. Pruned but
+    completed programs from earlier generations are preserved because they have a
+    non-None final loss (or `inf` if scoring failed cleanly).
 
-    Returns the number of programs dropped.
+    Args:
+        population: The `Population` object to modify.
+
+    Returns:
+        The number of programs dropped from the population.
     """
     progs = population._programs
     n_before = len(progs)
@@ -377,7 +397,28 @@ def _drop_trailing_unscored(population: Population) -> int:
 
 
 def _validate_resume_state(population: Population, census: list, n_gens: int) -> None:
-    """Refuse to resume if on-disk state is incomplete, inconsistent, or done."""
+    """Refuses to resume if on-disk state is incomplete, inconsistent, or already complete.
+
+    This function performs checks to ensure that the loaded `population.jsonl` and
+    `island_census.jsonl` files are in a valid state for resuming an EDGAR run.
+    It verifies that:
+    - The population is not empty (ensuring the seed phase completed).
+    - The census contains at least one completed generation (ensuring the run progressed
+      beyond the initial empty census save).
+    - The number of completed generations in the census does not exceed the target
+      `n_generations` (to prevent resuming a run that has already reached its validation phase).
+    - The program indices referenced in the latest census are consistent with the
+      number of programs in the population (checking for data corruption).
+
+    Args:
+        population: The loaded `Population` object.
+        census: The loaded list of island census snapshots.
+        n_gens: The total number of generations configured for the run.
+
+    Raises:
+        ValueError: If the on-disk state is incomplete, inconsistent, or the run
+            is already considered complete (e.g., reached validation phase).
+    """
     if len(population) == 0:
         raise ValueError(
             "Cannot resume: population.jsonl is empty. The original run did "
@@ -406,7 +447,22 @@ def _validate_resume_state(population: Population, census: list, n_gens: int) ->
 def _init_env(
     spec: TaskSpec, resume_from: str | Path | None, log_level: str
 ) -> tuple[any, bool]:
-    """Sets up the run environment, output directory, and logging."""
+    """Sets up the run environment, output directory, and logging.
+
+    This helper function determines if the run is a resume operation, prepares
+    the `TaskSpec` accordingly, creates the output directory, and initializes
+    the logging system.
+
+    Args:
+        spec: The `TaskSpec` object containing run configuration.
+        resume_from: Optional path to a previous run's output directory to resume from.
+        log_level: The verbosity level for logging messages.
+
+    Returns:
+        A tuple containing:
+            - `log`: The initialized log object.
+            - `resume`: A boolean indicating whether the run is a resume operation.
+    """
     resume = resume_from is not None
     if resume:
         resume_from = Path(resume_from).resolve()
@@ -423,7 +479,26 @@ def _init_env(
 def _load_or_init_state(
     spec: TaskSpec, resume: bool
 ) -> tuple[Population, list, list[set[int]] | None, int, int, float]:
-    """Loads existing population/census if resuming, or initializes new state."""
+    """Loads existing population and census if resuming, or initializes new state.
+
+    This function handles the conditional loading of evolutionary state (population,
+    island census) from disk if `resume` is True. Otherwise, it initializes a new
+    empty population and census, setting the `started_at` timestamp. It also performs
+    validation checks and drops unscored programs if resuming.
+
+    Args:
+        spec: The `TaskSpec` object with run configuration.
+        resume: A boolean indicating whether the run is a resume operation.
+
+    Returns:
+        A tuple containing:
+            - `population`: The `Population` object (loaded or newly initialized).
+            - `census`: The list of island census snapshots (loaded or newly initialized).
+            - `islands`: The list of island program indices (from last census or None).
+            - `start_gen`: The generation number to start from.
+            - `n_dropped`: The number of programs dropped during resume.
+            - `started_at`: The timestamp when the run originally started.
+    """
     n_gens = spec.evolution["n_generations"]
     pop_path = os.path.join(spec.output_dir, "population.jsonl")
     census_path = os.path.join(spec.output_dir, "island_census.jsonl")
@@ -461,7 +536,23 @@ def _log_startup(
     n_dropped: int,
     metrics: RunMetrics,
 ) -> None:
-    """Consolidates startup logging and restores historical metrics if resuming."""
+    """Consolidates startup logging and restores historical metrics if resuming.
+
+    This function logs initial configuration and resume-specific details,
+    such as the number of dropped programs and the generation from which the
+    run is resuming. If resuming, it also loads prior generation metrics into
+    the `RunMetrics` object.
+
+    Args:
+        log: The log object for writing messages.
+        spec: The `TaskSpec` object with run configuration.
+        resume: A boolean indicating whether the run is a resume operation.
+        population: The `Population` object.
+        census: The list of island census snapshots.
+        start_gen: The generation number to start from.
+        n_dropped: The number of programs dropped during resume.
+        metrics: The `RunMetrics` object to update with historical data.
+    """
     n_gens = spec.evolution["n_generations"]
     n_islands = spec.evolution["n_islands"]
     batch_size = spec.evolution["batch_size"]

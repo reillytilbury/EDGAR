@@ -1,14 +1,26 @@
 """data.py — translate a run_dir into JSON-safe DTOs for the dashboard.
 
-All functions take a Path to a run directory (the timestamped folder under
-program_databases/) and return plain dicts/lists ready to ship over HTTP.
+This module provides functions to load and transform raw EDGAR run data
+(e.g., `population.jsonl`, `island_census.jsonl`, `status.json`) from a
+specified run directory into JSON-safe Data Transfer Objects (DTOs). These DTOs
+are then consumed by the EDGAR dashboard's HTTP API, providing real-time
+monitoring and post-hoc analysis capabilities.
 
-Caching: Population.load is the only expensive call (24 MB JSONL on the largest
-runs). We memoise per (path, mtime) so repeated polls during a live run only
-re-parse when a new generation lands.
-
-Legacy tolerance: runs predating the status.json convention are treated as
-status='complete' implicitly.
+Key functionalities include:
+-   **Run Discovery:** Identifying EDGAR runs within specified root directories.
+-   **Data Loading & Caching:** Efficiently loading large data files with
+    memoization based on file modification times to optimize dashboard
+    performance during live runs.
+-   **Run Summary & Live State:** Generating high-level summaries and detailed
+    live state information for ongoing or completed experiments.
+-   **Program Details:** Providing comprehensive information for individual
+    evolved programs, including code, losses, parameters, and lineage.
+-   **Family Tree Data:** Preparing data structures for visualizing the
+    evolutionary lineage of programs.
+-   **JSON Sanitization:** Recursively converting complex Python and NumPy
+    types into JSON-compatible values, handling `NaN` and `inf` appropriately.
+-   **Legacy Tolerance:** Implicitly treating runs predating the `status.json`
+    convention as having a 'complete' status.
 """
 
 from __future__ import annotations
@@ -40,7 +52,20 @@ _METRICS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
 
 def _load_population(run_dir: Path) -> Population | None:
-    """Cached Population.load. Returns None if file doesn't exist yet."""
+    """Loads the population data for a given run directory, utilizing a cache.
+
+    The cache stores the Population object along with its file's modification
+    time (`mtime`). If the file's `mtime` has not changed since the last
+    load, the cached object is returned. This prevents expensive re-parsing
+    during repeated polls from the dashboard during a live run.
+
+    Args:
+        run_dir: The path to the run directory (e.g., `program_databases/YYYY-MM-DD/HH-MM-SS/`).
+
+    Returns:
+        A `Population` object if `population.jsonl` exists and can be loaded,
+        otherwise None. Returns cached population in case of mid-write race.
+    """
     path = run_dir / "population.jsonl"
     if not path.exists():
         return None
@@ -62,10 +87,20 @@ def _load_population(run_dir: Path) -> Population | None:
 
 
 def _reconstruct_model_prompt(run_dir: Path, pop: Population, idx: int) -> str:
-    """Reconstruct the prompt shown to the LLM for a given program.
+    """Reconstructs the exact prompt string shown to the LLM for a given program.
 
-    This uses the PromptSchema and configuration from task_spec.yaml along
-    with the program's parents to rebuild the exact prompt string.
+    This function uses the `PromptSchema` and configuration from `task_spec.yaml`,
+    along with the program's parents and any injected "ideas", to rebuild
+    the prompt. This allows for transparent inspection of LLM inputs.
+
+    Args:
+        run_dir: The path to the run directory.
+        pop: The `Population` object containing all programs.
+        idx: The index of the program for which to reconstruct the prompt.
+
+    Returns:
+        The reconstructed prompt string, or an error message if reconstruction fails.
+        Returns a specific message for seed programs as no LLM prompt was used.
     """
     spec_doc = _load_task_spec(run_dir)
     if not spec_doc:
@@ -114,11 +149,23 @@ def _reconstruct_model_prompt(run_dir: Path, pop: Population, idx: int) -> str:
 
 
 def _load_census(run_dir: Path) -> list[list[set[int]]]:
-    """Cached load_island_census. [] if not yet written.
+    """Loads the island census data for a given run directory, utilizing a cache.
 
-    NOTE: as currently saved the JSON shape is
-        census[generation][island_idx] -> list[int]
-    (see save_island_census), so each top-level entry is a *generation snapshot*.
+    The cache stores the census list along with its file's modification
+    time (`mtime`). If the file's `mtime` has not changed since the last
+    load, the cached object is returned. This prevents expensive re-parsing
+    during repeated polls from the dashboard during a live run.
+
+    The JSON shape of the census is `census[generation][island_idx] -> list[int]`,
+    where each top-level entry is a generation snapshot.
+
+    Args:
+        run_dir: The path to the run directory.
+
+    Returns:
+        A list of lists of sets of program indices representing the island
+        census, or an empty list if `island_census.jsonl` does not exist
+        or cannot be loaded. Returns cached census in case of mid-write race.
     """
     path = run_dir / "island_census.jsonl"
     if not path.exists():
@@ -140,7 +187,21 @@ def _load_census(run_dir: Path) -> list[list[set[int]]]:
 
 
 def _load_metrics(run_dir: Path) -> list[dict]:
-    """Cached metrics.jsonl loader. [] if not yet written."""
+    """Loads the metrics data for a given run directory, utilizing a cache.
+
+    The cache stores the metrics list along with its file's modification
+    time (`mtime`). If the file's `mtime` has not changed since the last
+    load, the cached object is returned. This prevents expensive re-parsing
+    during repeated polls from the dashboard during a live run.
+
+    Args:
+        run_dir: The path to the run directory.
+
+    Returns:
+        A list of dictionaries, where each dictionary represents metrics
+        for a generation, or an empty list if `metrics.jsonl` does not exist
+        or cannot be loaded. Returns cached metrics in case of mid-write race.
+    """
     path = run_dir / METRICS_FILENAME
     if not path.exists():
         return []
@@ -158,7 +219,20 @@ def _load_metrics(run_dir: Path) -> list[dict]:
 
 
 def _summarise_metrics(rows: list[dict]) -> dict:
-    """Cumulative totals across all generation rows. Cheap reduction."""
+    """Computes cumulative totals from a list of generational metrics rows.
+
+    This function efficiently reduces the detailed metrics from each generation
+    into a single summary dictionary, including totals for LLM calls, token
+    usage, latency, and scoring outcomes.
+
+    Args:
+        rows: A list of dictionaries, where each dictionary contains metrics
+              for a specific generation.
+
+    Returns:
+        A dictionary containing cumulative totals for various metrics across
+        all generations.
+    """
     totals = {
         "in_tokens": 0,
         "out_tokens": 0,
@@ -208,10 +282,21 @@ def _summarise_metrics(rows: list[dict]) -> dict:
 
 
 def _load_task_spec(run_dir: Path) -> dict:
-    """Load task_spec.yaml. Trust boundary is local-only: this file was written
-    by the same machine running the dashboard, so we tolerate Python-object
-    tags (e.g. CyclingModel objects from the fake-LLM test runner) via
-    unsafe_load if safe_load fails.
+    """Loads the `task_spec.yaml` file from a run directory.
+
+    This function attempts to load the `task_spec.yaml` file, which contains
+    the configuration and callable references for an EDGAR run. It uses
+    `yaml.safe_load` first and falls back to `yaml.unsafe_load` to tolerate
+    Python-object tags (e.g., `!python/object/new:edgar.llm.llm_calling.CyclingModel`)
+    that might be present in files written by the same machine (e.g., during
+    `fake-LLM` test runs).
+
+    Args:
+        run_dir: The path to the run directory.
+
+    Returns:
+        A dictionary representing the contents of `task_spec.yaml`, or an
+        empty dictionary if the file does not exist or cannot be parsed.
     """
     path = run_dir / "task_spec.yaml"
     if not path.exists():
@@ -228,6 +313,17 @@ def _load_task_spec(run_dir: Path) -> dict:
 
 
 def _read_log_tail(run_dir: Path, max_lines: int = 200) -> list[str]:
+    """Reads the tail of the `run.log` file for a given run directory.
+
+    Args:
+        run_dir: The path to the run directory.
+        max_lines: The maximum number of lines to read from the end of the log file.
+
+    Returns:
+        A list of strings, where each string is a line from the end of the
+        `run.log` file. Returns an empty list if the file does not exist
+        or cannot be read.
+    """
     path = run_dir / "run.log"
     if not path.exists():
         return []
@@ -243,7 +339,18 @@ def _read_log_tail(run_dir: Path, max_lines: int = 200) -> list[str]:
 
 
 def _clean(v: Any) -> Any:
-    """Recursively convert to JSON-safe values. NaN/inf -> None, numpy -> python."""
+    """Recursively converts input values into JSON-safe types.
+
+    This function handles common Python types, NumPy scalars and arrays,
+    converting them to their JSON-compatible counterparts. It specifically
+    converts `None`, `NotValidated`, `NaN`, and `inf` float values to `None`.
+
+    Args:
+        v: The value to clean. Can be any Python object.
+
+    Returns:
+        A JSON-safe representation of the input value.
+    """
     if v is None:
         return None
     if isinstance(v, NotValidated):
@@ -269,10 +376,19 @@ def _clean(v: Any) -> Any:
 
 
 def list_runs(roots: list[Path]) -> list[dict]:
-    """Scan roots for runs and return a summary list, newest first.
+    """Scans specified root directories for EDGAR runs and returns a summary list.
 
-    A "run" is any directory containing a task_spec.yaml file. Conventionally
-    these are organised as program_databases/YYYY-MM-DD/HH-MM-SS/.
+    An "EDGAR run" is identified as any directory containing a `task_spec.yaml`
+    file. Conventionally, these are organized under
+    `program_databases/<task_name>/YYYY-MM-DD/HH-MM-SS/`.
+
+    Args:
+        roots: A list of `Path` objects representing the directories to scan for runs.
+
+    Returns:
+        A list of dictionaries, where each dictionary is a compact summary
+        ("run card") for an EDGAR run, sorted by start time in reverse
+        chronological order (newest first).
     """
     out: list[dict] = []
     seen: set[str] = set()
@@ -292,8 +408,19 @@ def list_runs(roots: list[Path]) -> list[dict]:
 
 
 def _run_card(run_dir: Path) -> dict:
-    """Compact summary card for the run picker. Cheap — does NOT load population
-    on every call unless cheap stat info is missing.
+    """Generates a compact summary card for a specific EDGAR run.
+
+    This function provides a lightweight overview suitable for run selection
+    interfaces. It avoids loading the full `Population` unless basic status
+    information is missing, making it efficient for displaying many runs.
+
+    Args:
+        run_dir: The path to the run directory.
+
+    Returns:
+        A dictionary containing a compact summary of the run, including
+        `run_id`, `task_name`, `started_at`, `status`, `current_gen`,
+        `n_programs`, and `best_loss`.
     """
     spec = _load_task_spec(run_dir)
     status_doc = read_status(run_dir) or {"state": "complete"}
@@ -329,7 +456,18 @@ def _run_card(run_dir: Path) -> dict:
 
 
 def _run_id(run_dir: Path) -> str:
-    """Stable URL-safe id for a run: YYYY-MM-DD_HH-MM-SS or the dir name as a fallback."""
+    """Generates a stable, URL-safe identifier for a run.
+
+    The ID is constructed from the last two parts of the run directory's path
+    (e.g., `YYYY-MM-DD_HH-MM-SS`). If the path structure doesn't conform
+    to this, the directory name itself is used as a fallback.
+
+    Args:
+        run_dir: The path to the run directory.
+
+    Returns:
+        A string representing the stable, URL-safe run ID.
+    """
     parts = run_dir.parts
     if len(parts) >= 2:
         return f"{parts[-2]}_{parts[-1]}"
@@ -337,7 +475,18 @@ def _run_id(run_dir: Path) -> str:
 
 
 def resolve_run_dir(run_id: str, roots: list[Path]) -> Path | None:
-    """Inverse of _run_id: find the on-disk run directory for an id."""
+    """Resolves a run ID back to its on-disk run directory.
+
+    This function is the inverse of `_run_id`, searching through specified
+    root directories to find the `Path` corresponding to a given run ID.
+
+    Args:
+        run_id: The stable, URL-safe identifier of the run.
+        roots: A list of `Path` objects representing the directories to scan.
+
+    Returns:
+        The `Path` object to the run directory if found, otherwise `None`.
+    """
     for root in roots:
         root = Path(root)
         if not root.exists():
@@ -351,18 +500,26 @@ def resolve_run_dir(run_id: str, roots: list[Path]) -> Path | None:
 # ── Summary ──
 
 STALE_THRESHOLD_S = 180.0
+"""Threshold in seconds beyond which a 'running' or 'starting' run is considered 'stale' (failed)."""
 
 
 def _derived_state(status_doc: dict | None) -> tuple[str, bool]:
-    """Return (state, is_stale).
+    """Determines the derived state and staleness of a run.
 
-    A run is "stale" if status.json hasn't been touched in STALE_THRESHOLD_S
-    seconds while still reading 'running' or 'starting'. This catches runs
-    that died abnormally (SIGKILL, OOM, scoring-subprocess-induced abort)
-    where the runner never got to flip status to 'failed' itself.
+    A run is considered "stale" if its `status.json` hasn't been updated
+    within `STALE_THRESHOLD_S` seconds while its raw state is 'running' or
+    'starting'. This helps to identify runs that terminated abnormally
+    without explicitly updating their status to 'failed'. Stale runs are
+    reported as 'failed' for dashboard UI purposes, but their `status.json`
+    remains untouched.
 
-    We surface stale runs as 'failed' for UI purposes while leaving the raw
-    status.json file untouched.
+    Args:
+        status_doc: The dictionary loaded from `status.json`, or `None` if not found.
+
+    Returns:
+        A tuple containing:
+        - The derived state (`str`): 'complete', 'running', 'starting', or 'failed' (if stale).
+        - `is_stale` (`bool`): True if the run is considered stale, False otherwise.
     """
     if status_doc is None:
         return "complete", False
@@ -378,6 +535,19 @@ def _derived_state(status_doc: dict | None) -> tuple[str, bool]:
 
 
 def load_run_summary(run_dir: Path) -> dict:
+    """Loads and aggregates a comprehensive summary of an EDGAR run.
+
+    This function combines information from `task_spec.yaml`, `status.json`,
+    `population.jsonl`, `island_census.jsonl`, and `metrics.jsonl` to
+    provide a detailed overview of the experiment, including configuration,
+    status, and overall performance statistics.
+
+    Args:
+        run_dir: The path to the run directory.
+
+    Returns:
+        A dictionary containing a comprehensive summary of the EDGAR run.
+    """
     spec = _load_task_spec(run_dir)
     status_doc = read_status(run_dir) or {"state": "complete"}
     derived, is_stale = _derived_state(status_doc)
@@ -449,6 +619,19 @@ def load_run_summary(run_dir: Path) -> dict:
 
 
 def load_live_state(run_dir: Path) -> dict:
+    """Loads and aggregates the live, real-time state of an EDGAR run.
+
+    This function provides up-to-the-minute information necessary for live
+    monitoring of an active experiment, including current generation,
+    elapsed time, estimated time to completion (ETA), island populations,
+    best programs per generation, overall best program, and LLM success rates.
+
+    Args:
+        run_dir: The path to the run directory.
+
+    Returns:
+        A dictionary containing the live state of the EDGAR run.
+    """
     spec = _load_task_spec(run_dir)
     status_doc = read_status(run_dir) or {"state": "complete"}
     derived, is_stale = _derived_state(status_doc)
@@ -506,7 +689,23 @@ def _islands_payload(
     n_islands: int,
     alive_idxs: set[int],
 ) -> list[dict]:
-    """One row per island, with all programs ever born on that island."""
+    """Prepares a payload containing information about each island.
+
+    This function organizes programs by their originating island, providing
+    details such as the number of 'alive' programs and a list of program
+    cards for all programs ever born on that island.
+
+    Args:
+        pop: The `Population` object, or None if not available.
+        census: The island census data.
+        n_islands: The total number of islands configured for the run.
+        alive_idxs: A set of indices of programs currently considered 'alive'.
+
+    Returns:
+        A list of dictionaries, where each dictionary represents an island
+        and contains its index, the number of alive programs, and a list of
+        program cards.
+    """
     if not pop:
         return []
     by_island: dict[int, list[Program]] = {i: [] for i in range(n_islands)}
@@ -529,6 +728,16 @@ def _islands_payload(
 
 
 def _program_card(p: Program, alive_idxs: set[int]) -> dict:
+    """Generates a compact summary card for a single program.
+
+    Args:
+        p: The `Program` object.
+        alive_idxs: A set of indices of programs currently considered 'alive'.
+
+    Returns:
+        A dictionary containing key details of the program, suitable for
+        display in lists or tables, including losses, rank, parentage, and status.
+    """
     return {
         "idx": p.idx,
         "name": p.name or f"P{p.idx}",
@@ -549,6 +758,18 @@ def _program_card(p: Program, alive_idxs: set[int]) -> dict:
 
 
 def _alive_set(census: list[list[set[int]]]) -> set[int]:
+    """Determines the set of program indices that are currently 'alive'.
+
+    This is derived from the latest generation's island census. Programs are
+    considered alive if they are present in any island's population in the
+    most recent census snapshot.
+
+    Args:
+        census: The island census data, a list of generational snapshots.
+
+    Returns:
+        A set of integer indices of programs that are currently alive.
+    """
     if not census:
         return set()
     last = census[-1]
@@ -559,6 +780,15 @@ def _alive_set(census: list[list[set[int]]]) -> set[int]:
 
 
 def _best_per_gen(pop: Population | None) -> list[dict]:
+    """Identifies the best program (lowest discover loss) for each generation.
+
+    Args:
+        pop: The `Population` object, or None if not available.
+
+    Returns:
+        A list of dictionaries, where each dictionary contains the generation
+        number and the best discover loss for that generation.
+    """
     if not pop:
         return []
     by_gen: dict[int, float] = {}
@@ -573,6 +803,15 @@ def _best_per_gen(pop: Population | None) -> list[dict]:
 
 
 def _best_program(pop: Population | None) -> dict | None:
+    """Identifies the overall best program (lowest discover loss) across all generations.
+
+    Args:
+        pop: The `Population` object, or None if not available.
+
+    Returns:
+        A dictionary containing details of the overall best program,
+        or None if no finite-loss programs are found.
+    """
     if not pop:
         return None
     candidates = [p for p in pop if _finite(p.program_losses.discover.final)]
@@ -592,7 +831,19 @@ def _best_program(pop: Population | None) -> dict | None:
 def _success_rates_latest_gen(
     pop: Population | None, n_param_ests: int = 1
 ) -> dict | None:
-    """Per-stage success rates among programs born in the last generation."""
+    """Calculates success rates for various stages (model generation, parameter
+    estimator generation, JAX translation, scoring) among programs born in the
+    latest generation.
+
+    Args:
+        pop: The `Population` object, or None if not available.
+        n_param_ests: The configured number of parameter estimators expected
+                      per program. Defaults to 1.
+
+    Returns:
+        A dictionary containing success rates for the latest generation,
+        or None if no programs were born in the latest generation.
+    """
     if not pop:
         return None
     gens = sorted({p.birth.generation for p in pop if p.birth.generation >= 0})
@@ -627,6 +878,21 @@ def _estimate_eta(
     elapsed_s: float,
     state: str | None,
 ) -> float | None:
+    """Estimates the remaining time until an EDGAR run completes.
+
+    The ETA is calculated based on the average time spent per completed
+    generation and the number of generations remaining.
+
+    Args:
+        current_gen: The index of the current generation (0-indexed).
+        n_gens: The total number of generations configured for the run.
+        elapsed_s: The total elapsed time in seconds since the run started.
+        state: The current status of the run (e.g., 'running', 'starting', 'complete').
+
+    Returns:
+        The estimated time remaining in seconds, or None if the ETA cannot be
+        calculated (e.g., run is not active, or insufficient data).
+    """
     if state not in ("running", "starting"):
         return None
     if current_gen is None or current_gen < 0:
@@ -643,6 +909,19 @@ def _estimate_eta(
 
 
 def load_program_list(run_dir: Path) -> list[dict]:
+    """Loads a list of summary cards for all programs in a run.
+
+    The list is sorted by rank (ascending), then by validation loss
+    (ascending), and finally by program index. Programs without a rank are
+    sorted last.
+
+    Args:
+        run_dir: The path to the run directory.
+
+    Returns:
+        A list of dictionaries, where each dictionary is a program card
+        (`_program_card`) for a program in the population.
+    """
     pop = _load_population(run_dir)
     if not pop:
         return []
@@ -654,7 +933,19 @@ def load_program_list(run_dir: Path) -> list[dict]:
 
 
 def _sort_key(card: dict) -> tuple:
-    """Rank ascending; programs with no rank sorted last; then by validate loss."""
+    """Provides a sorting key for program cards.
+
+    Programs are sorted primarily by their rank (ascending), with programs
+    that have no rank (None) placed at the end. Secondary sorting is by
+    validation loss (ascending), or discover loss if validation loss is not
+    available. Finally, programs are sorted by their index (ascending) as a tie-breaker.
+
+    Args:
+        card: A program summary dictionary (program card).
+
+    Returns:
+        A tuple suitable for sorting, prioritizing rank, then loss, then index.
+    """
     rank = card.get("rank")
     loss = (
         card.get("loss_validate")
@@ -669,6 +960,19 @@ def _sort_key(card: dict) -> tuple:
 
 
 def load_program_detail(run_dir: Path, idx: int) -> dict | None:
+    """Loads comprehensive detailed information for a specific program.
+
+    This includes its full code, losses, parameters, sample-wise loss summaries,
+    optimization trajectories, image URLs, and lineage (parents and children).
+
+    Args:
+        run_dir: The path to the run directory.
+        idx: The index of the program to retrieve details for.
+
+    Returns:
+        A dictionary containing all available details for the specified program,
+        or None if the program does not exist or the population cannot be loaded.
+    """
     pop = _load_population(run_dir)
     if not pop or idx < 0 or idx >= len(pop):
         return None
@@ -741,6 +1045,7 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
     if p.program_losses.discover.trajectories is not None:
         trajectories = p.program_losses.discover.trajectories
         trajectories_summary = []
+        # trajectories.shape[0] refers to the number of parallel optimizations run for a program
         for i in range(trajectories.shape[0]):
             traj = trajectories[i]
             trajectories_summary.append(
@@ -814,7 +1119,18 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
 
 
 def _image_url_for(p: Program) -> str | None:
-    """Convention from edgar/llm/generate.py: per gen/island/batch."""
+    """Generates a relative URL for the image feedback plot of a program.
+
+    The URL adheres to the convention `image/gen_NNN/island_NNN/batch_NNN`.
+    This image is typically used for LLM image-based feedback.
+
+    Args:
+        p: The `Program` object.
+
+    Returns:
+        A string representing the relative URL for the image feedback plot,
+        or None if the program's generation or island information is missing.
+    """
     if p.birth.generation is None or p.birth.island is None:
         return None
     if p.birth.generation < 0 or p.birth.island < 0:
@@ -823,14 +1139,36 @@ def _image_url_for(p: Program) -> str | None:
 
 
 def _fit_image_url_for(p: Program) -> str | None:
-    """Convention from edgar/io/plotting.py: P{idx:04d}.png."""
+    """Generates a relative URL for the model fit image of a program.
+
+    The URL adheres to the convention `fit_image/{program_idx}`.
+    This image displays how well the program's model fits the data.
+
+    Args:
+        p: The `Program` object.
+
+    Returns:
+        A string representing the relative URL for the model fit image,
+        or None if the program's index or `fit_image_path` is missing.
+    """
     if p.idx is None or p.fit_image_path is None:
         return None
     return f"fit_image/{p.idx}"
 
 
 def _trajectory_image_url_for(p: Program) -> str | None:
-    """Convention from edgar/io/plotting.py: P{idx:04d}_traj.png."""
+    """Generates a relative URL for the optimization trajectory image of a program.
+
+    The URL adheres to the convention `trajectory_image/{program_idx}`.
+    This image visualizes the loss curves during parameter optimization.
+
+    Args:
+        p: The `Program` object.
+
+    Returns:
+        A string representing the relative URL for the trajectory image,
+        or None if the program's index or `trajectory_image_path` is missing.
+    """
     if p.idx is None or getattr(p, "trajectory_image_path", None) is None:
         return None
     return f"trajectory_image/{p.idx}"
@@ -840,6 +1178,21 @@ def _trajectory_image_url_for(p: Program) -> str | None:
 
 
 def load_family_tree_data(run_dir: Path) -> dict:
+    """Loads and formats data for visualizing the evolutionary family tree of programs.
+
+    This function prepares data structures compatible with Plotly for rendering
+    a hierarchical graph of programs, showing parent-child relationships,
+    generational layout, and node attributes (color, size, symbol) based on
+    their performance and status.
+
+    Args:
+        run_dir: The path to the run directory.
+
+    Returns:
+        A dictionary containing all necessary data for rendering the family tree,
+        including node positions, edges, IDs, labels, hover text, colors,
+        symbols, sizes, and a parent map for interactive highlighting.
+    """
     pop = _load_population(run_dir)
     if not pop:
         return {}
@@ -869,7 +1222,18 @@ def load_family_tree_data(run_dir: Path) -> dict:
 
 
 def _layout_by_generation(pop: Population) -> dict[int, tuple[float, float]]:
-    """Hierarchical layout: y = -generation, x = horizontal slot per generation."""
+    """Calculates a hierarchical layout for programs based on their generation.
+
+    Programs from the same generation are placed on the same horizontal level
+    (y-coordinate = -generation), and then evenly distributed horizontally.
+
+    Args:
+        pop: The `Population` object containing all programs.
+
+    Returns:
+        A dictionary mapping program indices to their (x, y) coordinates
+        in the layout.
+    """
     by_gen: dict[int, list[int]] = {}
     for i in range(len(pop)):
         p = pop[i]
@@ -885,6 +1249,18 @@ def _layout_by_generation(pop: Population) -> dict[int, tuple[float, float]]:
 
 
 def _build_edges(pop: Population, pos: dict) -> tuple[list, list]:
+    """Constructs the x and y coordinates for drawing edges (parent-child links)
+    in the family tree visualization.
+
+    Args:
+        pop: The `Population` object containing all programs.
+        pos: A dictionary mapping program indices to their (x, y) coordinates.
+
+    Returns:
+        A tuple containing two lists:
+        - `edge_x`: List of x-coordinates for the edges, with `None` separating segments.
+        - `edge_y`: List of y-coordinates for the edges, with `None` separating segments.
+    """
     edge_x, edge_y = [], []
     for i in range(len(pop)):
         p = pop[i]
@@ -899,7 +1275,20 @@ def _build_edges(pop: Population, pos: dict) -> tuple[list, list]:
 
 
 def _build_nodes(pop: Population, pos: dict, alive_idxs: set[int]) -> dict:
-    """Per-node display arrays for Plotly."""
+    """Prepares display properties for each node (program) in the family tree.
+
+    This includes their positions, IDs, labels, hover text, colors (based on loss),
+    symbols (based on rank/seed status), and sizes.
+
+    Args:
+        pop: The `Population` object containing all programs.
+        pos: A dictionary mapping program indices to their (x, y) coordinates.
+        alive_idxs: A set of indices of programs currently considered 'alive'.
+
+    Returns:
+        A dictionary containing lists of x, y, ids, labels, hover text, colors,
+        symbols, and sizes, structured for Plotly visualization.
+    """
     x, y, ids, labels, hover = [], [], [], [], []
     colors, symbols, sizes = [], [], []
     for i in range(len(pop)):
@@ -939,7 +1328,17 @@ def _build_nodes(pop: Population, pos: dict, alive_idxs: set[int]) -> dict:
 
 
 def _wrap_label(label: str, width: int = 15) -> str:
-    """Wrap a string into multiple lines using <br> for Plotly."""
+    """Wraps a string with `<br>` tags for multi-line display in Plotly.
+
+    Short numeric IDs are not wrapped.
+
+    Args:
+        label: The string label to wrap.
+        width: The maximum desired line width before wrapping.
+
+    Returns:
+        The wrapped string, with `<br>` tags replacing newlines.
+    """
     if not label:
         return ""
     # Avoid wrapping short numeric IDs like "P0" or "P123"
@@ -949,17 +1348,38 @@ def _wrap_label(label: str, width: int = 15) -> str:
 
 
 def _node_colour(loss) -> str:
+    """Determines the color of a node based on its loss value.
+
+    This provides a visual indicator of program performance in the family tree.
+
+    Args:
+        loss: The loss value of the program.
+
+    Returns:
+        A hexadecimal string representing the color.
+    """
     if not _finite(loss):
-        return "#52525b"
+        return "#52525b"  # Grey for non-finite losses
     if loss < 30:
-        return "#34d399"
+        return "#34d399"  # Green for good performance
     if loss < 50:
-        return "#fbbf24"
-    return "#fb7185"
+        return "#fbbf24"  # Yellow for moderate performance
+    return "#fb7185"  # Red for poorer performance
 
 
 def _build_parent_map(pop: Population) -> dict[str, list[int]]:
-    """{str(child_idx): [parent_idx, ...]} for ancestor highlighting in the JS."""
+    """Builds a map from child program indices to their parent program indices.
+
+    This map is used in the JavaScript frontend for ancestor highlighting
+    in the family tree visualization.
+
+    Args:
+        pop: The `Population` object containing all programs.
+
+    Returns:
+        A dictionary where keys are string representations of child program
+        indices and values are lists of integer indices of their parents.
+    """
     parent_map = {}
     for i in range(len(pop)):
         p = pop[i]
@@ -973,6 +1393,20 @@ def _build_parent_map(pop: Population) -> dict[str, list[int]]:
 
 
 def _safe_loss(v: Any) -> float | None:
+    """Safely converts a value to a float loss, handling non-finite values and `NotValidated`.
+
+    This helper is used within the dashboard to ensure consistent display
+    of loss values in the UI, mapping `None`, `NotValidated`, `NaN`, and `inf`
+    to `None`. This differs from `_scoring_safe_loss` which maps to `float("inf")`
+    for algorithmic use.
+
+    Args:
+        v: The value to convert.
+
+    Returns:
+        A finite float representation of the loss, or None if the value is
+        `None`, `NotValidated`, `NaN`, or `inf`.
+    """
     if v is None or isinstance(v, NotValidated):
         return None
     try:
@@ -985,6 +1419,17 @@ def _safe_loss(v: Any) -> float | None:
 
 
 def _finite(v: Any) -> bool:
+    """Checks if a value can be considered a finite float.
+
+    This helper is used to filter out programs with non-finite or invalid
+    loss values before further processing or display.
+
+    Args:
+        v: The value to check.
+
+    Returns:
+        True if the value is a finite float, False otherwise.
+    """
     if v is None or isinstance(v, NotValidated):
         return False
     try:
@@ -995,6 +1440,16 @@ def _finite(v: Any) -> bool:
 
 
 def _best_loss(pop: Population | None, split: str) -> float | None:
+    """Finds the best (minimum) finite loss for a specified split across all programs.
+
+    Args:
+        pop: The `Population` object, or None if not available.
+        split: The loss split to consider ('discover' or 'validate').
+
+    Returns:
+        The minimum finite loss value for the specified split, or None if no
+        finite losses are found.
+    """
     if not pop:
         return None
     losses = []
@@ -1010,12 +1465,18 @@ def _best_loss(pop: Population | None, split: str) -> float | None:
 
 
 def _llm_name(v: Any) -> str | None:
-    """Coerce an LLM field from task_spec.yaml to a display string.
+    """Coerces an LLM configuration value into a displayable string name.
 
-    Real runs save the LLM name as a string. The fake-LLM test runner
-    pickles a CyclingModel into the yaml; if so, surface its repr instead of
-    leaking a Python object into the JSON response.
-    If llm is a list of strings, join the strings with a comma in between
+    This function handles both string-based LLM names (for real runs) and
+    `CyclingModel` objects (from the fake-LLM test runner), and lists of strings,
+    ensuring a clean string representation for the dashboard UI.
+
+    Args:
+        v: The LLM configuration value, which can be a string, a list of strings,
+           or a `CyclingModel` object.
+
+    Returns:
+        A string representing the LLM's name, or None if the input is None.
     """
     if v is None:
         return None
@@ -1030,6 +1491,15 @@ def _llm_name(v: Any) -> str | None:
 
 
 def _format_ts(ts: float | None) -> str | None:
+    """Formats a Unix timestamp into an ISO 8601 string, truncated to seconds.
+
+    Args:
+        ts: The Unix timestamp (float) or None.
+
+    Returns:
+        An ISO 8601 formatted string (e.g., 'YYYY-MM-DDTHH:MM:SS'),
+        or None if the input timestamp is invalid.
+    """
     if ts is None:
         return None
     try:

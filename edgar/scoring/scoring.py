@@ -75,6 +75,17 @@ def _get_params(param_est_fn, default_params, data_train):
 
 
 def _eval_loss(model_fn, loss_fn, params, data_test):
+    """Computes the overall scalar loss for a model.
+
+    Args:
+        model_fn: The JAX-compiled model function (callable).
+        loss_fn: The loss function (callable).
+        params: The model parameters (JAX pytree).
+        data_test: A dictionary of test data.
+
+    Returns:
+        The scalar loss as a float. Returns infinity if `params` is None.
+    """
     if params is None:
         return float("inf")
     return float(_evaluate_scalar_loss(model_fn, loss_fn, params, data_test))
@@ -272,13 +283,16 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
 
 
 def _is_banned(banned_strings: list[str], program: Program) -> bool:
-    """
-    Checks if the program's JAX model code contains any banned strings.
+    """Checks if the program's JAX model code contains any banned strings.
+
     Args:
-        banned_strings: A list of strings that are not allowed in the program's JAX model code.
-        program: The Program to check, it's status is set to "banned if a banned string is found.
+        banned_strings: A list of strings that are not allowed in the program's
+            JAX model code.
+        program: The Program to check. Its status is set to "banned" if a
+            banned string is found.
+
     Returns:
-        True if the banned string is found, otherwise False.
+        True if a banned string is found, otherwise False.
     """
     if program.code.model_jax is not None:
         for banned_string in banned_strings:
