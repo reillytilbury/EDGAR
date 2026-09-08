@@ -937,6 +937,54 @@ def _print_summary(
     print("Teardown: uv run edgar launch-gcp <spec> --teardown")
 
 
+def _stream_logs(summary: list[tuple[str, str, str]], gcp: dict) -> None:
+    """Prompt the user and start background log streaming for the launched VMs.
+
+    Args:
+        summary: List of tuples representing (run_name, vm_name, results_uri).
+        gcp: Dictionary of GCP configuration options.
+    """
+    try:
+        ans = input("\nWould you like to stream logs? [y/N]: ").strip().lower()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if ans not in ("y", "yes"):
+        return
+
+    print("\nWaiting 30 seconds for the VM(s) to boot and initialize SSH...")
+    time.sleep(30)
+    os.makedirs("logs", exist_ok=True)
+    pids = []
+    for run_name, vm_name, _ in summary:
+        file_path = f"logs/{run_name}.txt"
+        log_file = open(file_path, "w", encoding="utf-8")
+        cmd = [
+            "gcloud",
+            "compute",
+            "ssh",
+            vm_name,
+            f"--zone={gcp['zone']}",
+            f"--project={gcp['project_id']}",
+            "--command=tail -f /var/log/edgar-startup.log",
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+        )
+        log_file.close()
+        pids.append(proc.pid)
+        print(
+            f"Streaming logs for {run_name} to {file_path} in the background (PID: {proc.pid})."
+        )
+
+    if pids:
+        print(f"To stop streaming, run: kill {' '.join(map(str, pids))}")
+
+
 # ── entry point ──
 
 
@@ -996,4 +1044,8 @@ def launch_gcp(spec_path: str, *, teardown=False, dry_run=False, fetch=False) ->
         summary.append((f["run_name"], vm, f"gs://{bucket}/results/{f['run_name']}"))
 
     _print_summary(summary, gcp, dry_run)
+
+    if not dry_run and summary:
+        _stream_logs(summary, gcp)
+
     return 0
