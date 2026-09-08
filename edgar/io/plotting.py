@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 import warnings
+import multiprocessing as mp
+import cloudpickle
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +16,92 @@ from ..evolution.program import Program
 
 if TYPE_CHECKING:
     from ..io.task_spec import TaskSpec
+
+
+def _feedback_image_worker(
+    queue: mp.Queue,
+    spec_bytes: bytes,
+    data: dict,
+    parents_bytes: bytes,
+    program_bytes: bytes,
+) -> None:
+    try:
+        spec = cloudpickle.loads(spec_bytes)
+        parents = cloudpickle.loads(parents_bytes)
+        program = cloudpickle.loads(program_bytes)
+
+        b = program.birth
+        img_path = os.path.join(
+            spec.output_dir,
+            "image_feedback",
+            f"gen_{b.generation:03d}",
+            f"island_{b.island:03d}",
+            f"batch_{b.batch_index:03d}",
+            "image.png",
+        )
+        os.makedirs(os.path.dirname(img_path), exist_ok=True)
+        spec.plot_fn(data, parents, save_path=img_path, rng=spec.rng)
+
+        if os.path.exists(img_path):
+            with open(img_path, "rb") as f:
+                img_bytes = f.read()
+            queue.put((img_bytes, img_path))
+        else:
+            queue.put((None, None))
+    except Exception as e:
+        import traceback
+
+        warnings.warn(
+            f"[plotting subprocess worker] failed: {e}\n{traceback.format_exc()}"
+        )
+        queue.put((None, None))
+
+
+def _program_fits_worker(
+    queue: mp.Queue, spec_bytes: bytes, data: dict, programs_bytes: bytes
+) -> None:
+    try:
+        spec = cloudpickle.loads(spec_bytes)
+        programs = cloudpickle.loads(programs_bytes)
+
+        plot_dir = Path(spec.output_dir) / "image_fits"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+
+        results = []
+        for p in programs:
+            if p.params_init is None or p.params is None:
+                continue
+
+            save_path = plot_dir / f"P{p.idx:04d}.png"
+            try:
+                spec.plot_fn(
+                    data,
+                    [p, p],
+                    save_path=str(save_path),
+                    losses=[
+                        p.program_losses.discover.init,
+                        p.program_losses.discover.final,
+                    ],
+                    sample_losses=[p.sample_losses_init, p.sample_losses],
+                    program_names=[f"{p.name} (Init)", f"{p.name} (Final)"],
+                    params=[p.params_init, p.params],
+                    rng=spec.rng,
+                )
+                results.append((p.idx, str(save_path)))
+            except Exception as e:
+                import traceback
+
+                warnings.warn(
+                    f"[plotting subprocess worker] failed for P#{p.idx}: {e}\n{traceback.format_exc()}"
+                )
+        queue.put(results)
+    except Exception as e:
+        import traceback
+
+        warnings.warn(
+            f"[plotting subprocess worker] failed: {e}\n{traceback.format_exc()}"
+        )
+        queue.put([])
 
 
 def generate_feedback_image(
@@ -43,23 +131,30 @@ def generate_feedback_image(
     """
     if spec is None or spec.plot_fn is None or data is None:
         return None
-    b = program.birth
-    img_path = os.path.join(
-        spec.output_dir,
-        "image_feedback",
-        f"gen_{b.generation:03d}",
-        f"island_{b.island:03d}",
-        f"batch_{b.batch_index:03d}",
-        "image.png",
+
+    ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
+    queue = ctx.Queue()
+    spec_bytes = cloudpickle.dumps(spec)
+    parents_bytes = cloudpickle.dumps(parents)
+    program_bytes = cloudpickle.dumps(program)
+
+    proc = ctx.Process(
+        target=_feedback_image_worker,
+        args=(queue, spec_bytes, data, parents_bytes, program_bytes),
     )
-    os.makedirs(os.path.dirname(img_path), exist_ok=True)
+    proc.start()
     try:
-        spec.plot_fn(data, parents, save_path=img_path, rng=spec.rng)
-        program.image_path = img_path
-        return open(img_path, "rb").read()
+        img_bytes, img_path = queue.get(timeout=120)
     except Exception as e:
-        warnings.warn(f"[plotting] plot_fn failed for program #{program.idx}: {e}")
+        proc.kill()
+        proc.join()
+        warnings.warn(f"[plotting] feedback image subprocess timed out or failed: {e}")
         return None
+
+    proc.join()
+    if img_path is not None:
+        program.image_path = img_path
+    return img_bytes
 
 
 def generate_program_fits(
@@ -85,31 +180,30 @@ def generate_program_fits(
     if spec.plot_fn is None:
         return
 
-    plot_dir = Path(spec.output_dir) / "image_fits"
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
+    queue = ctx.Queue()
+    spec_bytes = cloudpickle.dumps(spec)
+    programs_bytes = cloudpickle.dumps(programs)
 
-    for p in programs:
-        if p.params_init is None or p.params is None:
-            continue
+    proc = ctx.Process(
+        target=_program_fits_worker,
+        args=(queue, spec_bytes, data, programs_bytes),
+    )
+    proc.start()
+    try:
+        results = queue.get(timeout=120)
+    except Exception as e:
+        proc.kill()
+        proc.join()
+        warnings.warn(f"[plotting] program fits subprocess timed out or failed: {e}")
+        return
 
-        save_path = plot_dir / f"P{p.idx:04d}.png"
-        try:
-            spec.plot_fn(
-                data,
-                [p, p],
-                save_path=str(save_path),
-                losses=[
-                    p.program_losses.discover.init,
-                    p.program_losses.discover.final,
-                ],
-                sample_losses=[p.sample_losses_init, p.sample_losses],
-                program_names=[f"{p.name} (Init)", f"{p.name} (Final)"],
-                params=[p.params_init, p.params],
-                rng=spec.rng,
-            )
-            p.fit_image_path = str(save_path)
-        except Exception as e:
-            warnings.warn(f"[plotting] failed to generate fit plot for P#{p.idx}: {e}")
+    proc.join()
+    for p_idx, save_path in results:
+        for p in programs:
+            if p.idx == p_idx:
+                p.fit_image_path = save_path
+                break
 
 
 def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> None:
