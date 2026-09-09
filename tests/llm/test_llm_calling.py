@@ -250,3 +250,55 @@ async def test_call_llm_provider_ping(model_name, env_var):
     )
     assert result is not None, f"{model_name} returned None"
     assert "12345" in result, f"{model_name} response missing 12345: {result!r}"
+
+
+@pytest.mark.asyncio
+async def test_call_llm_retries_on_httpx_error():
+    import httpx
+    from unittest.mock import AsyncMock, patch
+    from edgar.io.config import RetryConfig
+
+    mock_run = AsyncMock()
+    mock_run.side_effect = [
+        httpx.ConnectError("Network is unreachable", request=None),
+        httpx.ConnectError("Network is unreachable", request=None),
+        AsyncMock(output="success response"),
+    ]
+
+    custom_rc = RetryConfig(max_retries=3, initial_delay=0.01, backoff_multiplier=1.0)
+    model = FakeLLM(DEFAULT_FAKE_PROGRAMS).gen_model()
+
+    with patch("edgar.llm.llm_calling.Agent.run", mock_run):
+        result = await call_llm(
+            prompt="Test prompt",
+            llm_model=model,
+            output_type=str,
+            retry_config=custom_rc,
+        )
+
+    assert result == "success response"
+    assert mock_run.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_call_llm_returns_none_after_exhausting_httpx_retries():
+    import httpx
+    from unittest.mock import AsyncMock, patch
+    from edgar.io.config import RetryConfig
+
+    mock_run = AsyncMock()
+    mock_run.side_effect = httpx.ConnectError("Network is unreachable", request=None)
+
+    custom_rc = RetryConfig(max_retries=3, initial_delay=0.01, backoff_multiplier=1.0)
+    model = FakeLLM(DEFAULT_FAKE_PROGRAMS).gen_model()
+
+    with patch("edgar.llm.llm_calling.Agent.run", mock_run):
+        result = await call_llm(
+            prompt="Test prompt",
+            llm_model=model,
+            output_type=str,
+            retry_config=custom_rc,
+        )
+
+    assert result is None
+    assert mock_run.call_count == 3

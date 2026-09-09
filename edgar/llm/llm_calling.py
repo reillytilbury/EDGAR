@@ -9,6 +9,7 @@ parsing using Pydantic schemas, ensuring that LLM responses conform to expected 
 """
 
 import asyncio
+import httpx
 import os
 import random
 import time
@@ -355,6 +356,21 @@ async def call_llm(
                 wait = min(delay + jitter, rc.max_delay)
                 warnings.warn(
                     f"[call_llm] HTTP {e.status_code} on attempt {attempt + 1}/{rc.max_retries}, "
+                    f"retrying in {wait:.1f}s."
+                )
+                await asyncio.sleep(wait)
+                delay = min(delay * rc.backoff_multiplier, rc.max_delay)
+
+            except httpx.HTTPError as e:
+                if attempt == rc.max_retries - 1:
+                    warnings.warn(
+                        f"[call_llm] HTTPX error {type(e).__name__} on final attempt {attempt + 1}/{rc.max_retries}. No more retries left. Returning None."
+                    )
+                    return None
+                jitter = random.uniform(0, 1)
+                wait = min(delay + jitter, rc.max_delay)
+                warnings.warn(
+                    f"[call_llm] HTTPX error {type(e).__name__} ({e}) on attempt {attempt + 1}/{rc.max_retries}, "
                     f"retrying in {wait:.1f}s."
                 )
                 await asyncio.sleep(wait)
