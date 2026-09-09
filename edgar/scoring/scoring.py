@@ -142,14 +142,13 @@ def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config):
 
 
 def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
-    """Scores one program inside a subprocess.
+    """Scores one program inside a subprocess. It creates JAX arrays and returns results as non-JAX objects,
+    ensuring that the memory allocated for JAX arrays is released when the subprocess exits.
 
     This function deserializes a `Program` and `loss_fn`, compiles the program's
     JAX model and parameter estimator, performs parameter estimation,
     optimization, calculates various losses, and generates a fingerprint and
-    sample-specific losses. All results are placed onto a multiprocessing queue.
-    It includes robust error handling for model loading, optimization, and
-    evaluation steps.
+    sample-specific losses.
 
     Args:
         queue: A multiprocessing Queue to put the results on.
@@ -278,11 +277,11 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         (
             final_loss,
             initial_loss,
-            fingerprint,
-            params,
-            sample_losses,
-            params_init,
-            sample_losses_init,
+            _to_numpy(fingerprint) if fingerprint is not None else None,
+            _to_numpy(params) if params is not None else None,
+            _to_numpy(sample_losses) if sample_losses is not None else None,
+            _to_numpy(params_init) if params_init is not None else None,
+            _to_numpy(sample_losses_init) if sample_losses_init is not None else None,
             best_idx,
             trajectories,
         )
@@ -323,20 +322,17 @@ def _score_one_model(
 ) -> tuple[
     float,
     float,
-    jnp.ndarray,
+    np.ndarray,
     dict | None,
-    jnp.ndarray | None,
+    np.ndarray | None,
     dict | None,
-    jnp.ndarray | None,
+    np.ndarray | None,
     int | None,
     list[list[float]] | None,
     str,
 ]:
-    """Scores a single program in a dedicated subprocess, enforcing a timeout and ensuring
-    that device memory is released after scoring.
+    """Scores a single program in a dedicated subprocess, enforcing a timeout and ensuring that device memory is released after scoring.
 
-    Returned arrays are converted to numpy, so that device memory does not accumulate in the main process.
-    This function acts as
     If the worker process does not return a result within `config["timeout_s"]`, it is killed, and the program is assigned an infinite loss.
 
     Args:
@@ -433,11 +429,11 @@ def _score_one_model(
     return (
         final,
         init,
-        _to_numpy(fp) if fp is not None else None,
-        _to_numpy(params) if params is not None else None,
-        _to_numpy(samples) if samples is not None else None,
-        _to_numpy(params_init) if params_init is not None else None,
-        _to_numpy(samples_init) if samples_init is not None else None,
+        fp,
+        params,
+        samples,
+        params_init,
+        samples_init,
         best_idx,
         trajectories,
         outcome,

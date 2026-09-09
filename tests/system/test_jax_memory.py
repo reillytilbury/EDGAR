@@ -13,11 +13,13 @@ Example:
 import asyncio
 import gc
 import inspect
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import patch
 
 import jax
+import pytest
 
 from edgar import run as run_mod
 from tests.system.fake_runner import build_fake_spec
@@ -63,7 +65,17 @@ def get_device_memory_stats() -> Dict[str, Dict[str, Any]]:
     return stats
 
 
-def test_gpu_memory_profiling() -> None:
+# Dynamically determine parametrization based on whether a GPU is available
+try:
+    gpu_available = len(jax.devices("gpu")) > 0
+except Exception:
+    gpu_available = False
+
+cpu_only_options = [False, True] if gpu_available else [True]
+
+
+@pytest.mark.parametrize("cpu_only", cpu_only_options)
+def test_gpu_memory_profiling(cpu_only: bool) -> None:
     """Profiles GPU and device memory usage across different execution stages of an EDGAR run.
 
     This test runs the evolutionary pipeline using fake LLMs and hooks into the
@@ -135,6 +147,11 @@ def test_gpu_memory_profiling() -> None:
             patches.append(p)
             p.start()
 
+    # Store current state of CUDA_VISIBLE_DEVICES
+    old_cuda = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cpu_only:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
     try:
         # Run the EDGAR experiment
         asyncio.run(run_mod.run(spec))
@@ -142,6 +159,12 @@ def test_gpu_memory_profiling() -> None:
         # Clean up all patches regardless of failure/success
         for p in patches:
             p.stop()
+
+        # Restore environment variable state
+        if old_cuda is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = old_cuda
+        elif "CUDA_VISIBLE_DEVICES" in os.environ:
+            del os.environ["CUDA_VISIBLE_DEVICES"]
 
     # Log/Assert findings
     print("\n--- GPU and Device Memory Profile Across Stages ---")
