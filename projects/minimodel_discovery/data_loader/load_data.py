@@ -3,15 +3,12 @@ from __future__ import annotations
 import numpy as np
 import jax.numpy as jnp
 from scipy.io import loadmat
+from typing import Tuple
 
 
 # Module-level context populated by load_data; used by image_feedback/plot.py.
 _DATASET_CONTEXT: dict[str, object] = {}
 _DIAGNOSTIC_CACHE: dict[tuple, dict[str, object]] = {}
-
-
-def _to_jax(d):
-    return {k: jnp.array(v) if k != "_sample_indices" else v for k, v in d.items()}
 
 
 def load_data(
@@ -58,13 +55,17 @@ def load_data(
         order = order[: int(max_cells)]
 
     if max_train_images is not None and int(max_train_images) < train_stim_ids_all.size:
-        train_keep = _select_evenly_spaced_indices(train_stim_ids_all.size, int(max_train_images))
+        train_keep = _select_evenly_spaced_indices(
+            train_stim_ids_all.size, int(max_train_images)
+        )
     else:
         train_keep = np.arange(train_stim_ids_all.size, dtype=np.int64)
 
     train_response = train_response_all[order][:, train_keep]
     test_repeats = test_repeats_all[order]
-    train_response, test_response, test_repeats = _normalize_responses(train_response, test_repeats)
+    train_response, test_response, test_repeats = _normalize_responses(
+        train_response, test_repeats
+    )
 
     train_images = images[train_stim_ids_all[train_keep]]
     test_images = images[test_stim_ids]
@@ -76,7 +77,9 @@ def load_data(
     n_test = test_response.shape[1]
     n_trials = n_train + n_test
 
-    response_repeats = np.full((n_cells, test_repeats.shape[1], n_trials), np.nan, dtype=np.float32)
+    response_repeats = np.full(
+        (n_cells, test_repeats.shape[1], n_trials), np.nan, dtype=np.float32
+    )
     response_repeats[:, :, n_train:] = test_repeats
 
     image_tensor = np.transpose(all_images, (1, 2, 0))[None, ...]
@@ -91,7 +94,10 @@ def load_data(
     _DATASET_CONTEXT.update(
         {
             "selected_cell_ids": order.astype(np.int64),
-            "fev_lookup": {int(cell_id): float(fev_all[cell_id]) for cell_id in range(fev_all.shape[0])},
+            "fev_lookup": {
+                int(cell_id): float(fev_all[cell_id])
+                for cell_id in range(fev_all.shape[0])
+            },
             "n_train_trials": int(n_train),
             "n_test_trials": int(n_test),
             "anchor_cell_count": int(anchor_cell_count),
@@ -100,7 +106,9 @@ def load_data(
     _DIAGNOSTIC_CACHE.clear()
 
     X = {
-        "image": np.array(image_tensor),  # materialise broadcast: (n_cells, H, W, n_trials)
+        "image": np.array(
+            image_tensor
+        ),  # materialise broadcast: (n_cells, H, W, n_trials)
         "response": all_response.astype(np.float32),
         "response_repeats": response_repeats,
         "stimulus_id": np.array(stimulus_id),
@@ -109,26 +117,27 @@ def load_data(
 
     # Trial split: train images vs test images (preserves natural train/test boundary)
     train_trials = np.arange(n_train, dtype=np.int64)
-    test_trials  = np.arange(n_train, n_trials, dtype=np.int64)
+    test_trials = np.arange(n_train, n_trials, dtype=np.int64)
+    n_samples = X["response"].shape[0]
 
     # ── split samples 50/50 into discover / validate ──
     rng = np.random.default_rng(random_seed)
-    perm_s   = rng.permutation(n_samples)
-    disc_idx = np.sort(perm_s[:n_samples // 2])
-    val_idx  = np.sort(perm_s[n_samples // 2:])
+    perm_s = rng.permutation(n_samples)
+    disc_idx = np.sort(perm_s[: n_samples // 2])
+    val_idx = np.sort(perm_s[n_samples // 2 :])
 
     X_disc_train = {k: v[disc_idx][..., train_trials] for k, v in X.items()}
-    X_disc_test  = {k: v[disc_idx][..., test_trials]  for k, v in X.items()}
-    X_val_train  = {k: v[val_idx][...,  train_trials] for k, v in X.items()}
-    X_val_test   = {k: v[val_idx][...,  test_trials]  for k, v in X.items()}
+    X_disc_test = {k: v[disc_idx][..., test_trials] for k, v in X.items()}
+    X_val_train = {k: v[val_idx][..., train_trials] for k, v in X.items()}
+    X_val_test = {k: v[val_idx][..., test_trials] for k, v in X.items()}
 
     # ── build X_eval: single cell from discover train for fingerprinting ──
     eval_samples = np.sort(rng.choice(disc_idx, 1, replace=False))
-    eval_pos     = np.searchsorted(disc_idx, eval_samples)
-    X_eval       = {k: v[eval_samples][..., train_trials] for k, v in X.items()}
-    X_eval['_sample_indices'] = eval_pos
+    eval_pos = np.searchsorted(disc_idx, eval_samples)
+    X_eval = {k: v[eval_samples][..., train_trials] for k, v in X.items()}
+    X_eval["_sample_indices"] = eval_pos
 
-    return (_to_jax(X_disc_train), _to_jax(X_disc_test)), (_to_jax(X_val_train), _to_jax(X_val_test)), _to_jax(X_eval)
+    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
 
 def loss_fn(model_output, data):
@@ -138,6 +147,7 @@ def loss_fn(model_output, data):
 
 
 # ── internal helpers ──
+
 
 def _select_evenly_spaced_indices(n_total: int, n_keep: int) -> np.ndarray:
     if n_total <= 0 or n_keep <= 0:
@@ -156,7 +166,11 @@ def _normalize_responses(
     train_norm = train_response / scale
     test_repeats_norm = test_repeats / scale[:, None, :]
     test_mean_norm = np.nanmean(test_repeats_norm, axis=1)
-    return train_norm.astype(np.float32), test_mean_norm.astype(np.float32), test_repeats_norm.astype(np.float32)
+    return (
+        train_norm.astype(np.float32),
+        test_mean_norm.astype(np.float32),
+        test_repeats_norm.astype(np.float32),
+    )
 
 
 def _compute_fev_from_repeats(repeats: np.ndarray) -> np.ndarray:

@@ -28,6 +28,7 @@ from ..evolution.program import (
 )
 from ..evolution.population import Population
 from ..io.metrics import get_active_metrics, stream_line
+from ..jax.utils import _to_jax, _to_numpy
 from .utils import (
     _evaluate_sample_losses,
     _evaluate_scalar_loss,
@@ -153,8 +154,9 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
     Args:
         queue: A multiprocessing Queue to put the results on.
         program_bytes: A `cloudpickle`-serialized `Program` object.
-        data: A tuple `(data_train, data_test)` containing dictionaries of JAX arrays
-            for training and testing.
+        data: A tuple `(data_train, data_test)` containing dictionaries of NumPy arrays
+            for training and testing, these are converted to JAX device arrays within the
+            _worker.
         loss_fn_bytes: A `cloudpickle`-serialized loss function.
         config: A dictionary containing scoring configuration, e.g.,
             `param_penalty_weight` and `gradient_descent` settings.
@@ -173,6 +175,11 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         loss_fn_train, loss_fn_test = loss_fn
     else:
         loss_fn_train = loss_fn_test = loss_fn
+
+    # Convert NumPy data to JAX device arrays
+    data = _to_jax(data)
+    if X_eval is not None:
+        X_eval = _to_jax(X_eval)
 
     data_train, data_test = data
 
@@ -325,15 +332,16 @@ def _score_one_model(
     list[list[float]] | None,
     str,
 ]:
-    """Scores a single program in a dedicated subprocess, enforcing a timeout.
+    """Scores a single program in a dedicated subprocess, enforcing a timeout and ensuring
+    that device memory is released after scoring.
 
-    This function executes the scoring in a separate process, allowing for robust
-    timeout handling. If the worker process does not return a result within
-    `config["timeout_s"]`, it is killed, and the program is assigned an infinite loss.
+    Returned arrays are converted to numpy, so that device memory does not accumulate in the main process.
+    This function acts as
+    If the worker process does not return a result within `config["timeout_s"]`, it is killed, and the program is assigned an infinite loss.
 
     Args:
         program: The `Program` object to be scored.
-        data: A tuple `(data_train, data_test)` containing dictionaries of JAX arrays
+        data: A tuple `(data_train, data_test)` containing dictionaries of numpy arrays
             for training and testing.
         loss_fn: The loss function (callable).
         config: A dictionary containing scoring configuration, including `timeout_s`.
@@ -425,11 +433,11 @@ def _score_one_model(
     return (
         final,
         init,
-        fp,
-        params,
-        samples,
-        params_init,
-        samples_init,
+        _to_numpy(fp) if fp is not None else None,
+        _to_numpy(params) if params is not None else None,
+        _to_numpy(samples) if samples is not None else None,
+        _to_numpy(params_init) if params_init is not None else None,
+        _to_numpy(samples_init) if samples_init is not None else None,
         best_idx,
         trajectories,
         outcome,

@@ -7,10 +7,6 @@ from scipy.signal import butter, filtfilt
 from typing import Tuple
 
 
-def _to_jax(d):
-    return {k: jnp.array(v) if k != "_sample_indices" else v for k, v in d.items()}
-
-
 def load_data(
     data_path: str = "",
     random_seed: int = 42,
@@ -40,13 +36,16 @@ def load_data(
     downsample_factor = int(downsample_factor)
 
     rng = np.random.default_rng(random_seed)
-    spks, _, _, _ = _load_mat_spont(data_path, var_thresh=var_thresh,
-                                     downsample_factor=downsample_factor)
+    spks, _, _, _ = _load_mat_spont(
+        data_path, var_thresh=var_thresh, downsample_factor=downsample_factor
+    )
 
     n_cells = min(n_cells, spks.shape[0])
     n_cells = n_cells - (n_cells % 4)
     if n_cells < 4:
-        raise ValueError("Need at least 4 cells for source/target and train/test splits.")
+        raise ValueError(
+            "Need at least 4 cells for source/target and train/test splits."
+        )
     spks = _subsample_cells(spks, n_cells, rng)
     spks = _zscore_rows(spks)
 
@@ -56,7 +55,7 @@ def load_data(
     cell_idx = rng.permutation(spks.shape[0])
     half = cell_idx.shape[0] // 2
     source_cells = cell_idx[:half]
-    target_cells = cell_idx[half:half * 2]
+    target_cells = cell_idx[half : half * 2]
 
     half_source = source_cells.size // 2
     half_target = target_cells.size // 2
@@ -80,19 +79,34 @@ def load_data(
 
     # Shape: (1, n_cells, T_*) — 1-dim sample axis for scoring.py vmap
     X_discover = (
-        {"source": X_train[:, train_t][np.newaxis], "target": Y_train[:, train_t][np.newaxis]},
-        {"source": X_train[:, test_t][np.newaxis], "target": Y_train[:, test_t][np.newaxis]},
+        {
+            "source": X_train[:, train_t][np.newaxis],
+            "target": Y_train[:, train_t][np.newaxis],
+        },
+        {
+            "source": X_train[:, test_t][np.newaxis],
+            "target": Y_train[:, test_t][np.newaxis],
+        },
     )
     X_validate = (
-        {"source": X_test[:, train_t][np.newaxis], "target": Y_test[:, train_t][np.newaxis]},
-        {"source": X_test[:, test_t][np.newaxis], "target": Y_test[:, test_t][np.newaxis]},
+        {
+            "source": X_test[:, train_t][np.newaxis],
+            "target": Y_test[:, train_t][np.newaxis],
+        },
+        {
+            "source": X_test[:, test_t][np.newaxis],
+            "target": Y_test[:, test_t][np.newaxis],
+        },
     )
-    X_eval = {"source": X_train[:, train_t][np.newaxis], "target": Y_train[:, train_t][np.newaxis]}
+    X_eval = {
+        "source": X_train[:, train_t][np.newaxis],
+        "target": Y_train[:, train_t][np.newaxis],
+    }
 
     # Store which position each eval sample occupies for param matching in scoring (always 0 for this project)
-    X_eval['_sample_indices'] = np.array([0])
+    X_eval["_sample_indices"] = np.array([0])
 
-    return (_to_jax(X_discover[0]), _to_jax(X_discover[1])), (_to_jax(X_validate[0]), _to_jax(X_validate[1])), _to_jax(X_eval)
+    return (X_discover[0], X_discover[1]), (X_validate[0], X_validate[1]), X_eval
 
 
 def loss_fn(model_output, data):
@@ -100,6 +114,7 @@ def loss_fn(model_output, data):
 
 
 # ── internal helpers ──
+
 
 def _load_mat_spont(
     mat_path: str,
@@ -136,7 +151,9 @@ def _zscore_rows(X: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     return (X - mu) / (sd + eps)
 
 
-def _subsample_cells(spks: np.ndarray, n_cells: int, rng: np.random.Generator) -> np.ndarray:
+def _subsample_cells(
+    spks: np.ndarray, n_cells: int, rng: np.random.Generator
+) -> np.ndarray:
     return spks[rng.choice(spks.shape[0], size=n_cells, replace=False)]
 
 
@@ -146,8 +163,12 @@ def _make_time_split(T: int, block_size: int, mode: str) -> tuple:
         T = (T // block_size) * block_size
         n_blocks = T // block_size
         n_blocks = n_blocks - (n_blocks % 2)
-        train_t = np.concatenate([b * block_size + np.arange(block_size) for b in range(0, n_blocks, 2)])
-        test_t = np.concatenate([b * block_size + np.arange(block_size) for b in range(1, n_blocks, 2)])
+        train_t = np.concatenate(
+            [b * block_size + np.arange(block_size) for b in range(0, n_blocks, 2)]
+        )
+        test_t = np.concatenate(
+            [b * block_size + np.arange(block_size) for b in range(1, n_blocks, 2)]
+        )
     else:
         T = T - (T % 2)
         train_t = np.arange(0, T // 2)

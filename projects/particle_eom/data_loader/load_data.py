@@ -13,10 +13,14 @@ import jax.numpy as jnp
 # run`/`edgar test` are always invoked from the repo root, so this mirrors how
 # `io.data_path` itself is resolved.
 for _collection in ("projects", "experiments"):
-    _generator_path = Path(_collection) / "particle_eom" / "data_loader" / "generator.py"
+    _generator_path = (
+        Path(_collection) / "particle_eom" / "data_loader" / "generator.py"
+    )
     if _generator_path.exists():
         break
-_spec = importlib.util.spec_from_file_location("particle_eom_generator", _generator_path)
+_spec = importlib.util.spec_from_file_location(
+    "particle_eom_generator", _generator_path
+)
 _generator = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_generator)
 sys.modules.setdefault("particle_eom_generator", _generator)
@@ -24,10 +28,6 @@ sys.modules.setdefault("particle_eom_generator", _generator)
 generate_sessions = _generator.generate_sessions
 minimum_image_diff = _generator.minimum_image_diff
 drop_diagonal = _generator.drop_diagonal
-
-
-def _to_jax(d):
-    return {k: jnp.array(v) if k != "_sample_indices" else v for k, v in d.items()}
 
 
 def _build_neighbor_dx(positions: np.ndarray, L: float) -> np.ndarray:
@@ -41,7 +41,9 @@ def _build_neighbor_dx(positions: np.ndarray, L: float) -> np.ndarray:
         np.ndarray: neighbor_dx[s, t, i, :] = x_j(t) - x_i(t) for every other cell j
             in session s, shape (n_sessions, n_recorded, n_cells, n_cells - 1).
     """
-    diff = minimum_image_diff(positions, L)  # (n_sessions, n_recorded, n_cells, n_cells)
+    diff = minimum_image_diff(
+        positions, L
+    )  # (n_sessions, n_recorded, n_cells, n_cells)
     return drop_diagonal(diff)
 
 
@@ -148,7 +150,9 @@ def load_data(
         C=C,
     )  # each (n_sessions, n_recorded, n_cells)
 
-    neighbor_dx = _build_neighbor_dx(positions, L)  # (n_sessions, n_recorded, n_cells, n_cells-1)
+    neighbor_dx = _build_neighbor_dx(
+        positions, L
+    )  # (n_sessions, n_recorded, n_cells, n_cells-1)
 
     n_recorded = positions.shape[1]
     # Split time into `n_chunks` contiguous blocks and interleave them: odd chunks
@@ -187,9 +191,9 @@ def load_data(
     X_eval["_sample_indices"] = eval_pos
 
     return (
-        (_to_jax(X_disc_train), _to_jax(X_disc_test)),
-        (_to_jax(X_val_train), _to_jax(X_val_test)),
-        _to_jax(X_eval),
+        (X_disc_train, X_disc_test),
+        (X_val_train, X_val_test),
+        X_eval,
     )
 
 

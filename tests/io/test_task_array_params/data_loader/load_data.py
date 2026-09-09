@@ -4,10 +4,6 @@ import numpy as np
 import jax.numpy as jnp
 
 
-def _to_jax(d):
-    return {k: jnp.array(v) if k != "_sample_indices" else v for k, v in d.items()}
-
-
 def target_function(x, a, b, c, k, phi_0):
     """
     Synthetic ground-truth function.
@@ -65,9 +61,9 @@ def load_data(
     X_eval["_sample_indices"] = eval_pos
 
     return (
-        (_to_jax(X_disc_train), _to_jax(X_disc_test)),
-        (_to_jax(X_val_train), _to_jax(X_val_test)),
-        _to_jax(X_eval),
+        (X_disc_train, X_disc_test),
+        (X_val_train, X_val_test),
+        X_eval,
     )
 
 

@@ -34,8 +34,9 @@ from __future__ import annotations
 import numpy as np
 import warnings
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Any
 from ..llm.code_loading import load_function_from_source
+from ..jax.utils import _has_jax
 
 MODEL_ENTRYPOINT = "model"
 PARAM_EST_ENTRYPOINT = "parameter_estimator"
@@ -159,7 +160,9 @@ class Program:
     This dataclass encapsulates all relevant information about a program, including
     its origin, source code, performance metrics, parameters, and unique identifiers.
     It serves as the fundamental unit manipulated by the evolutionary algorithm
-    and LLMs.
+    and LLMs. Note that since Programs are handled by the main process, none of its attributes should contain
+    JAX arrays, as their GPU-allocated resources will not be relesed, which can cause memory leaks.
+    The `__setattr__` method warns if JAX arrays are assigned to `eval_fingerprint`, `params`, `params_init`, `sample_losses`, or `sample_losses_init`.
 
     Attributes:
         birth: A `BirthCertificate` object detailing the program's lineage.
@@ -171,8 +174,8 @@ class Program:
         n_params: The total number of free parameters in the model.
         eval_fingerprint: A numpy array representing a low-dimensional
             fingerprint of the model's output, used for deduplication.
-        params: The optimized parameters of the model (as a JAX pytree).
-        params_init: The initial parameters of the model (as a JAX pytree).
+        params: The optimized parameters of the model (as a nested dictionary of NumPy arrays/scalars).
+        params_init: The initial parameters of the model (as a nested dictionary of NumPy arrays/scalars).
         sample_losses: A numpy array of per-sample loss values (without penalty)
             for the optimized parameters.
         sample_losses_init: A numpy array of per-sample loss values (without penalty)
@@ -207,6 +210,25 @@ class Program:
     best_estimator_idx: int | None = None
     data: dict | None = field(default=None, repr=False)
     _default_params: dict | Callable | None = None
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Override to warn if JAX arrays are assigned to memory-sensitive properties."""
+        if name in (
+            "eval_fingerprint",
+            "params",
+            "params_init",
+            "sample_losses",
+            "sample_losses_init",
+        ):
+            if _has_jax(value):
+                warnings.warn(
+                    f"Assigned value to Program.{name} contains JAX device arrays. "
+                    "These are GPU-allocated resources in the main process and may cause memory leaks. "
+                    "Convert them to NumPy arrays or standard python objects first.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        super().__setattr__(name, value)
 
     def __post_init__(self):
         """Post-initialization hook for Program objects, called after the default dataclass `__init__` method.

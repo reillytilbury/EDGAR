@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..evolution.program import Program
+from ..jax.utils import _to_jax
 
 if TYPE_CHECKING:
     from ..io.task_spec import TaskSpec
@@ -26,6 +27,7 @@ def _feedback_image_worker(
     program_bytes: bytes,
 ) -> None:
     try:
+        data = _to_jax(data)
         spec = cloudpickle.loads(spec_bytes)
         parents = cloudpickle.loads(parents_bytes)
         program = cloudpickle.loads(program_bytes)
@@ -61,6 +63,7 @@ def _program_fits_worker(
     queue: mp.Queue, spec_bytes: bytes, data: dict, programs_bytes: bytes
 ) -> None:
     try:
+        data = _to_jax(data)
         spec = cloudpickle.loads(spec_bytes)
         programs = cloudpickle.loads(programs_bytes)
 

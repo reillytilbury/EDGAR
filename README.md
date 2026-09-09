@@ -247,14 +247,14 @@ Returns three splits:
 - `X_eval` (dict) — small subset of `X_disc_train` used for generating model fingerprints.
 
 `X_eval` must be a dictionary containing:
-- Feature/response JAX arrays (same keys as other splits).
+- Feature/response numpy arrays (same keys as other splits).
 - `_sample_indices`: a NumPy array of integer indices indicating which samples from `X_disc_train` are included in `X_eval`.
-
-All data arrays should be JAX arrays. Data shape convention: `(n_samples, n_trials)` per key.
 
 **`loss_fn(model_output, data) -> JAX array of shape (n_samples,)`**
 
 Per-sample loss between model predictions (`model_output`) and data (`data`).
+
+Note that when `loss_fn` is evaluated the data arrays and model_output passed to it will contain JAX arrays.
 
 ### 3. Fill in seed programs
 

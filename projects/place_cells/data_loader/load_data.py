@@ -6,10 +6,6 @@ from scipy.ndimage import gaussian_filter
 from typing import Any, Dict, List, Optional
 
 
-def _to_jax(d):
-    return {k: jnp.array(v) if k != "_sample_indices" else v for k, v in d.items()}
-
-
 def load_data(
     data_path: str,
     time_bin_ms: int = 20,
@@ -53,19 +49,26 @@ def load_data(
 
     data_dict = _load_data_file(data_path)
 
-    time_key = _find_key(data_dict, None, ["t", "time", "timestamps", "pos_t", "position_t"])
+    time_key = _find_key(
+        data_dict, None, ["t", "time", "timestamps", "pos_t", "position_t"]
+    )
     t_raw = np.asarray(data_dict[time_key], dtype=float)
     t_pos = t_raw
 
-    spike_key = _find_key(data_dict, None,
-                          ["spikes", "spike_times", "spikes_mod1", "spikes_mod2", "spike_times_dict"])
+    spike_key = _find_key(
+        data_dict,
+        None,
+        ["spikes", "spike_times", "spikes_mod1", "spikes_mod2", "spike_times_dict"],
+    )
     spike_times_dict = _to_spike_dict(data_dict[spike_key])
     n_neurons_raw = len(spike_times_dict)
 
     features_raw: Dict[str, np.ndarray] = {}
     for feat in input_names:
         if feat not in data_dict:
-            raise KeyError(f"Input '{feat}' not found. Available: {list(data_dict.keys())}")
+            raise KeyError(
+                f"Input '{feat}' not found. Available: {list(data_dict.keys())}"
+            )
         features_raw[feat] = np.asarray(data_dict[feat], dtype=float)
 
     if time_start is None:
@@ -138,10 +141,16 @@ def load_data(
 
     x = features["x"]
     y = features["y"]
-    occupancy, _, _ = np.histogram2d(x, y, bins=n_spatial_bins, range=[[-1, 1], [-1, 1]])
+    occupancy, _, _ = np.histogram2d(
+        x, y, bins=n_spatial_bins, range=[[-1, 1], [-1, 1]]
+    )
     occupancy_s = gaussian_filter(occupancy, sigma=smoothing_sigma)
-    bin_x = np.clip(((x + 1.0) / 2.0 * n_spatial_bins).astype(int), 0, n_spatial_bins - 1)
-    bin_y = np.clip(((y + 1.0) / 2.0 * n_spatial_bins).astype(int), 0, n_spatial_bins - 1)
+    bin_x = np.clip(
+        ((x + 1.0) / 2.0 * n_spatial_bins).astype(int), 0, n_spatial_bins - 1
+    )
+    bin_y = np.clip(
+        ((y + 1.0) / 2.0 * n_spatial_bins).astype(int), 0, n_spatial_bins - 1
+    )
     rate_maps = np.zeros((n_cells, n_spatial_bins, n_spatial_bins), dtype=float)
     for c in range(n_cells):
         spike_map = np.zeros((n_spatial_bins, n_spatial_bins), dtype=float)
@@ -151,9 +160,14 @@ def load_data(
         rate_maps[c] = spike_map_s / (occupancy_s + 1e-6)
 
     keep_idx, _ = _place_cell_filter_indices(
-        response=firing_rates, rate_maps=rate_maps, x=x, y=y,
-        min_spatial_info=min_spatial_info, min_peak_rate=min_peak_rate,
-        min_mean_rate=min_mean_rate, verbose=True,
+        response=firing_rates,
+        rate_maps=rate_maps,
+        x=x,
+        y=y,
+        min_spatial_info=min_spatial_info,
+        min_peak_rate=min_peak_rate,
+        min_mean_rate=min_mean_rate,
+        verbose=True,
     )
     if len(keep_idx) > 0:
         firing_rates = firing_rates[keep_idx]
@@ -161,7 +175,9 @@ def load_data(
     n_cells = firing_rates.shape[0]
     response = firing_rates
     if zscore_response:
-        response = (response - response.mean(axis=1, keepdims=True)) / (response.std(axis=1, keepdims=True) + 1e-6)
+        response = (response - response.mean(axis=1, keepdims=True)) / (
+            response.std(axis=1, keepdims=True) + 1e-6
+        )
 
     pos_x = np.tile(x, (n_cells, 1))
     pos_y = np.tile(y, (n_cells, 1))
@@ -170,30 +186,46 @@ def load_data(
     # ── split samples 50/50 into discover / validate ──
     rng = np.random.default_rng(random_seed)
 
-    perm_s   = rng.permutation(n_samples)
-    disc_idx = np.sort(perm_s[:n_samples // 2])
-    val_idx  = np.sort(perm_s[n_samples // 2:])
+    perm_s = rng.permutation(n_samples)
+    disc_idx = np.sort(perm_s[: n_samples // 2])
+    val_idx = np.sort(perm_s[n_samples // 2 :])
 
     # ── split trials 50/50 into train / test ──
-    perm_t       = rng.permutation(n_trials)
-    train_trials = np.sort(perm_t[:n_trials // 2])
-    test_trials  = np.sort(perm_t[n_trials // 2:])
+    perm_t = rng.permutation(n_trials)
+    train_trials = np.sort(perm_t[: n_trials // 2])
+    test_trials = np.sort(perm_t[n_trials // 2 :])
 
-    X_disc_train = {'pos_x': pos_x[disc_idx][:, train_trials], 'pos_y': pos_y[disc_idx][:, train_trials], 'response': response[disc_idx][:, train_trials]}
-    X_disc_test  = {'pos_x': pos_x[disc_idx][:, test_trials],  'pos_y': pos_y[disc_idx][:, test_trials],  'response': response[disc_idx][:, test_trials]}
-    X_val_train  = {'pos_x': pos_x[val_idx][:, train_trials],  'pos_y': pos_y[val_idx][:, train_trials],  'response': response[val_idx][:, train_trials]}
-    X_val_test   = {'pos_x': pos_x[val_idx][:, test_trials],   'pos_y': pos_y[val_idx][:, test_trials],   'response': response[val_idx][:, test_trials]}
+    X_disc_train = {
+        "pos_x": pos_x[disc_idx][:, train_trials],
+        "pos_y": pos_y[disc_idx][:, train_trials],
+        "response": response[disc_idx][:, train_trials],
+    }
+    X_disc_test = {
+        "pos_x": pos_x[disc_idx][:, test_trials],
+        "pos_y": pos_y[disc_idx][:, test_trials],
+        "response": response[disc_idx][:, test_trials],
+    }
+    X_val_train = {
+        "pos_x": pos_x[val_idx][:, train_trials],
+        "pos_y": pos_y[val_idx][:, train_trials],
+        "response": response[val_idx][:, train_trials],
+    }
+    X_val_test = {
+        "pos_x": pos_x[val_idx][:, test_trials],
+        "pos_y": pos_y[val_idx][:, test_trials],
+        "response": response[val_idx][:, test_trials],
+    }
 
     # ── build X_eval: single cell from discover train for fingerprinting ──
     eval_pos = rng.choice(len(disc_idx), 1, replace=False)
     X_eval = {
-        'pos_x':           pos_x[disc_idx][eval_pos][:, train_trials],
-        'pos_y':           pos_y[disc_idx][eval_pos][:, train_trials],
-        'response':        response[disc_idx][eval_pos][:, train_trials],
-        '_sample_indices': eval_pos,
+        "pos_x": pos_x[disc_idx][eval_pos][:, train_trials],
+        "pos_y": pos_y[disc_idx][eval_pos][:, train_trials],
+        "response": response[disc_idx][eval_pos][:, train_trials],
+        "_sample_indices": eval_pos,
     }
 
-    return (_to_jax(X_disc_train), _to_jax(X_disc_test)), (_to_jax(X_val_train), _to_jax(X_val_test)), _to_jax(X_eval)
+    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
 
 def loss_fn(model_output, data):
@@ -201,6 +233,7 @@ def loss_fn(model_output, data):
 
 
 # ── internal helpers ──
+
 
 def _load_data_file(data_path: str) -> Dict[str, Any]:
     data_loaded = np.load(data_path, allow_pickle=True)
@@ -217,7 +250,9 @@ def _load_data_file(data_path: str) -> Dict[str, Any]:
     raise ValueError("Unsupported data format.")
 
 
-def _find_key(data_dict: Dict[str, Any], preferred: Optional[str], candidates: List[str]) -> str:
+def _find_key(
+    data_dict: Dict[str, Any], preferred: Optional[str], candidates: List[str]
+) -> str:
     if preferred and preferred in data_dict:
         return preferred
     for key in candidates:
@@ -262,8 +297,8 @@ def _place_cell_filter_indices(
     p = occupancy / (np.sum(occupancy) + 1e-6)
 
     spatial_info = np.zeros(n_cells)
-    peak_rate    = np.zeros(n_cells)
-    mean_rate    = response.mean(axis=1)
+    peak_rate = np.zeros(n_cells)
+    mean_rate = response.mean(axis=1)
 
     for c in range(n_cells):
         r = rate_maps[c]
@@ -275,10 +310,18 @@ def _place_cell_filter_indices(
             spatial_info[c] = np.nansum(p * ratio * np.log2(ratio + 1e-12))
         peak_rate[c] = np.nanmax(r)
 
-    keep = (spatial_info >= min_spatial_info) & (peak_rate >= min_peak_rate) & (mean_rate >= min_mean_rate)
+    keep = (
+        (spatial_info >= min_spatial_info)
+        & (peak_rate >= min_peak_rate)
+        & (mean_rate >= min_mean_rate)
+    )
     indices = np.where(keep)[0]
 
     if verbose:
         print(f"Place cell filter: {len(indices)}/{n_cells} cells retained")
 
-    return indices, {"spatial_info": spatial_info, "peak_rate": peak_rate, "mean_rate": mean_rate}
+    return indices, {
+        "spatial_info": spatial_info,
+        "peak_rate": peak_rate,
+        "mean_rate": mean_rate,
+    }

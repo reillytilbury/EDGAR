@@ -4,10 +4,6 @@ import numpy as np
 import jax.numpy as jnp
 
 
-def _to_jax(d):
-    return {k: jnp.array(v) if k != "_sample_indices" else v for k, v in d.items()}
-
-
 def load_data(
     data_path: str,
     activity_threshold: float,
@@ -38,7 +34,7 @@ def load_data(
     neural_data = np.load(data_path, allow_pickle=True).item()
     response = _extract_stimulus_related_response(neural_data, n_pcs=0)
 
-    angles = neural_data['istim']
+    angles = neural_data["istim"]
     n_trials_raw = response.shape[1]
     n_trials_small = int(n_trials_raw * activity_threshold)
 
@@ -48,15 +44,17 @@ def load_data(
         np.sum(np.exp(2j * angles)[np.newaxis, :] * response, axis=1)
         / np.sum(response, axis=1)
     )
-    good_cells = np.where((firing_probs > activity_threshold) & (conc > conc_threshold))[0]
+    good_cells = np.where(
+        (firing_probs > activity_threshold) & (conc > conc_threshold)
+    )[0]
     n_good_cells = len(good_cells)
 
     response_cropped = np.zeros((n_good_cells, n_trials_small))
-    angles_cropped   = np.zeros((n_good_cells, n_trials_small))
+    angles_cropped = np.zeros((n_good_cells, n_trials_small))
     for i, cell in enumerate(good_cells):
         active_trials_idx = np.where(response[cell] > 0)[0][:n_trials_small]
         response_cropped[i] = response[cell, active_trials_idx]
-        angles_cropped[i]   = angles[active_trials_idx]
+        angles_cropped[i] = angles[active_trials_idx]
 
     response_cropped = _normalize_response(response_cropped)
     X_stimulus = angles_cropped
@@ -67,43 +65,58 @@ def load_data(
     # ── split samples 50/50 into discover / validate ──
     rng = np.random.default_rng(random_seed)
 
-    perm_s   = rng.permutation(n_samples)
-    disc_idx = np.sort(perm_s[:n_samples // 2])
-    val_idx  = np.sort(perm_s[n_samples // 2:])
+    perm_s = rng.permutation(n_samples)
+    disc_idx = np.sort(perm_s[: n_samples // 2])
+    val_idx = np.sort(perm_s[n_samples // 2 :])
 
     # ── split trials 50/50 into train / test ──
-    perm_t       = rng.permutation(n_trials)
-    train_trials = np.sort(perm_t[:n_trials // 2])
-    test_trials  = np.sort(perm_t[n_trials // 2:])
+    perm_t = rng.permutation(n_trials)
+    train_trials = np.sort(perm_t[: n_trials // 2])
+    test_trials = np.sort(perm_t[n_trials // 2 :])
 
     stimulus_disc = X_stimulus[disc_idx]
     response_disc = X_response[disc_idx]
-    stimulus_val  = X_stimulus[val_idx]
-    response_val  = X_response[val_idx]
+    stimulus_val = X_stimulus[val_idx]
+    response_val = X_response[val_idx]
 
-    X_disc_train = {'stimulus': stimulus_disc[:, train_trials], 'response': response_disc[:, train_trials]}
-    X_disc_test  = {'stimulus': stimulus_disc[:, test_trials],  'response': response_disc[:, test_trials]}
-    X_val_train  = {'stimulus': stimulus_val[:,  train_trials], 'response': response_val[:,  train_trials]}
-    X_val_test   = {'stimulus': stimulus_val[:,  test_trials],  'response': response_val[:,  test_trials]}
-
-    # ── build X_eval: small subset of discover train for fingerprinting ──
-    eval_samples = np.sort(rng.choice(disc_idx, min(n_eval_samples, len(disc_idx)), replace=False))
-    eval_pos     = np.searchsorted(disc_idx, eval_samples)
-    X_eval = {
-        'stimulus': stimulus_disc[eval_pos][:, train_trials],
-        'response': response_disc[eval_pos][:, train_trials],
-        '_sample_indices': eval_pos,
+    X_disc_train = {
+        "stimulus": stimulus_disc[:, train_trials],
+        "response": response_disc[:, train_trials],
+    }
+    X_disc_test = {
+        "stimulus": stimulus_disc[:, test_trials],
+        "response": response_disc[:, test_trials],
+    }
+    X_val_train = {
+        "stimulus": stimulus_val[:, train_trials],
+        "response": response_val[:, train_trials],
+    }
+    X_val_test = {
+        "stimulus": stimulus_val[:, test_trials],
+        "response": response_val[:, test_trials],
     }
 
-    return (_to_jax(X_disc_train), _to_jax(X_disc_test)), (_to_jax(X_val_train), _to_jax(X_val_test)), _to_jax(X_eval)
+    # ── build X_eval: small subset of discover train for fingerprinting ──
+    eval_samples = np.sort(
+        rng.choice(disc_idx, min(n_eval_samples, len(disc_idx)), replace=False)
+    )
+    eval_pos = np.searchsorted(disc_idx, eval_samples)
+    X_eval = {
+        "stimulus": stimulus_disc[eval_pos][:, train_trials],
+        "response": response_disc[eval_pos][:, train_trials],
+        "_sample_indices": eval_pos,
+    }
+
+    return (X_disc_train, X_disc_test), (X_val_train, X_val_test), X_eval
 
 
 def loss_fn(model_output, data):
     """Scaled squared error loss."""
-    return 10 * jnp.mean((data['response'] - model_output) ** 2, axis=-1)
+    return 10 * jnp.mean((data["response"] - model_output) ** 2, axis=-1)
 
 
 # ── internal helpers ──
+
 
 def _extract_stimulus_related_response(
     data: dict,
@@ -111,14 +124,16 @@ def _extract_stimulus_related_response(
     z_score: bool = False,
     spont_mean_removal: bool = False,
 ) -> np.ndarray:
-    sresp = np.asarray(data['sresp'])
+    sresp = np.asarray(data["sresp"])
     if spont_mean_removal:
-        sresp = sresp - np.asarray(data['mean_spont'])[:, np.newaxis]
+        sresp = sresp - np.asarray(data["mean_spont"])[:, np.newaxis]
     if n_pcs > 0:
-        u_spont = np.asarray(data['u_spont'])
+        u_spont = np.asarray(data["u_spont"])
         sresp = sresp - u_spont[:, :n_pcs] @ (u_spont[:, :n_pcs].T @ sresp)
     if z_score:
-        sresp = (sresp - np.mean(sresp, axis=1, keepdims=True)) / np.std(sresp, axis=1, keepdims=True)
+        sresp = (sresp - np.mean(sresp, axis=1, keepdims=True)) / np.std(
+            sresp, axis=1, keepdims=True
+        )
     return sresp
 
 

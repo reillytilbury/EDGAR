@@ -34,6 +34,7 @@ from .llm.generate import (
 )
 from .io.config import RetryConfig
 from .scoring.scoring import rank, score
+from .jax.utils import _to_numpy
 from .io.plotting import generate_program_images
 
 
@@ -139,9 +140,9 @@ async def run(
     pop_path = os.path.join(spec.output_dir, "population.jsonl")
     census_path = os.path.join(spec.output_dir, "island_census.jsonl")
 
-    X_discover, X_validate, X_eval = spec.load_data_fn(
-        data_path=spec.io["data_path"], **spec.project_params
-    )
+    X_discover, X_validate, X_eval = _to_numpy(
+        spec.load_data_fn(data_path=spec.io["data_path"], **spec.project_params)
+    )  # Convert to numpy arrays in case they are jax arrays, otherwise can lead to gpu memory errors.
     retry_config = RetryConfig(**spec.llms.get("retry", {}))
     config = {**spec.flat_config, "retry_config": retry_config}
 

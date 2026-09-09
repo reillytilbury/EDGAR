@@ -112,11 +112,6 @@ SPEC_TEMPLATE_DATA_LOADER = dedent(
     import numpy as np
     import jax.numpy as jnp
 
-
-    def _to_jax(d):
-        return {k: jnp.array(v) if k != "_sample_indices" else v for k, v in d.items()}
-
-
     def load_data(
         data_path: str,
         n_eval_samples: int = 10,
@@ -141,23 +136,23 @@ SPEC_TEMPLATE_DATA_LOADER = dedent(
             tuple: A tuple containing (X_discover, X_validate, X_eval).
 
                 - **X_discover** (tuple): Contains `X_disc_train` and `X_disc_test`.
-                    - `X_disc_train` (dict): A dictionary of JAX arrays, typically
+                    - `X_disc_train` (dict): A dictionary of numpy arrays, typically
                       with shape `(n_samples_discover_train, n_trials)`. This data
                       is exposed to the LLM during the model discovery phase.
-                    - `X_disc_test` (dict): A dictionary of JAX arrays, typically
+                    - `X_disc_test` (dict): A dictionary of numpy arrays, typically
                       with shape `(n_samples_discover_test, n_trials)`. This is a
                       held-out test set used within the discovery phase for scoring
                       and feedback.
                 - **X_validate** (tuple): Contains `X_val_train` and `X_val_test`.
-                    - `X_val_train` (dict): A dictionary of JAX arrays, typically
+                    - `X_val_train` (dict): A dictionary of numpy arrays, typically
                       with shape `(n_samples_validate_train, n_trials)`. This data
                       is never seen during the discovery phase and is reserved for
                       final model validation.
-                    - `X_val_test` (dict): A dictionary of JAX arrays, typically
+                    - `X_val_test` (dict): A dictionary of numpy arrays, typically
                       with shape `(n_samples_validate_test, n_trials)`. This is a
                       final held-out evaluation set for robust performance assessment.
                 - **X_eval** (dict): A small subset of data from `X_disc_train` used
-                  for generating model fingerprints for deduplication. It contains JAX
+                  for generating model fingerprints for deduplication. It contains numpy
                   arrays plus `_sample_indices` (a NumPy integer array indicating
                   positions within `disc_idx`).
         """

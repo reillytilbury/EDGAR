@@ -31,7 +31,7 @@ One or two lines per row — a ledger, not prose.
 Verify against the *written* loader before claiming done (a couple can be checked mid-way).
 Any unticked box is a blocker, not a footnote.
 
-- [ ] All four split dicts share the same keys; values are JAX arrays, leading axis = samples
+- [ ] All four split dicts share the same keys; values are numpy arrays, leading axis = samples
 - [ ] `X_disc_*` and `X_val_*` hold **disjoint** sample sets
 - [ ] train/test hold the **same** samples, split along the within-sample axes (into disjoint observation sets)
 - [ ] `X_eval` carries `_sample_indices` indexing into `X_disc_train`'s sample axis
