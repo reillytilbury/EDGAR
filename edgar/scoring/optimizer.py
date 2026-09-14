@@ -14,7 +14,7 @@ from jax.flatten_util import ravel_pytree
 import jax.numpy as jnp
 import optax
 
-from .utils import _evaluate_scalar_loss
+from .utils import apply_model_plain, evaluate_scalar_loss
 
 
 class Optimizer:
@@ -34,6 +34,7 @@ class Optimizer:
         loss_fn: Callable[[jax.Array, Any], jax.Array],
         data_train: dict[str, Any],
         gd_config: dict[str, Any],
+        apply_model_fn: Callable[[Any, Any, Any], jax.Array] = apply_model_plain,
     ) -> None:
         """Initializes the Optimizer with model, loss, and training details.
 
@@ -51,7 +52,18 @@ class Optimizer:
         self.data_train = data_train
         self.gd_config = gd_config
         # Initializes the Adam optimizer from Optax with the specified learning rate.
-        self.opt = optax.adam(gd_config["learning_rate"])
+        # When `gradient_clip_norm` is set, wrap Adam with pre-Adam global-norm
+        # clipping (standard order): optax.chain(clip_by_global_norm, adam). Needed
+        # for models that backprop through long lax.scan sequences and can produce
+        # exploding gradients on early iterations. Absent/None → plain Adam.
+        clip_norm = gd_config.get("gradient_clip_norm")
+        adam = optax.adam(gd_config["learning_rate"])
+        self.opt = (
+            optax.chain(optax.clip_by_global_norm(clip_norm), adam)
+            if clip_norm
+            else adam
+        )
+        self.apply_model_fn = apply_model_fn
 
     def flatten_and_init_params(
         self,
@@ -99,7 +111,9 @@ class Optimizer:
         p = self.unflatten(flat_p)
         # Evaluate the scalar mean loss using the model, loss function, parameters,
         # and training data.
-        return _evaluate_scalar_loss(self.model_fn, self.loss_fn, p, self.data_train)
+        return evaluate_scalar_loss(
+            self.model_fn, self.loss_fn, p, self.data_train, self.apply_model_fn
+        )
 
     def _loss_and_grad_batched(
         self, flat_all: jax.Array

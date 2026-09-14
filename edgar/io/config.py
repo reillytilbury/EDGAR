@@ -312,10 +312,15 @@ class GradientDescentConfig(_LaxModel):
     Attributes:
         max_iter: The maximum number of iterations for the gradient descent algorithm.
         learning_rate: The learning rate used by the optimizer.
+        gradient_clip_norm: Optional global-norm gradient clip. When set, the
+            optimizer becomes ``optax.chain(clip_by_global_norm(norm), adam(lr))``
+            (pre-Adam clipping). Needed for state-space models that backprop
+            through long ``lax.scan`` sequences.
     """
 
     max_iter: int
     learning_rate: float
+    gradient_clip_norm: float | None = None
 
 
 class ScoringConfig(_LaxModel):

@@ -1,9 +1,10 @@
 import numpy as np
+import jax
 import jax.numpy as jnp
 import pytest
 from edgar.scoring.utils import (
-    _evaluate_sample_losses,
-    _evaluate_scalar_loss,
+    evaluate_sample_losses,
+    evaluate_scalar_loss,
     _safe_loss,
     _evaluate_model_output,
 )
@@ -78,6 +79,8 @@ def test_safe_sorting():
 def basic_model(data, params):
     return params["w"] * data["x"]
 
+def basic_apply_model(model_fn, data, params):
+    return jax.vmap(model_fn, in_axes=(0, 0))(data, params)
 
 def strict_model(data, params):
     assert data["x"].shape == (3,)
@@ -91,24 +94,24 @@ def test_evaluate_model_output():
     params = {"w": 1.0}
     data = {"x": jnp.array([1.0, 2.0])}  # Shape (2,)
     with pytest.raises(ValueError):  # can't vmap mismatched axes
-        _evaluate_model_output(model_fn, params, data)
+        _evaluate_model_output(model_fn, params, data, basic_apply_model)
 
     # Unbatched data with batched params should raise an error
     params = {"w": jnp.array([1.0, 2.0])}  # Shape (2,)
     data = {"x": 1.0}
     with pytest.raises(ValueError):  # can't vmap mismatched axes
-        _evaluate_model_output(model_fn, params, data)
+        _evaluate_model_output(model_fn, params, data, basic_apply_model)
 
     # Both unbatched should raise an error
     params = {"w": 1.0}
     data = {"x": 2.0}
     with pytest.raises(ValueError):  # can't vmap with no batch dimension
-        _evaluate_model_output(model_fn, params, data)
+        _evaluate_model_output(model_fn, params, data, basic_apply_model)
 
     # Both batched
     params = {"w": jnp.array([1.0, 2.0])}  # Shape (2,)
     data = {"x": jnp.array([2.0, 4.0])}  # Shape (2,)
-    result = _evaluate_model_output(model_fn, params, data)
+    result = _evaluate_model_output(model_fn, params, data, basic_apply_model)
     assert result.shape == (2,)  # output shape (2,)
     assert jnp.allclose(result, jnp.array([2.0, 8.0]))
 
@@ -116,7 +119,7 @@ def test_evaluate_model_output():
     model_fn = strict_model
     params = {"w": jnp.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])}  # Shape (2, 3)
     data = {"x": jnp.array([[2.0, 4.0, 6.0], [1.0, 3.0, 5.0]])}  # Shape (2, 3)
-    result = _evaluate_model_output(model_fn, params, data)
+    result = _evaluate_model_output(model_fn, params, data, basic_apply_model)
     assert result.shape == (2,)
     assert jnp.allclose(result, jnp.array([28.0, 49.0]))
 
@@ -130,7 +133,7 @@ def test_evaluate_sample_losses():
 
     params = {"w": jnp.array([1.0, 2.0])}  # Shape (2,)
     data = {"x": jnp.array([2.0, 4.0]), "y": jnp.array([3.0, 9.0])}  # Shape (2,)
-    losses = _evaluate_sample_losses(model_fn, loss_fn, params, data)
+    losses = evaluate_sample_losses(model_fn, loss_fn, params, data, basic_apply_model)
     assert losses.shape == (2,)
     expected_losses = jnp.array([1.0, 1.0])  # |(1*2 - 3)| and |(2*4 - 9)|
     assert jnp.allclose(losses, expected_losses)
@@ -145,7 +148,7 @@ def test_evaluate_scalar_loss_expected():
 
     params = {"w": jnp.array([1.0, 2.0])}  # Shape (2,)
     data = {"x": jnp.array([2.0, 4.0]), "y": jnp.array([3.0, 9.0])}  # Shape (2,)
-    scalar_loss = _evaluate_scalar_loss(model_fn, loss_fn, params, data)
+    scalar_loss = evaluate_scalar_loss(model_fn, loss_fn, params, data, basic_apply_model)
     assert scalar_loss.shape == ()
     expected_scalar_loss = jnp.mean(
         jnp.array([1.0, 1.0])
