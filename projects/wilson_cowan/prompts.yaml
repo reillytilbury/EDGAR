@@ -1,0 +1,193 @@
+# NOTE: written from scratch for WC — do NOT pattern-match to the state-space
+# projects (fhn_excitable / oscillator_ss). Those differ from WC in every way
+# that matters here:
+#   * WC observes TWO populations (E, I), not one scalar; the prediction is a
+#     tuple (E, I).
+#   * `y_prev` is a DICT that also carries the external stimulus.
+#   * The loss is a heteroscedastic Gaussian NLL (observation variance grows with
+#     activity); every model exposes a GD-fitted `log_noise_coef` param, but there
+#     are NO `s0_*` initial-state parameters.
+#   * Both populations are FULLY OBSERVED, so a hidden variable is optional
+#     (not required as it is for the excitable FHN task).
+# The contract below is defined by data_loader/load_data.py (the source of truth).
+
+model:
+  base: 'You are an AI scientist learning the dynamics of a **coupled neural
+    circuit** with two interacting populations: an **excitatory** population E and
+    an **inhibitory** population I. Both are FULLY OBSERVED at every timestep. A
+    brief external **stimulus pulse** is delivered to the circuit early in each
+    trajectory (there are two stimulus conditions — a pulse to E or a pulse to
+    I).
+
+    At each step you are given the PREVIOUS observation (E[t-1], I[t-1]) together
+    with the PREVIOUS stimulus, and you must predict the next observation
+    (E[t], I[t]). Prediction is one-step-ahead and teacher-forced. Models are scored by a
+    Gaussian negative log-likelihood in which the observation noise GROWS WITH ACTIVITY
+    (variance proportional to the predicted mean); a per-cell noise level
+    `log_noise_coef` is fitted by gradient descent alongside your dynamical parameters.
+    The NLL is averaged over both stimulus conditions and over time. Lower is better.
+
+    To do better your model must capture (a) how each population relaxes toward a
+    baseline with its own time constant, (b) how the two populations DRIVE each
+    other — E excites, I inhibits, (c) how the external stimulus feeds in, and 
+    (d) how the population returns to baseline after the pulse. 
+
+    Below are {num_parents} models, sorted from worst to best. *Analyze* their
+    progression, *generalize* what lowers the loss, and *create* a new model that
+    beats all of them. Take your time - think carefully about what type of dynamics
+    might be missing in the earlier model and how to capture it.
+    '
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use (use numpy as np).
+
+    * Model signature must be `def model(state, y_prev, params):` — a SINGLE
+    forward step of the circuit. `params` is a dict of learnable scalar floats.
+
+    * `y_prev` is a DICT of scalars with EXACTLY these keys:
+        - `y_prev["E_prev"]`   — excitatory activity at t-1
+        - `y_prev["I_prev"]`   — inhibitory activity at t-1
+        - `y_prev["stim_E_prev"]` — external drive to E at t-1 (1 during pulse, 0 otherwise) 
+        - `y_prev["stim_I_prev"]` — external drive to I at t-1 (1 during pulse, 0 otherwise)
+
+    * OUTPUT: return the tuple `(new_state, mean)` where `mean` is the tuple
+    `(E, I)` — your prediction of the next excitatory and inhibitory activity. Do
+    NOT return a scalar, a single array, or a distribution: return `(E, I)` as two
+    scalars.
+
+    * DO YOUR OWN INTEGRATION. You are predicting the next *value*, not a
+    derivative. Compute a rate of change and take one Euler step with the fixed
+    sampling interval, e.g.
+        H = 1.0   # integration step (module-level constant; time is unitless, dt=1)
+        E_dot = (-E_prev + drive_E) / tau_E
+        E = E_prev + H * E_dot
+    and return `E` (and likewise `I`). `H` is the known sampling grid — keep it a
+    module-level constant, NOT a learnable parameter.
+
+    * HIDDEN STATE IS OPTIONAL. Both E and I are observed, so you do NOT need a
+    hidden variable. `state` is a dict; if you use none, return `new_state = {{}}`.
+    If a slow process helps (e.g. a slowly accumulating adaptation / slow
+    inhibition variable that is NOT directly observed), you MAY carry it: add a
+    class-style attribute `model.INITIAL_STATE = {{"S": <float>}}`, read
+    `state["S"]`, and return `new_state` with the SAME keys. The framework seeds
+    the scan carry from `model.INITIAL_STATE`.
+
+    * CRITICAL: everything is a scalar. Use pure scalar arithmetic — no
+    `np.arange`, no slicing, no dynamic shapes.
+
+    * Provide `model.DEFAULT_PARAMS`: a dict of sensible float initial values for
+    EVERY key read from `params`. Values must be plain floats.
+
+    * Include `log_noise_coef` in `model.DEFAULT_PARAMS` (e.g. -4.6, i.e.
+    log(0.01)). This is the log observation-noise coefficient: the scorer models the
+    observation variance as `exp(log_noise_coef) * max(mean, 0.1)` and fits it per cell by
+    gradient descent. Your model body does NOT read or use `log_noise_coef` — just declare
+    it in `DEFAULT_PARAMS` so it becomes a learnable parameter.
+
+    '
+  image_analysis_instructions: '**Image Analysis Instructions:**
+
+    The image has two parts. The TOP strip shows two randomly chosen example
+    populations, each split into an E panel (left) and an I panel (right) showing that
+    population''s activity over time. Use these only for a quick sense of the
+    overall fit — because prediction is one-step-ahead and teacher-forced, a decent and
+    a badly-wrong model both track the data closely here.
+
+    The 2x2 grid BELOW plots the one-step prediction errors (residuals) : 
+    r_E = observed_E - predicted_E against the previous value of E or I, and 
+    similarly for r_I. Under teacher forcing these residuals are approximately
+    the sum of the true terms your model left out, so any leftover structure points
+    directly at a term you should add.
+
+    HOW TO READ A PANEL. In each panel the leftover error (vertical) is a scatter
+    against the previous value of one variable (horizontal). If the model has captured
+    that variable''s contribution, the error does not depend on it: the cloud is a
+    structureless band centred on zero. If a term in that variable is missing, the
+    cloud TRENDS with the variable (points drift up or down as it increases). The
+    number in each panel title is the correlation (between -1 and +1) between the error
+    and that variable — a plain measure of how strong the leftover dependence is;
+    ignore panels whose value is near zero. A caveat: E and I tend to rise and fall
+    together, so a genuine dependence on one variable can leak a weaker trend into the
+    panel for the other. Trust the STRONGER of the two panels in a row, and weigh the
+    diagonal (self) against the off-diagonal (cross) rather than reading each panel in
+    isolation.
+
+    COLOUR = TIME. The scatter points are coloured by time within the stimulus
+    transient (see the colorbar); baseline saturates to the ends. If the points at a
+    given horizontal position form a colour-ordered LOOP — one colour branch above and
+    a later-colour branch below — the error is not a static function of that variable
+    but depends on the PHASE / history (rise vs fall). That points to a DYNAMIC missing
+    term (a rate-of-change term or a slow hidden variable), not a plain function of the
+    instantaneous value.
+
+    Use this to create a new model that adds exactly the indicated term(s) and beats
+    the parent models.
+
+    '
+parameter_estimator:
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use (use numpy as np).
+
+    * Function signature must be `def parameter_estimator(data):`. `data` is ONE
+    cell''s training dict. The arrays are shaped `(n_stim, T)` — the two stimulus
+    conditions stacked along axis 0:
+        - `data["E"]`, `data["I"]`             — observed activity, `(n_stim, T)`
+        - `data["stim_E"]`, `data["stim_I"]`   — the stimulus, `(n_stim, T)`
+
+    * Return a param dict whose keys EXACTLY match the model''s `DEFAULT_PARAMS`.
+    Missing or extra keys will cause your estimator to be rejected. All values must
+    be plain Python floats. This INCLUDES `log_noise_coef` — a fine initial estimate is
+    `float(np.log(0.01))`; gradient descent refines it.
+
+    * Sensible, cheap estimates (no fitting — just statistics of the traces):
+
+    * Your response **must** be less than {max_lines} lines including imports.
+
+    * Do not use complex fitting functions like {swear_words}; a simple, fast
+    initial estimate is all that is needed.
+
+    * Do not call the model function; you will not have access to it.
+
+    '
+jax_translator_model:
+  code_guidelines: 'CRITICAL JAX compatibility requirements :
+
+    * The model signature is `def model(state, y_prev, params)` and returns
+    `(new_state, mean)` where `mean` is the Python tuple `(E, I)` of two jnp
+    scalars. Preserve this signature and the two-element return-tuple structure
+    exactly. Do NOT collapse `(E, I)` into an array.
+
+    * `y_prev` is a dict with keys `E_prev`, `I_prev`, `stim_E_prev`,
+    `stim_I_prev`. stim_E_prev and stim_I_prev are 0 if no stimulus, 1 if stimulus present.
+    Read from it exactly as the numpy model does.
+
+    * `state` and `new_state` are dicts with the SAME keys throughout the scan
+    (possibly empty). Do not add, remove, or rename keys. If the model defines
+    `model.INITIAL_STATE`, preserve it verbatim — the framework uses it to seed
+    the scan carry.
+
+    * Preserve `model.DEFAULT_PARAMS` verbatim. Preserve any module-level
+    integration constant (e.g. `H = 1.0`) as a Python literal.
+
+    * Replace all boolean indexing / Python `max`/`min` on array values with
+    `jnp.maximum` / `jnp.minimum` / `jnp.where`. Use `jnp.clip` for clipping — not
+    `jax.lax.clip`.
+
+    * Use `jnp` everywhere (no `np`). Avoid Python control flow (if/for) that
+    depends on array values.
+
+    * No dynamic array shapes — all constants must be Python literals or
+    compile-time integers.
+
+    * Never call Python `int()` / `float()` on JAX values. Use `x.astype(float)`
+    instead.
+
+    * Ensure compatibility with `jax.jit`, `jax.grad`, `jax.vmap`, AND
+    `jax.lax.scan` — the model is called inside a scan whose carry structure must
+    be invariant.
+
+    * Ensure all string values in function call arguments are properly
+    JSON-escaped.
+
+    '
