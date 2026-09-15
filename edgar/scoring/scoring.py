@@ -163,8 +163,8 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         split: A string indicating the current scoring split (e.g., "discover" or "validate").
 
     Returns:
-        None. Results are placed on the `queue` as a 9-tuple:
-        `(final_loss, initial_loss, fingerprint, params, sample_losses, params_init, sample_losses_init, best_idx, trajectories)`.
+        None. Results are placed on the `queue` as a 11-tuple:
+        `(final_loss, initial_loss, fingerprint, params, sample_losses, params_init, sample_losses_init, all_final, all_init, best_idx, trajectories)`.
         If any critical failure occurs (model loading, optimization), infinite
         losses and `None` for other results are returned.
     """
@@ -187,7 +187,19 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
     except ModelLoadingError as e:
         print(f"[scoring] program #{program.idx} model failed to load: {e}")
         queue.put(
-            (float("inf"), float("inf"), None, None, None, None, None, None, None)
+            (
+                float("inf"),
+                float("inf"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         )
         return
 
@@ -232,13 +244,27 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
         initial_loss = initial_losses[best_idx]
         params = params_list[best_idx]
         params_init = params_inits[best_idx]
+        all_init = [float(x) for x in initial_losses]
+        all_final = [float(x) for x in final_losses]
 
     except Exception as e:
         print(f"[scoring] program #{program.idx} failed during optimize/eval: {e}")
         print(f"[scoring] traceback:\n{traceback.format_exc()}")
         print(f"[scoring] code.model_jax:\n{program.code.model_jax}")
         queue.put(
-            (float("inf"), float("inf"), None, None, None, None, None, None, None)
+            (
+                float("inf"),
+                float("inf"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         )
         return
 
@@ -282,6 +308,8 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
             _to_numpy(sample_losses) if sample_losses is not None else None,
             _to_numpy(params_init) if params_init is not None else None,
             _to_numpy(sample_losses_init) if sample_losses_init is not None else None,
+            all_final,
+            all_init,
             best_idx,
             trajectories,
         )
@@ -368,12 +396,16 @@ def _score_one_model(
             None,
             None,
             None,
+            None,
+            None,
             "inf",
         )
     if _is_banned(config.get("banned_strings", []), program):
         return (
             float("inf"),
             float("inf"),
+            None,
+            None,
             None,
             None,
             None,
@@ -409,6 +441,8 @@ def _score_one_model(
             None,
             None,
             None,
+            None,
+            None,
             "timeout",
         )
     proc.join()
@@ -420,6 +454,8 @@ def _score_one_model(
         samples,
         params_init,
         samples_init,
+        all_final,
+        all_init,
         best_idx,
         trajectories,
     ) = result
@@ -429,11 +465,13 @@ def _score_one_model(
     return (
         final,
         init,
-        fp,
-        params,
-        samples,
-        params_init,
-        samples_init,
+        _to_numpy(fp) if fp is not None else None,
+        _to_numpy(params) if params is not None else None,
+        _to_numpy(samples) if samples is not None else None,
+        _to_numpy(params_init) if params_init is not None else None,
+        _to_numpy(samples_init) if samples_init is not None else None,
+        all_final,
+        all_init,
         best_idx,
         trajectories,
         outcome,
@@ -538,6 +576,8 @@ def score(
             sample_losses,
             params_init,
             sample_losses_init,
+            all_final,
+            all_init,
             best_idx,
             trajectories,
             outcome,
@@ -550,6 +590,8 @@ def score(
         loss_pair.init = initial_loss
         loss_pair.final = final_loss
         loss_pair.trajectories = trajectories
+        loss_pair.all_init = all_init
+        loss_pair.all_final = all_final
 
         # Record the best parameter estimator
         if best_idx is not None:

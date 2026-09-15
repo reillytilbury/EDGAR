@@ -226,11 +226,18 @@ def test_worker():
     fingerprint = result[2]
     expected_fingerprint = eval_data["y"]
     assert jnp.allclose(fingerprint, expected_fingerprint, atol=1e-2)
+    # Check all_final and all_init
+    all_final = result[7]
+    all_init = result[8]
+    assert len(all_final) == 1
+    assert len(all_init) == 1
+    assert np.isclose(all_final[0], expected_final_loss, atol=1e-2)
+    assert np.isclose(all_init[0], expected_initial_loss, atol=1e-2)
     # Check that best_idx is zero
-    best_idx = result[7]
+    best_idx = result[9]
     assert best_idx == 0
     # Check trajectories match initial and final training loss
-    trajectories = result[8]
+    trajectories = result[10]
     assert trajectories.shape == (1, config["gradient_descent"]["max_iter"])
     expected_initial_train_loss = jnp.mean(
         loss_fn(initial_params["w"] * data[0]["x"], data[0])
@@ -346,9 +353,20 @@ def test_score_one_model_multiple_param_ests():
         default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
-        program, data, loss_fn, BASE_CONFIG
-    )
+    (
+        final_loss,
+        initial_loss,
+        _,
+        _,
+        _,
+        _,
+        _,
+        all_final,
+        all_init,
+        best_idx,
+        trajectories,
+        outcome,
+    ) = _score_one_model(program, data, loss_fn, BASE_CONFIG)
 
     assert len(trajectories) == 2  # Not scored with broken param est
     assert len(trajectories[0]) == BASE_CONFIG["gradient_descent"]["max_iter"]
@@ -365,6 +383,14 @@ def test_score_one_model_multiple_param_ests():
     assert np.isclose(final_loss, np.min(trajectories[1]))  # final loss is the best one
     assert best_idx == 1  # best param est is the second one (index 1)
     assert outcome == "ok"
+
+    # Verify all_init and all_final contain test losses for all working parameter estimators
+    assert all_init is not None and len(all_init) == 2
+    assert all_final is not None and len(all_final) == 2
+    assert all_init[0] > all_init[1]
+    assert all_final[0] > all_final[1]
+    assert np.isclose(initial_loss, all_init[best_idx])
+    assert np.isclose(final_loss, all_final[best_idx])
 
 
 def test_score_one_model_gives_infinite_loss_for_broken_model_syntax():
@@ -435,9 +461,7 @@ def test_score_one_model_with_separate_train_test_loss_fns():
         initial_loss,
         _,
         params,
-        _,
-        _,
-        _,
+        *_,
         best_idx,
         trajectories,
         outcome,
@@ -614,6 +638,10 @@ def test_score_assigns_best_param_est():
     ]
     assert pop[0].code.best_param_est == PARAM_EST_CODE
     assert pop[0].param_est_code == PARAM_EST_CODE
+    assert pop[0].program_losses.discover.all_init is not None
+    assert pop[0].program_losses.discover.all_final is not None
+    assert len(pop[0].program_losses.discover.all_init) == 2
+    assert len(pop[0].program_losses.discover.all_final) == 2
 
 
 # --- rank ---
