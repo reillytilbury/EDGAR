@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import tempfile
 import time
+from pathlib import Path
 
 import traceback
 import cloudpickle
@@ -38,6 +40,66 @@ from .utils import (
 )
 
 # ── helpers ──
+
+# Large train/test splits are written once to a temp .npz per ``score()`` call 
+# so each subprocess receives a path string instead of re-pickling the full 
+# pytree through the spawn pipe.
+_SCORING_DATA_NPZ_THRESHOLD_BYTES = 32 * 1024 * 1024
+
+
+class _ScoringDataStore:
+    """Materialize a (train, test) tuple to disk when it exceeds the pickle threshold."""
+
+    def __init__(self, data: tuple):
+        self._data = data
+        self._path: str | None = None
+        self._tmpdir: tempfile.TemporaryDirectory | None = None
+
+    def ref(self) -> tuple | str:
+        train, test = self._data
+        nbytes = sum(
+            np.asarray(v).nbytes
+            for split in (train, test)
+            for k, v in split.items()
+            if k != "_sample_indices"
+        )
+        if nbytes < _SCORING_DATA_NPZ_THRESHOLD_BYTES:
+            return self._data
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="edgar_scoring_")
+        path = Path(self._tmpdir.name) / "data.npz"
+        arrays = {}
+        for k, v in train.items():
+            if k != "_sample_indices":
+                arrays[f"train_{k}"] = np.asarray(v)
+        for k, v in test.items():
+            if k != "_sample_indices":
+                arrays[f"test_{k}"] = np.asarray(v)
+        np.savez(path, **arrays)
+        self._path = str(path)
+        return self._path
+
+    def cleanup(self) -> None:
+        if self._tmpdir is not None:
+            self._tmpdir.cleanup()
+            self._tmpdir = None
+            self._path = None
+
+
+def _resolve_scoring_data(data_or_path: tuple | str) -> tuple:
+    if isinstance(data_or_path, tuple):
+        return data_or_path
+    loaded = np.load(data_or_path)
+    train = {
+        k.removeprefix("train_"): jnp.asarray(loaded[k])
+        for k in loaded.files
+        if k.startswith("train_")
+    }
+    test = {
+        k.removeprefix("test_"): jnp.asarray(loaded[k])
+        for k in loaded.files
+        if k.startswith("test_")
+    }
+    return train, test
 
 def _get_params(param_est_fn, default_params, data_train):
     """Estimates initial parameters for a model, falling back to defaults if the parameter estimator fails.
@@ -165,7 +227,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split, ap
     if X_eval is not None:
         X_eval = _to_jax(X_eval)
 
-    data_train, data_test = data
+    data_train, data_test = _resolve_scoring_data(data)
 
     try:
         model_fn = program.compile_model()
@@ -527,61 +589,66 @@ def score(
     counters = {"ok": 0, "timeout": 0, "inf": 0, "banned": 0}
     latencies_ms: list[float] = []
 
-    for k, program in enumerate(queue, start=1):
-        t0 = time.monotonic()
-        (
-            final_loss,
-            initial_loss,
-            fingerprint,
-            params,
-            sample_losses,
-            params_init,
-            sample_losses_init,
-            best_idx,
-            trajectories,
-            outcome,
-        ) = _score_one_model(program, X_split, loss_fn, config, X_eval, split, apply_model_fn)
-        latency_ms = (time.monotonic() - t0) * 1000.0
-        latencies_ms.append(latency_ms)
-        counters[outcome] += 1
+    data_store = _ScoringDataStore(X_split)
+    data_ref = data_store.ref()
+    try:
+        for k, program in enumerate(queue, start=1):
+            t0 = time.monotonic()
+            (
+                final_loss,
+                initial_loss,
+                fingerprint,
+                params,
+                sample_losses,
+                params_init,
+                sample_losses_init,
+                best_idx,
+                trajectories,
+                outcome,
+            ) = _score_one_model(program, data_ref, loss_fn, config, X_eval, split, apply_model_fn)
+            latency_ms = (time.monotonic() - t0) * 1000.0
+            latencies_ms.append(latency_ms)
+            counters[outcome] += 1
 
-        loss_pair = getattr(program.program_losses, split)
-        loss_pair.init = initial_loss
-        loss_pair.final = final_loss
-        loss_pair.trajectories = trajectories
+            loss_pair = getattr(program.program_losses, split)
+            loss_pair.init = initial_loss
+            loss_pair.final = final_loss
+            loss_pair.trajectories = trajectories
 
-        # Record the best parameter estimator
-        if best_idx is not None:
-            program.best_estimator_idx = best_idx
-            if program.code.param_est:
-                program.code.best_param_est = program.code.param_est[best_idx]
+            # Record the best parameter estimator
+            if best_idx is not None:
+                program.best_estimator_idx = best_idx
+                if program.code.param_est:
+                    program.code.best_param_est = program.code.param_est[best_idx]
 
-        if fingerprint is not None:
-            program.eval_fingerprint = fingerprint
-        if params is not None:
-            program.params = params
-        if params_init is not None:
-            program.params_init = params_init
-        if sample_losses is not None and split == "discover":
-            program.sample_losses = sample_losses
-        if sample_losses_init is not None and split == "discover":
-            program.sample_losses_init = sample_losses_init
+            if fingerprint is not None:
+                program.eval_fingerprint = fingerprint
+            if params is not None:
+                program.params = params
+            if params_init is not None:
+                program.params_init = params_init
+            if sample_losses is not None and split == "discover":
+                program.sample_losses = sample_losses
+            if sample_losses_init is not None and split == "discover":
+                program.sample_losses_init = sample_losses_init
 
-        if metrics is not None:
-            metrics.record_score_result(program.idx, latency_ms, outcome)
+            if metrics is not None:
+                metrics.record_score_result(program.idx, latency_ms, outcome)
 
-        # Cheap progress line so the user sees movement during the slow stage.
-        # Print every program for low n_total, every 4 for larger sweeps.
-        tick_every = 1 if n_total <= 12 else 4
-        if metrics is not None and (k == n_total or k % tick_every == 0):
-            avg_s = (sum(latencies_ms) / len(latencies_ms)) / 1000.0
-            stream_line(
-                metrics,
-                f"  [score {split}] {k}/{n_total}  "
-                f"(avg {avg_s:.1f}s, {counters['ok']} ok, "
-                f"{counters['timeout']} timeout, {counters['inf']} inf, "
-                f"{counters['banned']} banned)",
-            )
+            # Cheap progress line so the user sees movement during the slow stage.
+            # Print every program for low n_total, every 4 for larger sweeps.
+            tick_every = 1 if n_total <= 12 else 4
+            if metrics is not None and (k == n_total or k % tick_every == 0):
+                avg_s = (sum(latencies_ms) / len(latencies_ms)) / 1000.0
+                stream_line(
+                    metrics,
+                    f"  [score {split}] {k}/{n_total}  "
+                    f"(avg {avg_s:.1f}s, {counters['ok']} ok, "
+                    f"{counters['timeout']} timeout, {counters['inf']} inf, "
+                    f"{counters['banned']} banned)",
+                )
+    finally:
+        data_store.cleanup()
 
 
 def rank(
