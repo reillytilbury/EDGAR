@@ -36,6 +36,7 @@ from pydantic_ai.tools import RunContext
 
 from ..io.config import RetryConfig
 from ..io.metrics import get_active_metrics
+from .claude_headless import build_claude_headless_model
 from .response_schema import ModelSchema, ParamEstSchema, TranslationSchema
 
 LLMOutputTypes: TypeAlias = Union[str, ModelSchema, ParamEstSchema, TranslationSchema]
@@ -46,7 +47,10 @@ load_dotenv()
 # Provider dispatch is by model-name prefix. The model string is the single source
 # of truth for which API gets called; no separate `provider:` field in config. Add
 # a new prefix here when adding a new provider.
-_PROVIDER_PREFIXES = ("gemini-", "claude-")
+# ``claude-code-`` — headless Claude Code CLI (uses the local ``claude`` binary,
+# no API key). Match must come BEFORE ``claude-`` since the string ``claude-code-*``
+# also starts with ``claude-``.
+_PROVIDER_PREFIXES = ("gemini-", "claude-code-", "claude-")
 
 
 def _build_model(model_name: str) -> Model:
@@ -56,7 +60,8 @@ def _build_model(model_name: str) -> Model:
     with a clear message if it's missing or the prefix is unknown.
 
     Args:
-        model_name: The string identifier for the LLM, e.g., "gemini-pro" or "claude-3-sonnet".
+        model_name: The string identifier for the LLM, e.g., "gemini-pro",
+          "claude-3-sonnet", or "claude-code-headless"
 
     Returns:
         An instance of `pydantic_ai.models.Model` configured for the specified LLM.
@@ -72,6 +77,9 @@ def _build_model(model_name: str) -> Model:
                 "GOOGLE_API_KEY is not set. Export it in your shell or place it in the repo .env file."
             )
         return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
+
+    if model_name.startswith("claude-code-"):
+        return build_claude_headless_model(model_name)
 
     if model_name.startswith("claude-"):
         api_key = os.getenv("ANTHROPIC_API_KEY")
