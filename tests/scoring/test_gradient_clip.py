@@ -1,6 +1,6 @@
 """Tests for the optional ``gradient_clip_norm`` config in ``_optimize``.
 
-The state-space DSL project (``oscillator_ss``) backprops through long
+The state-space DSL project (``wilson_cowan``) backprops through long
 ``lax.scan`` sequences and can produce exploding gradients on early
 iterations. ``_optimize`` supports optional pre-Adam ``clip_by_global_norm``
 via ``gd_config["gradient_clip_norm"]``. These tests verify:
