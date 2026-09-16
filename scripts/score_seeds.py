@@ -38,10 +38,26 @@ def score_seeds(project_name: str):
 
     # Scoring
     # Discover scoring
-    score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
+    score(
+        population,
+        X_discover,
+        X_eval,
+        spec.scoring,
+        spec.loss_fn,
+        split="discover",
+        apply_model_fn=spec.apply_model_fn,
+    )
     # Validate scoring
     population.prepare_validation_scoring(islands=islands)
-    score(population, X_validate, None, spec.scoring, spec.loss_fn, split="validate")
+    score(
+        population,
+        X_validate,
+        None,
+        spec.scoring,
+        spec.loss_fn,
+        split="validate",
+        apply_model_fn=spec.apply_model_fn,
+    )
     print("Scoring complete\n --------- \n ")
     for i, program in enumerate(population):
         print(f"Seed {i + 1}:")

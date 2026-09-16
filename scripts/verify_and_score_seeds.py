@@ -1,18 +1,19 @@
 import argparse
 import asyncio
+import os
+from pathlib import Path
+
 import numpy as np
+
 from edgar.io.config import Config
 from edgar.io.task_spec import TaskSpec
 from edgar.scoring.scoring import _get_params, _eval_loss, _optimize
-from pathlib import Path
-import os
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
 _xla_flags = os.environ.get("XLA_FLAGS", "")
 if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
     os.environ["XLA_FLAGS"] = (_xla_flags + " --xla_gpu_enable_command_buffer=").strip()
-
 
 
 async def main(project_name: str):
@@ -34,26 +35,20 @@ async def main(project_name: str):
     else:
         loss_fn_train = loss_fn_test = spec.loss_fn
 
+    # Project-specific control over how model_fn is mapped over the data
+    # (e.g. autoregressive projects override this via data_loader.apply_model).
+    apply_model_fn = spec.apply_model_fn
+
     for idx, program in enumerate(spec.seed_programs):
         print("\n======================================")
         print(f"Testing Program {idx + 1}: {program.name}")
         print("======================================")
 
-
         # Load Python model code and translate manually for quick JAX compilation testing
-        model_code = program.code.model
-
-
-        # Simple JAX translation rules
-        model_jax_code = model_code.replace(
+        model_jax_code = program.code.model.replace(
             "import numpy as np", "import jax.numpy as jnp"
-        )
-        model_jax_code = model_code.replace(
-            "import numpy as np", "import jax.numpy as jnp"
-        )
-        model_jax_code = model_jax_code.replace("np.", "jnp.")
+        ).replace("np.", "jnp.")
         program.code.model_jax = model_jax_code
-
 
         try:
             model_fn = program.compile_model()
@@ -62,7 +57,6 @@ async def main(project_name: str):
             print(f"✗ Failed to compile JAX model: {e}")
             continue
 
-
         try:
             param_est_fn = program.compile_param_ests()
             print("✓ Compiled param estimator successfully")
@@ -70,12 +64,8 @@ async def main(project_name: str):
             print(f"✗ Failed to compile param estimator: {e}")
             continue
 
-
         # Get initial parameters
         try:
-            params_init = _get_params(
-                param_est_fn, program.default_params, X_discover[0]
-            )
             params_init = _get_params(
                 param_est_fn, program.default_params, X_discover[0]
             )
@@ -86,33 +76,28 @@ async def main(project_name: str):
             print(f"✗ Failed to estimate initial parameters: {e}")
             import traceback
 
-
             traceback.print_exc()
             continue
-
 
         # Evaluate initial loss
         try:
             initial_loss = _eval_loss(
-                model_fn, loss_fn_test, params_init, X_discover[1]
+                model_fn, loss_fn_test, params_init, X_discover[1], apply_model_fn
             )
             print(f"Initial loss on discovery test split: {initial_loss:.4f}")
         except Exception as e:
             print(f"✗ Failed to evaluate initial loss: {e}")
             import traceback
 
-
             traceback.print_exc()
             continue
-
 
         # Optimize parameters using gradient descent (Adam)
         try:
             print("Optimizing parameters...")
             gd_config = spec.scoring["gradient_descent"].copy()
-            # gd_config["max_iter"] = 100
             params_list, _ = _optimize(
-                model_fn, loss_fn_train, params_init, X_discover[0], gd_config
+                model_fn, loss_fn_train, params_init, X_discover[0], gd_config, apply_model_fn
             )
             params_opt = params_list[0]
             print("✓ Optimization complete")
@@ -120,14 +105,14 @@ async def main(project_name: str):
             print(f"✗ Failed during optimization: {e}")
             import traceback
 
-
             traceback.print_exc()
             continue
 
-
         # Evaluate final loss
         try:
-            final_loss = _eval_loss(model_fn, loss_fn_test, params_opt, X_discover[1])
+            final_loss = _eval_loss(
+                model_fn, loss_fn_test, params_opt, X_discover[1], apply_model_fn
+            )
             print(f"Final loss on discovery test split: {final_loss:.4f}")
             if final_loss < initial_loss:
                 print("✓ Success: Loss decreased during optimization!")
@@ -138,16 +123,7 @@ async def main(project_name: str):
             continue
 
 
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Verify and score seed programs for a given project."
-    )
-    parser.add_argument(
-        "project_name",
-        type=str,
-        help="Name of the project directory under the projects/ directory.",
-    )
     parser = argparse.ArgumentParser(
         description="Verify and score seed programs for a given project."
     )

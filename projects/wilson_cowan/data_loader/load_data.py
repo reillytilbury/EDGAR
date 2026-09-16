@@ -199,6 +199,32 @@ def apply_model(model_fn, data, params):
     return jax.vmap(per_sample, in_axes=(0, 0, 0, 0, 0))(E, I, sE, sI, params)
 
 
+def debug_trajectory(data, sample: int = 0, stim: int = 0):
+    """Per-step ``y_prev`` sequence for one (sample, stim) trajectory.
+
+    Optional hook consumed by ``scripts/debug_program.py`` to replay
+    ``model(state, y_prev, params)`` outside jit, one step at a time. It mirrors
+    the teacher-forced ``xs`` that ``apply_model`` scans over: ``y_prev[t]`` bundles
+    the observation and stimulus at ``t`` (the ``[:-1]`` slice), predicting ``y[t+1]``.
+
+    ``data`` is the training dict from ``load_data`` (E/I/stim_E/stim_I, each
+    ``(n_samples, n_stim, T)``). Returns a list of ``y_prev`` dicts of length ``T-1``.
+    """
+    E = data["E"][sample, stim]
+    I = data["I"][sample, stim]
+    sE = data["stim_E"][sample, stim]
+    sI = data["stim_I"][sample, stim]
+    return [
+        {
+            "E_prev": E[t],
+            "I_prev": I[t],
+            "stim_E_prev": sE[t],
+            "stim_I_prev": sI[t],
+        }
+        for t in range(E.shape[0] - 1)
+    ]
+
+
 def loss_fn(model_output, data):
     """Heteroscedastic Gaussian NLL, averaged over stim conditions and time.
 
