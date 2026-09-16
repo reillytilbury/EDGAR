@@ -43,6 +43,7 @@ def plot_model_fits(
     sample_losses=None,
     program_names=None,
     params=None,
+    rng: np.random.Generator | None = None,
     max_show: int = 5,
     stim_index: int = 0,
     window: int = 0,

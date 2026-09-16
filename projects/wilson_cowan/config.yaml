@@ -7,7 +7,7 @@ io:
   # Baseline-returning, hand-engineered slow-WCS data (15-param ground truth); the
   # heteroscedastic NLL loss is exercised here (see data_loader/load_data.py).
   # data_path: "/home/dabin/data/wc_simulations/wcs_manual_fold0.npz"
-  data_path: "/home/dabin/data/wc_simulations/wcs_fold0.npz"
+  data_path: "/home/dabin/data/wc_simulations/archive/wcs_fold0.npz"
 
 evolution:
   # Smoke defaults — override on the CLI for real runs (e.g. --evolution.n_generations=20).

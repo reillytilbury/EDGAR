@@ -202,6 +202,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split, ap
             params_inits,
             data_train,
             config["gradient_descent"],
+            apply_model_fn,
         )
 
         # 4. Compute final losses for each set of optimized parameters
