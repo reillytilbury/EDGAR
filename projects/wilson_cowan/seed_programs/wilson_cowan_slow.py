@@ -9,7 +9,8 @@ H = 1.0  # integration step; time is unitless (dt=1), so tau values are in time 
 # Adds a hidden slow-inhibition variable S (from TRN activity) that integrates the
 # inhibitory activity and feeds back onto both populations. Under teacher forcing
 # I_prev is the observed I, so S is recovered by carrying it through the scan;
-# apply_model seeds the carry from `INITIAL_STATE` below. E and I use the PREVIOUS
+# apply_model seeds the carry from the `s0_S` param in DEFAULT_PARAMS below (the s0_
+# prefix marks it as a learnable initial scan-carry value). E and I use the PREVIOUS
 # S (S_prev), matching the generator in data_loader/simulate_data.py.
 def model(state_prev, y_prev, params):
     """Wilson-Cowan-with-slow-inhibition dynamics update.
@@ -77,11 +78,9 @@ model.DEFAULT_PARAMS = {
     'W_IS': 0.001,
     'XE': 1.0,
     'XI': 1.0,
-    'log_noise_coef': -4.6052,  # log(0.01): fitted obs-noise coef, var = exp(·)·max(mean, EPS_MEAN)
+    's0_S': 1.0,  # initial value of the latent S; s0_ prefix → learnable scan-carry init
+    'log_noise_coef': -4.6052,  # log(0.01): fitted obs-noise coef, var = exp(·)·max(mean, EPS_MEAN) # TODO update this since rollout in apply_model_fn now uses free-running predictions
 }
-
-# Initial hidden state seeded into the scan carry by apply_model.
-model.INITIAL_STATE = {'S': 1.0}
 
 
 def model_jax(state_prev, y_prev, params):
@@ -127,4 +126,3 @@ def model_jax(state_prev, y_prev, params):
 
 
 model_jax.DEFAULT_PARAMS = model.DEFAULT_PARAMS
-model_jax.INITIAL_STATE = model.INITIAL_STATE

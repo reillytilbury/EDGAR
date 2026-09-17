@@ -5,8 +5,10 @@
 #     tuple (E, I).
 #   * `y_prev` is a DICT that also carries the external stimulus.
 #   * The loss is a heteroscedastic Gaussian NLL (observation variance grows with
-#     activity); every model exposes a GD-fitted `log_noise_coef` param, but there
-#     are NO `s0_*` initial-state parameters.
+#     activity); every model exposes a GD-fitted `log_noise_coef` param.
+#   * A hidden-state model declares its initial scan carry with `s0_`-prefixed params
+#     (e.g. `s0_S`), which the framework strips and uses as the scan's initial `state`;
+#     stateless models declare none. (WC uses the `s0_` convention, like fhn_excitable.)
 #   * Both populations are FULLY OBSERVED, so a hidden variable is optional
 #     (not required as it is for the excitable FHN task).
 # The contract below is defined by data_loader/load_data.py (the source of truth).
@@ -67,10 +69,12 @@ model:
     * HIDDEN STATE IS OPTIONAL. Both E and I are observed, so you do NOT need a
     hidden variable. `state` is a dict; if you use none, return `new_state = {{}}`.
     If a slow process helps (e.g. a slowly accumulating adaptation / slow
-    inhibition variable that is NOT directly observed), you MAY carry it: add a
-    class-style attribute `model.INITIAL_STATE = {{"S": <float>}}`, read
-    `state["S"]`, and return `new_state` with the SAME keys. The framework seeds
-    the scan carry from `model.INITIAL_STATE`.
+    inhibition variable that is NOT directly observed), you MAY carry it: read it
+    from `state` (e.g. `state["S"]`) and return `new_state` with the SAME keys. Give
+    its initial value as an `s0_`-prefixed entry in `model.DEFAULT_PARAMS` (e.g.
+    `"s0_S": 1.0`): the framework strips the `s0_` prefix and seeds the scan carry
+    with it (`state["S"]`), and its value is refined by gradient descent. Every key
+    your `state` reads must have a matching `s0_<key>` in `DEFAULT_PARAMS`.
 
     * CRITICAL: everything is a scalar. Use pure scalar arithmetic — no
     `np.arange`, no slicing, no dynamic shapes.
@@ -163,12 +167,12 @@ jax_translator_model:
     Read from it exactly as the numpy model does.
 
     * `state` and `new_state` are dicts with the SAME keys throughout the scan
-    (possibly empty). Do not add, remove, or rename keys. If the model defines
-    `model.INITIAL_STATE`, preserve it verbatim — the framework uses it to seed
-    the scan carry.
+    (possibly empty). Do not add, remove, or rename keys.
 
-    * Preserve `model.DEFAULT_PARAMS` verbatim. Preserve any module-level
-    integration constant (e.g. `H = 1.0`) as a Python literal.
+    * Preserve `model.DEFAULT_PARAMS` verbatim — including any `s0_`-prefixed
+    initial-state keys (e.g. `s0_S`), which the framework uses to seed the scan
+    carry. Preserve any module-level integration constant (e.g. `H = 1.0`) as a
+    Python literal.
 
     * Replace all boolean indexing / Python `max`/`min` on array values with
     `jnp.maximum` / `jnp.minimum` / `jnp.where`. Use `jnp.clip` for clipping — not

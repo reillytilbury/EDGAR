@@ -28,6 +28,8 @@ def parameter_estimator(data):
         "tau_S": 300.0,
         "W_ES": 0.001,
         "W_IS": 0.001,
+        # Initial value of the latent S (s0_ prefix → learnable scan-carry init); GD refines.
+        "s0_S": 1.0,
         # Obs-noise coef init log(0.01) (matches the generative var = 0.01*mean); GD refines.
-        "log_noise_coef": float(np.log(0.01)),
+        "log_noise_coef": float(np.log(0.01)), # TODO update this since rollout in apply_model_fn now uses free-running predictions
     }

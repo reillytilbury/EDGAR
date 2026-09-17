@@ -141,7 +141,7 @@ def plot_model_fits(
 
     # ── Top strip: two random samples, each as an E (left) and I (right) panel ────
     n_traj = min(2, n_show)
-    traj_rows = np.sort(np.random.default_rng().choice(n_show, n_traj, replace=False))
+    traj_rows = np.sort(rng.choice(n_show, n_traj, replace=False))
     T_full = true_E.shape[1]
     T_show = T_full if window <= 0 else int(min(window, T_full))
     t_true = np.arange(T_show)

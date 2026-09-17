@@ -45,7 +45,6 @@ def model(state, y_prev, params):
 
     return {"S": S}, (E, I)
 
-model.INITIAL_STATE = {'S': 1.0}
 
 model.DEFAULT_PARAMS = {
     "tau_E": 60.0,
@@ -57,5 +56,6 @@ model.DEFAULT_PARAMS = {
     "tau_S": 300.0,
     "W_ES": 0.5,
     "W_IS": 0.5,
-    "log_noise_coef": -4.6052,  # log(0.01): fitted obs-noise coef, var = exp(·)·max(mean, EPS_MEAN)
+    "s0_S": 1.0,  # initial value of the latent S; the s0_ prefix makes it a learnable scan-carry init
+    "log_noise_coef": -4.6052,  # log(0.01): fitted obs-noise coef, var = exp(·)·max(mean, EPS_MEAN) # TODO update this since rollout in apply_model_fn now uses free-running predictions
 }

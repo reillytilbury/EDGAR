@@ -31,7 +31,14 @@ meaningful and the mechanistic parameters stay interpretable.
 ``log_noise_coef`` reaches the (params-free) ``loss_fn`` the same way ``fhn_excitable``
 threads its noise param: ``apply_model`` reads it from ``params`` and appends it as a
 third output channel, which ``loss_fn`` reads back. The model function itself never sees
-it. There are no ``s0_*`` initial-state parameters.
+it.
+
+Hidden-state models declare their initial scan carry with ``s0_``-prefixed keys in
+``DEFAULT_PARAMS`` (e.g. ``s0_S``); ``apply_model`` strips the ``s0_`` prefix and uses
+them as the scan's initial ``state``, so the initial condition is fit by gradient descent
+alongside the dynamics (matching ``fhn_excitable``'s convention). Stateless models (the
+base WC) declare no ``s0_*`` keys and get an empty carry. ``loss_fn`` skips the first
+``WARMUP_STEPS`` predictions so the initial-state settling transient is not scored.
 
 Cross-validation is over the 12 repeats: ``simulate_data.save_kfold_splits`` writes
 ``wc_fold{f}.npz`` files, each holding a repeat-averaged ``train_data`` / ``test_data``
@@ -49,6 +56,17 @@ import numpy as np
 # resting baseline is ~0 (and predictions can dip slightly negative), so this keeps the
 # variance strictly positive; ~0.1 is around the resting activity level.
 EPS_MEAN = 0.1
+
+
+# Number of leading one-step predictions ignored by ``loss_fn``. A hidden-state model
+# seeds its scan carry from the fitted ``s0_*`` prior, which then settles toward a
+# sensible belief over the first ~tau steps; scoring that transient would penalise a
+# model for its initial-condition guess. Kept well below the stimulus onset (t=500 in the
+# current data) so the whole evoked response is still scored, and it applies uniformly to
+# the train and test windows (both scans start fresh from ``s0_*``). A Python constant so
+# it is baked into ``loss_fn``'s closure at import time — jit-safe, no ``ConcretizationError``.
+# Raise toward ~tau_S if the initial S-transient proves visible in the residuals.
+WARMUP_STEPS: int = 100
 
 
 # ── EDGAR entry points ──
@@ -151,17 +169,44 @@ def load_data(
     )
 
 
+def _split_params_s0(params: dict) -> tuple[dict, dict]:
+    """Split ``s0_``-prefixed params → initial scan-carry state; the rest are dynamics
+    params passed to ``model_fn``.
+
+    Only keys of the form ``s0_<name>`` with non-empty ``<name>`` are treated as initial
+    state (the prefix is stripped). A stateless model (base WC) declares no ``s0_*`` keys
+    and gets an empty init carry. ``log_noise_coef`` is not ``s0_``-prefixed, so it stays
+    in the dynamics params (and never reaches ``model_fn`` — ``apply_model`` reads it here).
+    Matches ``fhn_excitable``'s convention so the two projects stay aligned.
+    """
+    init_state, dyn_params = {}, {}
+    for k, v in params.items():
+        if k.startswith("s0_") and len(k) > 3:
+            init_state[k.removeprefix("s0_")] = v
+        else:
+            dyn_params[k] = v
+    return init_state, dyn_params
+
+
 def apply_model(model_fn, data, params):
-    """Teacher-forced one-step-ahead scan of ``model_fn`` over every (sample, stim).
+    """Free-rollout scan of ``model_fn`` over every (sample, stim).
 
-    Builds the per-step dict ``y_prev`` and scans over it (``jax.lax.scan`` handles the
-    pytree natively). vmaps over samples (axis 0, matched to per-sample ``params``) and,
-    inside, over the two stim conditions (params are shared across conditions — same
-    cell). Returns ``(n_samples, n_stim, T-1, 2)``: predicted (E, I) at each step.
+    The model is run as a generator: only the stimulus is teacher-forced (a known
+    exogenous input); the observables E, I fed in at each step come from the model's
+    OWN previous prediction, carried in the scan carry alongside the hidden state. The
+    model contract is unchanged — it still receives a ``y_prev`` dict and cannot tell
+    whether it is self-generated. (The original teacher-forced one-step scan is kept,
+    commented out, in ``per_stim`` below.) vmaps over samples (axis 0, matched to
+    per-sample ``params``) and, inside, over the two stim conditions (params shared
+    across conditions — same cell). Returns ``(n_samples, n_stim, T-1, 2)``: predicted
+    (E, I) at each step.
 
-    Models with a hidden state (e.g. the WCS slow variable ``S``) expose an
-    ``INITIAL_STATE`` attribute that seeds the scan carry; stateless models (base WC)
-    have none, so the carry starts as an empty dict exactly as before.
+    Hidden-state models (e.g. the WCS slow variable ``S``) declare their initial scan
+    carry via ``s0_``-prefixed keys in ``DEFAULT_PARAMS`` (e.g. ``s0_S``); those are split
+    out here by ``_split_params_s0`` and used as the scan's initial ``state``, so the
+    initial condition is learned by gradient descent. Stateless models (base WC) declare
+    no ``s0_*`` keys and start the scan from an empty dict carry. The model function only
+    ever sees the dynamics params (``s0_*`` and ``log_noise_coef`` are stripped away).
 
     The fitted per-sample observation-noise coefficient ``log_noise_coef`` is read from
     ``params`` and appended as a constant third channel, so the params-free ``loss_fn``
@@ -173,27 +218,57 @@ def apply_model(model_fn, data, params):
     sE = data["stim_E"]
     sI = data["stim_I"]
 
-    init_state = getattr(model_fn, "INITIAL_STATE", {})
-
     def per_sample(E_s, I_s, sE_s, sI_s, p):
+        init_state, dyn_params = _split_params_s0(p)
+
         def per_stim(E_c, I_c, sE_c, sI_c):
-            xs = {
-                "E_prev": E_c[:-1],
-                "I_prev": I_c[:-1],
-                "stim_E_prev": sE_c[:-1],
-                "stim_I_prev": sI_c[:-1],
-            }
+            # ── ORIGINAL: teacher-forced one-step-ahead (E_prev/I_prev from data) ──
+            # xs = {
+            #     "E_prev": E_c[:-1],
+            #     "I_prev": I_c[:-1],
+            #     "stim_E_prev": sE_c[:-1],
+            #     "stim_I_prev": sI_c[:-1],
+            # }
+            #
+            # def step(state, y_prev):
+            #     new_state, mean = model_fn(state, y_prev, dyn_params)
+            #     E_next, I_next = mean
+            #     return new_state, jnp.stack([E_next, I_next])
+            #
+            # _, means = jax.lax.scan(step, init_state, xs)  # (T-1, 2)
+            # return means
 
-            def step(state, y_prev):
-                new_state, mean = model_fn(state, y_prev, p)
+            # ── FREE ROLLOUT: feed the model's own (E, I) prediction back in ──
+            # Only the stimulus is scanned (teacher-forced exogenous input); E_prev/I_prev
+            # come from the previous step's output, held in the carry (state, E_prev, I_prev).
+            # Alignment matches the teacher-forced version: step j predicts y[j+1], so
+            # means[j] still lines up with target E/I[1+j] and loss_fn is unchanged.
+            # INITIAL CONDITION : observables seeded from the first true
+            # observation (E_c[0], I_c[0]) — the true start; fitting an observed-variable
+            # IC would only tune to the target. The hidden state seeds from the learnable
+            # s0_* (e.g. s0_S), which recovers the true (constant) initial hidden value and
+            # is well-identified under rollout. Any inaccuracy from the single-point seed is
+            # absorbed by loss_fn's first WARMUP_STEPS, which are not scored.
+            xs = {"stim_E_prev": sE_c[:-1], "stim_I_prev": sI_c[:-1]}
+
+            def step(carry, stim_prev):
+                state, E_prev, I_prev = carry
+                y_prev = {
+                    "E_prev": E_prev,
+                    "I_prev": I_prev,
+                    "stim_E_prev": stim_prev["stim_E_prev"],
+                    "stim_I_prev": stim_prev["stim_I_prev"],
+                }
+                new_state, mean = model_fn(state, y_prev, dyn_params)
                 E_next, I_next = mean
-                return new_state, jnp.stack([E_next, I_next])
+                return (new_state, E_next, I_next), jnp.stack([E_next, I_next])
 
-            _, means = jax.lax.scan(step, init_state, xs)  # (T-1, 2)
+            init_carry = (init_state, E_c[0], I_c[0])
+            _, means = jax.lax.scan(step, init_carry, xs)  # (T-1, 2)
             return means
 
         means = jax.vmap(per_stim)(E_s, I_s, sE_s, sI_s)   # (n_stim, T-1, 2)
-        log_nc = jnp.broadcast_to(p["log_noise_coef"], means.shape[:-1] + (1,))
+        log_nc = jnp.broadcast_to(dyn_params["log_noise_coef"], means.shape[:-1] + (1,))
         return jnp.concatenate([means, log_nc], axis=-1)   # (n_stim, T-1, 3)
 
     return jax.vmap(per_sample, in_axes=(0, 0, 0, 0, 0))(E, I, sE, sI, params)
@@ -232,6 +307,11 @@ def loss_fn(model_output, data):
     ``log_noise_coef`` is the per-sample fitted noise coefficient carried through by
     ``apply_model``. Targets are the ``[1:]`` slice of the observed E/I.
 
+    The first ``WARMUP_STEPS`` predictions are dropped before scoring so the initial-state
+    settling transient (a hidden-state model relaxing from its fitted ``s0_*`` prior) is not
+    penalised; the target slice is offset to stay aligned. Applies to both train and test
+    windows, since each scan starts fresh from ``s0_*``.
+
     The observation variance is signal-dependent: ``var = phi · max(mean, EPS_MEAN)`` with
     ``phi = exp(log_noise_coef)`` shared by E and I. Each channel is weighted by its own
     predicted mean, so the high-variance evoked transient is smoothly down-weighted and the
@@ -239,11 +319,11 @@ def loss_fn(model_output, data):
     (``stop_gradient``) so the model cannot lower the loss by inflating its predicted mean to
     buy variance; ``phi`` still gets a gradient through the ``log`` term. Returns ``(n,)``.
     """
-    E_hat = model_output[..., 0]      # (n, n_stim, T-1)
-    I_hat = model_output[..., 1]
-    log_nc = model_output[..., 2]
-    E_tgt = data["E"][:, :, 1:]
-    I_tgt = data["I"][:, :, 1:]
+    E_hat = model_output[:, :, WARMUP_STEPS:, 0]      # (n, n_stim, T-1-WARMUP_STEPS)
+    I_hat = model_output[:, :, WARMUP_STEPS:, 1]
+    log_nc = model_output[:, :, WARMUP_STEPS:, 2]
+    E_tgt = data["E"][:, :, 1 + WARMUP_STEPS:]        # target for step j is E[1+j]
+    I_tgt = data["I"][:, :, 1 + WARMUP_STEPS:]
 
     phi = jnp.exp(log_nc)
     var_E = phi * jnp.maximum(jax.lax.stop_gradient(E_hat), EPS_MEAN)
