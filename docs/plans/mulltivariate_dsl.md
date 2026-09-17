@@ -8,6 +8,20 @@
 
 EDGAR's state-space DSL (v1, September 2026) fixed temporal leakage by forcing each LLM-authored model to be a one-step causal update `model(state, y_prev, params) → (new_state, mean)` on a scalar observation. This plan extends that contract to a d-dimensional observation vector `y_prev: (d,)`, `mean: (d,)` so we can score models on jointly-observed systems — Lorenz-63, coupled Van der Pol, multi-channel EEG, small neural populations. The extension is designed to preserve every structural guarantee of v1 (leakage is still a scope error, fingerprint dedup still works, `WARMUP_STEPS` is still a Python constant) and to require *zero* changes to the `edgar/` engine. It is a project-local change plus prompt work. That is not accidental — it is the design goal.
 
+> **Status update (since writing).** The d-dimensional contract described here is no longer purely
+> prospective. `wilson_cowan` is a working multivariate state-space project on the current base — a
+> coupled 2-channel `(E, I)` model whose `mean` is a 2-vector, with a dict-structured `y_prev` and a
+> heteroscedastic Gaussian NLL whose variance scales with each channel's own predicted mean through
+> a single noise coefficient shared by both channels — and it required **no `edgar/` engine
+> change**, confirming this plan's central design goal. Three ways WC differs from the plan below:
+> (a) it packs channels into a wider stacked array `(n, n_stim, T-1, 3)` = `(E, I, log_noise_coef)`
+> — one *shared* noise coefficient — rather than the `(T-1, d, 2)` layout of §3, which would carry a
+> *per-channel* `log_sigma` (i.e. `(T-1, 2, 2)` at d=2); (b) it evaluates on a free rollout, not
+> one-step-ahead (see §11.2); and (c) it *sums* the per-channel NLLs (`nll_E + nll_I`) rather than
+> taking the mean-over-channels that §7.1 recommends (low impact at d=2, where sum = 2×mean, but a
+> deliberate deviation to note). The Lorenz-63 / coupled-VdP testbeds specified below remain
+> unbuilt.
+
 ## 2. The new contract
 
 ### 2.1 Signature
@@ -195,7 +209,7 @@ This is the *earliest* place we can catch "LLM wrote a scalar mean when we asked
 
 **Unchanged.** The prefix-strip logic is dict-of-key-value and doesn't care whether values are scalars or arrays.
 
-There is one *convention* question: when the LLM declares `"s0_x": [0.0, 0.0, 0.0]`, does the parameter estimator return `{"s0_x": [0.0, 0.0, 0.0]}` (list) or `{"s0_x": jnp.array([0.0, 0.0, 0.0])}` (array)? The scoring pipeline already handles both — see the `jnp.stack([jnp.asarray(s[k]) for s in per_sample])` on line 148 of `edgar/scoring/scoring.py`. So no change. But the prompt for the param_estimator has to *say* this explicitly; see §5 below.
+There is one *convention* question: when the LLM declares `"s0_x": [0.0, 0.0, 0.0]`, does the parameter estimator return `{"s0_x": [0.0, 0.0, 0.0]}` (list) or `{"s0_x": jnp.array([0.0, 0.0, 0.0])}` (array)? The scoring pipeline already handles both — see the `jnp.stack([jnp.asarray(s[k]) for s in per_sample]) for k in per_sample[0]` at `edgar/scoring/scoring.py:130`. So no change. But the prompt for the param_estimator has to *say* this explicitly; see §5 below.
 
 ## 4. Fingerprint path
 
@@ -333,7 +347,7 @@ Dimensions interact: `dx/dt = f(x, y)`, `dy/dt = g(x, y)`. Lorenz-63 (`dx/dt = �
 
 ### 6.1 On Appendix A's `model(cell_state, y_prev_self, coupling_input, params)` API
 
-The leakage-fix doc's Appendix A sketches a multi-cell extension where each *cell* has its own `model(cell_state, y_prev_self, coupling_input, params)` and the framework aggregates. That's a different design goal than this plan:
+The design plan (`docs/plans/state_space_dsl.md`, referenced by the leakage-fix doc) sketches in an Appendix A a multi-cell extension where each *cell* has its own `model(cell_state, y_prev_self, coupling_input, params)` and the framework aggregates. That's a different design goal than this plan:
 
 - **Appendix A's design**: model *one cell* per program; framework glues them into a network. Suited to homogeneous populations (100 neurons that all obey the same dynamics with different parameters). Requires a `coupling_fn` in the framework.
 - **This plan's design**: model *the whole population* per program; each program returns a d-vector mean directly. Suited to small, heterogeneous coupled systems (Lorenz, coupled VdP, 2-cell FHN). No framework changes.
@@ -390,7 +404,7 @@ Here I want to justify each proposed engine change and, wherever possible, argue
 ### 8.1 Files I initially thought needed changes but do not
 
 - `edgar/scoring/scoring.py::_optimize` — `ravel_pytree` handles arbitrary pytrees. Vector params ravel to a longer flat vector, gradients flow normally. No change.
-- `edgar/scoring/scoring.py::_eval_fingerprint` — the fingerprint call is `apply_model_fn(model_fn, X_eval, params_matched)`; the return value is passed through unchanged and stored on the program. No shape assumption. No change.
+- `edgar/scoring/utils.py::eval_fingerprint` (imported into `scoring.py`) — internally the fingerprint call is `apply_model_fn(model_fn, X_eval, params_matched)`; the return value is passed through unchanged and stored on the program. No shape assumption. No change.
 - `edgar/evolution/island.py::_are_duplicates` — calls `.flatten()` and cosine-similarity. Dimension-agnostic. No change.
 - `edgar/evolution/program.py::default_params.setter` — uses `np.asarray(v).size`, which correctly sums vector-param sizes into `n_params`. No change.
 - `edgar/io/task_spec.py::_extract_default_params` — reads `model.DEFAULT_PARAMS` verbatim. No change.
@@ -547,13 +561,20 @@ Ordering:
 ### 11.2 v2 (deferred)
 
 - **Full-Σ observation noise.** Only if a project needs it. Adds a Cholesky parameterisation to `params` and a full-Σ NLL to `loss_fn`. Project-local.
-- **Multi-cell homogeneous populations** (Appendix A of leakage-fix doc). Different DSL contract, different engine hook. Separate project (`projects/hh_population/`), separate design doc.
+- **Multi-cell homogeneous populations** (Appendix A of the design plan `docs/plans/state_space_dsl.md`, not currently in this repo). Different DSL contract, different engine hook. Separate project (`projects/hh_population/`), separate design doc.
 - **Per-step heteroscedastic noise.** Requires engine change to `apply_model → loss_fn` handshake. Deferred until we have a project that needs it.
-- **Free-running rollout metric.** Same as v1's follow-up; multi-step rollout is even more valuable for chaotic systems (Lorenz) than for oscillators. Complements one-step NLL.
+- **Free-running rollout metric — no longer deferred.** `wilson_cowan` already evaluates on a free
+  rollout (feeds its own `(E, I)` prediction back, teacher-forcing only the stimulus; commit
+  c12736c). Still worth generalizing to the chaotic multivariate testbeds (Lorenz), where multi-step
+  rollout is even more valuable than for oscillators, and promoting from a per-project `apply_model`
+  choice to an engine-level metric.
 
 ### 11.3 What can slip out of v1 and be v1.5
 
-- The `coupled_vdp/` project. `lorenz_63/` alone is enough to validate the multivariate DSL. Coupled VdP is nice-to-have.
+- The `coupled_vdp/` project. `lorenz_63/` alone is enough to validate the multivariate DSL — and
+  in fact `wilson_cowan` (a coupled 2-channel state-space project) already validates that
+  multivariate works on the current base, so `lorenz_63`'s role is now more a *known-ground-truth
+  chaotic* stress test than a first proof of the DSL. Coupled VdP is nice-to-have.
 - Per-channel loss reporting on the dashboard.
 - Fingerprint residual normalisation. Ship without; add if we see dedup collapse.
 

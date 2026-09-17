@@ -105,13 +105,19 @@ def check_scoring(model_fn, param_est_fn, default_params, data_train, data_test)
         k: jnp.stack([jnp.asarray(s[k]) for s in per_sample]) for k in per_sample[0]
     }
     L0 = _eval_loss(model_fn, loss_fn, params_init, data_test, apply_model)
-    params = _optimize(
+    # _optimize returns (list_of_optimized_param_sets, loss_trajectories)
+    opt_params, _ = _optimize(
         model_fn, loss_fn, params_init, data_train,
         gd_config={"max_iter": 100, "learning_rate": 0.005, "gradient_clip_norm": 5.0},
         apply_model_fn=apply_model,
     )
+    params = opt_params[0]
     Lf = _eval_loss(model_fn, loss_fn, params, data_test, apply_model)
     finite = bool(np.isfinite(L0) and np.isfinite(Lf))
+    # KNOWN FAILURE (2026-09-17): `improved` compares TEST loss before vs after fitting on
+    # TRAIN. Seed 3 — the deliberately-weak linear damped-oscillator foil — OVERFITS under this project's real
+    # lr=0.005: TRAIN improves (-1.94 -> -2.16) but TEST degrades (-1.92 -> -1.63), so fails this test. 
+    # At lr=0.001 seed 3 generalizes and all four seeds pass, so consider updating this. 
     improved = bool(Lf <= L0 + 1e-3)
     reasonable = bool(abs(Lf) < 100.0)
     return (finite and improved and reasonable), {

@@ -255,9 +255,11 @@ model.DEFAULT_STATE = {"V": -1.0, "w": -0.5}  # this attribute is the trap
 
 **The alternative**: return `{"mean": means, "log_sigma": log_sigmas}` from `apply_model` and read the dict in `loss_fn`. Cleaner types, more legible code.
 
-**Why we rejected it**: the framework's downstream dedup path (`_eval_fingerprint` in `edgar/scoring/scoring.py`, feeding into `edgar/evolution/island.py`) treats `apply_model`'s output as an array and calls `.flatten()` on it for cosine-similarity dedup. A dict output crashes on the first fingerprint attempt. Fixing that requires touching the fingerprint code path, which is used by every project in the repo — a small change, but one that risks regressions in projects we're not currently working on.
+**Why we rejected it**: the framework's downstream dedup path (`eval_fingerprint` in `edgar/scoring/utils.py`, imported into `edgar/scoring/scoring.py` and feeding into `edgar/evolution/island.py`) treats `apply_model`'s output as an array and calls `.flatten()` on it for cosine-similarity dedup. A dict output crashes on the first fingerprint attempt. Fixing that requires touching the fingerprint code path, which is used by every project in the repo — a small change, but one that risks regressions in projects we're not currently working on.
 
 **What we did instead**: stack `means` and `log_sigmas` into a single `(T-1, 2)` array. `loss_fn` reads column 0 for the mean, column 1 for `log_sigma`. `fingerprint` reads column 0 only (see §5.7). No engine change, no dict-typed output propagating through the codebase.
+
+**This generalizes — a dict is *not* the only way to carry richer output.** A model that needs more than `(mean, log_sigma)` per step just adds columns to the stacked array; the array stays flatten-able and no engine change is needed. `wilson_cowan` (added since) does exactly this: its `apply_model` returns `(n, n_stim, T-1, 3)` = `(E, I, log_noise_coef)` for a 2-channel heteroscedastic NLL. Earlier drafts of this doc inferred that richer output *forces* a dict, which in turn forces an engine change; that inference is wrong — a wider stacked array suffices — and §8.5, §9, and §11 #2 have been corrected accordingly.
 
 **A dead end worth naming**: the original design attempted to mutate the `data` dict inside `apply_model` — `data["log_sigma_obs"] = ...` — so `loss_fn` could read it back. This does not work. Under `jit` in `_optimize`, dict mutation is a trace-time no-op; the *original* `data` is what `loss_fn` sees. We caught this before writing it. Any future contributor tempted by dict mutation across the `apply_model → loss_fn` boundary should read this paragraph twice.
 
@@ -304,7 +306,7 @@ The framework has no auto-invocation hook where a project can register a pre-sco
 
 ### 5.7 Fingerprint discrimination
 
-`_eval_fingerprint` computes a cosine similarity between programs' outputs on a small `X_eval` set to detect near-duplicates. For state-space models on long trajectories the outputs are strongly phase-locked to the driving signal, and the concern is that cosine similarity between *any* two programs is pushed high enough to trip the dedup threshold — collapsing the population to a few cluster reps. (We haven't measured the pairwise-cosine distribution on a full run; this section documents the guard we put in against the failure mode, not a measured collapse.)
+`eval_fingerprint` (in `edgar/scoring/utils.py`) produces the per-program output fingerprint that `island.py` then compares by cosine similarity on a small `X_eval` set to detect near-duplicates. For state-space models on long trajectories the outputs are strongly phase-locked to the driving signal, and the concern is that cosine similarity between *any* two programs is pushed high enough to trip the dedup threshold — collapsing the population to a few cluster reps. (We haven't measured the pairwise-cosine distribution on a full run; this section documents the guard we put in against the failure mode, not a measured collapse.)
 
 Guard: `X_eval` uses short trajectories (T=100 rather than the full T=2400), and `apply_model` returns only the mean column (not the stacked mean+log_sigma) when it detects a `_fingerprint_only` flag in the data dict. Shorter traces + narrower feature set = more discriminative fingerprints.
 
@@ -408,13 +410,24 @@ For completeness: the old contract permitted models to do things that were struc
 - **Off-by-one causal violations.** `mean = y_shifted_by_the_wrong_amount`. Under the new DSL, `y[t]` is not in scope at step `t`; the wrong shift becomes a `NameError`, not a silent scoring bonus.
 - **"Use the observation to condition the mean" reasoning.** A common LLM failure was to write `mean[t] = f(y[t])` explicitly, believing this was a legitimate transformation. The new DSL routes any observation-conditional structure through `y_prev` (the innovation) and the state — which is exactly the mathematically correct framing for a Kalman-style correction.
 
-### 8.5 v1 restrictions that are DSL-neutral, not fundamental
+### 8.5 v1 restrictions that were DSL-neutral — several since lifted by `wilson_cowan`
 
-Three current limitations look like DSL restrictions but aren't:
+Three limitations were listed here as things that *looked* like DSL restrictions but weren't. The
+`wilson_cowan` project (added to the base since this report was written) has since crossed all three
+with no `edgar/` engine change, confirming they were never contract-level restrictions:
 
-- **Scalar `y_prev`.** v1 assumes univariate observations. Vector observations are a straight extension: `y_prev` becomes `(d,)`, `mean` becomes `(d,)`, `loss_fn` extends element-wise. No contract change.
-- **Gaussian observation model.** The framework's loss is Gaussian NLL. Poisson, multinomial, or heteroscedastic observations require `apply_model` to return richer output than `(mean, log_sigma)` — which forces the dict-output engine change discussed in §5.2. The DSL doesn't preclude these; the current loss-function plumbing does.
-- **Single-cell dynamics.** Multi-cell coupled dynamics fit the DSL if you extend `model(state, y_prev, coupling_input, params)` and add an aggregation step in the scan. Appendix A of the design plan sketches this; the underlying contract is unchanged.
+- **Scalar `y_prev`.** v1 assumed univariate observations. WC is multivariate: `y_prev` is a dict
+  (`E_prev, I_prev, stim_E_prev, stim_I_prev`), `mean` is an `(E, I)` pair, and `loss_fn` scores
+  both channels. This was exactly the straight extension anticipated here — no contract change.
+- **Gaussian observation model.** WC runs a heteroscedastic Gaussian NLL
+  (`var = phi · max(mean, EPS)`, `phi = exp(log_noise_coef)` shared across E and I, one coefficient
+  per sample) with **no engine change**: `apply_model` returns a wider stacked array
+  `(n, n_stim, T-1, 3)` = `(E, I, log_noise_coef)` and a matching project-local `loss_fn` reads it
+  back. Poisson/multinomial observations remain untried but fit the same wider-stack route.
+- **Single-cell dynamics.** WC's `(E, I)` populations are coupled *within one program* (each `mean`
+  is a 2-vector), so a small coupled system already fits the single-program contract. Only the
+  *homogeneous many-cell* case (per-cell `model(state, y_prev, coupling_input, params)` + an
+  aggregation step, Appendix A of the design plan) is still unimplemented.
 
 ### 8.6 Summary
 
@@ -441,9 +454,20 @@ The strongest form of the argument: the models we can no longer express under th
 
 ### Known limitations
 
-- **Gaussian observations only in v1.** Poisson (spike counts), heteroscedastic, and mixture observations would need `apply_model` to return richer than `(mean, log_sigma)`, which forces the dict-output engine change we deferred.
-- **Single-cell only in v1.** The multi-cell version needs an aggregation step in the scan, sketched in Appendix A of the plan doc but not implemented.
-- **No free-running evaluation.** We evaluate one-step prediction, not multi-step rollout from an initial condition. The latter is a stronger test of trajectory-level invariants (frequency, attractor structure) and is a natural v2 metric.
+- **Heteroscedastic/multi-channel observations demonstrated; Poisson still open.** The original
+  "Gaussian, univariate observations only" limitation no longer holds: `wilson_cowan` (added since)
+  runs a 2-channel `(E, I)` heteroscedastic Gaussian NLL with no engine change (wider stacked
+  `apply_model` output + project-local `loss_fn`). Poisson (spike counts) and mixture observations
+  remain untried but fit the same wider-stack route.
+- **Homogeneous many-cell populations still unimplemented.** WC handles a small coupled `(E, I)`
+  system inside one program, but the homogeneous many-cell version (per-cell
+  `model(state, y_prev, coupling_input, params)` + an aggregation step, Appendix A of the plan doc)
+  is still not built.
+- **Free-running rollout now used in `wilson_cowan`.** Originally deferred to v2 (one-step-only).
+  WC's `apply_model` now evaluates on a free rollout — it feeds the model's own `(E, I)` prediction
+  back into the scan and teacher-forces only the exogenous stimulus (commit c12736c).
+  `fhn_excitable` is still one-step teacher-forced, so rollout is currently a per-project `apply_model`
+  choice rather than an engine-wide default.
 
 ## 10. What was explored but not adopted
 
@@ -461,9 +485,13 @@ The strongest form of the argument: the models we can no longer express under th
 Ordered by expected leverage:
 
 1. **Multi-cell extension** (`projects/coupled_cells_ss/`). API sketched, requires only an aggregation step in `apply_model`. Enables population neural-data models.
-2. **Poisson observations for mPFC.** Requires dict-typed `apply_model` output, which is the main deferred engine change. Enables spike-train discovery.
+2. **Poisson observations for mPFC.** Project-local, no engine change: a bespoke `apply_model` returns the per-step rate (a stacked-array column, as `wilson_cowan` does for its heteroscedastic coefficient) and a project-local Poisson `loss_fn` scores counts against it. Enables spike-train discovery. (Earlier drafts claimed this "requires dict-typed output / an engine change" — that was wrong; see §5.2.)
 3. **PSD or moment-based fingerprint.** Removes the fragility of trajectory-space cosine similarity for dedup.
-4. **Free-running rollout metric.** Evaluate trajectory-level invariants under free simulation; a stronger generalization signal than one-step prediction.
+4. **Free-running rollout metric — started.** `wilson_cowan` now evaluates on a free rollout
+   (feeds its own `(E, I)` prediction back, teacher-forcing only the stimulus; commit c12736c)
+   rather than one-step-ahead. Remaining work: promote it to a first-class, engine-level metric
+   (it is currently a per-project `apply_model` choice — `fhn_excitable` is still one-step) and use
+   it to evaluate trajectory-level invariants (frequency, attractor structure).
 5. **Schema-level `s0_*` field.** Remove the naming convention; make initial-state values a first-class part of the model schema. Low urgency until we see a real collision in the wild.
 
 ## 12. Files touched
