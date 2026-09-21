@@ -213,6 +213,7 @@ class Program:
     rank: int | None = None
     best_estimator_idx: int | None = None
     data: dict | None = field(default=None, repr=False)
+    diagnostics: dict = field(default_factory=dict)
     _default_params: dict | Callable | None = None
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -223,6 +224,7 @@ class Program:
             "params_init",
             "sample_losses",
             "sample_losses_init",
+            "diagnostics",
         ):
             if _has_jax(value):
                 warnings.warn(

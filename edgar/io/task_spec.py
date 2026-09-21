@@ -37,9 +37,10 @@ import yaml
 
 
 from ..evolution.program import Program, BirthCertificate, Code
-from ..llm.code_loading import load_function_from_source
+from ..llm.code_loading import load_function_from_source, load_class_from_source
 from ..llm.prompt_schema import PromptSchema
 from ..llm.response_schema import RESPONSE_SCHEMAS
+from ..projects.diagnostics import BaseDiagnostics
 from ..scoring.utils import apply_model_plain
 from .config import Config
 from .config import REPO_ROOT
@@ -123,6 +124,42 @@ def _load_loss_fn(data_loader_path: Path) -> Callable | tuple[Callable, Callable
                 f"{data_loader_path} must define either 'loss_fn' or both 'loss_fn_train' and 'loss_fn_test'"
             )
     return loss_fn
+
+
+def _load_diagnostics(project_dir: Path) -> BaseDiagnostics | None:
+    """Loads the Diagnostics object from the project directory.
+
+    Checks for `diagnostics.py` (defining class `Diagnostics` or `plot_model_fits`),
+    falling back to legacy `image_feedback/plot.py` wrapped in a BaseDiagnostics adapter.
+    """
+    diag_path = project_dir / "diagnostics.py"
+    if diag_path.exists():
+        diag_cls = load_class_from_source(diag_path.read_text(), "Diagnostics")
+        if diag_cls is not None:
+            return diag_cls()
+        diag_fn = load_function_from_source(diag_path.read_text(), "plot_model_fits")
+        if diag_fn is not None:
+
+            class _FuncDiagnostics(BaseDiagnostics):
+                def plot_model_fits(self, *args, **kwargs):
+                    return diag_fn(*args, **kwargs)
+
+            return _FuncDiagnostics()
+
+    legacy_plot_path = project_dir / "image_feedback" / "plot.py"
+    if legacy_plot_path.exists():
+        plot_fn = load_function_from_source(
+            legacy_plot_path.read_text(), "plot_model_fits"
+        )
+        if plot_fn is not None:
+
+            class _LegacyDiagnostics(BaseDiagnostics):
+                def plot_model_fits(self, *args, **kwargs):
+                    return plot_fn(*args, **kwargs)
+
+            return _LegacyDiagnostics()
+
+    return None
 
 
 @dataclass
@@ -235,6 +272,8 @@ class TaskSpec:
 
     plot_fn: Callable | None
 
+    diagnostics: BaseDiagnostics | None = None
+
     apply_model_fn: Callable = field(default=None)
 
     creation_timestamp: str = field(
@@ -292,12 +331,8 @@ class TaskSpec:
             or apply_model_plain
         )
 
-        plot_path = config.project_dir / "image_feedback" / "plot.py"
-        plot_fn = (
-            load_function_from_source(plot_path.read_text(), "plot_model_fits")
-            if plot_path.exists()
-            else None
-        )
+        diagnostics = _load_diagnostics(config.project_dir)
+        plot_fn = diagnostics.plot_model_fits if diagnostics is not None else None
 
         git_sha, git_dirty = _git_state()
 
@@ -379,6 +414,7 @@ class TaskSpec:
             load_data_fn=load_data_fn,
             loss_fn=loss_fn,
             plot_fn=plot_fn,
+            diagnostics=diagnostics,
             apply_model_fn=apply_model_fn,
             seed_programs=seed_programs,
             rng=np.random.default_rng(config.run.random_seed),

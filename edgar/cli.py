@@ -428,7 +428,7 @@ def validate_project(task: str) -> int:
     Returns:
         int: Exit code (0 for successful validation, 1 for failure).
     """
-    from .llm.code_loading import load_function_from_source
+    from .llm.code_loading import load_function_from_source, load_class_from_source
 
     task_path = _task_dir(task)
     if not task_path.exists():
@@ -441,9 +441,21 @@ def validate_project(task: str) -> int:
         task_path / "seed_programs" / "param_est1.py",
         task_path / "seed_programs" / "param_est2.py",
         task_path / "data_loader" / "load_data.py",
-        task_path / "image_feedback" / "plot.py",
         task_path / "config.yaml",
     ]
+
+    has_diagnostics = (task_path / "diagnostics.py").exists()
+    has_legacy_plot = (task_path / "image_feedback" / "plot.py").exists()
+    if not has_diagnostics and not has_legacy_plot:
+        errors = [
+            f"Missing file: {task_path / 'diagnostics.py'} (or {task_path / 'image_feedback' / 'plot.py'})"
+        ]
+    else:
+        errors = []
+
+    for f in required_files:
+        if not f.exists():
+            errors.append(f"Missing file: {f}")
 
     required_fns = [
         (task_path / "seed_programs" / "model1.py", "model"),
@@ -451,11 +463,7 @@ def validate_project(task: str) -> int:
         (task_path / "seed_programs" / "param_est1.py", "parameter_estimator"),
         (task_path / "seed_programs" / "param_est2.py", "parameter_estimator"),
         (task_path / "data_loader" / "load_data.py", "load_data"),
-        (task_path / "data_loader" / "load_data.py", "loss_fn"),
-        (task_path / "image_feedback" / "plot.py", "plot_model_fits"),
     ]
-
-    errors = [f"Missing file: {f}" for f in required_files if not f.exists()]
 
     for path, fn_name in required_fns:
         if not path.exists():
@@ -464,6 +472,31 @@ def validate_project(task: str) -> int:
             errors.append(
                 f"Missing function '{fn_name}' in {path.relative_to(task_path)}"
             )
+
+    data_loader_file = task_path / "data_loader" / "load_data.py"
+    if data_loader_file.exists():
+        dl_source = data_loader_file.read_text()
+        loss_fn = load_function_from_source(dl_source, "loss_fn")
+        loss_fn_train = load_function_from_source(dl_source, "loss_fn_train")
+        loss_fn_test = load_function_from_source(dl_source, "loss_fn_test")
+        if loss_fn is None and (loss_fn_train is None or loss_fn_test is None):
+            errors.append(
+                "Missing function 'loss_fn' (or both 'loss_fn_train' and 'loss_fn_test') in data_loader/load_data.py"
+            )
+
+    if has_diagnostics:
+        diag_source = (task_path / "diagnostics.py").read_text()
+        if (
+            load_class_from_source(diag_source, "Diagnostics") is None
+            and load_function_from_source(diag_source, "plot_model_fits") is None
+        ):
+            errors.append(
+                "diagnostics.py must define 'class Diagnostics' or 'plot_model_fits'"
+            )
+    elif has_legacy_plot:
+        plot_source = (task_path / "image_feedback" / "plot.py").read_text()
+        if load_function_from_source(plot_source, "plot_model_fits") is None:
+            errors.append("image_feedback/plot.py must define 'plot_model_fits'")
 
     if errors:
         print("Validation failed:")
@@ -475,7 +508,10 @@ def validate_project(task: str) -> int:
     print("  ✓ seed_programs/model1.py, model2.py  (model)")
     print("  ✓ seed_programs/param_est1.py, param_est2.py  (parameter_estimator)")
     print("  ✓ data_loader/load_data.py  (load_data, loss_fn)")
-    print("  ✓ image_feedback/plot.py  (plot_model_fits)")
+    if has_diagnostics:
+        print("  ✓ diagnostics.py  (Diagnostics)")
+    else:
+        print("  ✓ image_feedback/plot.py  (plot_model_fits)")
     print("  ✓ config.yaml")
     return 0
 

@@ -74,11 +74,16 @@ def _get_nested_attr(obj: Any, dotted_key: str, default: Any = None) -> Any:
     item = obj
 
     for part in dotted_key.split("."):
-        if item is None or not hasattr(item, part):
+        if item is None:
             return default
-        item = getattr(item, part)
+        if isinstance(item, dict):
+            item = item.get(part, default)
+        elif hasattr(item, part):
+            item = getattr(item, part)
+        else:
+            return default
 
-    return item
+    return item if item is not None else default
 
 
 class PromptSchema(BaseModel):

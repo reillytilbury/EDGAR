@@ -461,11 +461,7 @@ def test_score_one_model_multiple_param_ests():
     (
         final_loss,
         initial_loss,
-        _,
-        _,
-        _,
-        _,
-        _,
+        *_,
         all_final,
         all_init,
         best_idx,

@@ -32,6 +32,7 @@ from ..jax.utils import _to_jax, _to_numpy
 from .utils import (
     evaluate_sample_losses,
     evaluate_scalar_loss,
+    evaluate_model_output,
     eval_fingerprint,
     apply_model_plain,
     _safe_loss,
@@ -141,14 +142,15 @@ def _worker(
     X_eval,
     split,
     apply_model_fn_bytes,
+    diagnostics_bytes=None,
 ):
     """Scores one program inside a subprocess. It creates JAX arrays and returns results as non-JAX objects,
     ensuring that the memory allocated for JAX arrays is released when the subprocess exits.
 
     This function deserializes a `Program` and `loss_fn`, compiles the program's
     JAX model and parameter estimator, performs parameter estimation,
-    optimization, calculates various losses, and generates a fingerprint and
-    sample-specific losses.
+    optimization, calculates various losses, and generates a fingerprint,
+    diagnostics metrics, and sample-specific losses.
 
     Args:
         queue: A multiprocessing Queue to put the results on.
@@ -163,9 +165,10 @@ def _worker(
         split: A string indicating the current scoring split (e.g., "discover" or "validate").
         apply_model_fn_bytes: A `cloudpickle`-serialized function controlling how
             `model_fn` is mapped over the data (e.g. plain vmap or a nested vmap).
+        diagnostics_bytes: An optional `cloudpickle`-serialized `Diagnostics` object.
     Returns:
-        None. Results are placed on the `queue` as a 11-tuple:
-        `(final_loss, initial_loss, fingerprint, params, sample_losses, params_init, sample_losses_init, all_final, all_init, best_idx, trajectories)`.
+        None. Results are placed on the `queue` as a 12-tuple:
+        `(final_loss, initial_loss, fingerprint, params, sample_losses, params_init, sample_losses_init, all_final, all_init, best_idx, trajectories, diagnostics_metrics)`.
         If any critical failure occurs (model loading, optimization), infinite
         losses and `None` for other results are returned.
     """
@@ -204,6 +207,7 @@ def _worker(
                 None,
                 None,
                 None,
+                {},
             )
         )
         return
@@ -272,6 +276,7 @@ def _worker(
                 None,
                 None,
                 None,
+                {},
             )
         )
         return
@@ -313,6 +318,27 @@ def _worker(
         )
         sample_losses_init = None
 
+    diagnostics_metrics = {}
+    if diagnostics_bytes is not None:
+        try:
+            diagnostics = cloudpickle.loads(diagnostics_bytes)
+            if diagnostics is not None and hasattr(diagnostics, "compute_metrics"):
+                y_pred = _to_numpy(evaluate_model_output(model_fn, params, data_test))
+                data_test_np = _to_numpy(data_test)
+                computed = diagnostics.compute_metrics(
+                    data=data_test_np,
+                    y_pred=y_pred,
+                    params=_to_numpy(params),
+                    program=program,
+                )
+                if isinstance(computed, dict):
+                    diagnostics_metrics = _to_numpy(computed)
+        except Exception as e:
+            print(
+                f"[scoring] program #{program.idx} diagnostics.compute_metrics failed (ignored): {e}"
+            )
+            diagnostics_metrics = {}
+
     queue.put(
         (
             final_loss,
@@ -326,6 +352,7 @@ def _worker(
             all_init,
             best_idx,
             trajectories,
+            diagnostics_metrics,
         )
     )
 
@@ -362,6 +389,7 @@ def _score_one_model(
     X_eval=None,
     split: str = "discover",
     apply_model_fn=apply_model_plain,
+    diagnostics=None,
 ) -> tuple[
     float,
     float,
@@ -372,6 +400,7 @@ def _score_one_model(
     np.ndarray | None,
     int | None,
     list[list[float]] | None,
+    dict,
     str,
 ]:
     """Scores a single program in a dedicated subprocess, enforcing a timeout and ensuring that device memory is released after scoring.
@@ -387,9 +416,10 @@ def _score_one_model(
         X_eval: Optional. A dictionary of evaluation data for fingerprinting.
             If `None`, fingerprint computation is skipped.
         split: The scoring split (e.g., "discover" or "validate").
+        diagnostics: Optional `BaseDiagnostics` object to compute project metrics.
 
     Returns:
-        A 10-tuple: `(final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init, best_idx, trajectories, outcome)`.
+        A 12-tuple: `(final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init, best_idx, trajectories, diagnostics_metrics, outcome)`.
         The `outcome` label is one of:
         - `"ok"` (finite loss)
         - `"timeout"` (subprocess killed)
@@ -409,6 +439,7 @@ def _score_one_model(
             None,
             None,
             None,
+            {},
             None,
             None,
             None,
@@ -424,6 +455,7 @@ def _score_one_model(
             None,
             None,
             None,
+            {},
             None,
             None,
             None,
@@ -438,6 +470,9 @@ def _score_one_model(
     program_bytes = cloudpickle.dumps(program)
     apply_model_fn_bytes = cloudpickle.dumps(apply_model_fn)
 
+    diagnostics_bytes = (
+        cloudpickle.dumps(diagnostics) if diagnostics is not None else None
+    )
     proc = ctx.Process(
         target=_worker,
         args=(
@@ -449,6 +484,7 @@ def _score_one_model(
             X_eval,
             split,
             apply_model_fn_bytes,
+            diagnostics_bytes,
         ),
     )
     proc.start()
@@ -465,6 +501,7 @@ def _score_one_model(
             None,
             None,
             None,
+            {},
             None,
             None,
             None,
@@ -484,6 +521,7 @@ def _score_one_model(
         all_init,
         best_idx,
         trajectories,
+        diagnostics_metrics,
     ) = result
     # Worker puts (inf, inf, None, None, None, None, None ,....,) on its own exception
     # path. Treat that as "inf" rather than "timeout" so metrics distinguish them.
@@ -496,6 +534,7 @@ def _score_one_model(
         _to_numpy(samples) if samples is not None else None,
         _to_numpy(params_init) if params_init is not None else None,
         _to_numpy(samples_init) if samples_init is not None else None,
+        diagnostics_metrics,
         all_final,
         all_init,
         best_idx,
@@ -556,6 +595,7 @@ def score(
     loss_fn,
     split: str,
     apply_model_fn=apply_model_plain,
+    diagnostics=None,
 ) -> None:
     """Scores every program needing scoring on the given split.
 
@@ -581,12 +621,13 @@ def score(
         config: A dictionary containing scoring configuration parameters.
         loss_fn: The loss function (callable) to be used for scoring.
         split: The name of the scoring split (e.g., "discover" or "validate").
+        diagnostics: Optional `BaseDiagnostics` object to compute project metrics.
 
     Returns:
         None. The `population` object is mutated in place, updating
         `program.program_losses.<split>.{init, final}`, `program.eval_fingerprint`,
         `program.params`, `program.params_init`, `program.sample_losses`,
-        and `program.sample_losses_init`.
+        `program.sample_losses_init`, and `program.diagnostics`.
     """
     queue = _needs_scoring(population, split)
     n_total = len(queue)
@@ -607,13 +648,21 @@ def score(
                 sample_losses,
                 params_init,
                 sample_losses_init,
+                diagnostics_metrics,
                 all_final,
                 all_init,
                 best_idx,
                 trajectories,
                 outcome,
             ) = _score_one_model(
-                program, data_ref, loss_fn, config, X_eval, split, apply_model_fn
+                program,
+                data_ref,
+                loss_fn,
+                config,
+                X_eval,
+                split,
+                apply_model_fn,
+                diagnostics=diagnostics,
             )
             latency_ms = (time.monotonic() - t0) * 1000.0
             latencies_ms.append(latency_ms)
@@ -642,6 +691,8 @@ def score(
                 program.sample_losses = sample_losses
             if sample_losses_init is not None and split == "discover":
                 program.sample_losses_init = sample_losses_init
+            if diagnostics_metrics:
+                program.diagnostics = diagnostics_metrics
 
             if metrics is not None:
                 metrics.record_score_result(program.idx, latency_ms, outcome)

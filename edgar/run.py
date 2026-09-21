@@ -185,6 +185,7 @@ async def run(
                     spec.scoring,
                     spec.loss_fn,
                     split="discover",
+                    diagnostics=spec.diagnostics,
                     apply_model_fn=spec.apply_model_fn,
                     n_items=len(spec.seed_programs),
                 )
@@ -261,6 +262,7 @@ async def run(
                     spec.scoring,
                     spec.loss_fn,
                     split="discover",
+                    diagnostics=spec.diagnostics,
                     apply_model_fn=spec.apply_model_fn,
                     n_items=n_spawn,
                 )
@@ -305,6 +307,7 @@ async def run(
                 spec.scoring,
                 spec.loss_fn,
                 split="validate",
+                diagnostics=spec.diagnostics,
                 apply_model_fn=spec.apply_model_fn,
             )
             rank(population)
