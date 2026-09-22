@@ -150,7 +150,7 @@ def analyse(run_dir: Path) -> None:
 
     # ── Figure: top-4 fits vs true traces ──
     figpath = run_dir / "figures" / "top4_fits.png"
-    figpath.parent.mkdir(exist_ok=True)
+    figpath.parent.mkdir(parents=True, exist_ok=True)
 
     # Reconstruct the full trajectory (test overlaps train by one boundary sample)
     # so we can show the fit on the train window AND the held-out test window in
