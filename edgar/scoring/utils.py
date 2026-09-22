@@ -4,6 +4,13 @@ from typing import Any, Callable
 import jax
 import jax.numpy as jnp
 
+def apply_model_plain(model_fn, data, params):
+    """Default model application: vmap the model over axis-0 (one sample = one
+    param set), matching EDGAR's standard contract. Projects can override this
+    via ``TaskSpec.apply_model_fn`` to change how ``model_fn`` is mapped over the
+    data (e.g. a nested vmap for per-neuron windowed prediction)."""
+    return jax.vmap(model_fn, in_axes=(0, 0))(data, params)
+
 
 def _safe_loss(val: Any) -> float:
     """Returns a float representation of a loss value.
@@ -30,6 +37,7 @@ def _evaluate_model_output(
     model_fn: Callable[[dict, dict], jax.Array],
     params: dict[str, Any],
     data: dict[str, Any],
+    apply_model_fn: Callable[[dict, dict, dict], jax.Array] | None = apply_model_plain,
 ) -> jax.Array:
     """Evaluates the model output by vmapping over the leading axis of data and params leaves.
 
@@ -49,14 +57,17 @@ def _evaluate_model_output(
         A JAX array of shape `(n_samples, output_shape)` containing the model output
         for each sample.
     """
-    return jax.vmap(model_fn, in_axes=(0, 0))(data, params)
+    if apply_model_fn is None:
+        apply_model_fn = apply_model_plain
+    return apply_model_fn(model_fn, data, params)
 
 
-def _evaluate_sample_losses(
+def evaluate_sample_losses(
     model_fn: Callable[[dict, dict], jax.Array],
     loss_fn: Callable[[jax.Array, dict], jax.Array],
     params: dict[str, Any],
     data: dict[str, Any],
+    apply_model_fn: Callable[[dict, dict, dict], jax.Array] = apply_model_plain,
 ) -> jax.Array:
     """Computes the per-sample loss for batched data and parameters.
 
@@ -80,19 +91,20 @@ def _evaluate_sample_losses(
     Returns:
         A JAX array of shape `(n_samples,)` containing the loss for each sample.
     """
-    output = _evaluate_model_output(model_fn, params, data)
+    output = _evaluate_model_output(model_fn, params, data, apply_model_fn)
     return loss_fn(output, data)
 
 
-def _evaluate_scalar_loss(
+def evaluate_scalar_loss(
     model_fn: Callable[[dict, dict], jax.Array],
     loss_fn: Callable[[jax.Array, dict], jax.Array],
     params: dict[str, Any],
     data: dict[str, Any],
+    apply_model_fn: Callable[[dict, dict, dict], jax.Array] = apply_model_plain,
 ) -> jax.Array:
     """Computes the mean scalar loss over all samples.
 
-    This function calculates the per-sample losses using `_evaluate_sample_losses`
+    This function calculates the per-sample losses using `evaluate_sample_losses`
     and then computes the mean of these losses, resulting in a single scalar loss
     value for the entire dataset.
 
@@ -112,4 +124,26 @@ def _evaluate_scalar_loss(
     Returns:
         A scalar JAX array representing the mean loss across all samples.
     """
-    return jnp.mean(_evaluate_sample_losses(model_fn, loss_fn, params, data))
+    return jnp.mean(evaluate_sample_losses(model_fn, loss_fn, params, data, apply_model_fn))
+
+
+def eval_fingerprint(model_fn, params, X_eval, apply_model_fn=apply_model_plain):
+    """Generates a low-dimensional "fingerprint" of model outputs for deduplication.
+
+    This fingerprint is used to compare models and identify functionally
+    identical or very similar programs, even if their code differs. It applies
+    the model to a small, fixed subset of the evaluation data (`X_eval`).
+
+    Args:
+        model_fn: The JAX-compiled model function (callable).
+        params: The model parameters (JAX pytree).
+        X_eval: A dictionary of evaluation data, containing a `_sample_indices`
+            key to select a subset of samples for fingerprinting.
+        apply_model_fn: A callable that applies the model function to the data and parameters.
+
+    Returns:
+        A JAX array representing the model's output fingerprint.
+    """
+    sample_indices = X_eval["_sample_indices"]
+    params_matched = jax.tree_util.tree_map(lambda p: p[sample_indices], params)
+    return _evaluate_model_output(model_fn, params_matched, X_eval, apply_model_fn)

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import tempfile
 import time
+from pathlib import Path
 
 import traceback
 import cloudpickle
@@ -30,14 +32,74 @@ from ..evolution.population import Population
 from ..io.metrics import get_active_metrics, stream_line
 from ..jax.utils import _to_jax, _to_numpy
 from .utils import (
-    _evaluate_sample_losses,
-    _evaluate_scalar_loss,
-    _evaluate_model_output,
+    evaluate_sample_losses,
+    evaluate_scalar_loss,
+    eval_fingerprint,
+    apply_model_plain,
     _safe_loss,
 )
 
 # ── helpers ──
 
+# Large train/test splits are written once to a temp .npz per ``score()`` call 
+# so each subprocess receives a path string instead of re-pickling the full 
+# pytree through the spawn pipe.
+_SCORING_DATA_NPZ_THRESHOLD_BYTES = 32 * 1024 * 1024
+
+
+class _ScoringDataStore:
+    """Materialize a (train, test) tuple to disk when it exceeds the pickle threshold."""
+
+    def __init__(self, data: tuple):
+        self._data = data
+        self._path: str | None = None
+        self._tmpdir: tempfile.TemporaryDirectory | None = None
+
+    def ref(self) -> tuple | str:
+        train, test = self._data
+        nbytes = sum(
+            np.asarray(v).nbytes
+            for split in (train, test)
+            for k, v in split.items()
+            if k != "_sample_indices"
+        )
+        if nbytes < _SCORING_DATA_NPZ_THRESHOLD_BYTES:
+            return self._data
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="edgar_scoring_")
+        path = Path(self._tmpdir.name) / "data.npz"
+        arrays = {}
+        for k, v in train.items():
+            if k != "_sample_indices":
+                arrays[f"train_{k}"] = np.asarray(v)
+        for k, v in test.items():
+            if k != "_sample_indices":
+                arrays[f"test_{k}"] = np.asarray(v)
+        np.savez(path, **arrays)
+        self._path = str(path)
+        return self._path
+
+    def cleanup(self) -> None:
+        if self._tmpdir is not None:
+            self._tmpdir.cleanup()
+            self._tmpdir = None
+            self._path = None
+
+
+def _resolve_scoring_data(data_or_path: tuple | str) -> tuple:
+    if isinstance(data_or_path, tuple):
+        return data_or_path
+    loaded = np.load(data_or_path)
+    train = {
+        k.removeprefix("train_"): jnp.asarray(loaded[k])
+        for k in loaded.files
+        if k.startswith("train_")
+    }
+    test = {
+        k.removeprefix("test_"): jnp.asarray(loaded[k])
+        for k in loaded.files
+        if k.startswith("test_")
+    }
+    return train, test
 
 def _get_params(param_est_fn, default_params, data_train):
     """Estimates initial parameters for a model, falling back to defaults if the parameter estimator fails.
@@ -75,7 +137,7 @@ def _get_params(param_est_fn, default_params, data_train):
         return jax.tree_util.tree_map(lambda x: jnp.stack([x] * n), default_params)
 
 
-def _eval_loss(model_fn, loss_fn, params, data_test):
+def _eval_loss(model_fn, loss_fn, params, data_test, apply_model_fn=apply_model_plain):
     """Computes the overall scalar loss for a model.
 
     Args:
@@ -89,31 +151,9 @@ def _eval_loss(model_fn, loss_fn, params, data_test):
     """
     if params is None:
         return float("inf")
-    return float(_evaluate_scalar_loss(model_fn, loss_fn, params, data_test))
+    return float(evaluate_scalar_loss(model_fn, loss_fn, params, data_test, apply_model_fn))
 
-
-def _eval_fingerprint(model_fn, params, X_eval):
-    """Generates a low-dimensional "fingerprint" of model outputs for deduplication.
-
-    This fingerprint is used to compare models and identify functionally
-    identical or very similar programs, even if their code differs. It applies
-    the model to a small, fixed subset of the evaluation data (`X_eval`).
-
-    Args:
-        model_fn: The JAX-compiled model function (callable).
-        params: The model parameters (JAX pytree).
-        X_eval: A dictionary of evaluation data, containing a `_sample_indices`
-            key to select a subset of samples for fingerprinting.
-
-    Returns:
-        A JAX array representing the model's output fingerprint.
-    """
-    sample_indices = X_eval["_sample_indices"]
-    params_matched = jax.tree_util.tree_map(lambda p: p[sample_indices], params)
-    return _evaluate_model_output(model_fn, params_matched, X_eval)
-
-
-def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config):
+def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config, apply_model_fn=apply_model_plain):
     """Performs gradient descent to optimize a model. If multiple initial parameter sets are provided, they are optimized in parallel.
 
     Args:
@@ -131,7 +171,7 @@ def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config):
         params_inits = [params_inits]
 
     # Initialize the optimizer
-    optimizer = Optimizer(model_fn, loss_fn, data_train, gd_config)
+    optimizer = Optimizer(model_fn, loss_fn, data_train, gd_config, apply_model_fn)
     flat_all, opt_state = optimizer.flatten_and_init_params(params_inits)
     # Run the JIT-compiled optimization on-device, this is the only part run on GPU
     optimized_params, loss_trajectories = optimizer.run_optimization(
@@ -141,7 +181,7 @@ def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config):
     return optimized_params, loss_trajectories
 
 
-def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
+def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split, apply_model_fn_bytes):
     """Scores one program inside a subprocess. It creates JAX arrays and returns results as non-JAX objects,
     ensuring that the memory allocated for JAX arrays is released when the subprocess exits.
 
@@ -161,7 +201,8 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
             `param_penalty_weight` and `gradient_descent` settings.
         X_eval: A dictionary of evaluation data for fingerprinting, or `None`.
         split: A string indicating the current scoring split (e.g., "discover" or "validate").
-
+        apply_model_fn_bytes: A `cloudpickle`-serialized function controlling how
+            `model_fn` is mapped over the data (e.g. plain vmap or a nested vmap).
     Returns:
         None. Results are placed on the `queue` as a 9-tuple:
         `(final_loss, initial_loss, fingerprint, params, sample_losses, params_init, sample_losses_init, best_idx, trajectories)`.
@@ -175,12 +216,18 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
     else:
         loss_fn_train = loss_fn_test = loss_fn
 
+    try:
+        apply_model_fn = cloudpickle.loads(apply_model_fn_bytes)
+    except Exception as e:
+        print(f"[scoring] failed to find apply_model_fn, falling back to default: {e}")
+        apply_model_fn = apply_model_plain
+
     # Convert NumPy data to JAX device arrays
     data = _to_jax(data)
     if X_eval is not None:
         X_eval = _to_jax(X_eval)
 
-    data_train, data_test = data
+    data_train, data_test = _resolve_scoring_data(data)
 
     try:
         model_fn = program.compile_model()
@@ -206,7 +253,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
 
         # 2. Compute initial losses for each
         initial_losses = [
-            _eval_loss(model_fn, loss_fn_test, p_init, data_test) + penalty
+            _eval_loss(model_fn, loss_fn_test, p_init, data_test, apply_model_fn) + penalty
             for p_init in params_inits
         ]
 
@@ -217,11 +264,12 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
             params_inits,
             data_train,
             config["gradient_descent"],
+            apply_model_fn,
         )
 
         # 4. Compute final losses for each set of optimized parameters
         final_losses = [
-            _eval_loss(model_fn, loss_fn_test, p_opt, data_test) + penalty
+            _eval_loss(model_fn, loss_fn_test, p_opt, data_test, apply_model_fn) + penalty
             for p_opt in params_list
         ]
 
@@ -245,7 +293,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
     # Fingerprint and sample losses are non-critical: failures here don't poison the loss.
     try:
         fingerprint = (
-            _eval_fingerprint(model_fn, params, X_eval) if X_eval is not None else None
+            eval_fingerprint(model_fn, params, X_eval, apply_model_fn) if X_eval is not None else None
         )
     except Exception as e:
         print(f"[scoring] program #{program.idx} fingerprint failed (ignored): {e}")
@@ -253,7 +301,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
 
     try:
         sample_losses = np.asarray(
-            _evaluate_sample_losses(model_fn, loss_fn_test, params, data_test)
+            evaluate_sample_losses(model_fn, loss_fn_test, params, data_test, apply_model_fn)
         )
     except Exception as e:
         print(f"[scoring] program #{program.idx} sample_losses failed (ignored): {e}")
@@ -262,7 +310,7 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split):
     try:
         sample_losses_init = (
             np.asarray(
-                _evaluate_sample_losses(model_fn, loss_fn_test, params_init, data_test)
+                evaluate_sample_losses(model_fn, loss_fn_test, params_init, data_test, apply_model_fn)
             )
             if split == "discover"
             else None
@@ -319,6 +367,7 @@ def _score_one_model(
     config: dict,
     X_eval=None,
     split: str = "discover",
+    apply_model_fn=apply_model_plain,
 ) -> tuple[
     float,
     float,
@@ -389,9 +438,20 @@ def _score_one_model(
     queue = ctx.Queue()
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
     program_bytes = cloudpickle.dumps(program)
+    apply_model_fn_bytes = cloudpickle.dumps(apply_model_fn)
+
     proc = ctx.Process(
         target=_worker,
-        args=(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split),
+        args=(
+            queue,
+            program_bytes,
+            data,
+            loss_fn_bytes,
+            config,
+            X_eval,
+            split,
+            apply_model_fn_bytes,
+        ),
     )
     proc.start()
     try:
@@ -490,6 +550,7 @@ def score(
     config: dict,
     loss_fn,
     split: str,
+    apply_model_fn=apply_model_plain,
 ) -> None:
     """Scores every program needing scoring on the given split.
 
@@ -528,61 +589,66 @@ def score(
     counters = {"ok": 0, "timeout": 0, "inf": 0, "banned": 0}
     latencies_ms: list[float] = []
 
-    for k, program in enumerate(queue, start=1):
-        t0 = time.monotonic()
-        (
-            final_loss,
-            initial_loss,
-            fingerprint,
-            params,
-            sample_losses,
-            params_init,
-            sample_losses_init,
-            best_idx,
-            trajectories,
-            outcome,
-        ) = _score_one_model(program, X_split, loss_fn, config, X_eval, split)
-        latency_ms = (time.monotonic() - t0) * 1000.0
-        latencies_ms.append(latency_ms)
-        counters[outcome] += 1
+    data_store = _ScoringDataStore(X_split)
+    data_ref = data_store.ref()
+    try:
+        for k, program in enumerate(queue, start=1):
+            t0 = time.monotonic()
+            (
+                final_loss,
+                initial_loss,
+                fingerprint,
+                params,
+                sample_losses,
+                params_init,
+                sample_losses_init,
+                best_idx,
+                trajectories,
+                outcome,
+            ) = _score_one_model(program, data_ref, loss_fn, config, X_eval, split, apply_model_fn)
+            latency_ms = (time.monotonic() - t0) * 1000.0
+            latencies_ms.append(latency_ms)
+            counters[outcome] += 1
 
-        loss_pair = getattr(program.program_losses, split)
-        loss_pair.init = initial_loss
-        loss_pair.final = final_loss
-        loss_pair.trajectories = trajectories
+            loss_pair = getattr(program.program_losses, split)
+            loss_pair.init = initial_loss
+            loss_pair.final = final_loss
+            loss_pair.trajectories = trajectories
 
-        # Record the best parameter estimator
-        if best_idx is not None:
-            program.best_estimator_idx = best_idx
-            if program.code.param_est:
-                program.code.best_param_est = program.code.param_est[best_idx]
+            # Record the best parameter estimator
+            if best_idx is not None:
+                program.best_estimator_idx = best_idx
+                if program.code.param_est:
+                    program.code.best_param_est = program.code.param_est[best_idx]
 
-        if fingerprint is not None:
-            program.eval_fingerprint = fingerprint
-        if params is not None:
-            program.params = params
-        if params_init is not None:
-            program.params_init = params_init
-        if sample_losses is not None and split == "discover":
-            program.sample_losses = sample_losses
-        if sample_losses_init is not None and split == "discover":
-            program.sample_losses_init = sample_losses_init
+            if fingerprint is not None:
+                program.eval_fingerprint = fingerprint
+            if params is not None:
+                program.params = params
+            if params_init is not None:
+                program.params_init = params_init
+            if sample_losses is not None and split == "discover":
+                program.sample_losses = sample_losses
+            if sample_losses_init is not None and split == "discover":
+                program.sample_losses_init = sample_losses_init
 
-        if metrics is not None:
-            metrics.record_score_result(program.idx, latency_ms, outcome)
+            if metrics is not None:
+                metrics.record_score_result(program.idx, latency_ms, outcome)
 
-        # Cheap progress line so the user sees movement during the slow stage.
-        # Print every program for low n_total, every 4 for larger sweeps.
-        tick_every = 1 if n_total <= 12 else 4
-        if metrics is not None and (k == n_total or k % tick_every == 0):
-            avg_s = (sum(latencies_ms) / len(latencies_ms)) / 1000.0
-            stream_line(
-                metrics,
-                f"  [score {split}] {k}/{n_total}  "
-                f"(avg {avg_s:.1f}s, {counters['ok']} ok, "
-                f"{counters['timeout']} timeout, {counters['inf']} inf, "
-                f"{counters['banned']} banned)",
-            )
+            # Cheap progress line so the user sees movement during the slow stage.
+            # Print every program for low n_total, every 4 for larger sweeps.
+            tick_every = 1 if n_total <= 12 else 4
+            if metrics is not None and (k == n_total or k % tick_every == 0):
+                avg_s = (sum(latencies_ms) / len(latencies_ms)) / 1000.0
+                stream_line(
+                    metrics,
+                    f"  [score {split}] {k}/{n_total}  "
+                    f"(avg {avg_s:.1f}s, {counters['ok']} ok, "
+                    f"{counters['timeout']} timeout, {counters['inf']} inf, "
+                    f"{counters['banned']} banned)",
+                )
+    finally:
+        data_store.cleanup()
 
 
 def rank(

@@ -1,0 +1,42 @@
+run:
+  random_seed: 42
+
+io:
+  # One k-fold file (from simulate_data.save_kfold_splits); point at *_fold1/2 to
+  # run the other folds. Passed to load_data as `data_path`.
+  # Baseline-returning, hand-engineered slow-WCS data (15-param ground truth); the
+  # heteroscedastic NLL loss is exercised here (see data_loader/load_data.py).
+  # data_path: "/home/dabin/data/wc_simulations/wcs_manual_fold0.npz"
+  data_path: "/home/dabin/data/wc_simulations/archive/wcs_fold0.npz"
+
+evolution:
+  # Smoke defaults — override on the CLI for real runs (e.g. --evolution.n_generations=20).
+  n_generations: 2
+  n_islands: 2
+  batch_size: 2
+  critical_population_size: 6
+  n_migrants: 1
+  topology: [1, 0]
+
+llms:
+  num_parents: 2
+  # model_llm: claude-code-headless
+  # param_est_llm: claude-code-headless
+  # jax_model_translator_llm: claude-code-headless
+  model_llm: gemini-3.6-flash
+  param_est_llm: gemini-3.6-flash
+  jax_model_translator_llm: gemini-2.5-flash-lite
+  max_tokens: 10000
+
+scoring:
+  timeout_s: 300.0
+  param_penalty_weight: 0.01
+  gradient_descent:
+    max_iter: 200          # match the sibling state-space projects (was inheriting 1000)
+    learning_rate: 0.001
+    gradient_clip_norm: 5.0 # pre-Adam global-norm clip; needed for long lax.scan backprop
+
+project_params:
+  sample_split_seed: 42   # 50/50 discover/validate split over the 8 samples
+  T_eval: 200             # short window per cell for the fingerprint dedup
+  n_eval: 4               # number of discover cells used for the fingerprint

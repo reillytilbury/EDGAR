@@ -349,17 +349,20 @@ def _are_duplicates(
         return False
     if p_i.eval_fingerprint is None or p_j.eval_fingerprint is None:
         return False
-    if (
-        p_i.program_losses.discover.final is not None
-        and p_j.program_losses.discover.final is not None
-    ):
-        if (
-            abs(p_i.program_losses.discover.final - p_j.program_losses.discover.final)
-            > loss_tol
-        ):
-            return False
+    # Failed programs (None / non-finite loss) are not meaningful duplicates.
+    # Also avoids abs(inf - inf) == nan slipping past the tolerance check below.
+    li = p_i.program_losses.discover.final
+    lj = p_j.program_losses.discover.final
+    if li is None or lj is None or not (np.isfinite(li) and np.isfinite(lj)):
+        return False
+    if abs(li - lj) > loss_tol:
+        return False
     y_i = p_i.eval_fingerprint.flatten()
     y_j = p_j.eval_fingerprint.flatten()
+    # Programs whose outputs have different lengths (e.g. an un-sliced full
+    # convolution) can't be compared by cosine similarity and are not duplicates.
+    if y_i.shape != y_j.shape:
+        return False
     cosine = np.dot(y_i, y_j) / (np.linalg.norm(y_i) * np.linalg.norm(y_j) + 1e-6)
     return bool(cosine >= cosine_tol)
 

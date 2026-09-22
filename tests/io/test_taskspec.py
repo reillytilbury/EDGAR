@@ -60,7 +60,10 @@ def test_fromconfig():
         "param_penalty_weight": 0.01,
         "timeout_s": 120.0,
         "banned_strings": [],
-        "gradient_descent": {"max_iter": 100, "learning_rate": 0.01},
+        "gradient_descent": {
+            "max_iter": 100, 
+            "learning_rate": 0.01,             
+            "gradient_clip_norm": None,},
     }
 
     # Check prompt schemas correctly loaded in
