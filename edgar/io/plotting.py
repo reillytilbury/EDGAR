@@ -43,13 +43,10 @@ def _feedback_image_worker(
         )
         os.makedirs(os.path.dirname(img_path), exist_ok=True)
         diag = getattr(spec, "diagnostics", None)
-        plot_fn = getattr(spec, "plot_fn", None)
-        if diag is not None and hasattr(diag, "generate_feedback_image"):
+        if diag is not None:
             diag.generate_feedback_image(
                 data, parents, rng=spec.rng, save_path=img_path
             )
-        elif plot_fn is not None:
-            plot_fn(data, parents, save_path=img_path, rng=spec.rng)
 
         if os.path.exists(img_path):
             with open(img_path, "rb") as f:
@@ -84,15 +81,10 @@ def _program_fits_worker(
 
             save_path = plot_dir / f"P{p.idx:04d}.png"
             diag = getattr(spec, "diagnostics", None)
-            plot_fn = (
-                diag.plot_model_fits
-                if diag is not None
-                else getattr(spec, "plot_fn", None)
-            )
-            if plot_fn is None:
+            if diag is None:
                 continue
             try:
-                plot_fn(
+                diag.plot_model_fits(
                     data,
                     [p, p],
                     save_path=str(save_path),
@@ -147,10 +139,7 @@ def generate_feedback_image(
     Returns:
         The raw bytes of the generated image if successful, otherwise `None`.
     """
-    has_plot = spec is not None and (
-        getattr(spec, "diagnostics", None) is not None
-        or getattr(spec, "plot_fn", None) is not None
-    )
+    has_plot = spec is not None and getattr(spec, "diagnostics", None) is not None
     if not has_plot or data is None:
         return None
 
@@ -199,10 +188,7 @@ def generate_program_fits(
         programs: A list of `Program` objects for which comparison plots
             should be generated.
     """
-    has_plot = spec is not None and (
-        getattr(spec, "diagnostics", None) is not None
-        or getattr(spec, "plot_fn", None) is not None
-    )
+    has_plot = spec is not None and getattr(spec, "diagnostics", None) is not None
     if not has_plot:
         return
 

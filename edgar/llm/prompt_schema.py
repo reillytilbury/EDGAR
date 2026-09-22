@@ -7,33 +7,15 @@ This module defines the `PromptSchema` Pydantic model for constructing LLM promp
 modular prompt design by separating various instructions (base, mode-specific, code/docstring guidelines,
 image analysis) and supports dynamic variable substitution.
 
-There are two kinds of template variables:
-- config_vars: These are derived from the global configuration or `TaskSpec` (e.g., `k`, `max_lines`,
-  `swear_words`). They are sourced directly from the `config` dictionary passed to `build_prompt`.
-- program_vars (parent_program_vars, current_program_vars): These are extracted from `Program`
-  objects using dotted paths (e.g., "name", "code.model", "program_losses.discover.final").
-  Dots in the path are replaced with underscores to form the template variable name, so
-  "code.model" is referenced as `{code_model}` in prompt templates.
-
-Example usage:
-    schema = PromptSchema(
-        base="You are a scientist. Below are {num_parents} models...",
-        explore="Be creative...",
-        code_guidelines="Function signature must be...",
-        docstring_guidelines="Include a brief description...",
-        parent_program_template="model: {name}\\nloss: {program_losses_discover_final}\\n{code_model}\\n",
-        parent_program_vars=["name", "program_losses.discover.final", "code.model"],
-    )
-
-    # config: flat dict from TaskSpec.flat_config (merged evolution + llms + scoring)
-    config = {"num_parents": 2, "max_lines": 50, "swear_words": "scipy.optimize, curve_fit"}
-
-    # parent_programs: list of Program objects (parent_program_vars extracted via dotted-path traversal)
-    prompt = schema.build_prompt("explore", parent_programs=parents, config=config)
+Template variables:
+- config variables: Sourced from the global configuration or TaskSpec (e.g. {num_parents}, {max_lines}).
+- program attributes: Referenced directly using dotted paths into Program objects (e.g. {name},
+  {code.model}, {program_losses.discover.final}, {diagnostics.r2_overall}).
 """
 
 from __future__ import annotations
 
+import string
 from pydantic import BaseModel, Field
 from typing import Optional, Any, TYPE_CHECKING
 
@@ -42,37 +24,12 @@ if TYPE_CHECKING:
     import numpy as np
 
 
-def _fill_program_vars(program: Any, var_names: list[str]) -> dict[str, Any]:
-    """Fills a dictionary with program attributes, converting dotted paths to underscore-separated keys.
+def _get_nested_attr(obj: Any, dotted_key: str, default: Any = "") -> Any:
+    """Safely retrieves a nested attribute or dictionary value from an object using a dotted key.
 
-    Args:
-        program: The Program object from which to extract variables.
-        var_names: A list of dotted-path strings representing the program attributes
-            to extract (e.g., "name", "code.model").
-
-    Returns:
-        A dictionary where keys are underscore-separated variable names (e.g., "code_model")
-        and values are the extracted attributes from the program.
-    """
-    return {x.replace(".", "_"): _get_nested_attr(program, x, "") for x in var_names}
-
-
-def _get_nested_attr(obj: Any, dotted_key: str, default: Any = None) -> Any:
-    """Safely retrieves a nested attribute from an object using a dotted key.
-
-    Example: `_get_nested_attr(program, "code.model")` would return `program.code.model`.
-
-    Args:
-        obj: The object from which to retrieve the attribute.
-        dotted_key: A string representing the dotted path to the attribute (e.g., "parent.child.grandchild").
-        default: The default value to return if any part of the dotted path is not found
-            or is None. Defaults to None.
-
-    Returns:
-        The value of the nested attribute, or the default value if not found.
+    Example: `_get_nested_attr(program, "code.model")` -> `program.code.model`.
     """
     item = obj
-
     for part in dotted_key.split("."):
         if item is None:
             return default
@@ -82,19 +39,36 @@ def _get_nested_attr(obj: Any, dotted_key: str, default: Any = None) -> Any:
             item = getattr(item, part)
         else:
             return default
-
     return item if item is not None else default
 
 
-class PromptSchema(BaseModel):
-    """Defines the schema for constructing an LLM prompt.
+class SafeProgramFormatter(string.Formatter):
+    """Formatter that resolves dotted field names directly against a Program object."""
 
-    This Pydantic model structures the various components of a prompt, allowing for
-    flexible and contextualized prompt generation for LLM code generation tasks.
-    It supports different sections for base instructions, mode-specific guidance,
-    code/docstring conventions, and image analysis, alongside templating for
-    configuration and program-specific variables.
-    """
+    def get_field(
+        self, field_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> tuple[Any, Any]:
+        if field_name in kwargs:
+            return kwargs[field_name], field_name
+
+        program = kwargs.get("program")
+        if program is not None:
+            val = _get_nested_attr(program, field_name, default="")
+            return val, field_name
+
+        return "", field_name
+
+    def format_field(self, value: Any, format_spec: str) -> str:
+        if value == "" and format_spec:
+            return ""
+        try:
+            return super().format_field(value, format_spec)
+        except (ValueError, TypeError):
+            return str(value)
+
+
+class PromptSchema(BaseModel):
+    """Defines the schema for constructing an LLM prompt."""
 
     base: str = Field(description="The base instructions for the LLM.")
     explore: Optional[str] = Field(
@@ -114,19 +88,19 @@ class PromptSchema(BaseModel):
         description="Instructions for the LLM on how to interpret and use multimodal image feedback.",
     )
     parent_program_template: str = Field(
-        description="A template string for formatting information about parent programs. Template variables (e.g., `{code_model}`) are filled from `parent_program_vars`."
+        description="A template string for formatting parent programs. Dotted paths (e.g. {code.model}, {diagnostics.r2_overall}) are resolved directly from parent programs."
     )
     parent_program_vars: list[str] = Field(
         default_factory=list,
-        description="A list of dotted-path strings for variables to extract from parent `Program` objects, e.g code.model",
+        description="Deprecated: dotted paths are now resolved directly in templates.",
     )
     current_program_template: Optional[str] = Field(
         None,
-        description="A template string for formatting information about the program currently being generated/modified. Template variables (e.g., `{code_model}`) are filled from `current_program_vars`.",
+        description="A template string for formatting the current program. Dotted paths (e.g. {code.model}) are resolved directly from current_program.",
     )
     current_program_vars: list[str] = Field(
         default_factory=list,
-        description="A list of dotted-path strings for variables to extract from the current `Program` object, e.g code.model",
+        description="Deprecated: dotted paths are now resolved directly in templates.",
     )
     ideas_template: str = Field(
         default="Some ideas you may want to incorporate into your model:\n {ideas-injection-point}",
@@ -134,7 +108,7 @@ class PromptSchema(BaseModel):
     )
     ideas: list[str] = Field(
         default_factory=list,
-        description="A list of ideas/bits of text to inject into the prompt with probability idea_probability.",
+        description="A list of ideas to inject into the prompt with probability idea_probability.",
     )
 
     def build_prompt(
@@ -176,7 +150,7 @@ class PromptSchema(BaseModel):
         config = config or {}
 
         config_copy = dict(config)
-        if "ideas-injection-point" not in config_copy:  # guard in case not present
+        if "ideas-injection-point" not in config_copy:
             config_copy["ideas-injection-point"] = ""
 
         sections = [
@@ -187,29 +161,28 @@ class PromptSchema(BaseModel):
             self.image_analysis_instructions,
         ]
 
-        # Add the ideas template if ideas-injection-point has content (i.e some ideas were randomly selected)
         if config_copy.get("ideas-injection-point"):
-            sections.insert(
-                1, self.ideas_template
-            )  # place this after base prompt and before explore/exploit instructions
+            sections.insert(1, self.ideas_template)
 
-        prompt_parts = [
-            s.format(**config_copy) for s in sections if s
-        ]  # format all the parts of the prompt
+        prompt_parts = [s.format(**config_copy) for s in sections if s]
+
+        formatter = SafeProgramFormatter()
 
         if parent_programs:
             programs_text = [
-                self.parent_program_template.format(
+                formatter.format(
+                    self.parent_program_template,
+                    program=p,
                     parent_number=i + 1,
-                    **_fill_program_vars(p, self.parent_program_vars),
                 )
                 for i, p in enumerate(parent_programs)
             ]
             prompt_parts.append("\n".join(programs_text))
 
         if current_program is not None and self.current_program_template is not None:
-            current_text = self.current_program_template.format(
-                **_fill_program_vars(current_program, self.current_program_vars)
+            current_text = formatter.format(
+                self.current_program_template,
+                program=current_program,
             )
             prompt_parts.append(current_text)
 

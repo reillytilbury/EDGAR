@@ -237,6 +237,56 @@ SPEC_TEMPLATE_PARAM_EST = dedent(
     '''
 )
 
+SPEC_TEMPLATE_DIAGNOSTICS = dedent(
+    '''\
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from edgar.projects.diagnostics import BaseDiagnostics
+
+
+    class Diagnostics(BaseDiagnostics):
+        """Project diagnostics, evaluation metrics, and visualizations."""
+
+        def compute_metrics(
+            self,
+            data: dict[str, np.ndarray],
+            y_pred: np.ndarray,
+            params: dict | None = None,
+            program=None,
+        ) -> dict[str, float]:
+            """Computes quantitative metrics on held-out test data.
+
+            Args:
+                data: Dictionary of test data NumPy arrays.
+                y_pred: Model predictions evaluated on `data`.
+                params: Dictionary of optimized model parameters.
+                program: The Program instance being evaluated.
+
+            Returns:
+                Dictionary of scalar metrics (e.g., {"r2": 0.85}).
+            """
+            return {}
+
+        def plot_model_fits(
+            self,
+            data: dict[str, np.ndarray],
+            programs: list,
+            rng: np.random.Generator,
+            save_path: str = "",
+            **kwargs,
+        ) -> None:
+            """Visualizes model predictions against data.
+
+            Args:
+                data: Dictionary of NumPy data arrays.
+                programs: List of Program objects.
+                rng: Random number generator.
+                save_path: File path where the figure should be saved.
+            """
+            pass
+    '''
+)
+
 SPEC_TEMPLATE_PLOT = dedent(
     '''\
     import numpy as np
@@ -327,7 +377,7 @@ def init_project(task: str) -> int:
     """Initializes a new EDGAR project with a predefined directory structure and template files.
 
     This command scaffolds a new project under `projects/` (or `experiments/` if that exists)
-    by creating directories for seed programs, data loader, and image feedback, along with
+    by creating directories for seed programs, data loader, and diagnostics, along with
     template Python files and a default `config.yaml`. Existing files will be overwritten.
 
     Args:
@@ -343,11 +393,11 @@ def init_project(task: str) -> int:
     # Create subdirectories
     seed_programs_dir = task_path / "seed_programs"
     data_loader_dir = task_path / "data_loader"
-    image_feedback_dir = task_path / "image_feedback"
+    diagnostics_dir = task_path / "diagnostics"
 
     seed_programs_dir.mkdir(exist_ok=True)
     data_loader_dir.mkdir(exist_ok=True)
-    image_feedback_dir.mkdir(exist_ok=True)
+    diagnostics_dir.mkdir(exist_ok=True)
 
     # Seed program files
     model1_path = seed_programs_dir / "model1.py"
@@ -358,8 +408,8 @@ def init_project(task: str) -> int:
     # Data loader files
     load_data_path = data_loader_dir / "load_data.py"
 
-    # Image feedback files
-    plot_path = image_feedback_dir / "plot.py"
+    # Diagnostics file
+    diagnostics_path = diagnostics_dir / "diagnostics.py"
 
     # Config file
     config_path = task_path / "config.yaml"
@@ -373,8 +423,8 @@ def init_project(task: str) -> int:
     # Write data loader file
     load_data_path.write_text(SPEC_TEMPLATE_DATA_LOADER, encoding="utf-8")
 
-    # Write image feedback file
-    plot_path.write_text(SPEC_TEMPLATE_PLOT, encoding="utf-8")
+    # Write diagnostics file
+    diagnostics_path.write_text(SPEC_TEMPLATE_DIAGNOSTICS, encoding="utf-8")
 
     # Write config
     config_text = dedent(
@@ -408,7 +458,7 @@ def init_project(task: str) -> int:
     print(f"Created project structure for '{task}':")
     print("  seed_programs/: model1.py, model2.py, param_est1.py, param_est2.py")
     print("  data_loader/: load_data.py")
-    print("  image_feedback/: plot.py")
+    print("  diagnostics/: diagnostics.py")
     print("  config.yaml")
     print("\nNext: fill in the functions in each file")
     return 0
@@ -420,7 +470,7 @@ def validate_project(task: str) -> int:
     This function ensures that the specified project directory exists and contains all
     necessary files (e.g., `model1.py`, `load_data.py`, `config.yaml`). It also
     verifies that these files define the expected functions (`model`,
-    `parameter_estimator`, `load_data`, `loss_fn`, `plot_model_fits`).
+    `parameter_estimator`, `load_data`, `loss_fn`, `plot_model_fits` or `Diagnostics`).
 
     Args:
         task (str): The name of the project to validate.
@@ -444,11 +494,14 @@ def validate_project(task: str) -> int:
         task_path / "config.yaml",
     ]
 
-    has_diagnostics = (task_path / "diagnostics.py").exists()
+    diag_file = None
+    if (task_path / "diagnostics" / "diagnostics.py").exists():
+        diag_file = task_path / "diagnostics" / "diagnostics.py"
+
     has_legacy_plot = (task_path / "image_feedback" / "plot.py").exists()
-    if not has_diagnostics and not has_legacy_plot:
+    if diag_file is None and not has_legacy_plot:
         errors = [
-            f"Missing file: {task_path / 'diagnostics.py'} (or {task_path / 'image_feedback' / 'plot.py'})"
+            f"Missing file: {task_path / 'diagnostics' / 'diagnostics.py'} or {task_path / 'image_feedback' / 'plot.py'}"
         ]
     else:
         errors = []
@@ -484,14 +537,14 @@ def validate_project(task: str) -> int:
                 "Missing function 'loss_fn' (or both 'loss_fn_train' and 'loss_fn_test') in data_loader/load_data.py"
             )
 
-    if has_diagnostics:
-        diag_source = (task_path / "diagnostics.py").read_text()
+    if diag_file is not None:
+        diag_source = diag_file.read_text()
         if (
             load_class_from_source(diag_source, "Diagnostics") is None
             and load_function_from_source(diag_source, "plot_model_fits") is None
         ):
             errors.append(
-                "diagnostics.py must define 'class Diagnostics' or 'plot_model_fits'"
+                f"{diag_file.relative_to(task_path)} must define 'class Diagnostics' or 'plot_model_fits'"
             )
     elif has_legacy_plot:
         plot_source = (task_path / "image_feedback" / "plot.py").read_text()
@@ -508,8 +561,8 @@ def validate_project(task: str) -> int:
     print("  ✓ seed_programs/model1.py, model2.py  (model)")
     print("  ✓ seed_programs/param_est1.py, param_est2.py  (parameter_estimator)")
     print("  ✓ data_loader/load_data.py  (load_data, loss_fn)")
-    if has_diagnostics:
-        print("  ✓ diagnostics.py  (Diagnostics)")
+    if diag_file is not None:
+        print(f"  ✓ {diag_file.relative_to(task_path)}  (Diagnostics)")
     else:
         print("  ✓ image_feedback/plot.py  (plot_model_fits)")
     print("  ✓ config.yaml")

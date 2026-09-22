@@ -127,12 +127,12 @@ def _load_loss_fn(data_loader_path: Path) -> Callable | tuple[Callable, Callable
 
 
 def _load_diagnostics(project_dir: Path) -> BaseDiagnostics | None:
-    """Loads the Diagnostics object from the project directory.
+    """Loads the Diagnostics object from the project / diagnostics directory.
 
     Checks for `diagnostics.py` (defining class `Diagnostics` or `plot_model_fits`),
     falling back to legacy `image_feedback/plot.py` wrapped in a BaseDiagnostics adapter.
     """
-    diag_path = project_dir / "diagnostics.py"
+    diag_path = project_dir / "diagnostics" / "diagnostics.py"
     if diag_path.exists():
         diag_cls = load_class_from_source(diag_path.read_text(), "Diagnostics")
         if diag_cls is not None:
@@ -213,9 +213,9 @@ class TaskSpec:
         loss_fn (Callable | tuple[Callable, Callable]): Project-specific loss function(s)
             used by the scoring sandbox to evaluate model predictions against held-out data.
             Can be a single callable `loss_fn` or a tuple `(loss_fn_train, loss_fn_test)`.
-        plot_fn (Callable | None): Optional function to render model-fit images for
-            LLM image-feedback prompts. None if the project does not provide
-            `image_feedback/plot.py`.
+        diagnostics (BaseDiagnostics | None): Optional object encapsulating project-specific
+            metrics, model fit plotting, and LLM feedback image generation.
+        plot_fn (Callable | None): Deprecated property returning `diagnostics.plot_model_fits`.
         apply_model_fn (Callable): Controls how the scoring sandbox maps a
             program's `model_fn` over the data. Defaults to `apply_model_plain`
             (a single `vmap` over axis-0). A project may override it by defining
@@ -270,8 +270,6 @@ class TaskSpec:
 
     loss_fn: Callable | tuple[Callable, Callable]
 
-    plot_fn: Callable | None
-
     diagnostics: BaseDiagnostics | None = None
 
     apply_model_fn: Callable = field(default=None)
@@ -283,6 +281,13 @@ class TaskSpec:
     seed_programs: list[Program] = field(default_factory=list)
 
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
+
+    @property
+    def plot_fn(self) -> Callable | None:
+        """Deprecated: accesses `plot_model_fits` from `diagnostics` for backward compatibility."""
+        return (
+            self.diagnostics.plot_model_fits if self.diagnostics is not None else None
+        )
 
     # ── constructors ──
 
@@ -332,7 +337,6 @@ class TaskSpec:
         )
 
         diagnostics = _load_diagnostics(config.project_dir)
-        plot_fn = diagnostics.plot_model_fits if diagnostics is not None else None
 
         git_sha, git_dirty = _git_state()
 
@@ -413,7 +417,6 @@ class TaskSpec:
             ],
             load_data_fn=load_data_fn,
             loss_fn=loss_fn,
-            plot_fn=plot_fn,
             diagnostics=diagnostics,
             apply_model_fn=apply_model_fn,
             seed_programs=seed_programs,

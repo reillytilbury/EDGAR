@@ -278,7 +278,7 @@ def test_worker():
 def test_score_one_model_trajectory_matches_loss():
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())  # train and test data are identical here!
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
     assert jnp.allclose(trajectories[0][0], initial_loss)
@@ -400,7 +400,7 @@ def test_score_one_model_kills_slow_model():
     data = (_make_data(), _make_data())
     config = {**BASE_CONFIG, "timeout_s": 2.0}
     t0 = time.time()
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, config
     )
     elapsed = time.time() - t0
@@ -420,7 +420,7 @@ def test_score_one_model_falls_back_to_default_params():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
 
@@ -466,6 +466,7 @@ def test_score_one_model_multiple_param_ests():
         all_init,
         best_idx,
         trajectories,
+        _,
         outcome,
     ) = _score_one_model(program, data, loss_fn, BASE_CONFIG)
 
@@ -502,7 +503,7 @@ def test_score_one_model_gives_infinite_loss_for_broken_model_syntax():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
 
@@ -521,7 +522,7 @@ def test_score_one_model_falls_back_when_param_est_syntax_error():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
 
@@ -565,6 +566,7 @@ def test_score_one_model_with_separate_train_test_loss_fns():
         *_,
         best_idx,
         trajectories,
+        _,
         outcome,
     ) = _score_one_model(program, data, loss_fn_tuple, custom_config)
 
@@ -600,7 +602,7 @@ def test_score_one_model_banned_string():
         "timeout_s": 10.0,
         "param_penalty_weight": 0.0,
     }
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, custom_config
     )
     assert final_loss == float("inf")

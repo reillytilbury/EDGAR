@@ -10,6 +10,7 @@ from edgar.llm.generate import (
     generate_models,
 )
 from edgar.llm.prompt_schema import PromptSchema
+from edgar.projects.diagnostics import BaseDiagnostics
 from tests.evolution.utils import make_empty_program
 from tests.llm.fakellm import FakeLLM, CyclingModel
 from tests.llm.programs import InvalidProgram, Program1, DEFAULT_FAKE_PROGRAMS
@@ -19,12 +20,15 @@ def make_fake_spec(output_dir: str | None = None) -> SimpleNamespace:
     if output_dir is None:
         output_dir = tempfile.mkdtemp()
 
-    def plot_fn(data, parents, save_path, **kwargs):
-        with open(save_path, "wb") as f:
-            f.write(generate_image_bytes())
+    class _FakeDiagnostics(BaseDiagnostics):
+        def generate_feedback_image(self, data, parents, rng, save_path="", **kwargs):
+            with open(save_path, "wb") as f:
+                f.write(generate_image_bytes())
 
     return SimpleNamespace(
-        plot_fn=plot_fn, output_dir=output_dir, rng=np.random.default_rng()
+        diagnostics=_FakeDiagnostics(),
+        output_dir=output_dir,
+        rng=np.random.default_rng(),
     )
 
 

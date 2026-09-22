@@ -28,8 +28,7 @@ def test_prompt_schema_nested_dict_attr():
         explore="Explore",
         code_guidelines="Code guidelines",
         docstring_guidelines="Docstring guidelines",
-        parent_program_template="Model {name}: R2={diagnostics_r2_overall}",
-        parent_program_vars=["name", "diagnostics.r2_overall"],
+        parent_program_template="Model {name}: R2={diagnostics.r2_overall}",
     )
     prompt = schema.build_prompt("explore", parent_programs=[program])
     assert "R2=0.85" in prompt
@@ -72,3 +71,33 @@ def test_trial_variability_diagnostics_loading():
     assert "r2_noise" in metrics
     assert "fano_slope_data" in metrics
     assert "fano_slope_pred" in metrics
+
+
+def test_diagnostics_feedback_image_worker(tmp_path):
+    from edgar.io.plotting import generate_feedback_image
+    from types import SimpleNamespace
+
+    created_files = []
+
+    class CustomDiagnostics(BaseDiagnostics):
+        def generate_feedback_image(self, data, parents, rng, save_path="", **kwargs):
+            import matplotlib.pyplot as plt
+
+            fig, ax = plt.subplots()
+            ax.plot([1, 2], [3, 4])
+            fig.savefig(save_path)
+            plt.close(fig)
+            created_files.append(save_path)
+
+    spec = SimpleNamespace(
+        output_dir=str(tmp_path),
+        diagnostics=CustomDiagnostics(),
+        rng=np.random.default_rng(0),
+    )
+    program = Program(birth=BirthCertificate(generation=1, island=0, batch_index=2))
+    img_bytes = generate_feedback_image(
+        spec=spec, data={"x": np.array([1, 2])}, parents=[], program=program
+    )
+    assert img_bytes is not None
+    assert len(img_bytes) > 0
+    assert len(program.image_path) > 0
