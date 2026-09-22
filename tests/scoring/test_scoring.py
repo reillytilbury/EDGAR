@@ -16,6 +16,7 @@ import multiprocessing as mp
 
 import numpy as np
 import jax.numpy as jnp
+import pytest
 
 from tests.llm.programs import Program1
 
@@ -291,9 +292,10 @@ def test_score_one_model_with_array_params():
 def test_score_one_gives_infinite_loss_for_program_with_none_default_params():
     program = _make_program(FAST_MODEL_CODE, default_params=None)
     assert program.n_params is None
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
-        program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
-    )
+    with pytest.warns(UserWarning, match="n_params=None"):
+        final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+            program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+        )
     assert final_loss == float("inf")
     assert initial_loss == float("inf")
     assert trajectories is None
