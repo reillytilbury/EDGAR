@@ -189,13 +189,25 @@ def generate_program_fits(
             should be generated.
     """
     has_plot = spec is not None and getattr(spec, "diagnostics", None) is not None
-    if not has_plot:
+    if not has_plot or data is None:
         return
 
+    # Filter for programs that have valid parameters and have not been plotted yet
+    pending = [
+        p
+        for p in programs
+        if p.params_init is not None
+        and p.params is not None
+        and getattr(p, "fit_image_path", None) is None
+    ]
+    if not pending:
+        return
+
+    timeout = max(120, len(pending) * 15)
     ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
     queue = ctx.Queue()
     spec_bytes = cloudpickle.dumps(spec)
-    programs_bytes = cloudpickle.dumps(programs)
+    programs_bytes = cloudpickle.dumps(pending)
 
     proc = ctx.Process(
         target=_program_fits_worker,
@@ -203,7 +215,7 @@ def generate_program_fits(
     )
     proc.start()
     try:
-        results = queue.get(timeout=120)
+        results = queue.get(timeout=timeout)
     except Exception as e:
         proc.kill()
         proc.join()
@@ -242,6 +254,8 @@ def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> 
     plot_dir.mkdir(parents=True, exist_ok=True)
 
     for p in programs:
+        if getattr(p, "trajectory_image_path", None) is not None:
+            continue
         discover_losses = p.program_losses.discover
         if not discover_losses or discover_losses.trajectories is None:
             continue
