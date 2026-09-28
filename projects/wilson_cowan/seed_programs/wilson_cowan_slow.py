@@ -12,12 +12,12 @@ H = 1.0  # integration step; time is unitless (dt=1), so tau values are in time 
 # apply_model seeds the carry from the `s0_S` param in DEFAULT_PARAMS below (the s0_
 # prefix marks it as a learnable initial scan-carry value). E and I use the PREVIOUS
 # S (S_prev), matching the generator in data_loader/simulate_data.py.
-def model(state_prev, y_prev, params):
+def model(hidden_state, y_prev, params):
     """Wilson-Cowan-with-slow-inhibition dynamics update.
 
     Args
     ----
-    state_prev : dict with the previous hidden state {'S': S_prev}.
+    hidden_state : dict with the previous hidden state {'S': S_prev}.
     y_prev : dict {'E_prev','I_prev','stim_E_prev','stim_I_prev'} — the previous
         observation bundled with the previous stimulus.
     params : dict of model parameters (adds tau_S, W_ES, W_IS over the base WC set).
@@ -46,7 +46,7 @@ def model(state_prev, y_prev, params):
     stim_E_prev = y_prev['stim_E_prev']
     stim_I_prev = y_prev['stim_I_prev']
 
-    S_prev = state_prev['S']
+    S_prev = hidden_state['S']
 
     S_dot = (-S_prev + I_prev) / tau_S
     S = S_prev + H * S_dot
@@ -58,8 +58,8 @@ def model(state_prev, y_prev, params):
     E = E_prev + H * E_dot
     I = I_prev + H * I_dot
 
-    new_state = {'S': S}
-    return new_state, (E, I)
+    new_hidden_state = {'S': S}
+    return new_hidden_state, (E, I)
 
 
 model.DEFAULT_PARAMS = {
@@ -83,7 +83,7 @@ model.DEFAULT_PARAMS = {
 }
 
 
-def model_jax(state_prev, y_prev, params):
+def model_jax(hidden_state, y_prev, params):
     '''JAX version of the WCS dynamics update (see `model`).'''
     E_max = params['E_max']
     I_max = params['I_max']
@@ -109,7 +109,7 @@ def model_jax(state_prev, y_prev, params):
     stim_E_prev = y_prev['stim_E_prev']
     stim_I_prev = y_prev['stim_I_prev']
 
-    S_prev = state_prev['S']
+    S_prev = hidden_state['S']
 
     S_dot = (-S_prev + I_prev) / tau_S
     S = S_prev + H * S_dot
@@ -121,8 +121,8 @@ def model_jax(state_prev, y_prev, params):
     E = E_prev + H * E_dot
     I = I_prev + H * I_dot
 
-    new_state = {'S': S}
-    return new_state, (E, I)
+    new_hidden_state = {'S': S}
+    return new_hidden_state, (E, I)
 
 
 model_jax.DEFAULT_PARAMS = model.DEFAULT_PARAMS

@@ -6,10 +6,11 @@ inhibitory ``I``, driven by a per-timestep external stimulus (an excitatory puls
 or an inhibitory pulse). There is no hidden variable.
 
 Contract for the LLM's program (see ``seed_programs/wilson_cowan.py``):
-    ``model(state, y_prev, params) -> (new_state, mean)``
+    ``model(hidden_state, y_prev, params) -> (new_hidden_state, mean)``
     * ``y_prev`` is a **dict** ``{"E_prev","I_prev","stim_E_prev","stim_I_prev"}`` —
       the previous observation bundled with the previous stimulus.
-    * ``new_state`` is an (empty) dict carry — the base model needs no hidden state.
+    * ``new_hidden_state`` carries additional hidden variables; it is empty for base WC.
+      The full dynamical state also includes E and I, carried by the scaffold.
     * ``mean`` is ``(E, I)`` — the predicted next observation.
     * ``params`` is a dict of the learnable WC parameters.
 
@@ -35,8 +36,8 @@ it.
 
 Hidden-state models declare their initial scan carry with ``s0_``-prefixed keys in
 ``DEFAULT_PARAMS`` (e.g. ``s0_S``); ``apply_model`` strips the ``s0_`` prefix and uses
-them as the scan's initial ``state``, so the initial condition is fit by gradient descent
-alongside the dynamics (matching ``fhn_excitable``'s convention). Stateless models (the
+them as the scan's initial ``hidden_state``, so the initial condition is fit by gradient descent
+alongside the dynamics (matching ``fhn_excitable``'s convention). Models without hidden variables (the
 base WC) declare no ``s0_*`` keys and get an empty carry. ``loss_fn`` skips the first
 ``WARMUP_STEPS`` predictions so the initial-state settling transient is not scored.
 
@@ -170,22 +171,22 @@ def load_data(
 
 
 def _split_params_s0(params: dict) -> tuple[dict, dict]:
-    """Split ``s0_``-prefixed params → initial scan-carry state; the rest are dynamics
+    """Split ``s0_``-prefixed params → initial hidden-state carry; the rest are dynamics
     params passed to ``model_fn``.
 
     Only keys of the form ``s0_<name>`` with non-empty ``<name>`` are treated as initial
-    state (the prefix is stripped). A stateless model (base WC) declares no ``s0_*`` keys
+    hidden state (the prefix is stripped). A model without hidden variables (base WC) declares no ``s0_*`` keys
     and gets an empty init carry. ``log_noise_coef`` is not ``s0_``-prefixed, so it stays
     in the dynamics params (and never reaches ``model_fn`` — ``apply_model`` reads it here).
     Matches ``fhn_excitable``'s convention so the two projects stay aligned.
     """
-    init_state, dyn_params = {}, {}
+    init_hidden_state, dyn_params = {}, {}
     for k, v in params.items():
         if k.startswith("s0_") and len(k) > 3:
-            init_state[k.removeprefix("s0_")] = v
+            init_hidden_state[k.removeprefix("s0_")] = v
         else:
             dyn_params[k] = v
-    return init_state, dyn_params
+    return init_hidden_state, dyn_params
 
 
 def apply_model(model_fn, data, params):
@@ -203,8 +204,8 @@ def apply_model(model_fn, data, params):
 
     Hidden-state models (e.g. the WCS slow variable ``S``) declare their initial scan
     carry via ``s0_``-prefixed keys in ``DEFAULT_PARAMS`` (e.g. ``s0_S``); those are split
-    out here by ``_split_params_s0`` and used as the scan's initial ``state``, so the
-    initial condition is learned by gradient descent. Stateless models (base WC) declare
+    out here by ``_split_params_s0`` and used as the scan's initial ``hidden_state``, so the
+    initial condition is learned by gradient descent. Models without hidden variables (base WC) declare
     no ``s0_*`` keys and start the scan from an empty dict carry. The model function only
     ever sees the dynamics params (``s0_*`` and ``log_noise_coef`` are stripped away).
 
@@ -219,7 +220,7 @@ def apply_model(model_fn, data, params):
     sI = data["stim_I"]
 
     def per_sample(E_s, I_s, sE_s, sI_s, p):
-        init_state, dyn_params = _split_params_s0(p)
+        init_hidden_state, dyn_params = _split_params_s0(p)
 
         def per_stim(E_c, I_c, sE_c, sI_c):
             # ── ORIGINAL: teacher-forced one-step-ahead (E_prev/I_prev from data) ──
@@ -230,17 +231,17 @@ def apply_model(model_fn, data, params):
             #     "stim_I_prev": sI_c[:-1],
             # }
             #
-            # def step(state, y_prev):
-            #     new_state, mean = model_fn(state, y_prev, dyn_params)
+            # def step(hidden_state, y_prev):
+            #     new_hidden_state, mean = model_fn(hidden_state, y_prev, dyn_params)
             #     E_next, I_next = mean
-            #     return new_state, jnp.stack([E_next, I_next])
+            #     return new_hidden_state, jnp.stack([E_next, I_next])
             #
-            # _, means = jax.lax.scan(step, init_state, xs)  # (T-1, 2)
+            # _, means = jax.lax.scan(step, init_hidden_state, xs)  # (T-1, 2)
             # return means
 
             # ── FREE ROLLOUT: feed the model's own (E, I) prediction back in ──
             # Only the stimulus is scanned (teacher-forced exogenous input); E_prev/I_prev
-            # come from the previous step's output, held in the carry (state, E_prev, I_prev).
+            # come from the previous step's output, held in the carry (hidden_state, E_prev, I_prev).
             # Alignment matches the teacher-forced version: step j predicts y[j+1], so
             # means[j] still lines up with target E/I[1+j] and loss_fn is unchanged.
             # INITIAL CONDITION : observables seeded from the first true
@@ -252,18 +253,18 @@ def apply_model(model_fn, data, params):
             xs = {"stim_E_prev": sE_c[:-1], "stim_I_prev": sI_c[:-1]}
 
             def step(carry, stim_prev):
-                state, E_prev, I_prev = carry
+                hidden_state, E_prev, I_prev = carry
                 y_prev = {
                     "E_prev": E_prev,
                     "I_prev": I_prev,
                     "stim_E_prev": stim_prev["stim_E_prev"],
                     "stim_I_prev": stim_prev["stim_I_prev"],
                 }
-                new_state, mean = model_fn(state, y_prev, dyn_params)
+                new_hidden_state, mean = model_fn(hidden_state, y_prev, dyn_params)
                 E_next, I_next = mean
-                return (new_state, E_next, I_next), jnp.stack([E_next, I_next])
+                return (new_hidden_state, E_next, I_next), jnp.stack([E_next, I_next])
 
-            init_carry = (init_state, E_c[0], I_c[0])
+            init_carry = (init_hidden_state, E_c[0], I_c[0])
             _, means = jax.lax.scan(step, init_carry, xs)  # (T-1, 2)
             return means
 
@@ -278,7 +279,7 @@ def debug_trajectory(data, sample: int = 0, stim: int = 0):
     """Closed-loop replay spec for ``apply_model``'s FREE-ROLLOUT scan.
 
     Optional hook consumed by ``scripts/debug_program.py`` to replay the exact scoring
-    path — ``model(state, y_prev, params)`` — outside jit, one step at a time. Because
+    path — ``model(hidden_state, y_prev, params)`` — outside jit, one step at a time. Because
     ``apply_model`` no longer teacher-forces the observables (it seeds the rollout from
     the true first observation and thereafter feeds the model's OWN ``(E, I)`` prediction
     back in as ``E_prev``/``I_prev``; only the stimulus is teacher-forced), a static

@@ -7,8 +7,8 @@
 #   * The loss is a heteroscedastic Gaussian NLL (observation variance grows with
 #     activity); every model exposes a GD-fitted `log_noise_coef` param.
 #   * A hidden-state model declares its initial scan carry with `s0_`-prefixed params
-#     (e.g. `s0_S`), which the framework strips and uses as the scan's initial `state`;
-#     stateless models declare none. (WC uses the `s0_` convention, like fhn_excitable.)
+#     (e.g. `s0_S`), which the framework strips and uses as the scan's initial `hidden_state`;
+#     models without hidden variables declare none. (WC uses the `s0_` convention, like fhn_excitable.)
 #   * Both populations are FULLY OBSERVED, so a hidden variable is optional
 #     (not required as it is for the excitable FHN task).
 # The contract below is defined by data_loader/load_data.py (the source of truth).
@@ -47,7 +47,7 @@ model:
 
     * Import any packages you use (use numpy as np).
 
-    * Model signature must be `def model(state, y_prev, params):` — a SINGLE
+    * Model signature must be `def model(hidden_state, y_prev, params):` — a SINGLE
     forward step of the circuit. `params` is a dict of learnable scalar floats.
 
     * `y_prev` is a DICT of scalars with EXACTLY these keys:
@@ -56,7 +56,7 @@ model:
         - `y_prev["stim_E_prev"]` — external drive to E at t-1 (1 during pulse, 0 otherwise) 
         - `y_prev["stim_I_prev"]` — external drive to I at t-1 (1 during pulse, 0 otherwise)
 
-    * OUTPUT: return the tuple `(new_state, mean)` where `mean` is the tuple
+    * OUTPUT: return the tuple `(new_hidden_state, mean)` where `mean` is the tuple
     `(E, I)` — your prediction of the next excitatory and inhibitory activity. Do
     NOT return a scalar, a single array, or a distribution: return `(E, I)` as two
     scalars.
@@ -71,14 +71,14 @@ model:
     module-level constant, NOT a learnable parameter.
 
     * HIDDEN STATE IS OPTIONAL. Both E and I are observed, so you do NOT need a
-    hidden variable. `state` is a dict; if you use none, return `new_state = {{}}`.
+    hidden variable. `hidden_state` is a dict; if you use none, return `new_hidden_state = {{}}`.
     If a slow process helps (e.g. a slowly accumulating adaptation / slow
     inhibition variable that is NOT directly observed), you MAY carry it: read it
-    from `state` (e.g. `state["S"]`) and return `new_state` with the SAME keys. Give
+    from `hidden_state` (e.g. `hidden_state["S"]`) and return `new_hidden_state` with the SAME keys. Give
     its initial value as an `s0_`-prefixed entry in `model.DEFAULT_PARAMS` (e.g.
     `"s0_S": 1.0`): the framework strips the `s0_` prefix and seeds the scan carry
-    with it (`state["S"]`), and its value is refined by gradient descent. Every key
-    your `state` reads must have a matching `s0_<key>` in `DEFAULT_PARAMS`.
+    with it (`hidden_state["S"]`), and its value is refined by gradient descent. Every key
+    your `hidden_state` reads must have a matching `s0_<key>` in `DEFAULT_PARAMS`.
 
     * CRITICAL: everything is a scalar. Use pure scalar arithmetic — no
     `np.arange`, no slicing, no dynamic shapes.
@@ -163,8 +163,8 @@ parameter_estimator:
 jax_translator_model:
   code_guidelines: 'CRITICAL JAX compatibility requirements :
 
-    * The model signature is `def model(state, y_prev, params)` and returns
-    `(new_state, mean)` where `mean` is the Python tuple `(E, I)` of two jnp
+    * The model signature is `def model(hidden_state, y_prev, params)` and returns
+    `(new_hidden_state, mean)` where `mean` is the Python tuple `(E, I)` of two jnp
     scalars. Preserve this signature and the two-element return-tuple structure
     exactly. Do NOT collapse `(E, I)` into an array.
 
@@ -172,7 +172,7 @@ jax_translator_model:
     `stim_I_prev`. stim_E_prev and stim_I_prev are 0 if no stimulus, 1 if stimulus present.
     Read from it exactly as the numpy model does.
 
-    * `state` and `new_state` are dicts with the SAME keys throughout the scan
+    * `hidden_state` and `new_hidden_state` are dicts with the SAME keys throughout the scan
     (possibly empty). Do not add, remove, or rename keys.
 
     * Preserve `model.DEFAULT_PARAMS` verbatim — including any `s0_`-prefixed

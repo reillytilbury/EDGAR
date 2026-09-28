@@ -5,11 +5,11 @@ H = 1/30000
 
 
 # Wilson-Cowan slow_inhibition model 
-def model(state_prev, y_prev, params):
+def model(hidden_state, y_prev, params):
     ''' Wilson-Cowan model dynamics update function. 
     Args
     ----
-    state: a dictionary representing the previous state of the system
+    hidden_state: a dictionary of additional hidden variables
     y_prev: tuple of ((E_prev, I_prev), (stim_E_prev, stim_I_prev)) representing the previous state and previous stimuli
     params: dictionary of model parameters
 
@@ -42,7 +42,7 @@ def model(state_prev, y_prev, params):
     stim_E_prev = y_prev['stim_E_prev']
     stim_I_prev = y_prev['stim_I_prev']
 
-    S_prev = state_prev['S']
+    S_prev = hidden_state['S']
 
     E_dot = -E_prev + (E_max - E_prev)* np.maximum((W_EE * E_prev - W_EI * I_prev - W_ES * S_prev + C_E + XE * stim_E_prev), 0)
     E_dot /= tau_E
@@ -54,9 +54,9 @@ def model(state_prev, y_prev, params):
     S_dot = -S_prev + I_prev
     S_dot /= tau_S
     S = S_prev + h * S_dot
-    new_state = {'S' : S}
+    new_hidden_state = {'S' : S}
 
-    return new_state, (E, I)
+    return new_hidden_state, (E, I)
 
 model.DEFAULT_PARAMS = {
     'tau_E' : 0.001, # time constant for excitatory population

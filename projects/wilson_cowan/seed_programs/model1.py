@@ -3,7 +3,7 @@ import numpy as np
 H = 1.0  # integration step (matches the data-generating grid; time is unitless, dt=1)
 
 
-def model(state, y_prev, params):
+def model(hidden_state, y_prev, params):
     """Leaky E/I integrators with a latent inhibition variable. 
 
     Each population relaxes toward a constant baseline drive with its own time
@@ -18,7 +18,7 @@ def model(state, y_prev, params):
         XE and XI : transient input strengths to the excitatory and inhibitory populations, respectively,
         W_ES and W_IS : weights of the slow inhibition S onto the excitatory and inhibitory populations, respectively.
 
-        state contains one latent variable S, which is a leaky integrator for the difference between the excitatory and inhibitory populations,
+        hidden_state contains one latent variable S, which is a leaky integrator for the difference between the excitatory and inhibitory populations,
         and follows the dynamics: 
            tau_S * dS/dt = -S + (E - I)
     """
@@ -30,7 +30,7 @@ def model(state, y_prev, params):
     E_transient_input_strength = params["XE"] * stim_E_prev
     I_transient_input_strength = params["XI"] * stim_I_prev
 
-    S_prev = state["S"]  # latent variable
+    S_prev = hidden_state["S"]  # latent variable
     S_dot = (-S_prev + (E_prev - I_prev)) / params["tau_S"]
     S = S_prev + H * S_dot
 

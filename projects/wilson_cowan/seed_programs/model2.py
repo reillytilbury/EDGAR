@@ -3,9 +3,9 @@ import numpy as np
 H = 1.0  # integration step (matches the data-generating grid; time is unitless, dt=1)
 
 
-def model(state, y_prev, params):
+def model(hidden_state, y_prev, params):
     """Linear coupled E/I circuit (recurrent push-pull). This model is fully Markovian with 
-    no latent variables, so the state is empty and the next step activity is fully determined 
+    no latent variables, so the hidden_state dict is empty and the next step activity is fully determined
     by the previous activity.
 
     Adds the recurrent weight matrix to the leaky integrators: E excites both

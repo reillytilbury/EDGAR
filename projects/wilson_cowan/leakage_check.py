@@ -9,8 +9,8 @@ structural regression guard matters. We verify:
   1. ISOLATION — perturbing the observed E/I at ``t:`` leaves every prediction at
      ``<t`` bit-exact (and the suffix does change). Passes because ``y[>=t]`` is
      never in scope at step ``t``.
-  2. SHAPE — each seed's ``model(state, y_prev, params)`` returns ``(new_state, (E, I))``
-     with a state pytree matching the ``s0_*`` init and finite scalar outputs. (An
+  2. SHAPE — each seed's ``model(hidden_state, y_prev, params)`` returns ``(new_hidden_state, (E, I))``
+     with a hidden-state pytree matching the ``s0_*`` init and finite scalar outputs. (An
      inline eager check; WC has no separate ``validate_step`` entry point yet.)
   3. NLL sanity — each seed loads, optimises, and produces a finite, ~O(1) loss that
      does not increase.
@@ -105,28 +105,28 @@ def check_isolation(model_fn, data, params) -> tuple[bool, dict]:
 
 
 def check_shape(model_fn, default_params) -> tuple[bool, dict]:
-    """Eager single-step check: returns ``(new_state, (E, I))``, state pytree stable, finite."""
-    init_state, dyn_params = _split_params_s0(default_params)
-    init_j = jax.tree_util.tree_map(jnp.asarray, init_state)
+    """Eager single-step check: returns ``(new_hidden_state, (E, I))``, hidden-state pytree stable, finite."""
+    init_hidden_state, dyn_params = _split_params_s0(default_params)
+    init_j = jax.tree_util.tree_map(jnp.asarray, init_hidden_state)
     dyn_j = jax.tree_util.tree_map(jnp.asarray, dyn_params)
     y_prev = {
         "E_prev": jnp.asarray(0.5), "I_prev": jnp.asarray(0.5),
         "stim_E_prev": jnp.asarray(0.0), "stim_I_prev": jnp.asarray(0.0),
     }
     try:
-        new_state, mean = model_fn(init_j, y_prev, dyn_j)
+        new_hidden_state, mean = model_fn(init_j, y_prev, dyn_j)
     except Exception as e:  # noqa: BLE001
         return False, {"error": f"{type(e).__name__}: {e}"}
 
-    same_state = (
-        jax.tree_util.tree_structure(new_state)
+    same_hidden_state = (
+        jax.tree_util.tree_structure(new_hidden_state)
         == jax.tree_util.tree_structure(init_j)
     )
     is_pair = isinstance(mean, tuple) and len(mean) == 2
     finite = is_pair and bool(jnp.all(jnp.isfinite(jnp.asarray(mean))))
-    ok = same_state and is_pair and finite
+    ok = same_hidden_state and is_pair and finite
     return ok, {
-        "state_pytree_matches_s0": same_state,
+        "state_pytree_matches_s0": same_hidden_state,
         "mean_is_(E,I)_pair": is_pair,
         "finite": finite,
     }

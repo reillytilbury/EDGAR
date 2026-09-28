@@ -5,11 +5,11 @@ H = 1.0  # integration step; time is unitless (dt=1), so tau values are in time 
 
 
 # Wilson-Cowan model 
-def model(state_prev, y_prev, params):
+def model(hidden_state, y_prev, params):
     ''' Wilson-Cowan model dynamics update function. 
     Args
     ----
-    state: a dictionary representing the previous state of the system -- not used in this function, but included for compatibility with the EDGAR framework
+    hidden_state: a dictionary of additional hidden variables -- not used in this function, but included for compatibility with the EDGAR framework
     y_prev: tuple of ((E_prev, I_prev), (stim_E_prev, stim_I_prev)) representing the previous state and previous stimuli
     params: dictionary of model parameters
 
@@ -45,9 +45,9 @@ def model(state_prev, y_prev, params):
     E = E_prev + H * E_dot
     I = I_prev + H * I_dot
 
-    # hard code new state as empty state 
-    new_state = {}
-    return new_state, (E, I)
+    # The base model has no additional hidden variables
+    new_hidden_state = {}
+    return new_hidden_state, (E, I)
 
 model.DEFAULT_PARAMS = {
     'tau_E' : 300.0, # time constant for excitatory population
@@ -66,7 +66,7 @@ model.DEFAULT_PARAMS = {
 }
 
 
-def model_jax(state_prev, y_prev, params):
+def model_jax(hidden_state, y_prev, params):
     '''JAX version of the Wilson-Cowan dynamics update (see `model`).'''
     E_max = params['E_max']
     I_max = params['I_max']
@@ -95,8 +95,8 @@ def model_jax(state_prev, y_prev, params):
     E = E_prev + H * E_dot
     I = I_prev + H * I_dot
 
-    new_state = {}
-    return new_state, (E, I)
+    new_hidden_state = {}
+    return new_hidden_state, (E, I)
 
 
 model_jax.DEFAULT_PARAMS = model.DEFAULT_PARAMS
