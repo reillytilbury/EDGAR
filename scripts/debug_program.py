@@ -6,18 +6,30 @@ Runs the LLM's ``model(state, y_prev, params)`` in a plain Python for-loop
 and the predicted observation at every step. Useful for figuring out WHY a
 program produces NaNs or inf losses during regular scoring.
 
+It replays the SAME path the scorer takes. When a project scores on a free
+rollout (the model is fed its OWN previous prediction, not the observed value),
+this loop feeds each prediction back in too — so a NaN that only appears under
+rollout is reproduced here, which a teacher-forced replay would miss.
+
 Not integrated into the scoring pipeline — the pipeline is jit-wrapped, and
 Python ``print`` inside a traced function fires only once at trace time.
 
 Project-agnostic across state-space projects. The one project-specific piece —
-how a data trajectory maps to the per-step ``y_prev`` the model consumes — is
-supplied by an optional hook in the project's ``data_loader/load_data.py``:
+how each step's ``y_prev`` is assembled (which parts are teacher-forced vs. fed
+back from the model's own output) — is supplied by an optional hook in the
+project's ``data_loader/load_data.py``:
 
-    def debug_trajectory(data) -> list[y_prev]:
-        '''Return one trajectory's per-step y_prev pytrees (what apply_model scans).'''
+    def debug_trajectory(data) -> dict:
+        '''Closed-loop replay spec for apply_model's scan. Returns:
+             "init_obs":  the prev-output seed for step 0,
+             "exo":       per-step teacher-forced inputs (the [:-1] slice),
+             "assemble":  fn(prev_out, exo_t) -> y_prev, folding the model's
+                          own previous output back in.
+        A teacher-forced project's ``assemble`` simply ignores ``prev_out``.'''
 
-Everything else is generic: the carry is seeded from ``model.INITIAL_STATE``
-(empty dict for stateless models), and the model output is flattened as a pytree
+Everything else is generic: the hidden carry is seeded from the model's
+``s0_*``-prefixed DEFAULT_PARAMS (empty for a stateless model, matching each
+project's ``_split_params_s0``), and the model output is flattened as a pytree
 for printing and the non-finite check, so scalar / tuple / dict predictions all work.
 
 Usage:
@@ -58,6 +70,22 @@ def _extract_default_params(source: str) -> dict:
     if model is None or not hasattr(model, "DEFAULT_PARAMS"):
         raise ValueError("program must define model.DEFAULT_PARAMS")
     return dict(model.DEFAULT_PARAMS)
+
+
+def _split_s0(params: dict) -> tuple[dict, dict]:
+    """Split ``s0_``-prefixed params → initial hidden carry; the rest are dyn params.
+
+    Mirrors each project's ``_split_params_s0`` so the debugger seeds the scan carry
+    exactly as ``apply_model`` does — an empty carry for a stateless model. ``log_noise_coef``
+    is not ``s0_``-prefixed, so it stays in the dyn params (the model ignores it).
+    """
+    init_state, dyn_params = {}, {}
+    for k, v in params.items():
+        if k.startswith("s0_") and len(k) > 3:
+            init_state[k.removeprefix("s0_")] = v
+        else:
+            dyn_params[k] = v
+    return init_state, dyn_params
 
 
 def _floats(tree):

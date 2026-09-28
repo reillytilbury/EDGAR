@@ -275,29 +275,56 @@ def apply_model(model_fn, data, params):
 
 
 def debug_trajectory(data, sample: int = 0, stim: int = 0):
-    """Per-step ``y_prev`` sequence for one (sample, stim) trajectory.
+    """Closed-loop replay spec for ``apply_model``'s FREE-ROLLOUT scan.
 
-    Optional hook consumed by ``scripts/debug_program.py`` to replay
-    ``model(state, y_prev, params)`` outside jit, one step at a time. It mirrors
-    the teacher-forced ``xs`` that ``apply_model`` scans over: ``y_prev[t]`` bundles
-    the observation and stimulus at ``t`` (the ``[:-1]`` slice), predicting ``y[t+1]``.
+    Optional hook consumed by ``scripts/debug_program.py`` to replay the exact scoring
+    path — ``model(state, y_prev, params)`` — outside jit, one step at a time. Because
+    ``apply_model`` no longer teacher-forces the observables (it seeds the rollout from
+    the true first observation and thereafter feeds the model's OWN ``(E, I)`` prediction
+    back in as ``E_prev``/``I_prev``; only the stimulus is teacher-forced), a static
+    ``y_prev`` list cannot reproduce it. Instead this returns a small spec describing the
+    closed loop:
+
+        {
+          "init_obs":  ``(E[0], I[0])`` — the previous-prediction seed for step 0
+                       (the true first observation, matching ``apply_model``'s carry),
+          "exo":       length ``T-1`` list of the per-step teacher-forced stimulus inputs
+                       (the ``[:-1]`` slice), so step ``t`` consumes stim ``t`` and
+                       predicts ``y[t+1]`` — exactly ``apply_model``'s alignment,
+          "assemble":  ``fn(prev_out, exo_t) -> y_prev`` — folds the model's previous
+                       output ``(E, I)`` back in as ``E_prev``/``I_prev`` and adds the
+                       teacher-forced stimulus.
+        }
+
+    The initial hidden carry (from ``s0_*`` params) and the param split are handled
+    generically by the debugger, mirroring ``_split_params_s0``. The scorer skips the
+    first ``WARMUP_STEPS`` predictions, but the debugger prints every step so a NaN that
+    originates inside the warmup window is still visible.
 
     ``data`` is the training dict from ``load_data`` (E/I/stim_E/stim_I, each
-    ``(n_samples, n_stim, T)``). Returns a list of ``y_prev`` dicts of length ``T-1``.
+    ``(n_samples, n_stim, T)``).
     """
     E = data["E"][sample, stim]
     I = data["I"][sample, stim]
     sE = data["stim_E"][sample, stim]
     sI = data["stim_I"][sample, stim]
-    return [
-        {
-            "E_prev": E[t],
-            "I_prev": I[t],
-            "stim_E_prev": sE[t],
-            "stim_I_prev": sI[t],
-        }
+
+    exo = [
+        {"stim_E_prev": sE[t], "stim_I_prev": sI[t]}
         for t in range(E.shape[0] - 1)
     ]
+
+    def assemble(prev_out, exo_t):
+        """Fold the model's previous ``(E, I)`` output back in; teacher-force the stim."""
+        E_prev, I_prev = prev_out
+        return {
+            "E_prev": E_prev,
+            "I_prev": I_prev,
+            "stim_E_prev": exo_t["stim_E_prev"],
+            "stim_I_prev": exo_t["stim_I_prev"],
+        }
+
+    return {"init_obs": (E[0], I[0]), "exo": exo, "assemble": assemble}
 
 
 def loss_fn(model_output, data):

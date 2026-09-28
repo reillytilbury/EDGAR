@@ -4,7 +4,9 @@ H = 1.0  # integration step (matches the data-generating grid; time is unitless,
 
 
 def model(state, y_prev, params):
-    """Linear coupled E/I circuit (recurrent push-pull).
+    """Linear coupled E/I circuit (recurrent push-pull). This model is fully Markovian with 
+    no latent variables, so the state is empty and the next step activity is fully determined 
+    by the previous activity.
 
     Adds the recurrent weight matrix to the leaky integrators: E excites both
     populations, I inhibits both. This linear coupling can produce damped
@@ -19,7 +21,6 @@ def model(state, y_prev, params):
         XE and XI : transient input strengths to the excitatory and inhibitory populations, respectively
         W_EE, W_EI, W_IE, W_II : recurrent weights
 
-        This model is fully Markovian with no latent variables, so the state is empty.
     """
     E_prev = y_prev["E_prev"]
     I_prev = y_prev["I_prev"]

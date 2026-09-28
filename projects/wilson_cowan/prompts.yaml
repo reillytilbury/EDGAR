@@ -16,18 +16,22 @@
 model:
   base: 'You are an AI scientist learning the dynamics of a **coupled neural
     circuit** with two interacting populations: an **excitatory** population E and
-    an **inhibitory** population I. Both are FULLY OBSERVED at every timestep. A
+    an **inhibitory** population I. Both are fully observed at every timestep. A
     brief external **stimulus pulse** is delivered to the circuit early in each
-    trajectory (there are two stimulus conditions — a pulse to E or a pulse to
-    I).
+    trajectory. There are two stimulus conditions — a pulse to E or a pulse to
+    I, each stimulating the corresponding population - i.e. a pulse to E increases 
+    E activity, a pulse to I increases I activity.
 
-    At each step you are given the PREVIOUS observation (E[t-1], I[t-1]) together
-    with the PREVIOUS stimulus, and you must predict the next observation
-    (E[t], I[t]). Prediction is one-step-ahead and teacher-forced. Models are scored by a
-    Gaussian negative log-likelihood in which the observation noise GROWS WITH ACTIVITY
-    (variance proportional to the predicted mean); a per-cell noise level
-    `log_noise_coef` is fitted by gradient descent alongside your dynamical parameters.
-    The NLL is averaged over both stimulus conditions and over time. Lower is better.
+    The model takes the previous excitatory and inhibitory activity (E[t-1], I[t-1]) and 
+    the previous stimulus, and outputs the next activity (E[t], I[t]). 
+    The objective of the model is to predict the mean activity of the E and I populations.
+    Models are scored by a Gaussian negative log-likelihood (NLL), and E and I population noise levels 
+    log_noise_coefs are fitted by graident descent alongside the other parameters of the model.
+    The NLL is averaged over stimulus conditions and time. Lower is better.
+
+    Models are scored on a FREE-ROLLOUT, NOT on one-step prediction. The rollout is seeded 
+    with the true first observation, and subsequent activities take model predictions as input. 
+    Errors therefore compound. 
 
     To do better your model must capture (a) how each population relaxes toward a
     baseline with its own time constant, (b) how the two populations DRIVE each
@@ -93,15 +97,17 @@ model:
 
     The image has two parts. The TOP strip shows two randomly chosen example
     populations, each split into an E panel (left) and an I panel (right) showing that
-    population''s activity over time. Use these only for a quick sense of the
-    overall fit — because prediction is one-step-ahead and teacher-forced, a decent and
-    a badly-wrong model both track the data closely here.
+    population''s activity over time — the data against your model''s FREE ROLLOUT. Therefore 
+    a wrong model VISIBLY DIVERGES from the data here — wrong amplitude,
+    wrong decay rate, spurious or missing oscillations, or an outright blow-up — while a
+    good model tracks the true trace across the whole trajectory.
 
-    The 2x2 grid BELOW plots the one-step prediction errors (residuals) : 
-    r_E = observed_E - predicted_E against the previous value of E or I, and 
-    similarly for r_I. Under teacher forcing these residuals are approximately
-    the sum of the true terms your model left out, so any leftover structure points
-    directly at a term you should add.
+    The 2x2 grid BELOW plots the rollout errors (residuals) :
+    r_E = observed_E - predicted_E against the previous OBSERVED value of E or I, and
+    similarly for r_I. Leftover structure that TRENDS with a regressor still points at a
+    missing term in that variable, so it tells you what to add; but because rollout
+    errors ACCUMULATE along the trajectory, read the residual as a qualitative direction
+    (which variable, which term) rather than an exact estimate of the omitted term.
 
     HOW TO READ A PANEL. In each panel the leftover error (vertical) is a scatter
     against the previous value of one variable (horizontal). If the model has captured

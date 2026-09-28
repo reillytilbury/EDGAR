@@ -1,5 +1,6 @@
 # ruff: noqa: E402
 import os
+import queue
 
 import cloudpickle
 
@@ -35,6 +36,8 @@ from edgar.scoring.scoring import (
     score,
 )
 
+from edgar.scoring.utils import apply_model_plain
+import cloudpickle
 
 # --- shared fixtures ---
 
@@ -115,6 +118,7 @@ BASE_CONFIG_WITH_PARAM_PENALTY = {
     "param_penalty_weight": 0.01,
 }
 
+apply_model_fn_bytes = cloudpickle.dumps(apply_model_plain)
 
 def _make_program(
     model_code, param_est=PARAM_EST_CODE, default_params={"w": jnp.array(0.5)}
@@ -198,7 +202,7 @@ def test_worker():
     queue = ctx.Queue()
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
     program_bytes = cloudpickle.dumps(program)
-    _worker(queue, program_bytes, data, loss_fn_bytes, config, eval_data, "discover")
+    _worker(queue, program_bytes, data, loss_fn_bytes, config, eval_data, "discover", apply_model_fn_bytes)
     result = queue.get()
     # Optimized model is y = x, same as train data
     final_loss = result[0]
