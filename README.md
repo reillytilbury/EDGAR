@@ -132,7 +132,7 @@ edgar resume program_databases/my_task/yyyy-mm-dd/hh-mm-ss
 - edgar/ #the code used to perform an edgar run
 - projects/ #where the user should specify the configuration for their project
   # see "Setting up a new project"
-- edgar-experimental/ #experimental features (for inspecting output of edgar runs)
+- edgar_experimental/ #experimental features (for inspecting output of edgar runs)
 - scripts/ #some useful scripts for debugging your project configuration
 ```
 
@@ -161,7 +161,7 @@ program_databases/
 ```
 
 > **EXPERIMENTAL (work in progress): edgar-analyzer agent.**
-  To in order to help with analyzing results we have configured a subagent for use with claude code or gemini cli in `agents/output`. See `agents/output/README.md` for further information on how to use this.
+  To in order to help with analyzing results we have configured a subagent for use with claude code or gemini cli in `edgar_experimental/agents/output`. See `edgar_experimental/agents/output/README.md` for further information on how to use this.
   The idea is to be able to use natural language to query results, e.g: **YOU:** Summarize the top models from the most recent run and identify common features which led to an improved score. 
   Additions to the instructions and tools in the mcp server are very welcome.
 
