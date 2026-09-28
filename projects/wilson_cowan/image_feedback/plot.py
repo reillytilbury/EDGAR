@@ -88,6 +88,7 @@ def plot_model_fits(
     # observation, then fed its own prediction; only the stimulus is teacher-forced.
     true_E = np.empty((n_show, T)); true_I = np.empty((n_show, T))
     pred_E = np.empty((n_show, T - 1)); pred_I = np.empty((n_show, T - 1))
+    stim_E_show = np.empty((n_show, T)); stim_I_show = np.empty((n_show, T))
     for row, s in enumerate(show_idx):
         sample_data = {
             "E": jnp.asarray(E[s:s + 1]),
@@ -102,25 +103,51 @@ def plot_model_fits(
         # out: (1, n_stim, T-1, >=2) -> free-rollout (E, I) at t = 1..T-1
         true_E[row] = E[s, si]; true_I[row] = I[s, si]
         pred_E[row] = out[0, si, :, 0]; pred_I[row] = out[0, si, :, 1]
+        stim_E_show[row] = np.asarray(data["stim_E"])[s, si]
+        stim_I_show[row] = np.asarray(data["stim_I"])[s, si]
 
     loss_str = f"{losses[best_j]:.4f}" if losses[best_j] is not None else "n/a"
     model_name = f"{program_names[best_j]}: loss={loss_str}"
     sample_labels = [f"sample {s}" for s in show_idx]
 
     T_show = T if window <= 0 else int(min(window, T))
-    t_true = np.arange(T_show)
-    t_pred = np.arange(1, T_show)
+
+    # Realign time so the FIRST stimulus onset sits at t=0; pre-stimulus bins are
+    # negative. Onset = the first bin (in any shown sample) where either pulse is on.
+    stim_on = (stim_E_show > 0.5) | (stim_I_show > 0.5)          # (n_show, T)
+    onset_cols = np.flatnonzero(stim_on.any(axis=0))
+    t0 = int(onset_cols[0]) if onset_cols.size else 0
+    t_true = np.arange(T_show) - t0
+    t_pred = np.arange(1, T_show) - t0
+
+    def _runs(mask):
+        """(start, end_exclusive) index pairs for each contiguous True run in mask."""
+        idx = np.flatnonzero(mask)
+        if idx.size == 0:
+            return []
+        brk = np.flatnonzero(np.diff(idx) > 1)
+        starts = np.concatenate(([idx[0]], idx[brk + 1]))
+        ends = np.concatenate((idx[brk], [idx[-1]])) + 1
+        return list(zip(starts.tolist(), ends.tolist()))
 
     # One row per shown sample; E panel (left) and I panel (right), data vs rollout.
     fig, axes = plt.subplots(
         n_show, 2, figsize=(11, 2.2 * n_show + 0.5), squeeze=False,
     )
     for row in range(n_show):
+        # Pulse windows for this sample's stim condition — shaded in BOTH panels:
+        # faint red where the E pulse is on, faint blue where the I pulse is on.
+        e_spans = _runs(stim_E_show[row, :T_show] > 0.5)
+        i_spans = _runs(stim_I_show[row, :T_show] > 0.5)
         for ci, (chan, obs, pred, mcolor) in enumerate([
             ("E", true_E, pred_E, "tab:red"),
             ("I", true_I, pred_I, "tab:blue"),
         ]):
             ax = axes[row, ci]
+            for a, b in e_spans:
+                ax.axvspan(a - t0, b - t0, color="tab:red", alpha=0.12, lw=0)
+            for a, b in i_spans:
+                ax.axvspan(a - t0, b - t0, color="tab:blue", alpha=0.12, lw=0)
             ax.plot(t_true, obs[row, :T_show], color="0.35", lw=0.9, label="data")
             ax.plot(t_pred, pred[row, :T_show - 1], color=mcolor, lw=0.9,
                     alpha=0.9, label="model (rollout)")
@@ -131,7 +158,7 @@ def plot_model_fits(
             if ci == 0:
                 ax.set_ylabel("activity", fontsize=8)
             if row == n_show - 1:
-                ax.set_xlabel("time bin", fontsize=8)
+                ax.set_xlabel("time from stim onset", fontsize=8)
             if row == 0 and ci == 0:
                 ax.legend(fontsize=7, loc="upper right")
 
