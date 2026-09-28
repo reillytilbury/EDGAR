@@ -1026,6 +1026,20 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
             return None
         return float(np.max(valid))
 
+    def _mean(lst):
+        if not lst:
+            return None
+        valid = [
+            float(x)
+            for x in lst
+            if x is not None
+            and not isinstance(x, NotValidated)
+            and math.isfinite(float(x))
+        ]
+        if not valid:
+            return None
+        return float(np.mean(valid))
+
     sample_losses_summary = None
     if p.sample_losses is not None:
         arr = np.asarray(p.sample_losses, dtype=float)
@@ -1077,10 +1091,26 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
             "discover": {
                 "init": _safe_loss(p.program_losses.discover.init),
                 "final": _safe_loss(p.program_losses.discover.final),
+                "min_init": _min(p.program_losses.discover.all_init),
+                "max_init": _max(p.program_losses.discover.all_init),
+                "mean_init": _mean(p.program_losses.discover.all_init),
+                "std_init": _std(p.program_losses.discover.all_init),
+                "min_final": _min(p.program_losses.discover.all_final),
+                "max_final": _max(p.program_losses.discover.all_final),
+                "mean_final": _mean(p.program_losses.discover.all_final),
+                "std_final": _std(p.program_losses.discover.all_final),
             },
             "validate": {
                 "init": _safe_loss(p.program_losses.validate.init),
                 "final": _safe_loss(p.program_losses.validate.final),
+                "min_init": _min(p.program_losses.validate.all_init),
+                "max_init": _max(p.program_losses.validate.all_init),
+                "mean_init": _mean(p.program_losses.validate.all_init),
+                "std_init": _std(p.program_losses.validate.all_init),
+                "min_final": _min(p.program_losses.validate.all_final),
+                "max_final": _max(p.program_losses.validate.all_final),
+                "mean_final": _mean(p.program_losses.validate.all_final),
+                "std_final": _std(p.program_losses.validate.all_final),
             },
         },
         "params": params_clean,

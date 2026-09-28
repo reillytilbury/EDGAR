@@ -130,11 +130,15 @@ class LossStats:
         final: The final loss value after parameter optimization. Can be `NotValidated`
             if the program is awaiting validation scoring.
         trajectories: Optimization histories (loss values per step) for all individual estimators.
+        all_init: Initial losses for all individual parameter estimators.
+        all_final: Final losses for all individual parameter estimators.
     """
 
     init: float | None = None
     final: float | NotValidated | None = None
     trajectories: np.ndarray | None = None
+    all_init: list[float] | None = None
+    all_final: list[float] | None = None
 
 
 @dataclass
