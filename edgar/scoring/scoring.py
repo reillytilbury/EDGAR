@@ -602,10 +602,12 @@ def score(
                 sample_losses,
                 params_init,
                 sample_losses_init,
+                all_final,
+                all_init,
                 best_idx,
                 trajectories,
                 outcome,
-            ) = _score_one_model(program, data_ref, loss_fn, config, X_eval, split, apply_model_fn)
+            ) = _score_one_model(program, X_split, loss_fn, config, X_eval, split)
             latency_ms = (time.monotonic() - t0) * 1000.0
             latencies_ms.append(latency_ms)
             counters[outcome] += 1
@@ -614,6 +616,8 @@ def score(
             loss_pair.init = initial_loss
             loss_pair.final = final_loss
             loss_pair.trajectories = trajectories
+            loss_pair.all_init = all_init
+            loss_pair.all_final = all_final
 
             # Record the best parameter estimator
             if best_idx is not None:
