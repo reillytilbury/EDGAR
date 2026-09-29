@@ -1,0 +1,45 @@
+run:
+  random_seed: 42
+
+io:
+  data_path: ""     # synthetic; unused
+
+evolution:
+  # Smoke defaults — override on the CLI for real runs (e.g. --evolution.n_generations=20).
+  n_generations: 2
+  n_islands: 2
+  batch_size: 2
+  critical_population_size: 6
+  n_migrants: 1
+  topology: [1, 0]
+
+llms:
+  num_parents: 2
+  model_llm: claude-code-headless
+  param_est_llm: claude-code-headless
+  jax_model_translator_llm: claude-code-headless
+  max_tokens: 10000
+
+scoring:
+  param_penalty_weight: 0.001
+  # FHN scan is longer than oscillator_ss (T=2400 vs 1024) → JIT takes longer.
+  timeout_s: 600.0
+  gradient_descent:
+    max_iter: 500
+    learning_rate: 0.005
+    gradient_clip_norm: 5.0
+
+project_params:
+  n_trajectories: 32
+  T: 2400
+  train_frac: 0.5   # fraction of each trajectory used to fit params. Model performance is evaluated on held-out trials
+  dt: 0.05
+  I0: 0.5           # supra-threshold drive → tonic-ish firing with noise-induced spike times
+  a: 0.7
+  b: 0.8
+  eps: 0.08         # small ε → slow recovery variable
+  proc_noise_std: 0.3
+  obs_noise_std: 0.05
+  T_eval: 200
+  n_eval: 4
+  seed: 42

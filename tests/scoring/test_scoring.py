@@ -1,5 +1,6 @@
 # ruff: noqa: E402
 import os
+import queue
 
 import cloudpickle
 
@@ -16,6 +17,7 @@ import multiprocessing as mp
 
 import numpy as np
 import jax.numpy as jnp
+import pytest
 
 from tests.llm.programs import Program1
 
@@ -34,6 +36,8 @@ from edgar.scoring.scoring import (
     score,
 )
 
+from edgar.scoring.utils import apply_model_plain
+import cloudpickle
 
 # --- shared fixtures ---
 
@@ -114,6 +118,7 @@ BASE_CONFIG_WITH_PARAM_PENALTY = {
     "param_penalty_weight": 0.01,
 }
 
+apply_model_fn_bytes = cloudpickle.dumps(apply_model_plain)
 
 def _make_program(
     model_code, param_est=PARAM_EST_CODE, default_params={"w": jnp.array(0.5)}
@@ -197,7 +202,7 @@ def test_worker():
     queue = ctx.Queue()
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
     program_bytes = cloudpickle.dumps(program)
-    _worker(queue, program_bytes, data, loss_fn_bytes, config, eval_data, "discover")
+    _worker(queue, program_bytes, data, loss_fn_bytes, config, eval_data, "discover", apply_model_fn_bytes)
     result = queue.get()
     # Optimized model is y = x, same as train data
     final_loss = result[0]
@@ -298,9 +303,10 @@ def test_score_one_model_with_array_params():
 def test_score_one_gives_infinite_loss_for_program_with_none_default_params():
     program = _make_program(FAST_MODEL_CODE, default_params=None)
     assert program.n_params is None
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
-        program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
-    )
+    with pytest.warns(UserWarning, match="n_params=None"):
+        final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+            program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+        )
     assert final_loss == float("inf")
     assert initial_loss == float("inf")
     assert trajectories is None

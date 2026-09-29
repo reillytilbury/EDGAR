@@ -1,0 +1,171 @@
+# State-space DSL for stochastic FitzHugh-Nagumo. Deep-merged over projects/prompt_defaults.yaml.
+#
+# Key difference from oscillator_ss: the observation is 1-D (voltage-like) but
+# the underlying system has a HIDDEN slow recovery variable. A model without
+# hidden state cannot represent excitability — the LLM must invent one.
+
+model:
+  base: 'You are an AI scientist learning a **state-space model** for a noisy 1-D
+    signal that comes from an **excitable dynamical system**. Each trajectory looks
+    like long quiet periods punctuated by sharp, stereotyped excursions (spikes)
+    with a slow recovery back to baseline. The underlying system has more than
+    one state variable — but you only observe ONE of them at each timestep.
+
+    Your model tracks a hidden state (which may include unobserved variables such
+    as a slow refractoriness/recovery/adaptation variable) and at each step
+    predicts the next observation from that state. Just tracking position and
+    velocity is NOT ENOUGH — a linear oscillator has no refractory period and
+    cannot represent the fast-slow, spike-and-recover structure you see.
+
+    You are given the PREVIOUS observation y[t-1] to update your state; you must
+    NOT peek at y[t] when predicting it. The framework enforces this: y[t] is not
+    in scope. Loss is per-sample Gaussian negative log-likelihood over the
+    trajectory (after a fixed 100-step warmup during which the hidden-state
+    prior stabilises). Lower is better.
+
+    A trivial baseline predicts y[t] ≈ y[t-1] (persistence) and gets slaughtered
+    on spike onsets. A linear oscillator seed can capture some rhythm but cannot
+    represent the after-spike refractory period. To beat both, your model MUST
+    carry at least one hidden variable that is not directly observed but that
+    modulates when the next spike can occur.
+
+    Below are {num_parents} models, sorted from worst to best. *Analyze* their
+    progression, *generalize* what lowers the loss, and *create* a new model that
+    beats all of them.
+
+    '
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use (use numpy as np).
+
+    * Model signature must be `def model(state, y_prev, params):` — a SINGLE
+    step of a state-space model. `state` is a dict of scalar floats (the current
+    belief); `y_prev` is a scalar (the observation from the previous timestep);
+    `params` is a dict of learnable scalars.
+
+    * OUTPUT: return the tuple `(new_state, mean)` where `new_state` is a dict
+    with EXACTLY the same keys as `state`, and `mean` is a scalar — your
+    prediction of the next observation''s mean. Do NOT return an array. Do NOT
+    return a distribution — observation noise is handled by a single learnable
+    `log_sigma_obs` parameter (see below).
+
+    * y[t] IS NOT IN SCOPE. You only see `y_prev` = y[t-1] and the current
+    `state`. Predicting y[t] means outputting a mean based on state and y_prev;
+    the framework compares it to the true y[t] for the loss.
+
+    * **HIDDEN STATE IS ESSENTIAL FOR THIS TASK.** The underlying system is
+    excitable — spikes need a slow variable that resets after each spike and
+    determines when the next spike can fire. The observed signal (y_prev) alone
+    cannot tell you where you are in the recovery cycle. Introduce a hidden
+    scalar (name it `w` for "recovery variable", `u` for "adaptation", or
+    whatever you like) that:
+        - has its own slow dynamics (small time-constant coefficient in front
+          of the differential update)
+        - is driven by the observable (via a term like `+ y_prev` or
+          `+ observable_state`)
+        - modulates the next-step prediction of the observable (subtractive
+          coupling like `dV/dt = ... - w` is typical for FHN-like systems)
+
+    * PATTERN (predict-then-update, Kalman-style with hidden variable):
+        innovation = y_prev - state["V_expected"]
+        V_c = state["V"] + gain * innovation
+        w_c = state["w"]                                # no direct obs of w
+        # dynamics — hidden w evolves slowly, V has fast excitable dynamics
+        V_next = V_c + dt * (f_fast(V_c) - w_c + I0)
+        w_next = w_c + dt * eps * g_slow(V_c, w_c)      # eps small → slow
+        mean = V_next
+
+    * You may store additional state if it helps. Keep the state small (≤ 6
+    scalars). Every state key needs a matching `s0_<key>` in DEFAULT_PARAMS.
+
+    * DEFAULT_PARAMS convention:
+        - Include one entry per learnable parameter, e.g. `I0`, `eps`, `k_gain`.
+        - Include `log_sigma_obs` — the log observation noise std (typically -2 to 0).
+        - For each state key `<key>`, include an entry `s0_<key>` — the initial
+          value the framework will use as the scan starting state.
+      Example for a state = {{"V": ..., "w": ...}} FHN-like model:
+        model.DEFAULT_PARAMS = {{"I0": 0.5, "eps": 0.08, "k_V": 0.3,
+                                 "log_sigma_obs": -1.5,
+                                 "s0_V": -1.0, "s0_w": -0.5}}
+      The framework strips the `s0_` prefix and passes those as `state`; the rest
+      are the `params` dict your model receives.
+
+    * CRITICAL: array shapes are irrelevant — state values are scalars.
+    Use pure scalar arithmetic. No `np.arange`, no dynamic shapes, no slicing.
+
+    * Provide `model.DEFAULT_PARAMS`: sensible float initial values for every key
+    in `params`, including all `s0_*` and `log_sigma_obs` keys.
+
+    '
+parameter_estimator:
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use (use numpy as np).
+
+    * Function signature must be `def parameter_estimator(data):`. `data` is
+    one trajectory''s training dict with `data[''y'']` — a 1-D array of length T
+    of the observed time series.
+
+    * Return a param dict whose keys EXACTLY match the model''s `DEFAULT_PARAMS`,
+    including `log_sigma_obs` AND every `s0_*` initial-state key. Missing any of
+    these will cause your parameter_estimator to be rejected. All values must be
+    plain Python floats.
+
+    * Sensible defaults for common keys:
+        - `log_sigma_obs`: log of the std of first-difference residuals
+          (`np.log(np.diff(y).std())`).
+        - `s0_V` (or the observable-state initial value): `float(y[0])`.
+        - `s0_w` / `s0_u` (hidden-state initial values): cannot be observed
+          directly — use `0.0` or a small constant. Gradient descent will
+          refine them.
+        - Time-constants for hidden variables: pick a small value like `0.05`
+          to `0.1`; gradient descent will refine.
+
+    * Your response **must** be less than {max_lines} lines including imports.
+
+    * Do not use complex fitting functions like {swear_words}; a simple, fast
+    initial estimate is all that is needed.
+
+    * Do not call the model function; you will not have access to it.
+
+    '
+jax_translator_model:
+  code_guidelines: 'CRITICAL JAX compatibility requirements for this state-space
+    project:
+
+    * The model signature is `def model(state, y_prev, params)` and returns
+    `(new_state, mean)` — a Python tuple whose second element is a jnp scalar.
+    Preserve this signature and return-tuple structure exactly.
+
+    * `state` and `new_state` are Python dicts with the SAME keys throughout the
+    scan. Do not add, remove, or rename keys. Every access `state["key_name"]`
+    must have a matching entry in the returned `new_state`.
+
+    * Preserve `model.DEFAULT_PARAMS` verbatim, including all `s0_*` prefixed
+    keys and `log_sigma_obs`. These are load-bearing: the framework strips
+    `s0_*` to build the scan carry and reads `log_sigma_obs` to build the
+    Gaussian NLL.
+
+    * Replace all boolean indexing with `jnp.where`.
+
+    * Use `jnp` everywhere (no `np`). Use `jnp.clip` for clipping — not
+    `jax.lax.clip`.
+
+    * Avoid Python control flow (if/for) that depends on array values. Use
+    `jnp.where` for element-wise conditionals.
+
+    * No dynamic array shapes — all constants must be Python literals or
+    compile-time integers.
+
+    * Never call Python `int()` / `float()` on JAX values. Use `x.astype(float)`
+    instead.
+
+    * Ensure compatibility with `jax.jit`, `jax.grad`, `jax.vmap`, AND
+    `jax.lax.scan` — the model is called inside a scan whose carry structure
+    must be invariant. Do not introduce any operation that produces a tracer
+    with a shape different from `state`.
+
+    * Ensure all string values in function call arguments are properly
+    JSON-escaped.
+
+    '

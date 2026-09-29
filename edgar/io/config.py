@@ -28,7 +28,6 @@ ValidLLMs = Literal[
     "gemini-3.1-flash-lite",
     "gemini-3.1-pro-preview",
     "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
     "gemini-3.7-flash",
     "claude-haiku-4-5",
@@ -37,7 +36,10 @@ ValidLLMs = Literal[
     "claude-opus-4-5",
     "claude-opus-4-6",
     "claude-opus-4-7",
-]
+    # Headless Claude Code CLI — no API key, uses the local `claude` binary.
+    # See edgar/llm/claude_headless.py.
+    "claude-code-headless",
+    ]
 """Literal type for valid LLM model names.
 """
 
@@ -312,10 +314,15 @@ class GradientDescentConfig(_LaxModel):
     Attributes:
         max_iter: The maximum number of iterations for the gradient descent algorithm.
         learning_rate: The learning rate used by the optimizer.
+        gradient_clip_norm: Optional global-norm gradient clip. When set, the
+            optimizer becomes ``optax.chain(clip_by_global_norm(norm), adam(lr))``
+            (pre-Adam clipping). Needed for state-space models that backprop
+            through long ``lax.scan`` sequences.
     """
 
     max_iter: int
     learning_rate: float
+    gradient_clip_norm: float | None = None
 
 
 class ScoringConfig(_LaxModel):

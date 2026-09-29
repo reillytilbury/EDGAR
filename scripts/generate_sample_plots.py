@@ -71,7 +71,15 @@ def generate_samples(project: str):
         population.add(seed_p)
 
     print("Scoring seed programs...")
-    score(population, X_discover, X_eval, spec.scoring, spec.loss_fn, split="discover")
+    score(
+        population,
+        X_discover,
+        X_eval,
+        spec.scoring,
+        spec.loss_fn,
+        split="discover",
+        apply_model_fn=spec.apply_model_fn,
+    )
 
     programs = [population[i] for i in range(len(population))]
 
