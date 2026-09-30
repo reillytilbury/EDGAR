@@ -256,9 +256,54 @@ Per-sample loss between model predictions (`model_output`) and data (`data`).
 
 Note that when `loss_fn` is evaluated the data arrays and model_output passed to it will contain JAX arrays.
 
+#### Optional custom model application
+
+By default, EDGAR evaluates models by vmapping the model over the leading
+sample axis:
+
+```python
+jax.vmap(model_fn, in_axes=(0, 0))(data, params)
+```
+
+Projects that need different application logic—such as recurrent scans or hidden-state handling—may define
+the following optional function in `data_loader/load_data.py`:
+
+```python
+def apply_model(model_fn, data, params):
+    ...
+    return model_output
+```
+
+- `model_fn` is the compiled candidate model.
+- `data` is a batched data dictionary.
+- `params` is a parameter pytree whose leaves have a leading sample axis.
+- The returned batched output is passed to `loss_fn`.
+
+A custom `apply_model` must be JAX-compatible.
+
+For example, a dynamical model could scan over each
+sample (timestep):
+
+```python
+def apply_model(model_fn, data, params):
+    def apply_one(sequence, sample_params):
+        def step(state, observation):
+            new_state, prediction = model_fn(state, observation, sample_params)
+            return new_state, prediction
+
+        initial_state = ...
+        _, predictions = jax.lax.scan(step, initial_state, sequence)
+        return predictions
+
+    return jax.vmap(apply_one)(data["sequence"], params)
+```
+
 ### 3. Fill in seed programs
 
-`model*.py` must define `def model(data, params):`
+By default, `model*.py` must define `def model(data, params):`. If the project
+provides a custom `apply_model`, it may establish a different model signature;
+all seed programs and generated models must use that same contract.
+
 - `data`: dict of JAX arrays for one sample, e.g. `data['stimulus']` shape `(n_trials,)`.
 - `params`: dict of named scalars/arrays.
 - Returns predictions shape `(n_trials,)`.
