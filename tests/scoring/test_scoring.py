@@ -1,8 +1,8 @@
 # ruff: noqa: E402
 import os
-import queue
 
 import cloudpickle
+import jax
 
 # Configure JAX to not preallocate all GPU memory and use platform allocator to avoid OOM errors
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -37,13 +37,25 @@ from edgar.scoring.scoring import (
 )
 
 from edgar.scoring.utils import apply_model_plain
-import cloudpickle
 
 # --- shared fixtures ---
 
 
 def basic_model_fn(data, params):
     return params["w"] * data["x"]
+
+
+def sample_scaled_apply_model(model_fn, data, params):
+    """Apply ``model_fn`` after scaling each sample's input independently."""
+
+    def apply_one(sample_data, sample_params):
+        model_data = {
+            **sample_data,
+            "x": sample_data["x"] * sample_data["sample_scale"],
+        }
+        return model_fn(model_data, sample_params)
+
+    return jax.vmap(apply_one)(data, params)
 
 
 def _make_basic_data(y_offset=0.0):
@@ -119,6 +131,7 @@ BASE_CONFIG_WITH_PARAM_PENALTY = {
 }
 
 apply_model_fn_bytes = cloudpickle.dumps(apply_model_plain)
+
 
 def _make_program(
     model_code, param_est=PARAM_EST_CODE, default_params={"w": jnp.array(0.5)}
@@ -202,7 +215,16 @@ def test_worker():
     queue = ctx.Queue()
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
     program_bytes = cloudpickle.dumps(program)
-    _worker(queue, program_bytes, data, loss_fn_bytes, config, eval_data, "discover", apply_model_fn_bytes)
+    _worker(
+        queue,
+        program_bytes,
+        data,
+        loss_fn_bytes,
+        config,
+        eval_data,
+        "discover",
+        apply_model_fn_bytes,
+    )
     result = queue.get()
     # Optimized model is y = x, same as train data
     final_loss = result[0]
@@ -274,6 +296,63 @@ def test_score_one_model_perfect_fit():
     assert outcome == "ok"
 
 
+def test_score_one_model_with_custom_apply_model():
+    """A custom apply function is used throughout subprocess scoring."""
+    program = _make_program(FAST_MODEL_CODE)
+
+    data = _make_data(n_samples=2)
+    data["sample_scale"] = jnp.array([1.0, 2.0])
+
+    eval_data = _make_data(n_samples=2)
+    eval_data["x"] = 2.0 * jnp.ones_like(eval_data["x"])
+    eval_data["sample_scale"] = jnp.array([1.0, 2.0])
+    eval_data["_sample_indices"] = jnp.array([0, 1])
+
+    config = {
+        **BASE_CONFIG,
+        "gradient_descent": {"max_iter": 100, "learning_rate": 0.1},
+    }
+
+    (
+        final_loss,
+        initial_loss,
+        fingerprint,
+        params,
+        sample_losses,
+        _params_init,
+        sample_losses_init,
+        _all_final,
+        _all_init,
+        best_idx,
+        trajectories,
+        outcome,
+    ) = _score_one_model(
+        program,
+        (data, data),
+        loss_fn,
+        config,
+        X_eval=eval_data,
+        apply_model_fn=sample_scaled_apply_model,
+    )
+
+    assert outcome == "ok"
+    assert best_idx == 0
+
+    # The custom scaling changes the optimum from w=[1, 1] to w=[1, 0.5].
+    assert np.allclose(params["w"], jnp.array([[1.0], [0.5]]), atol=2e-2)
+    assert final_loss < 1e-3
+    assert np.all(sample_losses < 1e-3)
+
+    # With the initial w=0.9, the two sample losses are 0.01 and 0.64.
+    expected_initial_sample_losses = jnp.array([0.01, 0.64])
+    assert np.allclose(sample_losses_init, expected_initial_sample_losses, atol=1e-5)
+    assert np.isclose(initial_loss, 0.325, atol=1e-5)
+    assert np.isclose(trajectories[0][0], 0.325, atol=1e-5)
+
+    # Fingerprinting also uses the custom apply function: both fitted outputs are 2.
+    assert np.allclose(fingerprint, 2.0 * jnp.ones_like(eval_data["x"]), atol=5e-2)
+
+
 def test_score_one_model_perfect_fit_with_param_penalty():
     """w=1.0 with y=x should give near-param_penalty loss after optimization."""
     program = _make_program(FAST_MODEL_CODE)
@@ -304,8 +383,10 @@ def test_score_one_gives_infinite_loss_for_program_with_none_default_params():
     program = _make_program(FAST_MODEL_CODE, default_params=None)
     assert program.n_params is None
     with pytest.warns(UserWarning, match="n_params=None"):
-        final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
-            program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+        final_loss, initial_loss, *_, best_idx, trajectories, outcome = (
+            _score_one_model(
+                program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+            )
         )
     assert final_loss == float("inf")
     assert initial_loss == float("inf")
@@ -648,6 +729,69 @@ def test_score_assigns_best_param_est():
     assert pop[0].program_losses.discover.all_final is not None
     assert len(pop[0].program_losses.discover.all_init) == 2
     assert len(pop[0].program_losses.discover.all_final) == 2
+
+
+def test_score_forwards_custom_apply_model(monkeypatch):
+    """Population scoring passes a custom apply function to model scoring."""
+    pop = Population()
+    pop.add(_make_program(FAST_MODEL_CODE))
+    data = (_make_data(), _make_data())
+    received = {}
+
+    def fake_score_one_model(
+        program,
+        scoring_data,
+        scoring_loss_fn,
+        config,
+        X_eval=None,
+        split="discover",
+        apply_model_fn=apply_model_plain,
+    ):
+        received["program"] = program
+        received["data"] = scoring_data
+        received["loss_fn"] = scoring_loss_fn
+        received["config"] = config
+        received["X_eval"] = X_eval
+        received["split"] = split
+        received["apply_model_fn"] = apply_model_fn
+
+        return (
+            0.0,
+            1.0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            [0.0],
+            [1.0],
+            None,
+            None,
+            "ok",
+        )
+
+    monkeypatch.setattr("edgar.scoring.scoring._score_one_model", fake_score_one_model)
+
+    score(
+        pop,
+        data,
+        None,
+        BASE_CONFIG,
+        loss_fn,
+        split="discover",
+        apply_model_fn=sample_scaled_apply_model,
+    )
+
+    assert received["program"] is pop[0]
+    assert received["data"] is data
+    assert received["loss_fn"] is loss_fn
+    assert received["config"] is BASE_CONFIG
+    assert received["X_eval"] is None
+    assert received["split"] == "discover"
+    assert received["apply_model_fn"] is sample_scaled_apply_model
+
+    assert pop[0].program_losses.discover.init == 1.0
+    assert pop[0].program_losses.discover.final == 0.0
 
 
 # --- rank ---
