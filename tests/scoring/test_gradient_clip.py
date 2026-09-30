@@ -10,6 +10,7 @@ via ``gd_config["gradient_clip_norm"]``. These tests verify:
 2. When the key is set, gradients are actually clipped: with an aggressive
    learning rate that would diverge without clipping, params stay bounded.
 """
+
 # ruff: noqa: E402
 import sys
 from pathlib import Path
@@ -25,6 +26,7 @@ from edgar.scoring.scoring import _optimize
 
 def _make_model_and_data():
     """Simple linear model y = w*x with a batch of 3 samples."""
+
     def model_fn(data, params):
         return params["w"] * data["x"]
 
@@ -32,7 +34,7 @@ def _make_model_and_data():
         return jnp.mean((output - data["y"]) ** 2, axis=-1)
 
     x = jnp.ones((3, 8))
-    data = {"x": x, "y": x * 2.0}   # true w = 2.0
+    data = {"x": x, "y": x * 2.0}  # true w = 2.0
     params_init = {"w": jnp.array([1.0, 1.0, 1.0])}
     return model_fn, loss_fn, data, params_init
 
@@ -42,11 +44,17 @@ def test_optimize_without_clip_norm_matches_baseline():
     model_fn, loss_fn, data, params_init = _make_model_and_data()
 
     (result_no_key,), _ = _optimize(
-        model_fn, loss_fn, params_init, data,
+        model_fn,
+        loss_fn,
+        params_init,
+        data,
         gd_config={"max_iter": 20, "learning_rate": 0.05},
     )
     (result_none,), _ = _optimize(
-        model_fn, loss_fn, params_init, data,
+        model_fn,
+        loss_fn,
+        params_init,
+        data,
         gd_config={"max_iter": 20, "learning_rate": 0.05, "gradient_clip_norm": None},
     )
     assert jnp.allclose(result_no_key["w"], result_none["w"])
@@ -57,7 +65,10 @@ def test_optimize_with_clip_norm_produces_finite_result():
     model_fn, loss_fn, data, params_init = _make_model_and_data()
 
     (result,), _ = _optimize(
-        model_fn, loss_fn, params_init, data,
+        model_fn,
+        loss_fn,
+        params_init,
+        data,
         gd_config={"max_iter": 50, "learning_rate": 0.05, "gradient_clip_norm": 1.0},
     )
     assert jnp.all(jnp.isfinite(result["w"]))
@@ -76,7 +87,10 @@ def test_clip_norm_keeps_params_bounded_under_aggressive_lr():
     model_fn, loss_fn, data, params_init = _make_model_and_data()
 
     (result,), _ = _optimize(
-        model_fn, loss_fn, params_init, data,
+        model_fn,
+        loss_fn,
+        params_init,
+        data,
         gd_config={"max_iter": 100, "learning_rate": 5.0, "gradient_clip_norm": 0.1},
     )
     assert jnp.all(jnp.isfinite(result["w"]))
@@ -95,7 +109,10 @@ def test_clip_norm_config_uses_get_not_indexing():
 
     # No gradient_clip_norm key at all in the config — must not raise.
     (result,), _ = _optimize(
-        model_fn, loss_fn, params_init, data,
+        model_fn,
+        loss_fn,
+        params_init,
+        data,
         gd_config={"max_iter": 5, "learning_rate": 0.01},
     )
     assert jnp.all(jnp.isfinite(result["w"]))

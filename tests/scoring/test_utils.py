@@ -79,8 +79,10 @@ def test_safe_sorting():
 def basic_model(data, params):
     return params["w"] * data["x"]
 
+
 def basic_apply_model(model_fn, data, params):
     return jax.vmap(model_fn, in_axes=(0, 0))(data, params)
+
 
 def strict_model(data, params):
     assert data["x"].shape == (3,)
@@ -148,7 +150,9 @@ def test_evaluate_scalar_loss_expected():
 
     params = {"w": jnp.array([1.0, 2.0])}  # Shape (2,)
     data = {"x": jnp.array([2.0, 4.0]), "y": jnp.array([3.0, 9.0])}  # Shape (2,)
-    scalar_loss = evaluate_scalar_loss(model_fn, loss_fn, params, data, basic_apply_model)
+    scalar_loss = evaluate_scalar_loss(
+        model_fn, loss_fn, params, data, basic_apply_model
+    )
     assert scalar_loss.shape == ()
     expected_scalar_loss = jnp.mean(
         jnp.array([1.0, 1.0])
