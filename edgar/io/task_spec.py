@@ -40,6 +40,7 @@ from ..evolution.program import Program, BirthCertificate, Code
 from ..llm.code_loading import load_function_from_source
 from ..llm.prompt_schema import PromptSchema
 from ..llm.response_schema import RESPONSE_SCHEMAS
+from ..scoring.utils import apply_model_plain
 from .config import Config
 from .config import REPO_ROOT
 
@@ -285,9 +286,6 @@ class TaskSpec:
             raise ValueError(f"{data_loader_path} must define callable load_data()")
 
         loss_fn = _load_loss_fn(data_loader_path)
-
-        # Optional per-project override of how model_fn is mapped over the data.
-        from ..scoring.scoring import apply_model_plain
 
         apply_model_fn = (
             load_function_from_source(data_loader_path.read_text(), "apply_model")

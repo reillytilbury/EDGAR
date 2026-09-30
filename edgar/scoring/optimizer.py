@@ -51,11 +51,6 @@ class Optimizer:
         self.loss_fn = loss_fn
         self.data_train = data_train
         self.gd_config = gd_config
-        # Initializes the Adam optimizer from Optax with the specified learning rate.
-        # When `gradient_clip_norm` is set, wrap Adam with pre-Adam global-norm
-        # clipping (standard order): optax.chain(clip_by_global_norm, adam). Needed
-        # for models that backprop through long lax.scan sequences and can produce
-        # exploding gradients on early iterations. Absent/None → plain Adam.
         clip_norm = gd_config.get("gradient_clip_norm")
         adam = optax.adam(gd_config["learning_rate"])
         self.opt = (

@@ -3,12 +3,12 @@ from typing import Any, Callable
 
 import jax
 import jax.numpy as jnp
+import tempfile
+from pathlib import Path
+import numpy as np
+
 
 def apply_model_plain(model_fn, data, params):
-    """Default model application: vmap the model over axis-0 (one sample = one
-    param set), matching EDGAR's standard contract. Projects can override this
-    via ``TaskSpec.apply_model_fn`` to change how ``model_fn`` is mapped over the
-    data (e.g. a nested vmap for per-neuron windowed prediction)."""
     return jax.vmap(model_fn, in_axes=(0, 0))(data, params)
 
 
@@ -124,7 +124,9 @@ def evaluate_scalar_loss(
     Returns:
         A scalar JAX array representing the mean loss across all samples.
     """
-    return jnp.mean(evaluate_sample_losses(model_fn, loss_fn, params, data, apply_model_fn))
+    return jnp.mean(
+        evaluate_sample_losses(model_fn, loss_fn, params, data, apply_model_fn)
+    )
 
 
 def eval_fingerprint(model_fn, params, X_eval, apply_model_fn=apply_model_plain):
@@ -147,3 +149,72 @@ def eval_fingerprint(model_fn, params, X_eval, apply_model_fn=apply_model_plain)
     sample_indices = X_eval["_sample_indices"]
     params_matched = jax.tree_util.tree_map(lambda p: p[sample_indices], params)
     return _evaluate_model_output(model_fn, params_matched, X_eval, apply_model_fn)
+
+
+# Large train/test splits are written once to a temp .npz per ``score()`` call
+# so each subprocess receives a path string instead of re-pickling the full
+# pytree through the spawn pipe.
+_SCORING_DATA_NPZ_THRESHOLD_BYTES = 32 * 1024 * 1024
+
+
+class ScoringDataStore:
+    """Materialize a (train, test) tuple to disk when it exceeds the pickle threshold."""
+
+    def __init__(self, data: tuple):
+        self._data = data
+        self._path: str | None = None
+        self._tmpdir: tempfile.TemporaryDirectory | None = None
+
+    def ref(self) -> tuple | str:
+        train, test = self._data
+        nbytes = sum(
+            np.asarray(v).nbytes
+            for split in (train, test)
+            for k, v in split.items()
+            if k != "_sample_indices"
+        )
+        if nbytes < _SCORING_DATA_NPZ_THRESHOLD_BYTES:
+            return self._data
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="edgar_scoring_")
+        path = Path(self._tmpdir.name) / "data.npz"
+        arrays = {}
+        for k, v in train.items():
+            if k != "_sample_indices":
+                arrays[f"train_{k}"] = np.asarray(v)
+        for k, v in test.items():
+            if k != "_sample_indices":
+                arrays[f"test_{k}"] = np.asarray(v)
+        np.savez(path, **arrays)
+        self._path = str(path)
+        return self._path
+
+    def cleanup(self) -> None:
+        if self._tmpdir is not None:
+            self._tmpdir.cleanup()
+            self._tmpdir = None
+            self._path = None
+
+
+def resolve_scoring_data(data_or_path: tuple | str) -> tuple:
+    """Resolve scoring data to a ``(train, test)`` tuple of NumPy arrays.
+
+    ``data_or_path`` is either the in-memory tuple supplied by the caller or a
+    path to the temporary ``.npz`` representation used for large datasets.
+    Device conversion is intentionally handled separately by the scoring
+    worker via :func:`edgar.jax.utils._to_jax`.
+    """
+    if isinstance(data_or_path, tuple):
+        return data_or_path
+
+    with np.load(data_or_path) as loaded:
+        train = {
+            k.removeprefix("train_"): np.asarray(loaded[k])
+            for k in loaded.files
+            if k.startswith("train_")
+        }
+        test = {
+            k.removeprefix("test_"): np.asarray(loaded[k])
+            for k in loaded.files
+            if k.startswith("test_")
+        }
+    return train, test

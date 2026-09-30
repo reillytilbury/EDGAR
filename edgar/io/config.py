@@ -28,6 +28,7 @@ ValidLLMs = Literal[
     "gemini-3.1-flash-lite",
     "gemini-3.1-pro-preview",
     "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
     "gemini-3.7-flash",
     "claude-haiku-4-5",
@@ -36,10 +37,8 @@ ValidLLMs = Literal[
     "claude-opus-4-5",
     "claude-opus-4-6",
     "claude-opus-4-7",
-    # Headless Claude Code CLI — no API key, uses the local `claude` binary.
-    # See edgar/llm/claude_headless.py.
     "claude-code-headless",
-    ]
+]
 """Literal type for valid LLM model names.
 """
 

@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
-import tempfile
 import time
-from pathlib import Path
 
 import traceback
 import cloudpickle
@@ -37,70 +35,12 @@ from .utils import (
     eval_fingerprint,
     apply_model_plain,
     _safe_loss,
+    ScoringDataStore,
+    resolve_scoring_data,
 )
 
+
 # ── helpers ──
-
-# Large train/test splits are written once to a temp .npz per ``score()`` call 
-# so each subprocess receives a path string instead of re-pickling the full 
-# pytree through the spawn pipe.
-_SCORING_DATA_NPZ_THRESHOLD_BYTES = 32 * 1024 * 1024
-
-
-class _ScoringDataStore:
-    """Materialize a (train, test) tuple to disk when it exceeds the pickle threshold."""
-
-    def __init__(self, data: tuple):
-        self._data = data
-        self._path: str | None = None
-        self._tmpdir: tempfile.TemporaryDirectory | None = None
-
-    def ref(self) -> tuple | str:
-        train, test = self._data
-        nbytes = sum(
-            np.asarray(v).nbytes
-            for split in (train, test)
-            for k, v in split.items()
-            if k != "_sample_indices"
-        )
-        if nbytes < _SCORING_DATA_NPZ_THRESHOLD_BYTES:
-            return self._data
-        self._tmpdir = tempfile.TemporaryDirectory(prefix="edgar_scoring_")
-        path = Path(self._tmpdir.name) / "data.npz"
-        arrays = {}
-        for k, v in train.items():
-            if k != "_sample_indices":
-                arrays[f"train_{k}"] = np.asarray(v)
-        for k, v in test.items():
-            if k != "_sample_indices":
-                arrays[f"test_{k}"] = np.asarray(v)
-        np.savez(path, **arrays)
-        self._path = str(path)
-        return self._path
-
-    def cleanup(self) -> None:
-        if self._tmpdir is not None:
-            self._tmpdir.cleanup()
-            self._tmpdir = None
-            self._path = None
-
-
-def _resolve_scoring_data(data_or_path: tuple | str) -> tuple:
-    if isinstance(data_or_path, tuple):
-        return data_or_path
-    loaded = np.load(data_or_path)
-    train = {
-        k.removeprefix("train_"): jnp.asarray(loaded[k])
-        for k in loaded.files
-        if k.startswith("train_")
-    }
-    test = {
-        k.removeprefix("test_"): jnp.asarray(loaded[k])
-        for k in loaded.files
-        if k.startswith("test_")
-    }
-    return train, test
-
 def _get_params(param_est_fn, default_params, data_train):
     """Estimates initial parameters for a model, falling back to defaults if the parameter estimator fails.
 
@@ -151,9 +91,19 @@ def _eval_loss(model_fn, loss_fn, params, data_test, apply_model_fn=apply_model_
     """
     if params is None:
         return float("inf")
-    return float(evaluate_scalar_loss(model_fn, loss_fn, params, data_test, apply_model_fn))
+    return float(
+        evaluate_scalar_loss(model_fn, loss_fn, params, data_test, apply_model_fn)
+    )
 
-def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config, apply_model_fn=apply_model_plain):
+
+def _optimize(
+    model_fn,
+    loss_fn,
+    params_inits,
+    data_train,
+    gd_config,
+    apply_model_fn=apply_model_plain,
+):
     """Performs gradient descent to optimize a model. If multiple initial parameter sets are provided, they are optimized in parallel.
 
     Args:
@@ -181,7 +131,16 @@ def _optimize(model_fn, loss_fn, params_inits, data_train, gd_config, apply_mode
     return optimized_params, loss_trajectories
 
 
-def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split, apply_model_fn_bytes):
+def _worker(
+    queue,
+    program_bytes,
+    data,
+    loss_fn_bytes,
+    config,
+    X_eval,
+    split,
+    apply_model_fn_bytes,
+):
     """Scores one program inside a subprocess. It creates JAX arrays and returns results as non-JAX objects,
     ensuring that the memory allocated for JAX arrays is released when the subprocess exits.
 
@@ -222,12 +181,10 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split, ap
         print(f"[scoring] failed to find apply_model_fn, falling back to default: {e}")
         apply_model_fn = apply_model_plain
 
-    # Convert NumPy data to JAX device arrays
-    data = _to_jax(data)
+    data_train, data_test = resolve_scoring_data(data)
+    data_train, data_test = _to_jax((data_train, data_test))
     if X_eval is not None:
         X_eval = _to_jax(X_eval)
-
-    data_train, data_test = _resolve_scoring_data(data)
 
     try:
         model_fn = program.compile_model()
@@ -265,7 +222,8 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split, ap
 
         # 2. Compute initial losses for each
         initial_losses = [
-            _eval_loss(model_fn, loss_fn_test, p_init, data_test, apply_model_fn) + penalty
+            _eval_loss(model_fn, loss_fn_test, p_init, data_test, apply_model_fn)
+            + penalty
             for p_init in params_inits
         ]
 
@@ -281,7 +239,8 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split, ap
 
         # 4. Compute final losses for each set of optimized parameters
         final_losses = [
-            _eval_loss(model_fn, loss_fn_test, p_opt, data_test, apply_model_fn) + penalty
+            _eval_loss(model_fn, loss_fn_test, p_opt, data_test, apply_model_fn)
+            + penalty
             for p_opt in params_list
         ]
 
@@ -319,7 +278,9 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split, ap
     # Fingerprint and sample losses are non-critical: failures here don't poison the loss.
     try:
         fingerprint = (
-            eval_fingerprint(model_fn, params, X_eval, apply_model_fn) if X_eval is not None else None
+            eval_fingerprint(model_fn, params, X_eval, apply_model_fn)
+            if X_eval is not None
+            else None
         )
     except Exception as e:
         print(f"[scoring] program #{program.idx} fingerprint failed (ignored): {e}")
@@ -327,7 +288,9 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split, ap
 
     try:
         sample_losses = np.asarray(
-            evaluate_sample_losses(model_fn, loss_fn_test, params, data_test, apply_model_fn)
+            evaluate_sample_losses(
+                model_fn, loss_fn_test, params, data_test, apply_model_fn
+            )
         )
     except Exception as e:
         print(f"[scoring] program #{program.idx} sample_losses failed (ignored): {e}")
@@ -336,7 +299,9 @@ def _worker(queue, program_bytes, data, loss_fn_bytes, config, X_eval, split, ap
     try:
         sample_losses_init = (
             np.asarray(
-                evaluate_sample_losses(model_fn, loss_fn_test, params_init, data_test, apply_model_fn)
+                evaluate_sample_losses(
+                    model_fn, loss_fn_test, params_init, data_test, apply_model_fn
+                )
             )
             if split == "discover"
             else None
@@ -606,7 +571,7 @@ def score(
     Args:
         population: The `Population` object whose programs are to be scored.
             This object will be mutated in place.
-        X_split: A tuple `(data_train, data_test)` containing dictionaries of JAX arrays
+        X_split: A tuple `(data_train, data_test)` containing dictionaries of NumPy arrays
             for training and testing data specific to the current split.
         X_eval: A dictionary of evaluation data for fingerprint computation.
             Pass `None` to skip fingerprint computation (e.g., when scoring on
@@ -627,7 +592,7 @@ def score(
     counters = {"ok": 0, "timeout": 0, "inf": 0, "banned": 0}
     latencies_ms: list[float] = []
 
-    data_store = _ScoringDataStore(X_split)
+    data_store = ScoringDataStore(X_split)
     data_ref = data_store.ref()
     try:
         for k, program in enumerate(queue, start=1):
