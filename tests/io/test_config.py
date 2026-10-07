@@ -1,9 +1,10 @@
 # ruff: noqa: F841
 
 import pytest
-from edgar.io.config import Config, LLMsConfig, RetryConfig
+from edgar.io.config import Config, LLMsConfig, RetryConfig, ScoringConfig
 from pydantic import ValidationError
 from edgar.io.task_spec import TaskSpec
+import jax
 
 
 def _llms_kwargs(**overrides):
@@ -46,6 +47,58 @@ def test_explicit_model_override_survives_provider():
     )
     assert cfg.model_llm == "gemini-2.5-pro"
     assert cfg.param_est_llm == "claude-sonnet-4-5"
+
+
+try:
+    gpu_available = len(jax.devices("gpu")) > 0
+except Exception:
+    gpu_available = False
+try:
+    tpu_available = len(jax.devices("tpu")) > 0
+except Exception:
+    tpu_available = False
+
+available_backends = []
+if gpu_available:
+    available_backends.append("gpu")
+if tpu_available:
+    available_backends.append("tpu")
+available_backends.append("cpu")
+
+
+@pytest.mark.parametrize("backend", available_backends)
+def test_scoring_jax_backend_accepts_available_backends(backend):
+    base = dict(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+    )
+    assert ScoringConfig(**base, jax_backend=backend).jax_backend == backend
+
+
+def test_scoring_jax_device_rejects_unknown_platform():
+    with pytest.raises(ValidationError):
+        ScoringConfig(
+            param_penalty_weight=0.0,
+            timeout_s=1.0,
+            banned_strings=[],
+            n_param_ests=1,
+            jax_backend="foo",
+            gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+        )
+
+
+def test_scoring_jax_device_accepts_default_none():
+    base = dict(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+    )
+    assert ScoringConfig(**base, jax_backend=None).jax_backend is None
 
 
 def test_load_perfect_config():
@@ -91,6 +144,7 @@ def test_load_perfect_config():
     assert config.scoring.n_param_ests == 1
     assert config.scoring.param_penalty_weight == 0.01
     assert config.scoring.timeout_s == 120.0
+    assert config.scoring.jax_backend is None  # default
     assert config.scoring.banned_strings == ["config"]
     assert config.scoring.gradient_descent.max_iter == 1000
     assert config.scoring.gradient_descent.learning_rate == 0.01

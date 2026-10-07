@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..evolution.program import Program
 from ..jax.utils import _to_jax
+from ..process import SubprocessTimeoutError, run_in_subprocess
 
 if TYPE_CHECKING:
     from ..io.task_spec import TaskSpec
@@ -143,26 +144,20 @@ def generate_feedback_image(
     if not has_plot or data is None:
         return None
 
-    ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
-    queue = ctx.Queue()
     spec_bytes = cloudpickle.dumps(spec)
     parents_bytes = cloudpickle.dumps(parents)
     program_bytes = cloudpickle.dumps(program)
 
-    proc = ctx.Process(
-        target=_feedback_image_worker,
-        args=(queue, spec_bytes, data, parents_bytes, program_bytes),
-    )
-    proc.start()
     try:
-        img_bytes, img_path = queue.get(timeout=120)
-    except Exception as e:
-        proc.kill()
-        proc.join()
+        img_bytes, img_path = run_in_subprocess(
+            _feedback_image_worker,
+            args=(spec_bytes, data, parents_bytes, program_bytes),
+            timeout=120,
+        )
+    except SubprocessTimeoutError as e:
         warnings.warn(f"[plotting] feedback image subprocess timed out or failed: {e}")
         return None
 
-    proc.join()
     if img_path is not None:
         program.image_path = img_path
     return img_bytes
@@ -204,25 +199,19 @@ def generate_program_fits(
         return
 
     timeout = max(120, len(pending) * 15)
-    ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
-    queue = ctx.Queue()
     spec_bytes = cloudpickle.dumps(spec)
     programs_bytes = cloudpickle.dumps(pending)
 
-    proc = ctx.Process(
-        target=_program_fits_worker,
-        args=(queue, spec_bytes, data, programs_bytes),
-    )
-    proc.start()
     try:
-        results = queue.get(timeout=timeout)
-    except Exception as e:
-        proc.kill()
-        proc.join()
+        results = run_in_subprocess(
+            _program_fits_worker,
+            args=(spec_bytes, data, programs_bytes),
+            timeout=timeout,
+        )
+    except SubprocessTimeoutError as e:
         warnings.warn(f"[plotting] program fits subprocess timed out or failed: {e}")
         return
 
-    proc.join()
     for p_idx, save_path in results:
         for p in programs:
             if p.idx == p_idx:

@@ -2,7 +2,6 @@
 import os
 
 import cloudpickle
-import jax
 
 # Configure JAX to not preallocate all GPU memory and use platform allocator to avoid OOM errors
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -10,6 +9,8 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
 xla_flags = os.environ.get("XLA_FLAGS", "")
 if "--xla_gpu_enable_command_buffer=" not in xla_flags:
     os.environ["XLA_FLAGS"] = (xla_flags + " --xla_gpu_enable_command_buffer=").strip()
+
+import jax
 import sys
 import time
 from pathlib import Path
@@ -121,6 +122,7 @@ def model(data, params):
 BASE_CONFIG = {
     "timeout_s": 10.0,
     "param_penalty_weight": 0.0,
+    "jax_backend": None,
     "gradient_descent": {"max_iter": 20, "learning_rate": 0.01},
     "banned_strings": [],
 }
@@ -209,6 +211,7 @@ def test_worker():
     eval_data["_sample_indices"] = jnp.array([0, 1])
     config = {
         "param_penalty_weight": 0.0,
+        "jax_backend": None,
         "gradient_descent": {"max_iter": 100, "learning_rate": 0.1},
     }
     ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
@@ -294,6 +297,56 @@ def test_score_one_model_perfect_fit():
     final_loss, *_, outcome = _score_one_model(program, data, loss_fn, BASE_CONFIG)
     assert final_loss < 1e-4
     assert outcome == "ok"
+
+
+try:
+    gpu_available = len(jax.devices("gpu")) > 0
+except Exception:
+    gpu_available = False
+try:
+    tpu_available = len(jax.devices("tpu")) > 0
+except Exception:
+    tpu_available = False
+
+available_backends = []
+if gpu_available:
+    available_backends.append("gpu")
+if tpu_available:
+    available_backends.append("tpu")
+available_backends.append("cpu")
+
+
+@pytest.mark.parametrize("backend", available_backends)
+def test_score_one_model_explicit_backend(backend: str):
+    config = BASE_CONFIG.copy()
+    config["jax_backend"] = backend
+    program = _make_program(FAST_MODEL_CODE)
+    data = (_make_data(), _make_data())
+
+    (
+        final_loss,
+        initial_loss,
+        fingerprint,
+        params,
+        sample_losses,
+        params_init,
+        sample_losses_init,
+        all_final,
+        all_init,
+        best_idx,
+        trajectories,
+        outcome,
+    ) = _score_one_model(
+        program,
+        data,
+        loss_fn,
+        config,
+        X_eval=data[1],
+        split="discover",
+    )
+
+    assert outcome == "ok"
+    assert np.isclose(final_loss, 0.0, atol=1e-4)
 
 
 def test_score_one_model_with_custom_apply_model():
@@ -556,6 +609,7 @@ def test_score_one_model_with_separate_train_test_loss_fns():
     custom_config = {
         "timeout_s": 10.0,
         "param_penalty_weight": 0.0,
+        "jax_backend": None,
         "gradient_descent": {"max_iter": 150, "learning_rate": 0.1},
     }
     (

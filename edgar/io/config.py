@@ -79,7 +79,6 @@ so a project can switch providers by setting only `llms.provider`. Individual
 roles can still be overridden with an explicit model name of either provider.
 """
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 """The root directory of the EDGAR project."""
 
@@ -345,6 +344,7 @@ class ScoringConfig(_LaxModel):
         banned_strings: A list of substrings that must not appear in the JAX-translated model.
             If any appear, the model is banned and assigned infinite loss.
         n_param_ests: The number of initial parameter estimators and number of optimizations to run per program (each starting from a different initial parameter estimate).
+        jax_backend: The JAX backend to use for scoring ("cpu", "gpu", or "tpu").
         gradient_descent: Configuration for the gradient descent optimization
             performed during scoring.
     """
@@ -354,6 +354,20 @@ class ScoringConfig(_LaxModel):
     banned_strings: list[str]
     n_param_ests: int
     gradient_descent: GradientDescentConfig
+    jax_backend: Literal["cpu", "gpu", "tpu"] | None = None
+
+    @model_validator(mode="after")
+    def check_jax_backend(self) -> ScoringConfig:
+        """
+        Validates the `jax_backend` is available, otherwise raises an error
+        """
+        import jax
+
+        try:
+            jax.config.update("jax_default_device", jax.devices(self.jax_backend)[0])
+        except Exception as e:
+            raise RuntimeError(f"{e}\n jax_backend options are cpu/gpu/tpu") from e
+        return self
 
 
 class PromptsConfig(_LaxModel):

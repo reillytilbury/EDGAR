@@ -65,6 +65,7 @@ def test_fromconfig():
         "param_penalty_weight": 0.01,
         "timeout_s": 120.0,
         "banned_strings": [],
+        "jax_backend": None,
         "gradient_descent": {
             "max_iter": 100,
             "learning_rate": 0.01,

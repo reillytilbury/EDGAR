@@ -9,8 +9,6 @@ and orchestrates population-level scoring and ranking.
 
 from __future__ import annotations
 
-import multiprocessing as mp
-import os
 import time
 
 import traceback
@@ -28,7 +26,8 @@ from ..evolution.program import (
 )
 from ..evolution.population import Population
 from ..io.metrics import get_active_metrics, stream_line
-from ..jax.utils import _to_jax, _to_numpy
+from ..process import SubprocessTimeoutError, run_in_subprocess
+from ..jax.utils import _to_jax, _to_numpy, configure_jax_backend
 from .utils import (
     evaluate_sample_losses,
     evaluate_scalar_loss,
@@ -172,6 +171,9 @@ def _worker(
         If any critical failure occurs (model loading, optimization), infinite
         losses and `None` for other results are returned.
     """
+    # Select and verify the platform before any worker-side JAX operation.
+    configure_jax_backend(config["jax_backend"])
+
     program = cloudpickle.loads(program_bytes)
     loss_fn = cloudpickle.loads(loss_fn_bytes)
     if isinstance(loss_fn, tuple):
@@ -462,36 +464,28 @@ def _score_one_model(
             "banned",
         )
 
-    ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
-
-    queue = ctx.Queue()
     loss_fn_bytes = cloudpickle.dumps(loss_fn)
     program_bytes = cloudpickle.dumps(program)
     apply_model_fn_bytes = cloudpickle.dumps(apply_model_fn)
-
     diagnostics_bytes = (
         cloudpickle.dumps(diagnostics) if diagnostics is not None else None
     )
-    proc = ctx.Process(
-        target=_worker,
-        args=(
-            queue,
-            program_bytes,
-            data,
-            loss_fn_bytes,
-            config,
-            X_eval,
-            split,
-            apply_model_fn_bytes,
-            diagnostics_bytes,
-        ),
-    )
-    proc.start()
     try:
-        result = queue.get(timeout=config["timeout_s"])
-    except mp.queues.Empty:
-        proc.kill()
-        proc.join()
+        result = run_in_subprocess(
+            _worker,
+            args=(
+                program_bytes,
+                data,
+                loss_fn_bytes,
+                config,
+                X_eval,
+                split,
+                apply_model_fn_bytes,
+                diagnostics_bytes,
+            ),
+            timeout=config["timeout_s"],
+        )
+    except SubprocessTimeoutError:
         return (
             float("inf"),
             float("inf"),
@@ -507,7 +501,6 @@ def _score_one_model(
             {},
             "timeout",
         )
-    proc.join()
     (
         final,
         init,

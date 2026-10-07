@@ -22,6 +22,8 @@ llms:
 scoring:
   param_penalty_weight: 0.01
   timeout_s: 120.0
+  jax_backend: "gpu"
+
 
   gradient_descent:
     max_iter: 100

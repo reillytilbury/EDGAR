@@ -5,6 +5,11 @@ import numpy as np
 import jax
 
 
+def configure_jax_backend(backend: str) -> None:
+    devices = jax.devices(backend)
+    jax.config.update("jax_default_device", devices[0])
+
+
 def _to_jax(x: Any) -> Any:
     """Recursively convert numpy arrays in a dictionary, list, or tuple to JAX arrays."""
     if isinstance(x, dict):
