@@ -335,6 +335,7 @@ def test_score_one_model_explicit_backend(backend: str):
         all_init,
         best_idx,
         trajectories,
+        _diagnostics_metrics,
         outcome,
     ) = _score_one_model(
         program,
@@ -378,6 +379,7 @@ def test_score_one_model_with_custom_apply_model():
         _all_init,
         best_idx,
         trajectories,
+        _diagnostics_metrics,
         outcome,
     ) = _score_one_model(
         program,
@@ -436,7 +438,7 @@ def test_score_one_gives_infinite_loss_for_program_with_none_default_params():
     program = _make_program(FAST_MODEL_CODE, default_params=None)
     assert program.n_params is None
     with pytest.warns(UserWarning, match="n_params=None"):
-        final_loss, initial_loss, *_, best_idx, trajectories, outcome = (
+        final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = (
             _score_one_model(
                 program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
             )
@@ -816,6 +818,7 @@ def test_score_forwards_custom_apply_model(monkeypatch):
         X_eval=None,
         split="discover",
         apply_model_fn=apply_model_plain,
+        diagnostics=None,
     ):
         received["program"] = program
         received["data"] = scoring_data
@@ -837,6 +840,7 @@ def test_score_forwards_custom_apply_model(monkeypatch):
             [1.0],
             None,
             None,
+            {},
             "ok",
         )
 

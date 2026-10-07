@@ -6,7 +6,7 @@ from edgar.scoring.utils import (
     evaluate_sample_losses,
     evaluate_scalar_loss,
     _safe_loss,
-    _evaluate_model_output,
+    evaluate_model_output,
 )
 from edgar.evolution.program import NotValidated
 
@@ -74,7 +74,7 @@ def test_safe_sorting():
     assert inf_indices == {3, 5, 6}
 
 
-# _evaluate_model_output
+# evaluate_model_output
 # Model functions for testing
 def basic_model(data, params):
     return params["w"] * data["x"]
@@ -96,24 +96,24 @@ def test_evaluate_model_output():
     params = {"w": 1.0}
     data = {"x": jnp.array([1.0, 2.0])}  # Shape (2,)
     with pytest.raises(ValueError):  # can't vmap mismatched axes
-        _evaluate_model_output(model_fn, params, data, basic_apply_model)
+        evaluate_model_output(model_fn, params, data, basic_apply_model)
 
     # Unbatched data with batched params should raise an error
     params = {"w": jnp.array([1.0, 2.0])}  # Shape (2,)
     data = {"x": 1.0}
     with pytest.raises(ValueError):  # can't vmap mismatched axes
-        _evaluate_model_output(model_fn, params, data, basic_apply_model)
+        evaluate_model_output(model_fn, params, data, basic_apply_model)
 
     # Both unbatched should raise an error
     params = {"w": 1.0}
     data = {"x": 2.0}
     with pytest.raises(ValueError):  # can't vmap with no batch dimension
-        _evaluate_model_output(model_fn, params, data, basic_apply_model)
+        evaluate_model_output(model_fn, params, data, basic_apply_model)
 
     # Both batched
     params = {"w": jnp.array([1.0, 2.0])}  # Shape (2,)
     data = {"x": jnp.array([2.0, 4.0])}  # Shape (2,)
-    result = _evaluate_model_output(model_fn, params, data, basic_apply_model)
+    result = evaluate_model_output(model_fn, params, data, basic_apply_model)
     assert result.shape == (2,)  # output shape (2,)
     assert jnp.allclose(result, jnp.array([2.0, 8.0]))
 
@@ -121,7 +121,7 @@ def test_evaluate_model_output():
     model_fn = strict_model
     params = {"w": jnp.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])}  # Shape (2, 3)
     data = {"x": jnp.array([[2.0, 4.0, 6.0], [1.0, 3.0, 5.0]])}  # Shape (2, 3)
-    result = _evaluate_model_output(model_fn, params, data, basic_apply_model)
+    result = evaluate_model_output(model_fn, params, data, basic_apply_model)
     assert result.shape == (2,)
     assert jnp.allclose(result, jnp.array([28.0, 49.0]))
 

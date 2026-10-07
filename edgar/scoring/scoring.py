@@ -640,11 +640,11 @@ def score(
                 sample_losses,
                 params_init,
                 sample_losses_init,
-                diagnostics_metrics,
                 all_final,
                 all_init,
                 best_idx,
                 trajectories,
+                diagnostics_metrics,
                 outcome,
             ) = _score_one_model(
                 program,

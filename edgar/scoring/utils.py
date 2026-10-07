@@ -33,7 +33,7 @@ def _safe_loss(val: Any) -> float:
     return val_float
 
 
-def _evaluate_model_output(
+def evaluate_model_output(
     model_fn: Callable[[dict, dict], jax.Array],
     params: dict[str, Any],
     data: dict[str, Any],
@@ -91,7 +91,7 @@ def evaluate_sample_losses(
     Returns:
         A JAX array of shape `(n_samples,)` containing the loss for each sample.
     """
-    output = _evaluate_model_output(model_fn, params, data, apply_model_fn)
+    output = evaluate_model_output(model_fn, params, data, apply_model_fn)
     return loss_fn(output, data)
 
 
@@ -148,7 +148,7 @@ def eval_fingerprint(model_fn, params, X_eval, apply_model_fn=apply_model_plain)
     """
     sample_indices = X_eval["_sample_indices"]
     params_matched = jax.tree_util.tree_map(lambda p: p[sample_indices], params)
-    return _evaluate_model_output(model_fn, params_matched, X_eval, apply_model_fn)
+    return evaluate_model_output(model_fn, params_matched, X_eval, apply_model_fn)
 
 
 # Large train/test splits are written once to a temp .npz per ``score()`` call

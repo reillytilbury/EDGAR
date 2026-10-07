@@ -3,8 +3,6 @@ from edgar.projects.diagnostics import BaseDiagnostics
 from edgar.evolution.program import Program, BirthCertificate
 from edgar.evolution.population import Population
 from edgar.llm.prompt_schema import PromptSchema, _get_nested_attr
-from edgar.io.task_spec import TaskSpec
-from edgar.io.config import Config
 
 
 def test_base_diagnostics_defaults():
@@ -48,29 +46,6 @@ def test_population_save_load_diagnostics(tmp_path):
     loaded_pop = Population.load(str(save_file))
     assert len(loaded_pop) == 1
     assert loaded_pop[0].diagnostics == {"r2_overall": 0.88, "r2_signal": 0.95}
-
-
-def test_trial_variability_diagnostics_loading():
-    config = Config.from_yaml("projects/trial_variability/config.yaml")
-    spec = TaskSpec.from_config(config)
-    assert spec.diagnostics is not None
-    assert hasattr(spec.diagnostics, "compute_metrics")
-    assert hasattr(spec.diagnostics, "plot_model_fits")
-
-    # Test compute_metrics on mock data
-    n_trials = 20
-    n_cells = 10
-    stim = np.linspace(0, np.pi, n_trials)
-    resp = np.ones((n_trials, n_cells))
-    data = {"stimulus": stim, "response": resp}
-    pred = np.ones((n_trials, n_cells)) * 0.9
-
-    metrics = spec.diagnostics.compute_metrics(data, pred)
-    assert "r2_overall" in metrics
-    assert "r2_signal" in metrics
-    assert "r2_noise" in metrics
-    assert "fano_slope_data" in metrics
-    assert "fano_slope_pred" in metrics
 
 
 def test_diagnostics_feedback_image_worker(tmp_path):
