@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "edgar"
 version = "0.1.0"
 description = "Equation Discovery with Graphical AI Reasoning: an evolutionary framework for discovering scientific equations using LLM-generated programs."
-requires-python = ">=3.13"
+requires-python = "==3.13.*"
 dependencies = [
     "anthropic>=0.50.0",
     "cloudpickle>=3.1.2",
