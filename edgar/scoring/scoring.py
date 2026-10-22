@@ -16,7 +16,7 @@ import cloudpickle
 import numpy as np
 import jax
 import jax.numpy as jnp
-from .optimizer import Optimizer
+from .optimizer import AdamOptimizer, ScipyOptimizer
 import warnings
 
 from ..evolution.program import (
@@ -102,7 +102,7 @@ def _optimize(
     loss_fn,
     params_inits,
     data_train,
-    gd_config,
+    scoring_config,
     apply_model_fn=apply_model_plain,
 ):
     """Performs gradient descent to optimize a model. If multiple initial parameter sets are provided, they are optimized in parallel.
@@ -112,7 +112,7 @@ def _optimize(
         loss_fn: The loss function (callable).
         params_inits: A list of initial parameter sets (JAX pytrees).
         data_train: A dictionary of training data.
-        gd_config: Configuration dictionary for gradient descent.
+        scoring_config: Configuration dictionary for the scoring process.
 
     Returns:
         optimized_params: A list of optimized parameter sets (JAX pytrees), corresponding to the input `params_inits`.
@@ -121,15 +121,25 @@ def _optimize(
     if isinstance(params_inits, dict):
         params_inits = [params_inits]
 
-    # Initialize the optimizer
-    optimizer = Optimizer(model_fn, loss_fn, data_train, gd_config, apply_model_fn)
-    flat_all, opt_state = optimizer.flatten_and_init_params(params_inits)
-    # Run the JIT-compiled optimization on-device, this is the only part run on GPU
-    optimized_params, loss_trajectories = optimizer.run_optimization(
-        flat_all, opt_state
+    selector = scoring_config.get("optimizer")
+    optimizer_config = scoring_config.get("optimizer_config")
+    if selector == "adam":
+        optimizer_t = AdamOptimizer
+    elif selector == "scipy":
+        optimizer_t = ScipyOptimizer
+    else:
+        raise ValueError(f"Unknown scoring optimizer: {selector}")
+
+    optimizer = optimizer_t(
+        model_fn,
+        loss_fn,
+        data_train,
+        optimizer_config,
+        apply_model_fn,
     )
-    loss_trajectories = np.asarray(loss_trajectories).T  # (n_opts, max_iter)
-    return optimized_params, loss_trajectories
+
+    params, trajectories = optimizer.optimize(params_inits)
+    return params, np.asarray(trajectories)
 
 
 def _worker(
@@ -240,7 +250,7 @@ def _worker(
             loss_fn_train,
             params_inits,
             data_train,
-            config["gradient_descent"],
+            config,
             apply_model_fn,
         )
 

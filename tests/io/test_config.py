@@ -101,6 +101,84 @@ def test_scoring_jax_device_accepts_default_none():
     assert ScoringConfig(**base, jax_backend=None).jax_backend is None
 
 
+def test_scoring_optimizer_config_tracks_selected_optimizer():
+    base = dict(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+        scipy_minimize={"method": "Powell"},
+    )
+    config = ScoringConfig(**base)
+    assert config.optimizer_config is config.gradient_descent
+
+    config.optimizer = "scipy"
+    assert config.optimizer_config is config.scipy_minimize
+    assert config.model_dump()["optimizer_config"] == {
+        "method": "Powell",
+        "tol": None,
+        "bounds": None,
+        "options": {},
+    }
+
+
+@pytest.mark.parametrize(
+    ("optimizer", "missing_field"),
+    [("adam", "gradient_descent"), ("scipy", "scipy_minimize")],
+)
+def test_scoring_optimizer_config_requires_selected_config(optimizer, missing_field):
+    with pytest.raises(ValidationError, match=missing_field):
+        ScoringConfig(
+            param_penalty_weight=0.0,
+            timeout_s=1.0,
+            banned_strings=[],
+            n_param_ests=1,
+            optimizer=optimizer,
+        )
+
+
+def test_scoring_optimizer_assignment_revalidates_selected_config():
+    config = ScoringConfig(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+    )
+    with pytest.raises(ValidationError, match="scipy_minimize"):
+        config.optimizer = "scipy"
+
+
+def test_scoring_warns_when_both_optimizer_configs_are_set():
+    with pytest.warns(
+        UserWarning,
+        match=r"Both scoring\.gradient_descent and scoring\.scipy_minimize are configured",
+    ):
+        ScoringConfig(
+            param_penalty_weight=0.0,
+            timeout_s=1.0,
+            banned_strings=[],
+            n_param_ests=1,
+            optimizer="adam",
+            gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+            scipy_minimize={"method": "Powell"},
+        )
+    with pytest.warns(
+        UserWarning,
+        match=r"Both scoring\.gradient_descent and scoring\.scipy_minimize are configured",
+    ):
+        ScoringConfig(
+            param_penalty_weight=0.0,
+            timeout_s=1.0,
+            banned_strings=[],
+            n_param_ests=1,
+            optimizer="scipy",
+            gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+            scipy_minimize={"method": "Powell"},
+        )
+
+
 def test_load_perfect_config():
     """
     Tests that a config with all fields specified loads correctly, and that all fields are correctly read from the config file.

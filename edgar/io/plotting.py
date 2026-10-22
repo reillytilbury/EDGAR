@@ -278,7 +278,7 @@ def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> 
                 fontsize=11,
                 fontweight="semibold",
             )
-            plt.xlabel("Gradient Descent Step", fontsize=9)
+            plt.xlabel("Optimization Step", fontsize=9)
             plt.ylabel("Training Loss", fontsize=9)
             plt.yscale("log")
             plt.grid(True, which="both", ls="-", alpha=0.15)

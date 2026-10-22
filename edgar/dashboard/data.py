@@ -1066,7 +1066,9 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
                 {
                     "idx": i,
                     "init": float(traj[0]),
-                    "final": float(traj[-1]),
+                    "final": float(np.asarray(traj)[np.isfinite(traj)][-1])
+                    if np.isfinite(traj).any()
+                    else float("nan"),
                 }
             )
 

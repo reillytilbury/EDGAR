@@ -450,7 +450,11 @@ class TaskSpec:
             "io": self.io,
             "evolution": self.evolution,
             "llms": self.llms,
-            "scoring": self.scoring,
+            "scoring": {
+                key: value
+                for key, value in self.scoring.items()
+                if key != "optimizer_config"
+            },
             "run": self.run,
             "project_params": self.project_params,
             "seed_programs": [

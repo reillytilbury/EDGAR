@@ -78,6 +78,8 @@ llms:
   swear_words: ['lstsq', 'scipy.optimize', 'optimize.minimize', 'curve_fit', 'sklearn']
 
 scoring:
+  # Parameter fitting optimizer: adam (default) or scipy.
+  optimizer: adam
   # Number of parameter estimators to generate and optimize per program
   n_param_ests: 1
   # Complexity penalty on parameterized programs.

@@ -48,14 +48,24 @@ def test_optimize_without_clip_norm_matches_baseline():
         loss_fn,
         params_init,
         data,
-        gd_config={"max_iter": 20, "learning_rate": 0.05},
+        scoring_config={
+            "optimizer": "adam",
+            "optimizer_config": {"max_iter": 20, "learning_rate": 0.05},
+        },
     )
     (result_none,), _ = _optimize(
         model_fn,
         loss_fn,
         params_init,
         data,
-        gd_config={"max_iter": 20, "learning_rate": 0.05, "gradient_clip_norm": None},
+        scoring_config={
+            "optimizer": "adam",
+            "optimizer_config": {
+                "max_iter": 20,
+                "learning_rate": 0.05,
+                "gradient_clip_norm": None,
+            },
+        },
     )
     assert jnp.allclose(result_no_key["w"], result_none["w"])
 
@@ -69,7 +79,14 @@ def test_optimize_with_clip_norm_produces_finite_result():
         loss_fn,
         params_init,
         data,
-        gd_config={"max_iter": 50, "learning_rate": 0.05, "gradient_clip_norm": 1.0},
+        scoring_config={
+            "optimizer": "adam",
+            "optimizer_config": {
+                "max_iter": 50,
+                "learning_rate": 0.05,
+                "gradient_clip_norm": 1.0,
+            },
+        },
     )
     assert jnp.all(jnp.isfinite(result["w"]))
     # true w = 2.0; with 50 steps @ lr=0.05 it should be well on the way
@@ -91,7 +108,14 @@ def test_clip_norm_keeps_params_bounded_under_aggressive_lr():
         loss_fn,
         params_init,
         data,
-        gd_config={"max_iter": 100, "learning_rate": 5.0, "gradient_clip_norm": 0.1},
+        scoring_config={
+            "optimizer": "adam",
+            "optimizer_config": {
+                "max_iter": 100,
+                "learning_rate": 5.0,
+                "gradient_clip_norm": 0.1,
+            },
+        },
     )
     assert jnp.all(jnp.isfinite(result["w"]))
     # With clipping the trajectory is well-behaved; params stay in a reasonable
@@ -113,6 +137,9 @@ def test_clip_norm_config_uses_get_not_indexing():
         loss_fn,
         params_init,
         data,
-        gd_config={"max_iter": 5, "learning_rate": 0.01},
+        scoring_config={
+            "optimizer": "adam",
+            "optimizer_config": {"max_iter": 5, "learning_rate": 0.01},
+        },
     )
     assert jnp.all(jnp.isfinite(result["w"]))

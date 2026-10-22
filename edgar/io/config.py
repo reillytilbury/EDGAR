@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 from dataclasses import field
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, computed_field, model_validator
 
 from ..llm.prompt_schema import PromptSchema
 
@@ -333,6 +333,15 @@ class GradientDescentConfig(_LaxModel):
     gradient_clip_norm: float | None = None
 
 
+class ScipyMinimizeConfig(_LaxModel):
+    """Supported keyword arguments for ``scipy.optimize.minimize``."""
+
+    method: str | None = None
+    tol: float | None = None
+    bounds: list[tuple[float | None, float | None]] | None = None
+    options: dict = field(default_factory=dict)
+
+
 class ScoringConfig(_LaxModel):
     """Configuration settings for model scoring and evaluation.
 
@@ -349,12 +358,29 @@ class ScoringConfig(_LaxModel):
             performed during scoring.
     """
 
+    model_config = ConfigDict(extra="ignore", validate_assignment=True)
+
     param_penalty_weight: float
     timeout_s: float
     banned_strings: list[str]
     n_param_ests: int
-    gradient_descent: GradientDescentConfig
+    optimizer: Literal["adam", "scipy"] = "adam"
+    gradient_descent: GradientDescentConfig | None = None
+    scipy_minimize: ScipyMinimizeConfig | None = None
     jax_backend: Literal["cpu", "gpu", "tpu"] | None = None
+
+    @computed_field
+    @property
+    def optimizer_config(self) -> GradientDescentConfig | ScipyMinimizeConfig:
+        """Return the optimizer-specific settings selected by ``optimizer``.
+
+        This is derived rather than stored so changing the optimizer (including
+        through a CLI override) cannot leave a stale config object behind.
+        """
+        if self.optimizer == "adam":
+            return self.gradient_descent
+
+        return self.scipy_minimize
 
     @model_validator(mode="after")
     def check_jax_backend(self) -> ScoringConfig:
@@ -367,6 +393,24 @@ class ScoringConfig(_LaxModel):
             jax.config.update("jax_default_device", jax.devices(self.jax_backend)[0])
         except Exception as e:
             raise RuntimeError(f"{e}\n jax_backend options are cpu/gpu/tpu") from e
+
+        if self.optimizer == "adam" and self.gradient_descent is None:
+            raise ValueError(
+                "scoring.gradient_descent must be configured when optimizer is 'adam'"
+            )
+        elif self.optimizer == "scipy" and self.scipy_minimize is None:
+            raise ValueError(
+                "scoring.scipy_minimize must be configured when optimizer is 'scipy'"
+            )
+        if self.gradient_descent and self.scipy_minimize:
+            if self.optimizer == "adam":
+                warnings.warn(
+                    "Both scoring.gradient_descent and scoring.scipy_minimize are configured. Only scoring.gradient_descent will be used."
+                )
+            else:
+                warnings.warn(
+                    "Both scoring.gradient_descent and scoring.scipy_minimize are configured. Only scoring.scipy_minimize will be used."
+                )
         return self
 
 

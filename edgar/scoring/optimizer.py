@@ -7,17 +7,33 @@ execute the optimization loop.
 from __future__ import annotations
 
 from functools import partial
+from abc import ABC, abstractmethod
 from typing import Any, Callable
 
 import jax
 from jax.flatten_util import ravel_pytree
 import jax.numpy as jnp
+import numpy as np
 import optax
 
 from .utils import apply_model_plain, evaluate_scalar_loss
 
 
-class Optimizer:
+class Optimizer(ABC):
+    """Common optimizer interface for scoring implementations."""
+
+    def __init__(self, model_fn, loss_fn, data_train, apply_model_fn=apply_model_plain):
+        self.model_fn = model_fn
+        self.loss_fn = loss_fn
+        self.data_train = data_train
+        self.apply_model_fn = apply_model_fn
+
+    @abstractmethod
+    def optimize(self, params_inits):
+        """Return optimized parameter pytrees and (starts, steps) loss traces."""
+
+
+class AdamOptimizer(Optimizer):
     """Gradient descent solver for JAX models.
 
     Holds the model function, loss function, data, and optimizer state to perform
@@ -47,9 +63,7 @@ class Optimizer:
             gd_config: Configuration dictionary for gradient descent,
                 expected to contain 'learning_rate' and 'max_iter'.
         """
-        self.model_fn = model_fn
-        self.loss_fn = loss_fn
-        self.data_train = data_train
+        super().__init__(model_fn, loss_fn, data_train, apply_model_fn)
         self.gd_config = gd_config
         clip_norm = gd_config.get("gradient_clip_norm")
         adam = optax.adam(gd_config["learning_rate"])
@@ -58,7 +72,11 @@ class Optimizer:
             if clip_norm
             else adam
         )
-        self.apply_model_fn = apply_model_fn
+
+    def optimize(self, params_inits):
+        flat_all, opt_state = self.flatten_and_init_params(params_inits)
+        params, traces = self.run_optimization(flat_all, opt_state)
+        return params, jnp.asarray(traces).T
 
     def flatten_and_init_params(
         self,
@@ -242,3 +260,95 @@ class Optimizer:
         # Unflatten the final best parameters back into their original PyTree structure
         # for each parallel optimization.
         return [self.unflatten(flat) for flat in final_best_flats], loss_trajectories
+
+
+class ScipyOptimizer(Optimizer):
+    """Sequential SciPy minimization using scalar loss evaluations only."""
+
+    def __init__(
+        self,
+        model_fn,
+        loss_fn,
+        data_train,
+        scipy_config=None,
+        apply_model_fn=apply_model_plain,
+    ):
+        super().__init__(model_fn, loss_fn, data_train, apply_model_fn)
+        self.scipy_config = scipy_config or {}
+
+    def optimize(self, params_inits):
+        from scipy.optimize import minimize
+
+        results, trajectories = [], []
+        data_leaves = jax.tree_util.tree_leaves(self.data_train)
+        if not data_leaves:
+            raise ValueError("SciPy optimization requires batched training data")
+        n_samples = data_leaves[0].shape[0]
+        if n_samples == 0:
+            raise ValueError("SciPy optimization requires at least one sample")
+
+        for initial in params_inits:
+            sample_results, sample_traces = [], []
+            for sample_idx in range(n_samples):
+                sample_initial = jax.tree_util.tree_map(
+                    lambda leaf: leaf[sample_idx], initial
+                )
+                sample_data = jax.tree_util.tree_map(
+                    lambda leaf: jnp.expand_dims(leaf[sample_idx], axis=0),
+                    self.data_train,
+                )
+                flat, unflatten = ravel_pytree(sample_initial)
+                trace = []
+
+                def objective(values):
+                    params = jax.tree_util.tree_map(
+                        lambda leaf: jnp.expand_dims(leaf, axis=0), unflatten(values)
+                    )
+                    return float(
+                        evaluate_scalar_loss(
+                            self.model_fn,
+                            self.loss_fn,
+                            params,
+                            sample_data,
+                            self.apply_model_fn,
+                        )
+                    )
+
+                trace.append(objective(flat))
+
+                def callback(values):
+                    trace.append(objective(values))
+
+                result = minimize(
+                    objective,
+                    np.asarray(flat, dtype=float),
+                    method=self.scipy_config.get("method"),
+                    tol=self.scipy_config.get("tol"),
+                    bounds=self.scipy_config.get("bounds"),
+                    options=self.scipy_config.get("options"),
+                    callback=callback,
+                )
+                final_loss = objective(result.x)
+                if not np.isclose(trace[-1], final_loss):
+                    trace.append(final_loss)
+                if not np.isfinite(final_loss):
+                    raise ValueError("SciPy optimizer returned a non-finite loss")
+                sample_results.append(unflatten(result.x))
+                sample_traces.append(trace)
+
+            results.append(
+                jax.tree_util.tree_map(
+                    lambda *leaves: jnp.stack(leaves), *sample_results
+                )
+            )
+            width = max(map(len, sample_traces))
+            aligned = [
+                trace + [trace[-1]] * (width - len(trace)) for trace in sample_traces
+            ]
+            trajectories.append(np.mean(aligned, axis=0))
+        width = max(map(len, trajectories), default=0)
+        padded = np.empty((len(trajectories), width))
+        for i, trace in enumerate(trajectories):
+            padded[i, : len(trace)] = trace
+            padded[i, len(trace) :] = trace[-1]
+        return results, padded

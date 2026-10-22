@@ -65,8 +65,15 @@ def test_fromconfig():
         "param_penalty_weight": 0.01,
         "timeout_s": 120.0,
         "banned_strings": [],
+        "optimizer": "adam",
         "jax_backend": None,
         "gradient_descent": {
+            "max_iter": 100,
+            "learning_rate": 0.01,
+            "gradient_clip_norm": None,
+        },
+        "scipy_minimize": None,
+        "optimizer_config": {
             "max_iter": 100,
             "learning_rate": 0.01,
             "gradient_clip_norm": None,
