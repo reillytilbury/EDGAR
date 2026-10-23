@@ -289,6 +289,26 @@ class ScipyOptimizer(Optimizer):
 
         for initial in params_inits:
             sample_results, sample_traces = [], []
+            # All samples of this estimator have the same parameter structure.
+            # Compile the *whole* loss once, rather than dispatching the model,
+            # loss and reductions separately on every SciPy function evaluation.
+            _, unflatten = ravel_pytree(
+                jax.tree_util.tree_map(lambda leaf: leaf[0], initial)
+            )
+
+            @jax.jit
+            def scalar_loss(values, sample_data):
+                params = jax.tree_util.tree_map(
+                    lambda leaf: jnp.expand_dims(leaf, axis=0), unflatten(values)
+                )
+                return evaluate_scalar_loss(
+                    self.model_fn,
+                    self.loss_fn,
+                    params,
+                    sample_data,
+                    self.apply_model_fn,
+                )
+
             for sample_idx in range(n_samples):
                 sample_initial = jax.tree_util.tree_map(
                     lambda leaf: leaf[sample_idx], initial
@@ -297,22 +317,11 @@ class ScipyOptimizer(Optimizer):
                     lambda leaf: jnp.expand_dims(leaf[sample_idx], axis=0),
                     self.data_train,
                 )
-                flat, unflatten = ravel_pytree(sample_initial)
+                flat, _ = ravel_pytree(sample_initial)
                 trace = []
 
                 def objective(values):
-                    params = jax.tree_util.tree_map(
-                        lambda leaf: jnp.expand_dims(leaf, axis=0), unflatten(values)
-                    )
-                    return float(
-                        evaluate_scalar_loss(
-                            self.model_fn,
-                            self.loss_fn,
-                            params,
-                            sample_data,
-                            self.apply_model_fn,
-                        )
-                    )
+                    return float(scalar_loss(values, sample_data))
 
                 trace.append(objective(flat))
 

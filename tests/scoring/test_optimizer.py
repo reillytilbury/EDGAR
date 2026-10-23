@@ -89,3 +89,29 @@ def test_scipy_optimizer_independently_fits_multiple_structured_samples():
     assert traces.shape[0] == 2
     assert np.all(np.isfinite(traces))
     assert np.all(np.isfinite(traces[:, 0]))
+
+
+def test_scipy_loss_is_traced_once_for_samples_of_same_shape():
+    traces = []
+
+    def model(data, params):
+        # Called while tracing the jitted scalar loss, not on every SciPy call.
+        traces.append(1)
+        return params["w"] * data["x"]
+
+    data = {
+        "x": jnp.ones((2, 3)),
+        "y": jnp.asarray([[2.0] * 3, [3.0] * 3]),
+    }
+
+    def loss(output, target):
+        return jnp.mean((output - target["y"]) ** 2, axis=-1)
+
+    optimizer = ScipyOptimizer(
+        model, loss, data, {"method": "Nelder-Mead", "options": {"maxiter": 40}}
+    )
+    params, trajectories = optimizer.optimize([{"w": jnp.zeros(2)}])
+    assert len(traces) == 1
+    assert np.allclose(params[0]["w"], [2.0, 3.0], atol=0.1)
+    assert trajectories.shape[0] == 1
+    assert np.isfinite(trajectories).all()
