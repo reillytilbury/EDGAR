@@ -8,6 +8,7 @@ import warnings
 from queue import Empty
 from typing import Any, Callable
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class SubprocessTimeoutError(TimeoutError):
@@ -22,8 +23,34 @@ class SubprocessWorkerError(RuntimeError):
         self.traceback_text = traceback_text
 
 
-def _worker_entry(queue, target, args):
+def available_cpu_count() -> int:
+    """Return CPUs available to this process, respecting affinity where available."""
     try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
+
+
+def run_tasks_in_threads(tasks, max_workers: int):
+    """Yield ``(key, result, error)`` for bounded tasks in completion order.
+
+    Threads supervise scoring subprocesses; model execution itself remains in
+    its dedicated process, preserving timeout and JAX-memory isolation.
+    """
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(fn): key for key, fn in tasks}
+        for future in as_completed(futures):
+            key = futures[future]
+            try:
+                yield key, future.result(), None
+            except Exception as exc:
+                yield key, None, exc
+
+
+def _worker_entry(queue, target, args, cpu_affinity=None):
+    try:
+        if cpu_affinity is not None and hasattr(os, "sched_setaffinity"):
+            os.sched_setaffinity(0, {cpu_affinity})
         target(queue, *args)
     except Exception as exc:
         queue.put(
@@ -53,7 +80,10 @@ def get_mp_context() -> mp.context.BaseContext:
 
 
 def run_in_subprocess(
-    target: Callable[..., Any], args: tuple[Any, ...], timeout: float
+    target: Callable[..., Any],
+    args: tuple[Any, ...],
+    timeout: float,
+    cpu_affinity: int | None = None,
 ) -> Any:
     """Run a queue-based worker in an isolated process and return its result.
 
@@ -63,7 +93,7 @@ def run_in_subprocess(
     """
     ctx = get_mp_context()
     queue = ctx.Queue()
-    proc = ctx.Process(target=_worker_entry, args=(queue, target, args))
+    proc = ctx.Process(target=_worker_entry, args=(queue, target, args, cpu_affinity))
     proc.start()
     try:
         result = queue.get(timeout=timeout)

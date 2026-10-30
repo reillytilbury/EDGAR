@@ -856,6 +856,7 @@ def test_score_forwards_custom_apply_model(monkeypatch):
         split="discover",
         apply_model_fn=apply_model_plain,
         diagnostics=None,
+        cpu_affinity=None,
     ):
         received["program"] = program
         received["data"] = scoring_data

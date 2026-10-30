@@ -73,6 +73,7 @@ def test_fromconfig():
             "gradient_clip_norm": None,
         },
         "scipy_minimize": None,
+        "max_workers": None,
         "optimizer_config": {
             "max_iter": 100,
             "learning_rate": 0.01,

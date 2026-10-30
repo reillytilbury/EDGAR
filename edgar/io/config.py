@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Literal
 from dataclasses import field
 import yaml
-from pydantic import BaseModel, ConfigDict, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from ..llm.prompt_schema import PromptSchema
 
@@ -354,6 +360,7 @@ class ScoringConfig(_LaxModel):
             If any appear, the model is banned and assigned infinite loss.
         n_param_ests: The number of initial parameter estimators and number of optimizations to run per program (each starting from a different initial parameter estimate).
         jax_backend: The JAX backend to use for scoring ("cpu", "gpu", or "tpu").
+        max_workers: Optional maximum number of simultaneous CPU scoring workers.
         gradient_descent: Configuration for the gradient descent optimization
             performed during scoring.
     """
@@ -368,6 +375,14 @@ class ScoringConfig(_LaxModel):
     gradient_descent: GradientDescentConfig | None = None
     scipy_minimize: ScipyMinimizeConfig | None = None
     jax_backend: Literal["cpu", "gpu", "tpu"] | None = None
+    max_workers: int | None = None
+
+    @field_validator("max_workers")
+    @classmethod
+    def check_max_workers(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("max_workers must be a positive integer or None")
+        return value
 
     @computed_field
     @property

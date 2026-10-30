@@ -101,6 +101,30 @@ def test_scoring_jax_device_accepts_default_none():
     assert ScoringConfig(**base, jax_backend=None).jax_backend is None
 
 
+@pytest.mark.parametrize("workers", [0, -1])
+def test_scoring_max_workers_must_be_positive(workers):
+    base = dict(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+    )
+    with pytest.raises(ValidationError):
+        ScoringConfig(**base, max_workers=workers)
+
+
+def test_scoring_max_workers_defaults_to_automatic():
+    base = dict(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+    )
+    assert ScoringConfig(**base).max_workers is None
+
+
 def test_scoring_optimizer_config_tracks_selected_optimizer():
     base = dict(
         param_penalty_weight=0.0,

@@ -10,6 +10,7 @@ and orchestrates population-level scoring and ranking.
 from __future__ import annotations
 
 import time
+import os
 
 import traceback
 import cloudpickle
@@ -26,7 +27,12 @@ from ..evolution.program import (
 )
 from ..evolution.population import Population
 from ..io.metrics import get_active_metrics, stream_line
-from ..process import SubprocessTimeoutError, run_in_subprocess
+from ..process import (
+    SubprocessTimeoutError,
+    available_cpu_count,
+    run_in_subprocess,
+    run_tasks_in_threads,
+)
 from ..jax.utils import _to_jax, _to_numpy, configure_jax_backend
 from .utils import (
     evaluate_sample_losses,
@@ -401,6 +407,7 @@ def _score_one_model(
     split: str = "discover",
     apply_model_fn=apply_model_plain,
     diagnostics=None,
+    cpu_affinity: int | None = None,
 ) -> tuple[
     float,
     float,
@@ -428,6 +435,7 @@ def _score_one_model(
             If `None`, fingerprint computation is skipped.
         split: The scoring split (e.g., "discover" or "validate").
         diagnostics: Optional `BaseDiagnostics` object to compute project metrics.
+        cpu_affinity: Optional. An integer specifying the CPU core to which the subprocess should be pinned.
 
     Returns:
         A 12-tuple: `(final_loss, initial_loss, eval_fingerprint, params, sample_losses, params_init, sample_losses_init, best_idx, trajectories, diagnostics_metrics, outcome)`.
@@ -494,6 +502,7 @@ def _score_one_model(
                 diagnostics_bytes,
             ),
             timeout=config["timeout_s"],
+            cpu_affinity=cpu_affinity,
         )
     except SubprocessTimeoutError:
         return (
@@ -589,6 +598,128 @@ def _needs_scoring(population: Population, split: str) -> list[Program]:
     ]
 
 
+def _create_score_jobs(
+    programs: list[Program],
+    data_ref,
+    loss_fn,
+    config: dict,
+    X_eval,
+    split: str,
+    apply_model_fn,
+    diagnostics,
+    worker_limit: int,
+    available_cpus: list[int],
+) -> tuple[list, dict]:
+    """Create threaded score jobs and score outcomes that need no worker."""
+    backend = config.get("jax_backend") or jax.default_backend()
+    jobs = []
+    immediate = {}
+
+    for position, program in enumerate(programs):
+        if program.n_params is None or _is_banned(
+            config.get("banned_strings", []), program
+        ):
+            continue
+
+        cpu_affinity = (
+            available_cpus[position % worker_limit]
+            if backend == "cpu" and hasattr(os, "sched_setaffinity")
+            else None
+        )
+
+        def run(program=program, cpu_affinity=cpu_affinity):
+            started = time.monotonic()
+            result = _score_one_model(
+                program,
+                data_ref,
+                loss_fn,
+                config,
+                X_eval,
+                split,
+                apply_model_fn,
+                diagnostics=diagnostics,
+                cpu_affinity=cpu_affinity,
+            )
+            return result, (time.monotonic() - started) * 1000.0
+
+        jobs.append((program.idx, run))
+
+    # These outcomes are intentionally evaluated synchronously and before the
+    # threaded results, preserving the existing progress/metrics ordering.
+    for program in programs:
+        if program.n_params is None or program.status == "banned":
+            immediate[program.idx] = _score_one_model(
+                program,
+                data_ref,
+                loss_fn,
+                config,
+                X_eval,
+                split,
+                apply_model_fn,
+                diagnostics=diagnostics,
+            )
+
+    return jobs, immediate
+
+
+def _iter_score_results(jobs: list, immediate: dict, worker_limit: int):
+    """Yield score results uniformly as (program index, result, latency)."""
+    for program_idx, result in immediate.items():
+        yield program_idx, result, 0.0
+
+    for program_idx, payload, error in run_tasks_in_threads(jobs, worker_limit):
+        if error is not None:
+            raise error
+        result, latency_ms = payload
+        yield program_idx, result, latency_ms
+
+
+def _apply_score_result(program: Program, result: tuple, split: str) -> str:
+    """Write a score result back to its program and return its outcome label."""
+    (
+        final_loss,
+        initial_loss,
+        fingerprint,
+        params,
+        sample_losses,
+        params_init,
+        sample_losses_init,
+        all_final,
+        all_init,
+        best_idx,
+        trajectories,
+        diagnostics_metrics,
+        outcome,
+    ) = result
+
+    loss_pair = getattr(program.program_losses, split)
+    loss_pair.init = initial_loss
+    loss_pair.final = final_loss
+    loss_pair.trajectories = trajectories
+    loss_pair.all_init = all_init
+    loss_pair.all_final = all_final
+
+    if best_idx is not None:
+        program.best_estimator_idx = best_idx
+        if program.code.param_est:
+            program.code.best_param_est = program.code.param_est[best_idx]
+
+    if fingerprint is not None:
+        program.eval_fingerprint = fingerprint
+    if params is not None:
+        program.params = params
+    if params_init is not None:
+        program.params_init = params_init
+    if sample_losses is not None and split == "discover":
+        program.sample_losses = sample_losses
+    if sample_losses_init is not None and split == "discover":
+        program.sample_losses_init = sample_losses_init
+    if diagnostics_metrics:
+        program.diagnostics = diagnostics_metrics
+
+    return outcome
+
+
 def score(
     population: Population,
     X_split: tuple,
@@ -635,82 +766,61 @@ def score(
     n_total = len(queue)
     metrics = get_active_metrics()
     counters = {"ok": 0, "timeout": 0, "inf": 0, "banned": 0}
-    latencies_ms: list[float] = []
 
-    data_store = ScoringDataStore(X_split)
-    data_ref = data_store.ref()
+    backend = config.get("jax_backend") or jax.default_backend()
+    cpu_count = available_cpu_count()
     try:
-        for k, program in enumerate(queue, start=1):
-            t0 = time.monotonic()
-            (
-                final_loss,
-                initial_loss,
-                fingerprint,
-                params,
-                sample_losses,
-                params_init,
-                sample_losses_init,
-                all_final,
-                all_init,
-                best_idx,
-                trajectories,
-                diagnostics_metrics,
-                outcome,
-            ) = _score_one_model(
-                program,
-                data_ref,
-                loss_fn,
-                config,
-                X_eval,
-                split,
-                apply_model_fn,
-                diagnostics=diagnostics,
-            )
-            latency_ms = (time.monotonic() - t0) * 1000.0
-            latencies_ms.append(latency_ms)
+        available_cpus = sorted(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        available_cpus = list(range(cpu_count))
+    configured_workers = config.get("max_workers")
+    if configured_workers is not None and (
+        not isinstance(configured_workers, int)
+        or isinstance(configured_workers, bool)
+        or configured_workers < 1
+    ):
+        raise ValueError("scoring.max_workers must be a positive integer or None")
+    worker_limit = (
+        min(cpu_count, configured_workers or cpu_count) if backend == "cpu" else 1
+    )
+    worker_limit = max(1, min(worker_limit, n_total or 1))
+    data_store = ScoringDataStore(X_split)
+    try:
+        data_ref = data_store.ref()
+        programs_by_idx = {program.idx: program for program in queue}
+        jobs, immediate = _create_score_jobs(
+            queue,
+            data_ref,
+            loss_fn,
+            config,
+            X_eval,
+            split,
+            apply_model_fn,
+            diagnostics,
+            worker_limit,
+            available_cpus,
+        )
+        tick_every = 1 if n_total <= 12 else 4
+        total_latency_ms = 0.0
+        for k, (program_idx, result, latency_ms) in enumerate(
+            _iter_score_results(jobs, immediate, worker_limit), start=1
+        ):
+            program = programs_by_idx[program_idx]
+            outcome = _apply_score_result(program, result, split)
+            total_latency_ms += latency_ms
             counters[outcome] += 1
-
-            loss_pair = getattr(program.program_losses, split)
-            loss_pair.init = initial_loss
-            loss_pair.final = final_loss
-            loss_pair.trajectories = trajectories
-            loss_pair.all_init = all_init
-            loss_pair.all_final = all_final
-
-            # Record the best parameter estimator
-            if best_idx is not None:
-                program.best_estimator_idx = best_idx
-                if program.code.param_est:
-                    program.code.best_param_est = program.code.param_est[best_idx]
-
-            if fingerprint is not None:
-                program.eval_fingerprint = fingerprint
-            if params is not None:
-                program.params = params
-            if params_init is not None:
-                program.params_init = params_init
-            if sample_losses is not None and split == "discover":
-                program.sample_losses = sample_losses
-            if sample_losses_init is not None and split == "discover":
-                program.sample_losses_init = sample_losses_init
-            if diagnostics_metrics:
-                program.diagnostics = diagnostics_metrics
 
             if metrics is not None:
                 metrics.record_score_result(program.idx, latency_ms, outcome)
-
-            # Cheap progress line so the user sees movement during the slow stage.
-            # Print every program for low n_total, every 4 for larger sweeps.
-            tick_every = 1 if n_total <= 12 else 4
-            if metrics is not None and (k == n_total or k % tick_every == 0):
-                avg_s = (sum(latencies_ms) / len(latencies_ms)) / 1000.0
-                stream_line(
-                    metrics,
-                    f"  [score {split}] {k}/{n_total}  "
-                    f"(avg {avg_s:.1f}s, {counters['ok']} ok, "
-                    f"{counters['timeout']} timeout, {counters['inf']} inf, "
-                    f"{counters['banned']} banned)",
-                )
+                if k == n_total or k % tick_every == 0:
+                    avg_s = total_latency_ms / k / 1000.0
+                    stream_line(
+                        metrics,
+                        f"  [score {split}] {k}/{n_total}  "
+                        f"(avg {avg_s:.1f}s, {counters['ok']} ok, "
+                        f"{counters['timeout']} timeout, {counters['inf']} inf, "
+                        f"{counters['banned']} banned)",
+                    )
     finally:
         data_store.cleanup()
 

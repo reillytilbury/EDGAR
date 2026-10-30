@@ -87,6 +87,8 @@ scoring:
 
   # Total wall-clock timeout (seconds) for a single program scoring run.
   timeout_s: 120.0
+  # Maximum concurrent CPU scoring processes; null uses all CPUs available to this process.
+  max_workers: null
 
   # Banned substrings in jax-translated models. If present, program gets infinite loss & banned status.
   banned_strings: []

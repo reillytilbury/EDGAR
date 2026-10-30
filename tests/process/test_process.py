@@ -7,6 +7,7 @@ from edgar.process import (
     SubprocessWorkerError,
     get_mp_context,
     run_in_subprocess,
+    run_tasks_in_threads,
 )
 
 
@@ -54,3 +55,32 @@ def test_non_spawn_context_warns(monkeypatch):
         context = get_mp_context()
 
     assert context.get_start_method() == "fork"
+
+
+def test_run_tasks_in_threads_overlaps_tasks():
+    import threading
+
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def task():
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.1)
+        with lock:
+            active -= 1
+        return True
+
+    results = list(run_tasks_in_threads([(i, task) for i in range(4)], 2))
+    assert len(results) == 4
+    assert all(result is True and error is None for _, result, error in results)
+    assert peak == 2
+
+
+def test_available_cpu_count_is_positive():
+    from edgar.process import available_cpu_count
+
+    assert available_cpu_count() >= 1
