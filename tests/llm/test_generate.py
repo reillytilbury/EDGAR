@@ -598,19 +598,17 @@ async def test_generate_one_model_with_ideas():
         assert "Use recurrence" not in called_prompt
 
 
-@pytest.mark.parametrize("missing", ["model", "param_est", "model_jax"])
+@pytest.mark.parametrize("missing", ["model", "model_jax"])
 def test_mark_failed_generations(missing):
-    """Programs missing any code string are marked; complete or non-alive ones are not."""
+    """Programs missing model or JAX model code are marked; complete or non-alive ones are not."""
     complete = make_program(number=0)
     incomplete = make_program(number=1)
     setattr(incomplete.code, missing, None)
     already_banned = make_program(number=2)
     already_banned.code.model = None
     already_banned.status = "banned"
-    no_estimators = make_program(number=3)
-    no_estimators.code.param_est = []  # falls back to default_params, not a failure
     pop = Population()
-    for p in (complete, incomplete, already_banned, no_estimators):
+    for p in (complete, incomplete, already_banned):
         pop.add(p)
 
     mark_failed_generations(pop)
@@ -618,6 +616,18 @@ def test_mark_failed_generations(missing):
     assert complete.status == "alive"
     assert incomplete.status == "failed_generation"
     assert already_banned.status == "banned"
+
+
+@pytest.mark.parametrize("param_est", [None, []])
+def test_missing_param_ests_are_not_failed_generations(param_est):
+    """Missing estimators are not a failure: scoring initialises from default_params instead."""
+    no_estimators = make_program(number=0)
+    no_estimators.code.param_est = param_est
+    pop = Population()
+    pop.add(no_estimators)
+
+    mark_failed_generations(pop)
+
     assert no_estimators.status == "alive"
 
 

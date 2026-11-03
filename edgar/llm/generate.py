@@ -74,14 +74,15 @@ def _needs_model_translation(program: Program) -> bool:
 
 
 def mark_failed_generations(population: Population) -> None:
-    """Marks alive programs whose code is incomplete as "failed_generation".
+    """Marks alive programs without model or JAX model code as "failed_generation".
 
-    Run after the generation and translation stages. A program left without model,
-    parameter estimator, or JAX model code (e.g. because the LLM response was
-    truncated) cannot be scored and must not be sampled as a parent or migrant.
-    The status is final: generation stages only work on alive programs, so failures
-    are not retried. It stays on its island so failures remain visible in the run
-    outputs.
+    Run after the generation and translation stages. A program left without numpy
+    model or JAX model code (e.g. because the LLM response was truncated) cannot be
+    scored and must not be sampled as a parent or migrant. Missing parameter
+    estimators are not a failure: gradient descent is then initialised from the
+    program's default params. The status is final: generation stages only work on
+    alive programs, so failures are not retried. It stays on its island so failures
+    remain visible in the run outputs.
 
     Args:
         population: The population whose programs are checked. Mutated in-place.
@@ -90,7 +91,7 @@ def mark_failed_generations(population: Population) -> None:
         if program.status != "alive":
             continue
         code = program.code
-        if code.model is None or code.param_est is None or code.model_jax is None:
+        if code.model is None or code.model_jax is None:
             program.status = "failed_generation"
 
 
