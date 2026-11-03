@@ -511,7 +511,6 @@ def deduplicate(
     islands: list[set[int]],
     population: Population,
     evolution: dict,
-    loss_tol: float = 0.01,
     cosine_tol: float = 0.95,
 ) -> None:
     """Applies both within-island and between-island deduplication to the population.
@@ -520,7 +519,8 @@ def deduplicate(
     within each island. Subsequently, it calls `deduplicate_outer` to eliminate
     duplicates found across different islands. The `min_island_size` for
     cross-island deduplication is dynamically calculated as 75% of the
-    `critical_population_size` specified in the evolution configuration.
+    `critical_population_size` specified in the evolution configuration, and the
+    loss tolerance is taken from the project-specific `dedup_loss_tol`.
 
     Args:
         islands: A list of island sets (each set contains program indices).
@@ -528,9 +528,9 @@ def deduplicate(
         population: The global `Population` object used to resolve program indices
             to `Program` objects.
         evolution: A dictionary containing evolutionary configuration parameters,
-            specifically `critical_population_size`.
-        loss_tol: The absolute tolerance for the difference in `discover.final` losses
-            to consider programs as duplicates. Defaults to 0.01.
+            specifically `critical_population_size` and `dedup_loss_tol` (the
+            absolute tolerance for the difference in `discover.final` losses to
+            consider programs as duplicates).
         cosine_tol: The minimum cosine similarity between `eval_fingerprint` arrays
             to consider programs as duplicates. Defaults to 0.95.
     """
@@ -538,6 +538,7 @@ def deduplicate(
     min_island_size = int(
         0.75 * n_critical
     )  # only remove cross-island duplicates if both islands have at least 75% of critical population size
+    loss_tol = evolution["dedup_loss_tol"]
 
     deduplicate_inner(islands, population, loss_tol, cosine_tol)
     deduplicate_outer(islands, population, min_island_size, loss_tol, cosine_tol)

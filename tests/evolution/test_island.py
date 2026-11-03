@@ -605,7 +605,7 @@ def test_deduplicate_applies_inner_then_outer():
         ]
     )
     islands = [{0, 1, 2}, {3, 4, 5}]
-    evolution = {"critical_population_size": 2}
+    evolution = {"critical_population_size": 2, "dedup_loss_tol": 0.01}
     deduplicate(islands, pop, evolution)
     # inner: island 0 → {0, 2} (1 removed); island 1 unchanged → {3, 4, 5}
     # outer: min_island_size=1.5; island 0 size=2, island 1 size=3 → both pass
@@ -613,6 +613,22 @@ def test_deduplicate_applies_inner_then_outer():
     #   2 dup of 4 (losses 2.0 vs 2.005) → 4 removed from island 1
     assert islands[0] == {0, 2}
     assert islands[1] == {5}
+
+
+def test_deduplicate_uses_configured_loss_tol():
+    # Same fingerprint, losses 0.05 apart: duplicates only when dedup_loss_tol >= 0.05.
+    def make():
+        return make_fingerprint_population([(_E0, 1.00), (_E0, 1.05)])
+
+    pop = make()
+    islands = [{0, 1}]
+    deduplicate(islands, pop, {"critical_population_size": 2, "dedup_loss_tol": 0.01})
+    assert islands[0] == {0, 1}
+
+    pop = make()
+    islands = [{0, 1}]
+    deduplicate(islands, pop, {"critical_population_size": 2, "dedup_loss_tol": 0.1})
+    assert islands[0] == {0}
 
 
 # ─────────────────────────────────────────────────────────────────────────
