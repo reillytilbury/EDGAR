@@ -7,13 +7,17 @@ from edgar.llm.generate import (
     _generate_param_ests_for_program,
     generate_models,
     generate_param_ests,
+    mark_failed_generations,
+    _filter_programs,
+    _needs_model_code,
     _translate_one_model,
     translate_programs,
 )
 from edgar.llm.response_schema import ModelSchemaDynamicDefaultParams
 from edgar.llm.code_loading import load_function_from_source
 from edgar.llm.prompt_schema import PromptSchema
-from tests.evolution.utils import make_empty_program
+from tests.evolution.utils import make_empty_program, make_program
+from edgar.evolution.population import Population
 from tests.llm.programs import (
     Program1,
     InvalidProgram,
@@ -592,3 +596,40 @@ async def test_generate_one_model_with_ideas():
         called_prompt = mock_call.call_args[1]["prompt"]
         assert "Placeholder: " in called_prompt
         assert "Use recurrence" not in called_prompt
+
+
+@pytest.mark.parametrize("missing", ["model", "param_est", "model_jax"])
+def test_mark_failed_generations(missing):
+    """Programs missing any code string are marked; complete or non-alive ones are not."""
+    complete = make_program(number=0)
+    incomplete = make_program(number=1)
+    setattr(incomplete.code, missing, None)
+    already_banned = make_program(number=2)
+    already_banned.code.model = None
+    already_banned.status = "banned"
+    no_estimators = make_program(number=3)
+    no_estimators.code.param_est = []  # falls back to default_params, not a failure
+    pop = Population()
+    for p in (complete, incomplete, already_banned, no_estimators):
+        pop.add(p)
+
+    mark_failed_generations(pop)
+
+    assert complete.status == "alive"
+    assert incomplete.status == "failed_generation"
+    assert already_banned.status == "banned"
+    assert no_estimators.status == "alive"
+
+
+def test_failed_generations_are_not_retried():
+    """Generation stages only select alive programs, so marked failures are final."""
+    failed = make_program(number=0)
+    failed.code.model = None
+    pending = make_program(number=1)
+    pending.code.model = None
+    pop = Population()
+    pop.add(failed)
+    mark_failed_generations(pop)
+    pop.add(pending)  # spawned in the next generation, not yet generated
+
+    assert _filter_programs(pop, _needs_model_code) == [pending]

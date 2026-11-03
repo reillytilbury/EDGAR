@@ -90,7 +90,8 @@ def spawn(
 ) -> None:
     """Samples parents from each island and creates empty `Program` shells.
 
-    For each island, this function samples `num_parents` programs (uniformly at random)
+    For each island, this function samples `num_parents` programs (uniformly at random,
+    excluding programs with status "failed_generation")
     and uses their indices to create `batch_size` new `Program` shells. Each shell
     receives a `BirthCertificate` detailing its origin (generation, island, batch index,
     parentage, mode, and temperature). These new shells are added to the global
@@ -110,7 +111,7 @@ def spawn(
         rng: The NumPy random number generator to use for sampling parents.
     """
     for island_idx, island in enumerate(islands):
-        programs = [population[i] for i in island]
+        programs = _eligible_parents(population, island)
 
         for batch_idx in range(batch_size):
             parent_indices = list(uniform_sample(programs, k=num_parents, rng=rng))
@@ -165,6 +166,27 @@ def prune(islands: list[set[int]], population: Population, evolution: dict) -> N
     for idx in all_before - all_after:
         if population[idx].status == "alive":
             population[idx].status = "pruned"
+
+
+def _eligible_parents(population: Population, island: set[int]) -> list[Program]:
+    """Returns the programs on an island that may be sampled as parents or migrants.
+
+    Programs with status "failed_generation" have no code to show the LLM or to
+    score, so they stay on the island for bookkeeping but are never sampled.
+    Currently we allow banned programs to be eligible parents - we may choose to change this behavior in the future.
+
+    Args:
+        population: The global `Population` used to resolve program indices.
+        island: The set of program indices on the island.
+
+    Returns:
+        A list of the island's `Program` objects that are eligible for sampling.
+    """
+    return [
+        population[idx]
+        for idx in island
+        if population[idx].status != "failed_generation"
+    ]
 
 
 def uniform_sample(
@@ -297,7 +319,7 @@ def migrate(
     # First collect which programs will be migrated
     updates = []
     for island in islands:
-        programs = [population[idx] for idx in island]
+        programs = _eligible_parents(population, island)
         sampled = boltzmann_sample(
             programs, k=n_migrants, temperature=T_warped, rng=rng
         )

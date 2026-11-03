@@ -73,8 +73,30 @@ def _needs_model_translation(program: Program) -> bool:
     return program.code.model is not None and program.code.model_jax is None
 
 
+def mark_failed_generations(population: Population) -> None:
+    """Marks alive programs whose code is incomplete as "failed_generation".
+
+    Run after the generation and translation stages. A program left without model,
+    parameter estimator, or JAX model code (e.g. because the LLM response was
+    truncated) cannot be scored and must not be sampled as a parent or migrant.
+    The status is final: generation stages only work on alive programs, so failures
+    are not retried. It stays on its island so failures remain visible in the run
+    outputs.
+
+    Args:
+        population: The population whose programs are checked. Mutated in-place.
+    """
+    for program in population:
+        if program.status != "alive":
+            continue
+        code = program.code
+        if code.model is None or code.param_est is None or code.model_jax is None:
+            program.status = "failed_generation"
+
+
 def _filter_programs(
-    population: Population, filter_rule: Callable[[Program], bool]
+    population: Population, filter_rule: Callable[[Program], bool],
+    only_alive_programs = True,
 ) -> list[Program]:
     """Filters a population of programs based on a given rule.
 
@@ -82,11 +104,17 @@ def _filter_programs(
         population: The population of programs to filter.
         filter_rule: A callable that takes a Program and returns True if it
             should be included in the filtered list.
+        only_alive_programs: If True, only programs with status "alive" are considered. If False,
+        programs marked as failed_generation, or pruned, banned, etc. are retried in later generations.
+        Defaults to True.
 
     Returns:
         A list of programs that satisfy the filter rule.
     """
-    return [p for p in population if filter_rule(p)]
+    if only_alive_programs:
+        return [p for p in population if p.status == "alive" and filter_rule(p)]
+    else:
+        return [p for p in population if filter_rule(p)]
 
 
 def _resolve_parents(population: Population, program: Program) -> list[Program]:
@@ -177,6 +205,7 @@ async def _generate_one_model(
         image_bytes=image_bytes,
         log_raw_llm_response=cfg.get("log_raw_llm_response", False),
         max_tokens=cfg.get("max_tokens"),
+        thinking=cfg.get("model_thinking"),
         retry_config=cfg.get("retry_config"),
         role="model",
     )
@@ -305,6 +334,7 @@ async def _generate_one_param_est(
         temperature=1.0,
         log_raw_llm_response=config.get("log_raw_llm_response", False),
         max_tokens=config.get("max_tokens"),
+        thinking=config.get("param_est_thinking"),
         retry_config=config.get("retry_config"),
         role="param_est",
     )

@@ -1,3 +1,4 @@
+import io
 import tempfile
 from types import SimpleNamespace
 import numpy as np
@@ -40,8 +41,9 @@ def run_param_est_code(code: str, data: dict):
 def generate_image_bytes():
     matrix = np.array([[0, 255, 0], [255, 0, 255], [0, 255, 0]], dtype=np.uint8)
     img = Image.fromarray(matrix, mode="L")
-    img.save("test_image.png")
-    return open("test_image.png", "rb").read()
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 async def generate_one_fake_model():

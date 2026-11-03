@@ -261,7 +261,7 @@
           <div><span class="text-zinc-500">programs</span> <span class="font-mono ml-1" x-text="summary.n_programs ?? 0"></span></div>
           <div><span class="text-zinc-500">alive at end</span> <span class="font-mono ml-1" x-text="summary.n_alive ?? 0"></span></div>
           <div><span class="text-zinc-500">scored (disc.)</span> <span class="font-mono ml-1" x-text="summary.n_scored_discover ?? 0"></span></div>
-          <div><span class="text-zinc-500">best discover</span> <span class="font-mono ml-1" x-text="fmt(summary.best_discover_loss)"></span></div>
+          <div><span class="text-zinc-500">best discover</span> <span class="font-mono ml-1" x-text="fmtSig(summary.best_discover_loss)"></span></div>
           <div><span class="text-zinc-500">best validate</span> <span class="font-mono ml-1" x-text="fmt(summary.best_validate_loss)"></span></div>
           <div><span class="text-zinc-500">model LLM</span> <span class="font-mono ml-1 text-xs" x-text="summary.llms?.model ?? '-'"></span></div>
           <div><span class="text-zinc-500">param_est LLM</span> <span class="font-mono ml-1 text-xs" x-text="summary.llms?.param_est ?? '-'"></span></div>
@@ -331,8 +331,8 @@
                   <td class="px-3 py-1.5 font-mono" x-text="p.rank ?? '-'"></td>
                   <td class="px-3 py-1.5 font-mono text-zinc-400" x-text="p.idx"></td>
                   <td class="px-3 py-1.5 truncate" x-text="p.name"></td>
-                  <td class="px-3 py-1.5 font-mono" :class="lossClass(p.loss_validate)" x-text="fmt(p.loss_validate)"></td>
-                  <td class="px-3 py-1.5 font-mono" :class="lossClass(p.loss_discover)" x-text="fmt(p.loss_discover)"></td>
+                  <td class="px-3 py-1.5 font-mono" :class="lossClass(p.loss_validate)" x-text="fmtSig(p.loss_validate)"></td>
+                  <td class="px-3 py-1.5 font-mono" :class="lossClass(p.loss_discover)" x-text="fmtSig(p.loss_discover)"></td>
                   <td class="px-3 py-1.5 font-mono" x-text="p.n_params ?? '-'"></td>
                   <td class="px-3 py-1.5 font-mono" x-text="p.gen"></td>
                   <td class="px-3 py-1.5 font-mono" x-text="p.island"></td>
@@ -514,7 +514,7 @@
                   class="block w-full text-left border border-zinc-800 rounded px-3 py-2 hover:bg-zinc-800/60">
                   <div class="flex items-baseline justify-between gap-3">
                     <div class="text-sm"><span class="font-mono text-zinc-400">#<span x-text="p.idx"></span></span> <span x-text="p.name"></span></div>
-                    <div class="text-xs font-mono" :class="lossClass(p.loss_discover)" x-text="fmt(p.loss_discover)"></div>
+                    <div class="text-xs font-mono" :class="lossClass(p.loss_discover)" x-text="fmtSig(p.loss_discover)"></div>
                   </div>
                   <div class="text-[11px] text-zinc-500">gen <span x-text="p.gen"></span> · island <span x-text="p.island"></span></div>
                 </button>
@@ -530,7 +530,7 @@
                   class="block w-full text-left border border-zinc-800 rounded px-3 py-2 hover:bg-zinc-800/60">
                   <div class="flex items-baseline justify-between gap-3">
                     <div class="text-sm"><span class="font-mono text-zinc-400">#<span x-text="c.idx"></span></span> <span x-text="c.name"></span></div>
-                    <div class="text-xs font-mono" :class="lossClass(c.loss_discover)" x-text="fmt(c.loss_discover)"></div>
+                    <div class="text-xs font-mono" :class="lossClass(c.loss_discover)" x-text="fmtSig(c.loss_discover)"></div>
                   </div>
                   <div class="text-[11px] text-zinc-500">gen <span x-text="c.gen"></span> · island <span x-text="c.island"></span></div>
                 </button>
