@@ -25,6 +25,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 First clone the repository and checkout the `main` branch
 ```bash
 git clone https://github.com/reillytilbury/EDGAR.git
+cd EDGAR
 git checkout main
 ``` 
 
@@ -97,7 +98,7 @@ Override config values on the command line:
 
 ```bash
 edgar run projects/orientation_tuning/config.yaml --evolution.n_generations=5
-edgar projects/orientation_tuning/config.yaml --llms.model_llm=gemini-2.5-pro
+edgar run projects/orientation_tuning/config.yaml --llms.model_llm=gemini-2.5-pro
 ```
 
 Run a quick test with reduced settings (1 generation, 2 islands, batch size 2) to verify the pipeline is wired correctly
@@ -121,7 +122,7 @@ By default this allows access to data saved in `program_databases`. If the data 
 edgar dashboard {data_directory}
 ```
 
-A run which failed can be resume via, for example:
+A failed run can be resumed, for example:
 ```bash
 edgar resume program_databases/my_task/yyyy-mm-dd/hh-mm-ss
 ```
