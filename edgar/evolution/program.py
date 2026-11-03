@@ -63,7 +63,7 @@ class BirthCertificate:
         island: The ID of the island where the program was spawned.
         batch_index: The index of the program within its generation's batch.
         mode: The evolutionary mode (e.g., 'explore', 'exploit') at the time of creation.
-        temperature: The sampling temperature used for LLM generation.
+        temperature: Legacy metadata from historical runs; new programs leave it unset.
         parent_indices: A list of global indices of parent programs.
         llm_name: The name of the LLM model used to generate this program.
         ideas: A list of ideas included in the prompt to generate the program.

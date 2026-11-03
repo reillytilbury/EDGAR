@@ -45,6 +45,19 @@ async def test_call_llm_with_fake_model():
 
 
 @pytest.mark.asyncio
+async def test_call_llm_omits_sampling_temperature():
+    from unittest.mock import AsyncMock, patch
+
+    model = FakeLLM(DEFAULT_FAKE_PROGRAMS).gen_model()
+    mock_run = AsyncMock(return_value=type("Result", (), {"output": "ok"})())
+    with patch("edgar.llm.llm_calling.Agent.run", mock_run):
+        assert await call_llm(prompt="prompt", llm_model=model) == "ok"
+
+    settings = mock_run.call_args.kwargs["model_settings"]
+    assert "temperature" not in settings
+
+
+@pytest.mark.asyncio
 async def test_call_llm_with_fake_param_est():
     llm = FakeLLM(DEFAULT_FAKE_PROGRAMS)
     param_est = llm.gen_param_est()

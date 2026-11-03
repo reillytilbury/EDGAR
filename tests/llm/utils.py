@@ -69,7 +69,6 @@ async def generate_one_fake_model():
         prompt_schema,
         llm_model,
         "explore",
-        1.0,
         spec=make_fake_spec(),
         data={},
     )
@@ -93,7 +92,6 @@ async def generate_fake_models(n: int):
         prompt_schema,
         llm_models,
         "explore",
-        1.0,
         spec=make_fake_spec(),
         data={},
     )

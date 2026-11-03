@@ -489,16 +489,12 @@ class TaskSpec:
     # ── generation schedule ──
 
     def schedule(self, generation: int) -> tuple[str, float, LLMs]:
-        """Returns the operational mode, temperature, and specific LLMs for a given generation.
+        """Returns the operational mode, migration temperature, and LLMs for a generation.
 
-        The `temperature` for LLM generation follows a decaying schedule:
-        `temperature = 1 + exp(-generation / n_generations)`. This results in a decay
-        from 2.0 (at generation 0) towards 1.37 (as `generation` approaches
-        `n_generations`). This range [1.37, 2.0] is considered the **Gemini scale**.
-        For LLM providers like Anthropic, which typically accept temperatures in the
-        range [0, 1], the `call_llm` function in `llm_calling.py` handles the necessary
-        rescaling (e.g., mapping [1.37, 2.0] to [0.685, 1.0]) to ensure consistent
-        behavior.
+        The migration temperature follows a decaying schedule:
+        `migration_temperature = 1 + exp(-generation / n_generations)`. This results in a decay
+        from 2.0 at generation 0 towards 1.37 at the end of the run. It is used
+        only for Boltzmann-weighted island migration, not LLM sampling.
 
         The `mode` transitions from "explore" to "exploit", guiding the LLM's
         behavior towards either novelty or refinement. This transition is controlled
@@ -514,9 +510,8 @@ class TaskSpec:
             tuple[str, float, LLMs]: A tuple containing:
                 - mode (str): "explore" if generation < exploit_point * n_generations,
                   "exploit" otherwise.
-                - temperature (float): The Gemini-scale temperature ([1.37, 2.0]) for
-                  LLM generation. This value will be rescaled at the call site for
-                  LLMs with different accepted temperature ranges (e.g., Anthropic).
+                - migration_temperature (float): The scheduled value used to control
+                  Boltzmann sampling during island migration.
                 - llms (LLMs): A namedtuple providing the specific LLM models to be
                   used for `model` generation, `param_est` generation, and `model_jax`
                   translation in this generation.
@@ -527,7 +522,7 @@ class TaskSpec:
         exploit_point = self.evolution.get("exploit_point", 0.5)
 
         mode = "explore" if generation < exploit_point * n_generations else "exploit"
-        temperature = 1 + np.exp(-generation / n_generations)
+        migration_temperature = 1 + np.exp(-generation / n_generations)
 
         model_llm = (
             self.llms["model_llm"][generation % len(self.llms["model_llm"])]
@@ -541,7 +536,7 @@ class TaskSpec:
             model_jax=self.llms["jax_model_translator_llm"],
         )
 
-        return mode, temperature, llms
+        return mode, migration_temperature, llms
 
     # ── config ──
 

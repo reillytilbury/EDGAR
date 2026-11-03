@@ -147,7 +147,7 @@ print(f"  seed count:   {len(spec.seed_programs)}")
 print(f"  loss_fn:      {spec.loss_fn.__module__}.{spec.loss_fn.__name__}")
 print(f"  plot_fn:      "
       f"{spec.plot_fn.__name__ if spec.plot_fn else None}")
-print(f"  schedule(0):  {spec.schedule(0)[:2]}  (mode, temperature)")
+print(f"  schedule(0):  {spec.schedule(0)[:2]}  (mode, migration temperature)")
 
 
 # %% [markdown]

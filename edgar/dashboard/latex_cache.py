@@ -12,8 +12,8 @@ The process involves:
    `task_spec.yaml`) that was configured for JAX model translation.
 4. Constructing a prompt (`_LATEX_PROMPT`) to instruct the LLM to output
    only the LaTeX equations.
-5. Calling the LLM via `llm_calling.call_llm` with a low temperature for
-   deterministic output and retries for robustness.
+5. Calling the LLM via `llm_calling.call_llm` using provider defaults and retries
+   for robustness.
 6. Atomically writing the LLM's LaTeX response to a JSON file
    (`run_dir/latex_cache/{idx}.json`) for persistent caching.
 
@@ -149,7 +149,6 @@ async def get_or_generate_latex(
             prompt=prompt,
             llm_model=llm_model,
             output_type=str,
-            temperature=0.2,  # Low temperature for deterministic output
             retry_config=retry_config,
         )
     except Exception as e:  # noqa: BLE001 — surface everything as a clean error

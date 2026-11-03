@@ -49,6 +49,13 @@ def test_explicit_model_override_survives_provider():
     assert cfg.param_est_llm == "claude-sonnet-4-5"
 
 
+def test_legacy_param_est_temperature_is_ignored():
+    """Old user configs remain loadable but do not expose the removed setting."""
+    cfg = LLMsConfig(**_llms_kwargs(param_est_temperature=1.0))
+    assert "param_est_temperature" not in cfg.model_dump()
+    assert not hasattr(cfg, "param_est_temperature")
+
+
 try:
     gpu_available = len(jax.devices("gpu")) > 0
 except Exception:

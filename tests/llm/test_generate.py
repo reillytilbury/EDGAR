@@ -60,7 +60,6 @@ async def test_generate_one_model():
         prompt_schema,
         llm_model,
         "explore",
-        1.0,
         spec=make_fake_spec(output_dir="test_output"),
         data={},
     )
@@ -99,7 +98,6 @@ async def test_generate_one_model_dynamic_params():
         prompt_schema,
         llm_model,
         "explore",
-        1.0,
         spec=make_fake_spec(output_dir="test_output"),
         data=data,
         output_schema=ModelSchemaDynamicDefaultParams,
@@ -152,7 +150,6 @@ async def test_generate_one_model_dynamic_params_evaluation_failure():
             prompt_schema,
             llm_model,
             "explore",
-            1.0,
             spec=make_fake_spec(output_dir="test_output"),
             data=data,
             output_schema=ModelSchemaDynamicDefaultParams,
@@ -192,7 +189,6 @@ async def test_generate_same_model():
         prompt_schema,
         llm_model,
         "explore",
-        1.0,
         spec=make_fake_spec(output_dir="test_output"),
     )
 
@@ -240,7 +236,6 @@ async def test_generate_distinct_models():
         prompt_schema,
         llm_models,
         "explore",
-        1.0,
         spec=make_fake_spec(output_dir="test_output"),
     )
 
@@ -461,7 +456,6 @@ async def test_generate_one_model_with_real_llm():
         prompt_schema,
         llm=LLM_MODEL,
         mode="exploit",
-        temperature=1.0,
         spec=make_fake_spec(output_dir="test_output"),
         data={},
     )
@@ -561,7 +555,6 @@ async def test_generate_one_model_with_ideas():
             prompt_schema,
             llm_model,
             "explore",
-            1.0,
             config={"idea_probability": 1.0},
             spec=make_fake_spec(output_dir="test_output"),
             data={},
@@ -582,7 +575,6 @@ async def test_generate_one_model_with_ideas():
             prompt_schema,
             llm_model,
             "explore",
-            1.0,
             config={"idea_probability": 0.0},
             spec=make_fake_spec(output_dir="test_output"),
             data={},
