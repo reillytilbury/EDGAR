@@ -30,6 +30,7 @@ from .evolution.island import (
 from .llm.generate import (
     generate_models,
     generate_param_ests,
+    mark_failed_generations,
     translate_programs,
 )
 from .io.config import RetryConfig
@@ -50,6 +51,9 @@ t_spawn = timed("spawn", quiet=True)(spawn)
 t_generate_models = timed("generate_models")(generate_models)
 t_generate_param_ests = timed("generate_param_ests")(generate_param_ests)
 t_translate_programs = timed("translate_programs")(translate_programs)
+t_mark_failed_generations = timed("mark_failed_generations", quiet=True)(
+    mark_failed_generations
+)
 t_score = timed("score")(score)
 t_fits = timed("generate_program_images", quiet=True)(generate_program_images)
 t_deduplicate = timed("deduplicate", quiet=True)(deduplicate)
@@ -173,6 +177,7 @@ async def run(
                     output_schema=spec.response_schemas.jax_model,
                     n_items=len(spec.seed_programs),
                 )
+                t_mark_failed_generations(population)
                 t_score_seeds(
                     population,
                     X_discover,
@@ -248,6 +253,7 @@ async def run(
                     output_schema=spec.response_schemas.jax_model,
                     n_items=n_spawn,
                 )
+                t_mark_failed_generations(population)
                 t_score(
                     population,
                     X_discover,

@@ -43,6 +43,8 @@ def test_fromconfig():
         "model_llm": ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
         "param_est_llm": "gemini-2.5-flash-lite",
         "jax_model_translator_llm": "gemini-2.5-flash-lite",
+        "model_thinking": "medium",
+        "param_est_thinking": "low",
         "model_response_schema": "ModelSchema",
         "param_est_response_schema": "ParamEstSchema",
         "jax_model_response_schema": "TranslationSchema",

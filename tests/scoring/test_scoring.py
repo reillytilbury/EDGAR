@@ -431,6 +431,24 @@ def test_score_one_model_falls_back_to_default_params():
     assert outcome == "ok"
 
 
+@pytest.mark.parametrize("param_est", [None, []])
+def test_score_scores_program_without_param_ests(param_est):
+    """A program with JAX model code but no estimators is still scored, with gradient
+    descent initialised from default_params."""
+    program = Program(
+        birth=BirthCertificate(generation=0, island=0, batch_index=0),
+        code=Code(param_est=param_est, model_jax=FAST_MODEL_CODE),
+        _default_params={"w": jnp.array(1.0)},
+    )
+    pop = Population()
+    pop.add(program)
+
+    score(pop, (_make_data(), _make_data()), None, BASE_CONFIG, loss_fn, "discover")
+
+    assert jnp.isfinite(program.program_losses.discover.final)
+    assert program.code.best_param_est is None
+
+
 def test_score_one_model_multiple_param_ests():
     """score model with multiple param ests, one good, one bad, one failing.
     Check that we only get losses returned for the working param ests and that best_idx points to the best one."""

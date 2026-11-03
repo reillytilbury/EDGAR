@@ -60,8 +60,10 @@ def _get_params(param_est_fn, default_params, data_train):
         A JAX pytree (dictionary of JAX arrays) representing the initial parameters
         for each sample in `data_train`.
     """
+    n = next(iter(data_train.values())).shape[0]
+    if param_est_fn is None:
+        return jax.tree_util.tree_map(lambda x: jnp.stack([x] * n), default_params)
     try:
-        n = next(iter(data_train.values())).shape[0]
         data_np = {k: np.asarray(v) for k, v in data_train.items()}
         per_sample = [
             param_est_fn({k: v[i] for k, v in data_np.items()}) for i in range(n)
@@ -73,7 +75,6 @@ def _get_params(param_est_fn, default_params, data_train):
         warnings.warn(
             f"[scoring] param_est_fn failed at runtime, falling back to default params: {e}"
         )
-        n = next(iter(data_train.values())).shape[0]
         return jax.tree_util.tree_map(lambda x: jnp.stack([x] * n), default_params)
 
 
@@ -507,18 +508,19 @@ def _score_one_model(
 
 
 def _has_jax_code(program: Program) -> bool:
-    """Checks if a program has both JAX model code and a NumPy parameter estimator.
+    """Checks if a program has JAX model code.
 
-    A program is considered ready for scoring if it has successfully had its
-    numpy model translated to JAX and has a parameter estimator.
+    A program is considered ready for scoring once its numpy model has been
+    translated to JAX. Parameter estimators are optional: without them, gradient
+    descent is initialised from the program's default params.
 
     Args:
         program: The `Program` object to check.
 
     Returns:
-        True if the program has both `model_jax` and `param_est` code, False otherwise.
+        True if the program has `model_jax` code, False otherwise.
     """
-    return bool(program.code.model_jax and program.code.param_est)
+    return bool(program.code.model_jax)
 
 
 def _needs_scoring(population: Population, split: str) -> list[Program]:

@@ -154,6 +154,12 @@ function dashboard() {
       if (Math.abs(v) >= 1000) return v.toFixed(0);
       return v.toFixed(p);
     },
+    fmtSig(v, s = 3) {
+      if (v === null || v === undefined || Number.isNaN(v)) return '-';
+      if (typeof v !== 'number') return String(v);
+      if (Math.abs(v) >= 1000) return v.toFixed(0);
+      return v.toPrecision(s);
+    },
     fmtDuration(s) {
       if (s === null || s === undefined) return '-';
       s = Math.max(0, Math.round(s));

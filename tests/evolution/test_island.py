@@ -19,6 +19,7 @@ from tests.evolution.utils import (
     make_seeds,
     make_fingerprint_population,
     make_fingerprint_program,
+    make_program,
 )
 
 
@@ -735,3 +736,49 @@ def test_deduplicate_outer_identical_indices_preserves_alive_status():
     assert pop[0].status == "alive"
     assert pop[1].status == "alive"
     assert pop[2].status == "alive"
+
+
+def _population_with_failed_generation():
+    """One island holding two seeds and a third program marked failed_generation."""
+    population = Population()
+    islands = seed(population, make_seeds(), n_islands=2)
+    failed = make_program(number=2)
+    failed.status = "failed_generation"
+    population.add(failed)
+    for island in islands:
+        island.add(failed.idx)
+    return population, islands, failed.idx
+
+
+def test_spawn_skips_failed_generation_parents():
+    population, islands, failed_idx = _population_with_failed_generation()
+    spawn(
+        population,
+        islands,
+        0,
+        "test mode",
+        1.0,
+        batch_size=10,
+        num_parents=2,
+        rng=np.random.default_rng(0),
+    )
+    children = [p for p in population if p.birth.parent_indices]
+    assert len(children) == 20
+    for child in children:
+        assert failed_idx not in child.birth.parent_indices
+    # Failed programs stay on their island for bookkeeping.
+    assert all(failed_idx in island for island in islands)
+
+
+def test_migrate_skips_failed_generation_programs():
+    population, islands, failed_idx = _population_with_failed_generation()
+    islands[1].discard(failed_idx)
+    for _ in range(20):
+        migrate(
+            islands,
+            population,
+            {"n_migrants": 2, "topology": [1, 0]},
+            temperature=2.0,
+            rng=np.random.default_rng(),
+        )
+        assert failed_idx not in islands[1]

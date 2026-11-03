@@ -55,6 +55,10 @@ ValidResponseSchemas = Literal[
 Provider = Literal["google", "anthropic"]
 """Supported default providers"""
 
+ThinkingLevel = Literal["minimal", "low", "medium", "high", "xhigh"]
+"""Reasoning effort levels, mapped by PydanticAI to each provider's setting (e.g.
+`thinking_level` for Gemini 3, a thinking token budget for Gemini 2.5)."""
+
 
 _PROVIDER_MODEL_DEFAULTS: dict[Provider, dict[str, ValidLLMs]] = {
     "google": {
@@ -262,6 +266,10 @@ class LLMsConfig(_LaxModel):
         param_est_llm: The LLM model to use for generating `parameter_estimator` code.
         jax_model_translator_llm: The LLM model to use for translating numpy `model`
             code into JAX-compatible code.
+        model_thinking: Reasoning effort for `model_llm` calls. `None` uses the
+            provider's default.
+        param_est_thinking: Reasoning effort for `param_est_llm` calls. `None` uses
+            the provider's default.
         log_raw_llm_response: If True, logs the raw JSON responses from LLM calls
             for debugging purposes.
         max_lines: The maximum number of lines allowed in generated code snippets.
@@ -275,6 +283,8 @@ class LLMsConfig(_LaxModel):
     model_llm: ValidLLMs | list[ValidLLMs] | None = None
     param_est_llm: ValidLLMs | None = None
     jax_model_translator_llm: ValidLLMs | None = None
+    model_thinking: ThinkingLevel | None = None
+    param_est_thinking: ThinkingLevel | None = None
     model_response_schema: ValidResponseSchemas = "ModelSchema"
     param_est_response_schema: ValidResponseSchemas = "ParamEstSchema"
     jax_model_response_schema: ValidResponseSchemas = "TranslationSchema"
