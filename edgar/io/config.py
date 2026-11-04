@@ -194,6 +194,10 @@ class EvolutionConfig(_LaxModel):
             Must be a permutation of `range(n_islands)`.
         exploit_point: The point in the run (as a fraction of total generations) to transition
             from "explore" to "exploit" mode. Defaults to 0.5.
+        dedup_loss_tol: Absolute tolerance on the difference in `discover.final` losses
+            below which two programs (with matching `n_params` and fingerprints) are
+            considered duplicates. Loss scales differ across projects, so set this
+            relative to the project's typical loss. Defaults to 0.01
     """
 
     n_generations: int
@@ -203,6 +207,7 @@ class EvolutionConfig(_LaxModel):
     n_migrants: int
     topology: list[int]
     exploit_point: float
+    dedup_loss_tol: float = 0.01
 
     @model_validator(mode="after")
     def check_args(self) -> EvolutionConfig:
@@ -233,6 +238,10 @@ class EvolutionConfig(_LaxModel):
         if not (0 <= self.exploit_point <= 1):
             raise ValueError(
                 f"exploit_point ({self.exploit_point}) must be between 0 and 1"
+            )
+        if self.dedup_loss_tol < 0 or not isinstance(self.dedup_loss_tol, float):
+            raise ValueError(
+                f"dedup_loss_tol ({self.dedup_loss_tol}) must be a non-negative float"
             )
 
         return self

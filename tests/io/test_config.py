@@ -229,6 +229,7 @@ def test_load_perfect_config():
     assert config.evolution.n_migrants == 2
     assert config.evolution.topology == [1, 2, 3, 4, 5, 6, 7, 0]
     assert config.evolution.exploit_point == 0.2
+    assert config.evolution.dedup_loss_tol == 0.5
     assert config.llms.default_provider == "google"
     assert config.llms.num_parents == 2
     assert config.llms.idea_probability == 0.0
