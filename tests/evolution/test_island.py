@@ -755,7 +755,6 @@ def test_spawn_skips_failed_generation_parents():
         islands,
         0,
         "test mode",
-        1.0,
         batch_size=10,
         num_parents=2,
         rng=np.random.default_rng(0),
