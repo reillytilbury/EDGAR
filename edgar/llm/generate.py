@@ -96,8 +96,9 @@ def mark_failed_generations(population: Population) -> None:
 
 
 def _filter_programs(
-    population: Population, filter_rule: Callable[[Program], bool],
-    only_alive_programs = True,
+    population: Population,
+    filter_rule: Callable[[Program], bool],
+    only_alive_programs=True,
 ) -> list[Program]:
     """Filters a population of programs based on a given rule.
 
