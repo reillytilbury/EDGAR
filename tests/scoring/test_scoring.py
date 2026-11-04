@@ -2,7 +2,6 @@
 import os
 
 import cloudpickle
-import jax
 
 # Configure JAX to not preallocate all GPU memory and use platform allocator to avoid OOM errors
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -10,6 +9,8 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
 xla_flags = os.environ.get("XLA_FLAGS", "")
 if "--xla_gpu_enable_command_buffer=" not in xla_flags:
     os.environ["XLA_FLAGS"] = (xla_flags + " --xla_gpu_enable_command_buffer=").strip()
+
+import jax
 import sys
 import time
 from pathlib import Path
@@ -121,7 +122,9 @@ def model(data, params):
 BASE_CONFIG = {
     "timeout_s": 10.0,
     "param_penalty_weight": 0.0,
-    "gradient_descent": {"max_iter": 20, "learning_rate": 0.01},
+    "jax_backend": None,
+    "optimizer": "adam",
+    "optimizer_config": {"max_iter": 20, "learning_rate": 0.01},
     "banned_strings": [],
 }
 
@@ -159,15 +162,21 @@ class TestOptimize:
         model_fn = basic_model_fn
         params_inits = {"w": jnp.array(2 * [0.1])}
         data_train = _make_basic_data()
-        gd_config = {"max_iter": 100, "learning_rate": 0.1}
+        scoring_config = {
+            "optimizer": "adam",
+            "optimizer_config": {"max_iter": 100, "learning_rate": 0.1},
+        }
         optimized_params, loss_trajectories = _optimize(
-            model_fn, loss_fn, params_inits, data_train, gd_config
+            model_fn, loss_fn, params_inits, data_train, scoring_config
         )
         assert len(optimized_params) == 1
         assert optimized_params[0]["w"].shape == (data_train["x"].shape[0],)
         assert jnp.allclose(optimized_params[0]["w"], jnp.array([1.0, 2.0]), atol=0.05)
 
-        assert loss_trajectories.shape == (1, gd_config["max_iter"])
+        assert loss_trajectories.shape == (
+            1,
+            scoring_config["optimizer_config"]["max_iter"],
+        )
         initial_loss = loss_trajectories[0, 0]
         final_loss = loss_trajectories[0, -1]
         assert final_loss < initial_loss
@@ -183,9 +192,12 @@ class TestOptimize:
             {"w": jnp.array(2 * [5.0])},
         ]
         data_train = _make_basic_data()
-        gd_config = {"max_iter": 100, "learning_rate": 0.1}
+        scoring_config = {
+            "optimizer": "adam",
+            "optimizer_config": {"max_iter": 100, "learning_rate": 0.1},
+        }
         optimized_params, loss_trajectories = _optimize(
-            model_fn, loss_fn, params_inits, data_train, gd_config
+            model_fn, loss_fn, params_inits, data_train, scoring_config
         )
         assert len(optimized_params) == 5
         for p in optimized_params:
@@ -194,7 +206,10 @@ class TestOptimize:
                 p["w"], jnp.array([1.0, 2.0]), atol=0.05
             )  # Should converge to the true values
 
-        assert loss_trajectories.shape == (5, gd_config["max_iter"])
+        assert loss_trajectories.shape == (
+            5,
+            scoring_config["optimizer_config"]["max_iter"],
+        )
         initial_losses = loss_trajectories[:, 0]
         final_losses = loss_trajectories[:, -1]
         assert jnp.all(final_losses < initial_losses)
@@ -209,7 +224,9 @@ def test_worker():
     eval_data["_sample_indices"] = jnp.array([0, 1])
     config = {
         "param_penalty_weight": 0.0,
-        "gradient_descent": {"max_iter": 100, "learning_rate": 0.1},
+        "jax_backend": None,
+        "optimizer": "adam",
+        "optimizer_config": {"max_iter": 100, "learning_rate": 0.1},
     }
     ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
     queue = ctx.Queue()
@@ -265,7 +282,7 @@ def test_worker():
     assert best_idx == 0
     # Check trajectories match initial and final training loss
     trajectories = result[10]
-    assert trajectories.shape == (1, config["gradient_descent"]["max_iter"])
+    assert trajectories.shape == (1, config["optimizer_config"]["max_iter"])
     expected_initial_train_loss = jnp.mean(
         loss_fn(initial_params["w"] * data[0]["x"], data[0])
     )
@@ -278,7 +295,7 @@ def test_worker():
 def test_score_one_model_trajectory_matches_loss():
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())  # train and test data are identical here!
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
     assert jnp.allclose(trajectories[0][0], initial_loss)
@@ -296,6 +313,73 @@ def test_score_one_model_perfect_fit():
     assert outcome == "ok"
 
 
+def test_score_one_model_scipy_optimizer():
+    program = _make_program(FAST_MODEL_CODE)
+    data = (_make_data(), _make_data())
+    config = {
+        **BASE_CONFIG,
+        "optimizer": "scipy",
+        "optimizer_config": {"method": "Nelder-Mead", "options": {"maxiter": 30}},
+    }
+    final_loss, _, _, params, *rest = _score_one_model(program, data, loss_fn, config)
+    assert final_loss < 1e-4
+    assert params["w"] is not None
+    trajectories = rest[6]
+    assert trajectories.shape[0] == 1
+    assert np.isfinite(trajectories[0, 0])
+
+
+try:
+    gpu_available = len(jax.devices("gpu")) > 0
+except Exception:
+    gpu_available = False
+try:
+    tpu_available = len(jax.devices("tpu")) > 0
+except Exception:
+    tpu_available = False
+
+available_backends = []
+if gpu_available:
+    available_backends.append("gpu")
+if tpu_available:
+    available_backends.append("tpu")
+available_backends.append("cpu")
+
+
+@pytest.mark.parametrize("backend", available_backends)
+def test_score_one_model_explicit_backend(backend: str):
+    config = BASE_CONFIG.copy()
+    config["jax_backend"] = backend
+    program = _make_program(FAST_MODEL_CODE)
+    data = (_make_data(), _make_data())
+
+    (
+        final_loss,
+        initial_loss,
+        fingerprint,
+        params,
+        sample_losses,
+        params_init,
+        sample_losses_init,
+        all_final,
+        all_init,
+        best_idx,
+        trajectories,
+        _diagnostics_metrics,
+        outcome,
+    ) = _score_one_model(
+        program,
+        data,
+        loss_fn,
+        config,
+        X_eval=data[1],
+        split="discover",
+    )
+
+    assert outcome == "ok"
+    assert np.isclose(final_loss, 0.0, atol=1e-4)
+
+
 def test_score_one_model_with_custom_apply_model():
     """A custom apply function is used throughout subprocess scoring."""
     program = _make_program(FAST_MODEL_CODE)
@@ -310,7 +394,7 @@ def test_score_one_model_with_custom_apply_model():
 
     config = {
         **BASE_CONFIG,
-        "gradient_descent": {"max_iter": 100, "learning_rate": 0.1},
+        "optimizer_config": {"max_iter": 100, "learning_rate": 0.1},
     }
 
     (
@@ -325,6 +409,7 @@ def test_score_one_model_with_custom_apply_model():
         _all_init,
         best_idx,
         trajectories,
+        _diagnostics_metrics,
         outcome,
     ) = _score_one_model(
         program,
@@ -383,7 +468,7 @@ def test_score_one_gives_infinite_loss_for_program_with_none_default_params():
     program = _make_program(FAST_MODEL_CODE, default_params=None)
     assert program.n_params is None
     with pytest.warns(UserWarning, match="n_params=None"):
-        final_loss, initial_loss, *_, best_idx, trajectories, outcome = (
+        final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = (
             _score_one_model(
                 program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
             )
@@ -400,7 +485,7 @@ def test_score_one_model_kills_slow_model():
     data = (_make_data(), _make_data())
     config = {**BASE_CONFIG, "timeout_s": 2.0}
     t0 = time.time()
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, config
     )
     elapsed = time.time() - t0
@@ -420,7 +505,7 @@ def test_score_one_model_falls_back_to_default_params():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
 
@@ -461,21 +546,18 @@ def test_score_one_model_multiple_param_ests():
     (
         final_loss,
         initial_loss,
-        _,
-        _,
-        _,
-        _,
-        _,
+        *_,
         all_final,
         all_init,
         best_idx,
         trajectories,
+        _,
         outcome,
     ) = _score_one_model(program, data, loss_fn, BASE_CONFIG)
 
     assert len(trajectories) == 2  # Not scored with broken param est
-    assert len(trajectories[0]) == BASE_CONFIG["gradient_descent"]["max_iter"]
-    assert len(trajectories[1]) == BASE_CONFIG["gradient_descent"]["max_iter"]
+    assert len(trajectories[0]) == BASE_CONFIG["optimizer_config"]["max_iter"]
+    assert len(trajectories[1]) == BASE_CONFIG["optimizer_config"]["max_iter"]
 
     assert (
         trajectories[0][0] > trajectories[1][0]
@@ -506,7 +588,7 @@ def test_score_one_model_gives_infinite_loss_for_broken_model_syntax():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
 
@@ -525,7 +607,7 @@ def test_score_one_model_falls_back_when_param_est_syntax_error():
         _default_params={"w": jnp.array(1.0)},
     )
     data = (_make_data(), _make_data())
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, BASE_CONFIG
     )
 
@@ -559,7 +641,9 @@ def test_score_one_model_with_separate_train_test_loss_fns():
     custom_config = {
         "timeout_s": 10.0,
         "param_penalty_weight": 0.0,
-        "gradient_descent": {"max_iter": 150, "learning_rate": 0.1},
+        "jax_backend": None,
+        "optimizer": "adam",
+        "optimizer_config": {"max_iter": 150, "learning_rate": 0.1},
     }
     (
         final_loss,
@@ -569,6 +653,7 @@ def test_score_one_model_with_separate_train_test_loss_fns():
         *_,
         best_idx,
         trajectories,
+        _,
         outcome,
     ) = _score_one_model(program, data, loss_fn_tuple, custom_config)
 
@@ -604,7 +689,7 @@ def test_score_one_model_banned_string():
         "timeout_s": 10.0,
         "param_penalty_weight": 0.0,
     }
-    final_loss, initial_loss, *_, best_idx, trajectories, outcome = _score_one_model(
+    final_loss, initial_loss, *_, best_idx, trajectories, _, outcome = _score_one_model(
         program, data, loss_fn, custom_config
     )
     assert final_loss == float("inf")
@@ -630,13 +715,16 @@ def test_optimize_before_convergence():
         k: jnp.stack([jnp.asarray(v)] * n_samples)
         for k, v in Program1.default_params.items()
     }
-    gd_config = {"max_iter": 5, "learning_rate": 0.001}
+    scoring_config = {
+        "optimizer": "adam",
+        "optimizer_config": {"max_iter": 5, "learning_rate": 0.001},
+    }
     best_params = _optimize(
         model_fn=model_fn,
         loss_fn=loss_fn,
         params_inits=[params_init],
         data_train=data_train,
-        gd_config=gd_config,
+        scoring_config=scoring_config,
     )[0][0]
     loss = _eval_loss(model_fn, loss_fn, best_params, data_train)
     print(f"Final loss: {loss:.6f}")
@@ -659,13 +747,16 @@ def test_optimize_with_multiple_param_inits():
         k: jnp.stack([jnp.asarray(v * 10)] * n_samples)
         for k, v in Program1.default_params.items()
     }
-    gd_config = {"max_iter": 5, "learning_rate": 0.01}
+    scoring_config = {
+        "optimizer": "adam",
+        "optimizer_config": {"max_iter": 5, "learning_rate": 0.01},
+    }
     optimized_params, _ = _optimize(
         model_fn=model_fn,
         loss_fn=loss_fn,
         params_inits=[params_init_1, params_init_2],
         data_train=data_train,
-        gd_config=gd_config,
+        scoring_config=scoring_config,
     )
     losses = [
         _eval_loss(model_fn, loss_fn, params, data_train) for params in optimized_params
@@ -764,6 +855,8 @@ def test_score_forwards_custom_apply_model(monkeypatch):
         X_eval=None,
         split="discover",
         apply_model_fn=apply_model_plain,
+        diagnostics=None,
+        cpu_affinity=None,
     ):
         received["program"] = program
         received["data"] = scoring_data
@@ -785,6 +878,7 @@ def test_score_forwards_custom_apply_model(monkeypatch):
             [1.0],
             None,
             None,
+            {},
             "ok",
         )
 

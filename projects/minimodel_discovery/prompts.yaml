@@ -29,14 +29,11 @@ model:
   image_analysis_instructions: null
   parent_program_template: '**{name}**
 
-    {code_model}
+    {code.model}
 
     '
   config_vars:
   - max_lines
-  parent_program_vars:
-  - name
-  - code.model
 parameter_estimator:
   base: 'You are creating a compact parameter estimator for the current model.
 
@@ -70,9 +67,6 @@ parameter_estimator:
   image_analysis_instructions: null
   parent_program_template: '**{name}**
 
-    {code_model}
+    {code.model}
 
     '
-  parent_program_vars:
-  - name
-  - code.model

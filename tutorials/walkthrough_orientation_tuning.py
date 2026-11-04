@@ -129,7 +129,7 @@ if __name__ == "__main__":
 # Cell A5: Inspect the spec's generation schedule
 # ─────────────────────────────────────────────────────────────────────────
 # `spec.schedule(generation)` is what `run.py` calls every generation to pick
-# the current mode ("explore" / "exploit"), temperature, and per-role LLMs.
+# the current mode ("explore" / "exploit"), migration temperature, and per-role LLMs.
 # We probe it at gen=0 and the last generation so the range is concrete.
 if __name__ == "__main__":
     n_gen = spec.evolution["n_generations"]
@@ -311,17 +311,16 @@ if __name__ == "__main__":
 # Cell D13: Get the schedule values for generation 0
 # ─────────────────────────────────────────────────────────────────────────
 # At gen=0 the schedule emits mode="explore" (first half of generations) and
-# temperature=2.0 (Gemini scale; the Anthropic call_llm guard will rescale to
-# 1.0 at the actual API call). The `llms` tuple contains the model names for
+# migration_temperature=2.0, used for Boltzmann migration (not LLM sampling).
+# The `llms` tuple contains the model names for
 # each of the three LLM roles.
 if __name__ == "__main__":
     generation = 0
-    mode, temperature, llms = spec.schedule(generation)
+    mode, migration_temperature, llms = spec.schedule(generation)
 
     print(f"generation:    {generation}")
     print(f"mode:          {mode}")
-    print(f"temperature:   {temperature:.4f}  (call_llm will rescale to "
-          f"{temperature / 2.0:.4f} for Anthropic)")
+    print(f"migration temperature: {migration_temperature:.4f}")
     print(f"llms.model:        {llms.model}")
     print(f"llms.param_est:    {llms.param_est}")
     print(f"llms.model_jax:    {llms.model_jax}")
@@ -339,7 +338,7 @@ if __name__ == "__main__":
     sizes_before = [len(isl) for isl in islands]
 
     spawn(
-        population, islands, generation, mode, temperature,
+        population, islands, generation, mode,
         batch_size=spec.evolution["batch_size"],
         num_parents=spec.llms["num_parents"],
         rng=spec.rng,
@@ -371,7 +370,6 @@ if __name__ == "__main__":
         spec.prompt_schemas.model,
         llms.model,  # single string after override; list cycling not exercised
         mode,
-        temperature,
         config=config_dict,
         spec=spec,
         data=X_discover[1],  # test-split data is used for the image-feedback render
@@ -485,12 +483,12 @@ if __name__ == "__main__":
 # Cell D21: Migrate programs between islands
 # ─────────────────────────────────────────────────────────────────────────
 # `migrate(...)` Boltzmann-samples `n_migrants` programs from each island
-# (biased toward low loss; the bias strength is governed by `temperature`)
+# (biased toward low loss; the bias strength is governed by migration temperature)
 # and copies them into the destination island indicated by `topology[i]`.
 # Migration is what lets islands share their good discoveries.
 if __name__ == "__main__":
     sizes_before = [len(isl) for isl in islands]
-    migrate(islands, population, spec.evolution, temperature, rng=spec.rng)
+    migrate(islands, population, spec.evolution, migration_temperature, rng=spec.rng)
     sizes_after = [len(isl) for isl in islands]
     print(f"Island sizes after migrate:  before={sizes_before}  after={sizes_after}")
     print(f"Topology: {spec.evolution['topology']}  (island i sends migrants to island topology[i])")

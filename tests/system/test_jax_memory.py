@@ -13,7 +13,6 @@ Example:
 import asyncio
 import gc
 import inspect
-import os
 from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import patch
@@ -86,6 +85,7 @@ def test_gpu_memory_profiling(cpu_only: bool) -> None:
     # Use a temporary output directory for the test run
     test_output_dir = Path(__file__).parents[2] / "test_output_gpu_profile"
     spec = build_fake_spec(test_output_dir)
+    spec.scoring["jax_backend"] = "cpu" if cpu_only else "gpu"
 
     # Set up stage tracking
     stages_to_patch: List[str] = [
@@ -147,11 +147,6 @@ def test_gpu_memory_profiling(cpu_only: bool) -> None:
             patches.append(p)
             p.start()
 
-    # Store current state of CUDA_VISIBLE_DEVICES
-    old_cuda = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if cpu_only:
-        os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
     try:
         # Run the EDGAR experiment
         asyncio.run(run_mod.run(spec))
@@ -159,12 +154,6 @@ def test_gpu_memory_profiling(cpu_only: bool) -> None:
         # Clean up all patches regardless of failure/success
         for p in patches:
             p.stop()
-
-        # Restore environment variable state
-        if old_cuda is not None:
-            os.environ["CUDA_VISIBLE_DEVICES"] = old_cuda
-        elif "CUDA_VISIBLE_DEVICES" in os.environ:
-            del os.environ["CUDA_VISIBLE_DEVICES"]
 
     # Log/Assert findings
     print("\n--- GPU and Device Memory Profile Across Stages ---")

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..evolution.program import Program
 from ..jax.utils import _to_jax
+from ..process import SubprocessTimeoutError, run_in_subprocess
 
 if TYPE_CHECKING:
     from ..io.task_spec import TaskSpec
@@ -42,7 +43,11 @@ def _feedback_image_worker(
             "image.png",
         )
         os.makedirs(os.path.dirname(img_path), exist_ok=True)
-        spec.plot_fn(data, parents, save_path=img_path, rng=spec.rng)
+        diag = getattr(spec, "diagnostics", None)
+        if diag is not None:
+            diag.generate_feedback_image(
+                data, parents, rng=spec.rng, save_path=img_path
+            )
 
         if os.path.exists(img_path):
             with open(img_path, "rb") as f:
@@ -76,8 +81,11 @@ def _program_fits_worker(
                 continue
 
             save_path = plot_dir / f"P{p.idx:04d}.png"
+            diag = getattr(spec, "diagnostics", None)
+            if diag is None:
+                continue
             try:
-                spec.plot_fn(
+                diag.plot_model_fits(
                     data,
                     [p, p],
                     save_path=str(save_path),
@@ -132,29 +140,24 @@ def generate_feedback_image(
     Returns:
         The raw bytes of the generated image if successful, otherwise `None`.
     """
-    if spec is None or spec.plot_fn is None or data is None:
+    has_plot = spec is not None and getattr(spec, "diagnostics", None) is not None
+    if not has_plot or data is None:
         return None
 
-    ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
-    queue = ctx.Queue()
     spec_bytes = cloudpickle.dumps(spec)
     parents_bytes = cloudpickle.dumps(parents)
     program_bytes = cloudpickle.dumps(program)
 
-    proc = ctx.Process(
-        target=_feedback_image_worker,
-        args=(queue, spec_bytes, data, parents_bytes, program_bytes),
-    )
-    proc.start()
     try:
-        img_bytes, img_path = queue.get(timeout=120)
-    except Exception as e:
-        proc.kill()
-        proc.join()
+        img_bytes, img_path = run_in_subprocess(
+            _feedback_image_worker,
+            args=(spec_bytes, data, parents_bytes, program_bytes),
+            timeout=120,
+        )
+    except SubprocessTimeoutError as e:
         warnings.warn(f"[plotting] feedback image subprocess timed out or failed: {e}")
         return None
 
-    proc.join()
     if img_path is not None:
         program.image_path = img_path
     return img_bytes
@@ -180,28 +183,35 @@ def generate_program_fits(
         programs: A list of `Program` objects for which comparison plots
             should be generated.
     """
-    if spec.plot_fn is None:
+    has_plot = spec is not None and getattr(spec, "diagnostics", None) is not None
+    if not has_plot or data is None:
         return
 
-    ctx = mp.get_context(os.environ.get("EDGAR_MP_START_METHOD", "spawn"))
-    queue = ctx.Queue()
-    spec_bytes = cloudpickle.dumps(spec)
-    programs_bytes = cloudpickle.dumps(programs)
+    # Filter for programs that have valid parameters and have not been plotted yet
+    pending = [
+        p
+        for p in programs
+        if p.params_init is not None
+        and p.params is not None
+        and getattr(p, "fit_image_path", None) is None
+    ]
+    if not pending:
+        return
 
-    proc = ctx.Process(
-        target=_program_fits_worker,
-        args=(queue, spec_bytes, data, programs_bytes),
-    )
-    proc.start()
+    timeout = max(120, len(pending) * 15)
+    spec_bytes = cloudpickle.dumps(spec)
+    programs_bytes = cloudpickle.dumps(pending)
+
     try:
-        results = queue.get(timeout=120)
-    except Exception as e:
-        proc.kill()
-        proc.join()
+        results = run_in_subprocess(
+            _program_fits_worker,
+            args=(spec_bytes, data, programs_bytes),
+            timeout=timeout,
+        )
+    except SubprocessTimeoutError as e:
         warnings.warn(f"[plotting] program fits subprocess timed out or failed: {e}")
         return
 
-    proc.join()
     for p_idx, save_path in results:
         for p in programs:
             if p.idx == p_idx:
@@ -233,6 +243,8 @@ def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> 
     plot_dir.mkdir(parents=True, exist_ok=True)
 
     for p in programs:
+        if getattr(p, "trajectory_image_path", None) is not None:
+            continue
         discover_losses = p.program_losses.discover
         if not discover_losses or discover_losses.trajectories is None:
             continue
@@ -266,7 +278,7 @@ def generate_trajectory_image(spec: TaskSpec, programs: list[Program] | Any) -> 
                 fontsize=11,
                 fontweight="semibold",
             )
-            plt.xlabel("Gradient Descent Step", fontsize=9)
+            plt.xlabel("Optimization Step", fontsize=9)
             plt.ylabel("Training Loss", fontsize=9)
             plt.yscale("log")
             plt.grid(True, which="both", ls="-", alpha=0.15)

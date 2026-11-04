@@ -89,7 +89,7 @@ def gen_banner(
     """Writes a banner to the log at the start of each generation.
 
     This banner provides a high-level overview of the current generation's
-    configuration, including the evolutionary `mode`, `temperature`,
+    configuration, including the evolutionary `mode`, migration temperature,
     number of programs to `spawn`, and the LLMs selected for model
     generation, parameter estimation, and JAX translation. It helps users
     correlate shifts in behavior (e.g., explore/exploit transition,
@@ -100,7 +100,7 @@ def gen_banner(
         gen: The current generation index (0-based).
         n_gens: The total number of generations planned for the run.
         mode: The evolutionary mode for the current generation (e.g., "explore", "exploit").
-        temperature: The sampling temperature for LLM generation in the current generation.
+        temperature: The migration temperature in the current generation.
         llms: An object (likely from `LLMsConfig`) containing the LLM models
             configured for model generation, parameter estimation, and JAX translation.
             Can be a single model or a list of models for rotation.
@@ -115,7 +115,7 @@ def gen_banner(
     print_and_log(
         log,
         f"┌── Generation {gen}/{n_gens - 1}  "
-        f"mode={mode}  temp={temperature:.3f}  "
+        f"mode={mode}  migration_temp={temperature:.3f}  "
         f"spawn={n_spawn}  "
         f"llms[model={_llm_display(model_llm)} "
         f"param_est={_llm_display(llms.param_est)} "
@@ -239,7 +239,7 @@ def log_generation(
     objects.
 
     The verbosity of the logged information depends on `log.level`:
-    *   **`compact`**: Logs generation index, mode, temperature, elapsed times,
+    *   **`compact`**: Logs generation index, mode, migration temperature, elapsed times,
         LLM names, program spawning success rates (model, parameter estimator,
         JAX translation, and scoring), the global best discover loss, and
         the best program on each island.

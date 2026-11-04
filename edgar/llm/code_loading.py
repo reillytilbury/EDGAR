@@ -44,3 +44,31 @@ def load_function_from_source(
     # Return the requested object only if it is callable.
     func = ns.get(entrypoint_name)
     return func if callable(func) else None
+
+
+def load_class_from_source(
+    source: str | None,
+    entrypoint_name: str,
+) -> type | None:
+    """Executes Python source code in a fresh namespace and returns a specified class object.
+
+    Args:
+        source: The Python source code string to execute. If `None` or empty, no execution occurs.
+        entrypoint_name: The name of the class expected to be defined in the `source`.
+
+    Returns:
+        The class object corresponding to `entrypoint_name` if successfully loaded,
+        otherwise `None`.
+    """
+    if not source or not source.strip():
+        return None
+
+    ns = {}
+    try:
+        exec(source, ns)
+    except Exception as e:
+        warnings.warn(f"[code_loading] exec failed for '{entrypoint_name}': {e}")
+        return None
+
+    cls = ns.get(entrypoint_name)
+    return cls if isinstance(cls, type) else None

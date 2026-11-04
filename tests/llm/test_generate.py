@@ -60,7 +60,6 @@ async def test_generate_one_model():
         prompt_schema,
         llm_model,
         "explore",
-        1.0,
         spec=make_fake_spec(output_dir="test_output"),
         data={},
     )
@@ -99,7 +98,6 @@ async def test_generate_one_model_dynamic_params():
         prompt_schema,
         llm_model,
         "explore",
-        1.0,
         spec=make_fake_spec(output_dir="test_output"),
         data=data,
         output_schema=ModelSchemaDynamicDefaultParams,
@@ -152,7 +150,6 @@ async def test_generate_one_model_dynamic_params_evaluation_failure():
             prompt_schema,
             llm_model,
             "explore",
-            1.0,
             spec=make_fake_spec(output_dir="test_output"),
             data=data,
             output_schema=ModelSchemaDynamicDefaultParams,
@@ -192,7 +189,6 @@ async def test_generate_same_model():
         prompt_schema,
         llm_model,
         "explore",
-        1.0,
         spec=make_fake_spec(output_dir="test_output"),
     )
 
@@ -240,7 +236,6 @@ async def test_generate_distinct_models():
         prompt_schema,
         llm_models,
         "explore",
-        1.0,
         spec=make_fake_spec(output_dir="test_output"),
     )
 
@@ -438,10 +433,9 @@ async def test_generate_one_model_with_real_llm():
         docstring_guidelines="Include a docstring, with a short descriptive name for the model",
         image_analysis_instructions="Add a short description in the docstring of the image you see",
         parent_program_template="Model {parent_number}: {name}"
-        "loss: {program_losses_discover_final}"
+        "loss: {program_losses.discover.final}"
         ""
-        "{code_model}",
-        parent_program_vars=["name", "program_losses.discover.final", "code.model"],
+        "{code.model}",
     )
     program1 = Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
@@ -462,7 +456,6 @@ async def test_generate_one_model_with_real_llm():
         prompt_schema,
         llm=LLM_MODEL,
         mode="exploit",
-        temperature=1.0,
         spec=make_fake_spec(output_dir="test_output"),
         data={},
     )
@@ -493,8 +486,7 @@ async def test_generate_one_param_est_with_real_llm():
         explore="The estimator should return a sensible initial guess for the model parameters.",
         code_guidelines="Function signature must be `def parameter_estimator(data):` where `data` is a dict of named arrays. Return a dict of named scalar floats.",
         docstring_guidelines="Include a short docstring describing the estimation strategy.",
-        parent_program_template="Model: {name}\n\n{code_model}",
-        parent_program_vars=["name", "code.model"],
+        parent_program_template="Model: {name}\n\n{code.model}",
     )
     generated_param_est = await _generate_one_param_est(
         program, [], prompt_schema, llm=LLM_MODEL, config={}
@@ -523,8 +515,7 @@ async def test_translate_one_model_with_real_llm():
         explore="Preserve the logic exactly; only replace numpy with jax.numpy.",
         code_guidelines="Import jax.numpy as jnp. Function signature must be `def model(data, params):` identical to the original.",
         docstring_guidelines="Keep the original docstring unchanged.",
-        parent_program_template="Model: {name}\n\n{code_model}",
-        parent_program_vars=["name", "code.model"],
+        parent_program_template="Model: {name}\n\n{code.model}",
     )
     await _translate_one_model(program, prompt_schema, llm=LLM_MODEL)
     print("Generated JAX model code:\n", program.code.model_jax)
@@ -564,7 +555,6 @@ async def test_generate_one_model_with_ideas():
             prompt_schema,
             llm_model,
             "explore",
-            1.0,
             config={"idea_probability": 1.0},
             spec=make_fake_spec(output_dir="test_output"),
             data={},
@@ -585,7 +575,6 @@ async def test_generate_one_model_with_ideas():
             prompt_schema,
             llm_model,
             "explore",
-            1.0,
             config={"idea_probability": 0.0},
             spec=make_fake_spec(output_dir="test_output"),
             data={},

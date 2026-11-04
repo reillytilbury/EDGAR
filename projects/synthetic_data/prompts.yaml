@@ -45,12 +45,8 @@ model:
   
   parent_program_template: '**Model: {name}**
 
-    loss: {program_losses_discover_final}
+    loss: {program_losses.discover.final}
 
-    {code_model}
+    {code.model}
 
     '
-  parent_program_vars:
-  - name
-  - program_losses.discover.final
-  - code.model

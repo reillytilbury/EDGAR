@@ -1,6 +1,5 @@
 import numpy as np
 
-
 def parameter_estimator(data):
     """
     Estimate double-peaked Gaussian tuning curve parameters from a smoothed

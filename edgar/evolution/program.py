@@ -63,7 +63,7 @@ class BirthCertificate:
         island: The ID of the island where the program was spawned.
         batch_index: The index of the program within its generation's batch.
         mode: The evolutionary mode (e.g., 'explore', 'exploit') at the time of creation.
-        temperature: The sampling temperature used for LLM generation.
+        temperature: Legacy metadata from historical runs; new programs leave it unset.
         parent_indices: A list of global indices of parent programs.
         llm_name: The name of the LLM model used to generate this program.
         ideas: A list of ideas included in the prompt to generate the program.
@@ -213,6 +213,7 @@ class Program:
     rank: int | None = None
     best_estimator_idx: int | None = None
     data: dict | None = field(default=None, repr=False)
+    diagnostics: dict = field(default_factory=dict)
     _default_params: dict | Callable | None = None
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -223,6 +224,7 @@ class Program:
             "params_init",
             "sample_losses",
             "sample_losses_init",
+            "diagnostics",
         ):
             if _has_jax(value):
                 warnings.warn(

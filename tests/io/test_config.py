@@ -1,9 +1,10 @@
 # ruff: noqa: F841
 
 import pytest
-from edgar.io.config import Config, LLMsConfig, RetryConfig
+from edgar.io.config import Config, LLMsConfig, RetryConfig, ScoringConfig
 from pydantic import ValidationError
 from edgar.io.task_spec import TaskSpec
+import jax
 
 
 def _llms_kwargs(**overrides):
@@ -46,6 +47,167 @@ def test_explicit_model_override_survives_provider():
     )
     assert cfg.model_llm == "gemini-2.5-pro"
     assert cfg.param_est_llm == "claude-sonnet-4-5"
+
+
+def test_legacy_param_est_temperature_is_ignored():
+    """Old user configs remain loadable but do not expose the removed setting."""
+    cfg = LLMsConfig(**_llms_kwargs(param_est_temperature=1.0))
+    assert "param_est_temperature" not in cfg.model_dump()
+    assert not hasattr(cfg, "param_est_temperature")
+
+
+try:
+    gpu_available = len(jax.devices("gpu")) > 0
+except Exception:
+    gpu_available = False
+try:
+    tpu_available = len(jax.devices("tpu")) > 0
+except Exception:
+    tpu_available = False
+
+available_backends = []
+if gpu_available:
+    available_backends.append("gpu")
+if tpu_available:
+    available_backends.append("tpu")
+available_backends.append("cpu")
+
+
+@pytest.mark.parametrize("backend", available_backends)
+def test_scoring_jax_backend_accepts_available_backends(backend):
+    base = dict(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+    )
+    assert ScoringConfig(**base, jax_backend=backend).jax_backend == backend
+
+
+def test_scoring_jax_device_rejects_unknown_platform():
+    with pytest.raises(ValidationError):
+        ScoringConfig(
+            param_penalty_weight=0.0,
+            timeout_s=1.0,
+            banned_strings=[],
+            n_param_ests=1,
+            jax_backend="foo",
+            gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+        )
+
+
+def test_scoring_jax_device_accepts_default_none():
+    base = dict(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+    )
+    assert ScoringConfig(**base, jax_backend=None).jax_backend is None
+
+
+@pytest.mark.parametrize("workers", [0, -1])
+def test_scoring_max_workers_must_be_positive(workers):
+    base = dict(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+    )
+    with pytest.raises(ValidationError):
+        ScoringConfig(**base, max_workers=workers)
+
+
+def test_scoring_max_workers_defaults_to_automatic():
+    base = dict(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+    )
+    assert ScoringConfig(**base).max_workers is None
+
+
+def test_scoring_optimizer_config_tracks_selected_optimizer():
+    base = dict(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+        scipy_minimize={"method": "Powell"},
+    )
+    config = ScoringConfig(**base)
+    assert config.optimizer_config is config.gradient_descent
+
+    config.optimizer = "scipy"
+    assert config.optimizer_config is config.scipy_minimize
+    assert config.model_dump()["optimizer_config"] == {
+        "method": "Powell",
+        "tol": None,
+        "bounds": None,
+        "options": {},
+    }
+
+
+@pytest.mark.parametrize(
+    ("optimizer", "missing_field"),
+    [("adam", "gradient_descent"), ("scipy", "scipy_minimize")],
+)
+def test_scoring_optimizer_config_requires_selected_config(optimizer, missing_field):
+    with pytest.raises(ValidationError, match=missing_field):
+        ScoringConfig(
+            param_penalty_weight=0.0,
+            timeout_s=1.0,
+            banned_strings=[],
+            n_param_ests=1,
+            optimizer=optimizer,
+        )
+
+
+def test_scoring_optimizer_assignment_revalidates_selected_config():
+    config = ScoringConfig(
+        param_penalty_weight=0.0,
+        timeout_s=1.0,
+        banned_strings=[],
+        n_param_ests=1,
+        gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+    )
+    with pytest.raises(ValidationError, match="scipy_minimize"):
+        config.optimizer = "scipy"
+
+
+def test_scoring_warns_when_both_optimizer_configs_are_set():
+    with pytest.warns(
+        UserWarning,
+        match=r"Both scoring\.gradient_descent and scoring\.scipy_minimize are configured",
+    ):
+        ScoringConfig(
+            param_penalty_weight=0.0,
+            timeout_s=1.0,
+            banned_strings=[],
+            n_param_ests=1,
+            optimizer="adam",
+            gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+            scipy_minimize={"method": "Powell"},
+        )
+    with pytest.warns(
+        UserWarning,
+        match=r"Both scoring\.gradient_descent and scoring\.scipy_minimize are configured",
+    ):
+        ScoringConfig(
+            param_penalty_weight=0.0,
+            timeout_s=1.0,
+            banned_strings=[],
+            n_param_ests=1,
+            optimizer="scipy",
+            gradient_descent={"max_iter": 1, "learning_rate": 0.1},
+            scipy_minimize={"method": "Powell"},
+        )
 
 
 def test_load_perfect_config():
@@ -91,6 +253,7 @@ def test_load_perfect_config():
     assert config.scoring.n_param_ests == 1
     assert config.scoring.param_penalty_weight == 0.01
     assert config.scoring.timeout_s == 120.0
+    assert config.scoring.jax_backend is None  # default
     assert config.scoring.banned_strings == ["config"]
     assert config.scoring.gradient_descent.max_iter == 1000
     assert config.scoring.gradient_descent.learning_rate == 0.01

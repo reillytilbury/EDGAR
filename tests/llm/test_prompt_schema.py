@@ -9,8 +9,7 @@ def _make_schema(**kwargs) -> PromptSchema:
         explore="Be creative ...",
         code_guidelines="**Code Generation Guidelines**:\n ... \n",
         docstring_guidelines="**Docstring Guidelines**:\n ... \n",
-        parent_program_template="Model {parent_number}:\n{code_model}\n",
-        parent_program_vars=["code.model"],
+        parent_program_template="Model {parent_number}:\n{code.model}\n",
     )
     return PromptSchema(**{**defaults, **kwargs})
 
@@ -58,10 +57,8 @@ def test_build_prompt_no_parents():
 
 def test_build_prompt_with_current_program():
     schema = _make_schema(
-        parent_program_template="Parent {parent_number}:\n{code_model}\n",
-        parent_program_vars=["code.model"],
-        current_program_template="New model:\n{code_model}\n",
-        current_program_vars=["code.model"],
+        parent_program_template="Parent {parent_number}:\n{code.model}\n",
+        current_program_template="New model:\n{code.model}\n",
     )
     parent = _make_program(Program1.model)
     current = _make_program(Program2.model)
@@ -124,3 +121,39 @@ def test_build_prompt_ideas():
     prompt_with_ideas = schema.build_prompt(mode="explore", config=config_with_ideas)
     assert "Some ideas you may want to incorporate:" in prompt_with_ideas
     assert "Idea 1\nIdea 2" in prompt_with_ideas
+
+
+def test_build_prompt_dotted_templates_without_vars():
+    """Dotted paths in templates resolve directly from program without declaring program_vars."""
+    schema = _make_schema(
+        parent_program_template="Model {parent_number} ({name}): loss={program_losses.discover.final:.2f}, R2={diagnostics.r2_overall:.2f}, code={code.model}",
+        parent_program_vars=[],  # No vars declared
+        current_program_template="Current: code={code.model}",
+        current_program_vars=[],
+    )
+    p = _make_program(Program1.model, loss=0.1234)
+    p.name = "MyModel"
+    p.diagnostics = {"r2_overall": 0.8567}
+
+    prompt = schema.build_prompt(
+        mode="explore",
+        parent_programs=[p],
+        config={"num_parents": 1},
+        current_program=p,
+    )
+    assert "Model 1 (MyModel): loss=0.12, R2=0.86, code=" in prompt
+    assert Program1.model in prompt
+    assert "Current: code=" in prompt
+
+
+def test_build_prompt_safe_fallback_for_missing_fields():
+    """Missing or None fields resolve to empty string rather than crashing."""
+    schema = _make_schema(
+        parent_program_template="Loss={program_losses.discover.final}, Missing={diagnostics.nonexistent}, Code={code.model}",
+        parent_program_vars=[],
+    )
+    p = _make_program(Program1.model)  # no loss, no diagnostics
+    prompt = schema.build_prompt(
+        mode="explore", parent_programs=[p], config={"num_parents": 1}
+    )
+    assert "Loss=, Missing=, Code=" in prompt

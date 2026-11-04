@@ -2,8 +2,8 @@
 
 This module serves as the interface for EDGAR to communicate with LLM providers
 like Google (Gemini) and Anthropic (Claude). It dynamically builds PydanticAI Model
-instances, handles provider-specific configurations (e.g., API keys, temperature
-rescaling for Anthropic), and implements retry mechanisms for transient HTTP errors.
+instances, handles provider-specific configuration, and implements retry mechanisms
+for transient HTTP errors.
 Additionally, it supports multimodal input (text and images) and structured output
 parsing using Pydantic schemas, ensuring that LLM responses conform to expected formats.
 """
@@ -220,7 +220,6 @@ async def call_llm(
     llm_model: str | Model,
     output_type: LLMOutputTypes = str,
     image_bytes: bytes | None = None,
-    temperature: float = 1.0,
     thinking: bool | str | None = None,
     max_tokens: int | None = 10_000,
     log_raw_llm_response: bool = False,
@@ -231,7 +230,7 @@ async def call_llm(
 
     This asynchronous function provides a unified interface for interacting with different
     LLMs (e.g., Gemini, Claude). It manages the construction of
-    the PydanticAI `Agent`, applies provider-specific temperature rescaling, handles
+    the PydanticAI `Agent`, handles
     `max_tokens` defaults, and implements a retry mechanism for transient
     HTTP errors. It also supports multimodal input by optionally including an image with the text prompt.
 
@@ -244,10 +243,6 @@ async def call_llm(
             for structured output.
         image_bytes: Optional PNG image bytes to include alongside the text prompt
             for multimodal LLM calls.
-        temperature: Sampling temperature for the model. Values are on a Gemini-scale
-            ([0, 2]). If an Anthropic model is used and the temperature exceeds 1.0,
-            it will be rescaled to fit Anthropic's [0, 1] range (e.g., [1.37, 2.0]
-            becomes [0.685, 1.0]).
         thinking: Optional reasoning effort setting, influencing the LLM's response style.
             Can be `True`, `False`, or one of "minimal", "low", "medium", "high", "xhigh".
         max_tokens: Maximum number of tokens to generate in the model's response.
@@ -281,15 +276,6 @@ async def call_llm(
     else:
         raise TypeError("llm_model must be a string or a PydanticAI Model instance.")
 
-    # Provider temperature ranges differ: Google accepts [0, 2], Anthropic [0, 1].
-    # The schedule in task_spec.schedule() emits temp in [~1.37, 2.0] (Gemini-scale).
-    # For Anthropic, rescale by /2 to map [1.37, 2.0] -> [0.685, 1.0], preserving
-    # the schedule's relative decay shape inside Anthropic's valid range. Only
-    # rescales when the supplied temperature exceeds 1.0 — explicitly-passed
-    # in-range values (e.g. 0.7 from tests) are left alone.
-    if isinstance(model, AnthropicModel) and temperature > 1.0:
-        temperature = temperature / 2.0
-
     # Anthropic's API treats max_tokens as REQUIRED (Google's allows None and uses
     # its own server-side default). Caller bugs that leak None through here crash
     # deep inside the anthropic SDK with a confusing TypeError. Fall back to the
@@ -321,7 +307,6 @@ async def call_llm(
     )
 
     model_settings = ModelSettings(
-        temperature=temperature,
         thinking=thinking,
         max_tokens=max_tokens,
     )

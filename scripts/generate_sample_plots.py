@@ -24,6 +24,7 @@ from edgar.evolution.program import Program, BirthCertificate
 from edgar.evolution.population import Population
 from edgar.scoring.scoring import score
 from edgar.scoring.utils import _safe_loss
+from edgar.llm.utils import translate_to_jax
 from edgar.io.plotting import generate_feedback_image, generate_program_fits, generate_trajectory_image
 
 repo_root = Path(__file__).parent.parent
@@ -63,11 +64,7 @@ def generate_samples(project: str):
     population = Population()
     for seed_p in spec.seed_programs:
         if not seed_p.code.model_jax:
-            seed_p.code.model_jax = (
-                seed_p.code.model
-                .replace("import numpy as np", "import jax.numpy as jnp")
-                .replace("np.", "jnp.")
-            )
+            seed_p.code.model_jax = translate_to_jax(seed_p.code.model)
         population.add(seed_p)
 
     print("Scoring seed programs...")
@@ -79,9 +76,16 @@ def generate_samples(project: str):
         spec.loss_fn,
         split="discover",
         apply_model_fn=spec.apply_model_fn,
+        diagnostics=spec.diagnostics,
     )
 
     programs = [population[i] for i in range(len(population))]
+    for p in programs:
+        final_loss = p.program_losses.discover.final if hasattr(p, "program_losses") else None
+        loss_str = f"{final_loss:.4f}" if final_loss is not None else "N/A"
+        print(f"  Program {p.name}: loss = {loss_str}")
+        if p.diagnostics:
+            print(f"    Diagnostics: {p.diagnostics}")
 
     # 4. Generate Feedback Image (using first 2 as parents)
     print("Generating feedback image...")

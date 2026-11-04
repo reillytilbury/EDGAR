@@ -37,9 +37,10 @@ import yaml
 
 
 from ..evolution.program import Program, BirthCertificate, Code
-from ..llm.code_loading import load_function_from_source
+from ..llm.code_loading import load_function_from_source, load_class_from_source
 from ..llm.prompt_schema import PromptSchema
 from ..llm.response_schema import RESPONSE_SCHEMAS
+from ..projects.diagnostics import BaseDiagnostics
 from ..scoring.utils import apply_model_plain
 from .config import Config
 from .config import REPO_ROOT
@@ -125,6 +126,42 @@ def _load_loss_fn(data_loader_path: Path) -> Callable | tuple[Callable, Callable
     return loss_fn
 
 
+def _load_diagnostics(project_dir: Path) -> BaseDiagnostics | None:
+    """Loads the Diagnostics object from the project / diagnostics directory.
+
+    Checks for `diagnostics.py` (defining class `Diagnostics` or `plot_model_fits`),
+    falling back to legacy `image_feedback/plot.py` wrapped in a BaseDiagnostics adapter.
+    """
+    diag_path = project_dir / "diagnostics" / "diagnostics.py"
+    if diag_path.exists():
+        diag_cls = load_class_from_source(diag_path.read_text(), "Diagnostics")
+        if diag_cls is not None:
+            return diag_cls()
+        diag_fn = load_function_from_source(diag_path.read_text(), "plot_model_fits")
+        if diag_fn is not None:
+
+            class _FuncDiagnostics(BaseDiagnostics):
+                def plot_model_fits(self, *args, **kwargs):
+                    return diag_fn(*args, **kwargs)
+
+            return _FuncDiagnostics()
+
+    legacy_plot_path = project_dir / "image_feedback" / "plot.py"
+    if legacy_plot_path.exists():
+        plot_fn = load_function_from_source(
+            legacy_plot_path.read_text(), "plot_model_fits"
+        )
+        if plot_fn is not None:
+
+            class _LegacyDiagnostics(BaseDiagnostics):
+                def plot_model_fits(self, *args, **kwargs):
+                    return plot_fn(*args, **kwargs)
+
+            return _LegacyDiagnostics()
+
+    return None
+
+
 @dataclass
 class TaskSpec:
     """Object containing everything needed to run (or re-run) an EDGAR experiment.
@@ -176,9 +213,9 @@ class TaskSpec:
         loss_fn (Callable | tuple[Callable, Callable]): Project-specific loss function(s)
             used by the scoring sandbox to evaluate model predictions against held-out data.
             Can be a single callable `loss_fn` or a tuple `(loss_fn_train, loss_fn_test)`.
-        plot_fn (Callable | None): Optional function to render model-fit images for
-            LLM image-feedback prompts. None if the project does not provide
-            `image_feedback/plot.py`.
+        diagnostics (BaseDiagnostics | None): Optional object encapsulating project-specific
+            metrics, model fit plotting, and LLM feedback image generation.
+        plot_fn (Callable | None): Deprecated property returning `diagnostics.plot_model_fits`.
         apply_model_fn (Callable): Controls how the scoring sandbox maps a
             program's `model_fn` over the data. Defaults to `apply_model_plain`
             (a single `vmap` over axis-0). A project may override it by defining
@@ -233,7 +270,7 @@ class TaskSpec:
 
     loss_fn: Callable | tuple[Callable, Callable]
 
-    plot_fn: Callable | None
+    diagnostics: BaseDiagnostics | None = None
 
     apply_model_fn: Callable = field(default=None)
 
@@ -244,6 +281,13 @@ class TaskSpec:
     seed_programs: list[Program] = field(default_factory=list)
 
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
+
+    @property
+    def plot_fn(self) -> Callable | None:
+        """Deprecated: accesses `plot_model_fits` from `diagnostics` for backward compatibility."""
+        return (
+            self.diagnostics.plot_model_fits if self.diagnostics is not None else None
+        )
 
     # ── constructors ──
 
@@ -292,12 +336,7 @@ class TaskSpec:
             or apply_model_plain
         )
 
-        plot_path = config.project_dir / "image_feedback" / "plot.py"
-        plot_fn = (
-            load_function_from_source(plot_path.read_text(), "plot_model_fits")
-            if plot_path.exists()
-            else None
-        )
+        diagnostics = _load_diagnostics(config.project_dir)
 
         git_sha, git_dirty = _git_state()
 
@@ -378,7 +417,7 @@ class TaskSpec:
             ],
             load_data_fn=load_data_fn,
             loss_fn=loss_fn,
-            plot_fn=plot_fn,
+            diagnostics=diagnostics,
             apply_model_fn=apply_model_fn,
             seed_programs=seed_programs,
             rng=np.random.default_rng(config.run.random_seed),
@@ -411,7 +450,11 @@ class TaskSpec:
             "io": self.io,
             "evolution": self.evolution,
             "llms": self.llms,
-            "scoring": self.scoring,
+            "scoring": {
+                key: value
+                for key, value in self.scoring.items()
+                if key != "optimizer_config"
+            },
             "run": self.run,
             "project_params": self.project_params,
             "seed_programs": [
@@ -446,16 +489,12 @@ class TaskSpec:
     # ── generation schedule ──
 
     def schedule(self, generation: int) -> tuple[str, float, LLMs]:
-        """Returns the operational mode, temperature, and specific LLMs for a given generation.
+        """Returns the operational mode, migration temperature, and LLMs for a generation.
 
-        The `temperature` for LLM generation follows a decaying schedule:
-        `temperature = 1 + exp(-generation / n_generations)`. This results in a decay
-        from 2.0 (at generation 0) towards 1.37 (as `generation` approaches
-        `n_generations`). This range [1.37, 2.0] is considered the **Gemini scale**.
-        For LLM providers like Anthropic, which typically accept temperatures in the
-        range [0, 1], the `call_llm` function in `llm_calling.py` handles the necessary
-        rescaling (e.g., mapping [1.37, 2.0] to [0.685, 1.0]) to ensure consistent
-        behavior.
+        The migration temperature follows a decaying schedule:
+        `migration_temperature = 1 + exp(-generation / n_generations)`. This results in a decay
+        from 2.0 at generation 0 towards 1.37 at the end of the run. It is used
+        only for Boltzmann-weighted island migration, not LLM sampling.
 
         The `mode` transitions from "explore" to "exploit", guiding the LLM's
         behavior towards either novelty or refinement. This transition is controlled
@@ -471,9 +510,8 @@ class TaskSpec:
             tuple[str, float, LLMs]: A tuple containing:
                 - mode (str): "explore" if generation < exploit_point * n_generations,
                   "exploit" otherwise.
-                - temperature (float): The Gemini-scale temperature ([1.37, 2.0]) for
-                  LLM generation. This value will be rescaled at the call site for
-                  LLMs with different accepted temperature ranges (e.g., Anthropic).
+                - migration_temperature (float): The scheduled value used to control
+                  Boltzmann sampling during island migration.
                 - llms (LLMs): A namedtuple providing the specific LLM models to be
                   used for `model` generation, `param_est` generation, and `model_jax`
                   translation in this generation.
@@ -484,7 +522,7 @@ class TaskSpec:
         exploit_point = self.evolution.get("exploit_point", 0.5)
 
         mode = "explore" if generation < exploit_point * n_generations else "exploit"
-        temperature = 1 + np.exp(-generation / n_generations)
+        migration_temperature = 1 + np.exp(-generation / n_generations)
 
         model_llm = (
             self.llms["model_llm"][generation % len(self.llms["model_llm"])]
@@ -498,7 +536,7 @@ class TaskSpec:
             model_jax=self.llms["jax_model_translator_llm"],
         )
 
-        return mode, temperature, llms
+        return mode, migration_temperature, llms
 
     # ── config ──
 

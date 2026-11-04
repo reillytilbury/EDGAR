@@ -96,8 +96,9 @@ def mark_failed_generations(population: Population) -> None:
 
 
 def _filter_programs(
-    population: Population, filter_rule: Callable[[Program], bool],
-    only_alive_programs = True,
+    population: Population,
+    filter_rule: Callable[[Program], bool],
+    only_alive_programs=True,
 ) -> list[Program]:
     """Filters a population of programs based on a given rule.
 
@@ -152,7 +153,6 @@ async def _generate_one_model(
     prompt_schema: PromptSchema,
     llm: str | Model,
     mode: str,
-    temperature: float,
     config: dict[str, Any] | None = None,
     spec: TaskSpec | None = None,
     data: dict | None = None,
@@ -173,8 +173,6 @@ async def _generate_one_model(
         llm: The LLM model name (str) or a pre-configured PydanticAI Model instance to use.
         mode: The generation mode (e.g., "explore" or "exploit"), which can affect the
             content of the generated prompt via `prompt_schema`.
-        temperature: The sampling temperature for the LLM, controlling the randomness of
-            the generation.
         config: Optional configuration dictionary containing LLM call parameters such as
             `log_raw_llm_response`, `max_tokens`, and `retry_config`. Also used to store
             `idea_probability` for prompt schema.
@@ -202,7 +200,6 @@ async def _generate_one_model(
         prompt=prompt,
         llm_model=llm,
         output_type=output_schema,
-        temperature=temperature,
         image_bytes=image_bytes,
         log_raw_llm_response=cfg.get("log_raw_llm_response", False),
         max_tokens=cfg.get("max_tokens"),
@@ -242,7 +239,6 @@ async def generate_models(
     prompt_schema: PromptSchema,
     llm: str | Model,
     mode: str,
-    temperature: float,
     config: dict[str, Any] | None = None,
     spec: TaskSpec | None = None,
     data: dict | None = None,
@@ -260,7 +256,6 @@ async def generate_models(
         prompt_schema: The schema used to build the LLM prompt for model generation.
         llm: The LLM model name (str) or a pre-configured PydanticAI Model instance to use.
         mode: The generation mode (e.g., "explore" or "exploit").
-        temperature: The sampling temperature for the LLM.
         config: Optional configuration dictionary for LLM calls, including settings like
             `log_raw_llm_response`, `max_tokens`, and `retry_config`.
         spec: The `TaskSpec` object, used for generating image feedback for the LLMs.
@@ -282,7 +277,6 @@ async def generate_models(
                 prompt_schema,
                 llm,
                 mode,
-                temperature,
                 config,
                 spec,
                 data,
@@ -309,7 +303,7 @@ async def _generate_one_param_est(
     """Generates the numpy parameter estimator code for a single program using an LLM.
 
     This function constructs a prompt tailored for parameter estimator generation, calls
-    the specified LLM with a fixed temperature of 1.0, and returns the generated code string.
+    the specified LLM and returns the generated code string.
 
     Args:
         program: The program for which to generate the parameter estimator code.
@@ -332,7 +326,6 @@ async def _generate_one_param_est(
         prompt=prompt,
         llm_model=llm,
         output_type=output_schema,
-        temperature=1.0,
         log_raw_llm_response=config.get("log_raw_llm_response", False),
         max_tokens=config.get("max_tokens"),
         thinking=config.get("param_est_thinking"),
@@ -454,8 +447,8 @@ async def _translate_one_model(
 ) -> None:
     """Translates the numpy model code of a single program into JAX-compatible code using an LLM.
 
-    This function constructs a translation prompt, calls the specified LLM with a fixed
-    temperature of 1.0, and validates the generated JAX code by attempting to load the
+    This function constructs a translation prompt, calls the specified LLM, and validates
+    the generated JAX code by attempting to load the
     'model' function from it. If successful, the program's `model_jax` code is updated.
 
     Args:
@@ -477,7 +470,6 @@ async def _translate_one_model(
         prompt=model_prompt,
         llm_model=llm,
         output_type=output_schema,
-        temperature=1.0,
         retry_config=retry_config,
         max_tokens=max_tokens,
         role="jax",

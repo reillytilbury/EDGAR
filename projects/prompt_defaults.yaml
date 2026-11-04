@@ -55,19 +55,15 @@ model:
   image_analysis_instructions: null
   parent_program_template: 'Model: {name}
 
-    loss: {program_losses_discover_final}
+    loss: {program_losses.discover.final}
 
-    {model_code}
+    {code.model}
 
     ----------------------------
 
     '
   config_vars:
   - num_parents
-  parent_program_vars:
-  - name
-  - program_losses.discover.final
-  - model_code
 parameter_estimator:
   base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest model (shown last below). Also included are previous parent models and their parameter estimators.
 
@@ -97,25 +93,17 @@ parameter_estimator:
     '
   image_analysis_instructions: null
   parent_program_template: 'Parent model: {name}
-    loss: {program_losses_discover_final}
+    loss: {program_losses.discover.final}
     model:
-    {model_code}
+    {code.model}
     parameter_estimator:
-    {param_est_code}
+    {code.best_param_est}
 
     ---
     '
-  parent_program_vars:
-  - name
-  - program_losses.discover.final
-  - model_code
-  - param_est_code
   current_program_template: 'New model: {name}
-    {model_code}
+    {code.model}
     '
-  current_program_vars:
-  - name
-  - model_code
 jax_translator_model:
   base: '
     Translate the following model function to JAX-compatible code.
@@ -157,12 +145,9 @@ jax_translator_model:
     '
   image_analysis_instructions: null
   parent_program_template: ''
-  parent_program_vars: []
   current_program_template: 'Model code:
 
-    {code_model}
+    {code.model}
 
     '
-  current_program_vars:
-  - code.model
 
