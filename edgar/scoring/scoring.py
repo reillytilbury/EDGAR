@@ -27,6 +27,7 @@ from ..evolution.program import (
 )
 from ..evolution.population import Population
 from ..io.metrics import get_active_metrics, stream_line
+from ..projects.diagnostics import is_compute_metrics_defined
 from ..process import (
     SubprocessTimeoutError,
     available_cpu_count,
@@ -340,7 +341,7 @@ def _worker(
     if diagnostics_bytes is not None:
         try:
             diagnostics = cloudpickle.loads(diagnostics_bytes)
-            if diagnostics is not None and hasattr(diagnostics, "compute_metrics"):
+            if is_compute_metrics_defined(diagnostics):
                 y_pred = _to_numpy(evaluate_model_output(model_fn, params, data_test))
                 computed = diagnostics.compute_metrics(
                     data=_to_numpy(data_test),

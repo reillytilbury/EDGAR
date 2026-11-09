@@ -47,6 +47,7 @@ class BaseDiagnostics:
         program_names: list[str] | None = None,
         params: list[dict] | None = None,
         title_prefix: str | None = None,
+        apply_model_fn: Any | None = None,
         **kwargs: Any,
     ) -> None:
         """Visualizes model fits against ground truth data (used for post-hoc analysis & Dashboard).
@@ -61,6 +62,9 @@ class BaseDiagnostics:
             program_names: Names for each program.
             params: Parameters for each program.
             title_prefix: Prefix for plot title.
+            apply_model_fn: Optional project-specific rollout callable with signature
+                ``(model_fn, data, params)``. Used for models with custom input/state
+                contracts; defaults to the standard model application when omitted.
         """
         pass
 
@@ -87,3 +91,17 @@ class BaseDiagnostics:
             save_path=save_path,
             **kwargs,
         )
+
+
+def is_compute_metrics_defined(diagnostics: Any) -> bool:
+    """Return whether diagnostics provides a callable class-level metrics override.
+
+    The default ``BaseDiagnostics.compute_metrics`` implementation does not count.
+    Overrides inherited from intermediate classes do count. Returns False for
+    None, missing methods, and non-callable attributes.
+    """
+    return (
+        callable(getattr(diagnostics, "compute_metrics", None))
+        and getattr(type(diagnostics), "compute_metrics", None)
+        is not BaseDiagnostics.compute_metrics
+    )
