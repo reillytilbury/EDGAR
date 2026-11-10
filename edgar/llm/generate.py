@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import warnings
-from typing import Any, TYPE_CHECKING, Callable
+from dataclasses import dataclass
+from typing import Any, TYPE_CHECKING, Callable, Awaitable
 import numpy as np
 
 from pydantic_ai.models import Model
@@ -31,14 +32,110 @@ from ..llm.code_loading import load_function_from_source
 from ..io.plotting import generate_feedback_image
 
 if TYPE_CHECKING:
-    from ..io.task_spec import TaskSpec
+    from ..io.task_spec import TaskSpec, LLMs
+
+
+@dataclass(frozen=True)
+class GenerationStage:
+    """A named, configured generation operation for one run generation.
+
+    The operation accepts its live population and discovery data at
+    execution time; configuration specific to the stage is bound by the builder.
+    """
+
+    name: str
+    execute: Callable[..., Awaitable[None]]
+
+
+def _build_model_stage(spec, llms, mode, config, retry_config):
+    """Bind model-generation settings, leaving population and data for execution."""
+
+    async def execute(population: Population, *, data: dict) -> None:
+        await generate_models(
+            population,
+            spec.prompt_schemas.model,
+            llms.model,
+            mode,
+            config=config,
+            spec=spec,
+            data=data,
+            output_schema=spec.response_schemas.model,
+        )
+
+    return execute
+
+
+def _build_param_est_stage(spec, llms, mode, config, retry_config):
+    """Bind parameter-estimator settings using the common stage interface."""
+
+    async def execute(population: Population, *, data: dict) -> None:
+        await generate_param_ests(
+            population,
+            spec.prompt_schemas.param_est,
+            llms.param_est,
+            config,
+            output_schema=spec.response_schemas.param_est,
+        )
+
+    return execute
+
+
+def _build_translation_stage(spec, llms, mode, config, retry_config):
+    """Bind translation settings using the common stage interface."""
+
+    async def execute(population: Population, *, data: dict) -> None:
+        await translate_programs(
+            population,
+            spec.prompt_schemas.jax_model,
+            llms.model_jax,
+            retry_config=retry_config,
+            max_tokens=config.get("max_tokens"),
+            output_schema=spec.response_schemas.jax_model,
+        )
+
+    return execute
+
+
+_STAGE_BUILDERS = {
+    "generate_models": _build_model_stage,
+    "generate_param_ests": _build_param_est_stage,
+    "translate_programs": _build_translation_stage,
+}
+
+
+def build_generation_stages(
+    stages: list[str],
+    spec: TaskSpec,
+    llms: LLMs,
+    mode: str,
+    config: dict[str, Any],
+    retry_config: RetryConfig,
+) -> list[GenerationStage]:
+    """Build configured stage callables for a generation.
+
+    Resolve configured names through the stage-builder registry, preserving their
+    order. Builders bind prompts, models, schemas and options; the runner supplies
+    the live population/data and owns timing and progress item counts.
+
+    Raises:
+        ValueError: If a configured stage name is not registered.
+    """
+    selected = []
+    for name in stages:
+        try:
+            builder = _STAGE_BUILDERS[name]
+        except KeyError:
+            raise ValueError(f"Unknown generation stage: {name}") from None
+        execute = builder(spec, llms, mode, config, retry_config)
+        selected.append(GenerationStage(name=name, execute=execute))
+    return selected
 
 
 # ---------------------------------------------------------------------------
 # Filters — which programs need work at each stage
 # ---------------------------------------------------------------------------
 def _needs_model_code(program: Program) -> bool:
-    """Checks if a program requires its numpy model code to be generated.
+    """Checks if a program requires its original model code to be generated.
 
     Args:
         program: The program to check.
@@ -76,8 +173,8 @@ def _needs_model_translation(program: Program) -> bool:
 def mark_failed_generations(population: Population) -> None:
     """Marks alive programs without model or JAX model code as "failed_generation".
 
-    Run after the generation and translation stages. A program left without numpy
-    model or JAX model code (e.g. because the LLM response was truncated) cannot be
+    Run after the generation stages and model finalization. A program left without
+    original model or executable JAX source (e.g. because an LLM response was truncated) cannot be
     scored and must not be sampled as a parent or migrant. Missing parameter
     estimators are not a failure: gradient descent is then initialised from the
     program's default params. The status is final: generation stages only work on
@@ -93,6 +190,24 @@ def mark_failed_generations(population: Population) -> None:
         code = program.code
         if code.model is None or code.model_jax is None:
             program.status = "failed_generation"
+
+
+def finalize_model_code(population: Population, *, translation_required: bool) -> None:
+    """Make original model source available to scoring in direct-JAX mode.
+
+    Existing executable source is preserved. When translation is requested, missing
+    translations remain missing and are handled by ``mark_failed_generations``.
+    This does not validate or compile the source; scoring handles invalid code.
+    """
+    if translation_required:
+        return
+    for program in population:
+        if (
+            program.status == "alive"
+            and program.code.model_jax is None
+            and program.code.model is not None
+        ):
+            program.code.model_jax = program.code.model
 
 
 def _filter_programs(
@@ -244,7 +359,7 @@ async def generate_models(
     data: dict | None = None,
     output_schema: type[BaseModel] = ModelSchema,
 ) -> None:
-    """Asynchronously generates numpy model code for programs needing it within a population.
+    """Asynchronously generates model code for programs needing it within a population.
 
     This function identifies programs without model code using `_needs_model_code`,
     resolves their parent programs, and then concurrently dispatches asynchronous LLM calls

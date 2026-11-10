@@ -1,5 +1,6 @@
 run:
   random_seed: 42
+  generation_stages: [generate_models, generate_param_ests, translate_programs]
 
 io:
   data_path: "a"

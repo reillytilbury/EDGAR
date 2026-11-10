@@ -94,9 +94,6 @@ def test_gpu_memory_profiling(cpu_only: bool) -> None:
         "t_score_seeds",
         "t_fits_seeds",
         "t_spawn",
-        "t_generate_models",
-        "t_generate_param_ests",
-        "t_translate_programs",
         "t_score",
         "t_fits",
         "t_deduplicate",
@@ -105,6 +102,9 @@ def test_gpu_memory_profiling(cpu_only: bool) -> None:
         "t_score_validate",
     ]
     memory_history: Dict[str, Dict[str, Any]] = {}
+    expected_generation_stages = run_mod.RunConfig.model_validate(
+        spec.run
+    ).generation_stages
 
     def create_tracker(stage_name: str, original_func: Any) -> Any:
         """Wraps the target function to record memory telemetry.
@@ -137,15 +137,33 @@ def test_gpu_memory_profiling(cpu_only: bool) -> None:
 
             return sync_wrapper
 
+    # Generation operations are now configured callables built at runtime, not
+    # t_generate_* aliases on edgar.run. Instrument each callable as it is built.
+    original_build_generation_stages = run_mod.build_generation_stages
+
+    def build_tracked_generation_stages(*args: Any, **kwargs: Any) -> Any:
+        stages = original_build_generation_stages(*args, **kwargs)
+        return [
+            type(stage)(
+                name=stage.name,
+                execute=create_tracker(stage.name, stage.execute),
+            )
+            for stage in stages
+        ]
+
     # Apply patching
     patches = []
     for stage in stages_to_patch:
-        if hasattr(run_mod, stage):
-            original = getattr(run_mod, stage)
-            tracker = create_tracker(stage, original)
-            p = patch.object(run_mod, stage, side_effect=tracker)
-            patches.append(p)
-            p.start()
+        original = getattr(run_mod, stage)
+        tracker = create_tracker(stage, original)
+        p = patch.object(run_mod, stage, side_effect=tracker)
+        patches.append(p)
+        p.start()
+    builder_patch = patch.object(
+        run_mod, "build_generation_stages", side_effect=build_tracked_generation_stages
+    )
+    patches.append(builder_patch)
+    builder_patch.start()
 
     try:
         # Run the EDGAR experiment
@@ -184,6 +202,8 @@ def test_gpu_memory_profiling(cpu_only: bool) -> None:
                 )
 
     # Ensure that we actually hit and recorded telemetry for the targeted stages
-    assert len(memory_history) == 14, (
-        "Memory profile information missing from some target function."
+    expected_stages = set(stages_to_patch) | set(expected_generation_stages)
+    assert expected_stages <= memory_history.keys(), (
+        "Memory profile information missing for stages: "
+        f"{sorted(expected_stages - memory_history.keys())}"
     )

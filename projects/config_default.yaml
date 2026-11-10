@@ -3,6 +3,10 @@
 
 run:
   random_seed: null #Used for spawning and migration
+  # Ordered LLM stages. Omit translate_programs only when model prompts and seeds produce JAX code.
+  # Allowed: [generate_models], [generate_models, generate_param_ests],
+  # [generate_models, translate_programs], or the full list below.
+  generation_stages: [generate_models, generate_param_ests, translate_programs]
 
 io:
   # Path to task data. Override in each project config.

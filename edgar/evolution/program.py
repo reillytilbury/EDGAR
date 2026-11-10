@@ -252,7 +252,7 @@ class Program:
         """Loads and compiles the JAX model callable from its source code.
 
         This method uses `load_function_from_source` to dynamically load the
-        JAX-translated model code (`self.code.model_jax`) into a callable function.
+        JAX-compatible model code (`self.code.model_jax`) into a callable function.
 
         Returns:
             A callable Python function representing the JAX model.

@@ -8,6 +8,7 @@ from edgar.llm.generate import (
     generate_models,
     generate_param_ests,
     mark_failed_generations,
+    finalize_model_code,
     _filter_programs,
     _needs_model_code,
     _translate_one_model,
@@ -618,6 +619,35 @@ def test_missing_param_ests_are_not_failed_generations(param_est):
     mark_failed_generations(pop)
 
     assert no_estimators.status == "alive"
+
+
+@pytest.mark.parametrize("translation_required", [False, True])
+def test_finalize_model_code(translation_required):
+    direct = make_program(number=0)
+    direct.code.model_jax = None
+    direct.code.param_est = None
+    existing = make_program(number=1)
+    original = existing.code.model_jax
+    missing = make_program(number=2)
+    missing.code.model = None
+    missing.code.model_jax = None
+    banned = make_program(number=3)
+    banned.code.model_jax = None
+    banned.status = "banned"
+    pop = Population()
+    for p in (direct, existing, missing, banned):
+        pop.add(p)
+    finalize_model_code(pop, translation_required=translation_required)
+    finalize_model_code(pop, translation_required=translation_required)
+    assert direct.code.model_jax == (
+        None if translation_required else direct.code.model
+    )
+    assert existing.code.model_jax == original
+    assert missing.code.model_jax is None
+    assert banned.code.model_jax is None
+    mark_failed_generations(pop)
+    assert direct.status == ("failed_generation" if translation_required else "alive")
+    assert missing.status == "failed_generation"
 
 
 def test_failed_generations_are_not_retried():

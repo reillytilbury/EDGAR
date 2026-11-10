@@ -101,6 +101,27 @@ edgar run projects/orientation_tuning/config.yaml --evolution.n_generations=5
 edgar run projects/orientation_tuning/config.yaml --llms.model_llm=gemini-2.5-pro
 ```
 
+### Generation stages
+
+`run.generation_stages` selects the ordered LLM stages for each generation. The
+default in `projects/config_default.yaml` is
+`[generate_models, generate_param_ests, translate_programs]`. A project can
+override it in `config.yaml`:
+
+```yaml
+run:
+  generation_stages: [generate_models, generate_param_ests]
+```
+
+This skips translation for both seeds and new programs: model-generation prompts
+and seed model files **must already produce JAX-compatible code**. Override the
+default model-generation prompt in `prompts.yaml` accordingly. To use default
+parameter initialization instead of generating estimators, use
+`[generate_models]`; to translate without generating estimators, use
+`[generate_models, translate_programs]`. Seed-provided estimators remain in use.
+Stages cannot be reordered, repeated, or extended. The setting is saved in
+`task_spec.yaml` and restored on resume; old saved specs inherit the default.
+
 Run a quick test with reduced settings (1 generation, 2 islands, batch size 2) to verify the pipeline is wired correctly
 
 ```bash

@@ -19,7 +19,14 @@ def test_fromconfig():
     assert taskspec.task_name == "test_task"
     assert taskspec.project_dir == Path("tests/io/test_task").resolve()
     # Check config parameters correctly loaded in
-    assert taskspec.run == {"random_seed": 42}
+    assert taskspec.run == {
+        "random_seed": 42,
+        "generation_stages": [
+            "generate_models",
+            "generate_param_ests",
+            "translate_programs",
+        ],
+    }
     assert taskspec.io == {"data_path": "", "save_path": "", "save_trajectories": False}
     assert taskspec.evolution == {
         "n_generations": 4,
