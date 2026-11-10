@@ -12,12 +12,6 @@ import sys
 import os
 from pathlib import Path
 
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
-_xla_flags = os.environ.get("XLA_FLAGS", "")
-if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
-    os.environ["XLA_FLAGS"] = (_xla_flags + " --xla_gpu_enable_command_buffer=").strip()
-
 from edgar.io.config import Config
 from edgar.io.task_spec import TaskSpec
 from edgar.evolution.program import Program, BirthCertificate
@@ -25,9 +19,20 @@ from edgar.evolution.population import Population
 from edgar.scoring.scoring import score
 from edgar.scoring.utils import _safe_loss
 from edgar.llm.utils import translate_to_jax
-from edgar.io.plotting import generate_feedback_image, generate_program_fits, generate_trajectory_image
+from edgar.io.plotting import (
+    generate_feedback_image,
+    generate_program_fits,
+    generate_trajectory_image,
+)
+
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+_xla_flags = os.environ.get("XLA_FLAGS", "")
+if "--xla_gpu_enable_command_buffer=" not in _xla_flags:
+    os.environ["XLA_FLAGS"] = (_xla_flags + " --xla_gpu_enable_command_buffer=").strip()
 
 repo_root = Path(__file__).parent.parent
+
 
 def generate_samples(project: str):
     print(f"--- Generating sample plots for project: {project} ---")
@@ -63,6 +68,8 @@ def generate_samples(project: str):
 
     population = Population()
     for seed_p in spec.seed_programs:
+        if "translate_programs" not in spec.run["generation_stages"]:
+            seed_p.code.model_jax = seed_p.code.model
         if not seed_p.code.model_jax:
             seed_p.code.model_jax = translate_to_jax(seed_p.code.model)
         population.add(seed_p)
@@ -81,7 +88,9 @@ def generate_samples(project: str):
 
     programs = [population[i] for i in range(len(population))]
     for p in programs:
-        final_loss = p.program_losses.discover.final if hasattr(p, "program_losses") else None
+        final_loss = (
+            p.program_losses.discover.final if hasattr(p, "program_losses") else None
+        )
         loss_str = f"{final_loss:.4f}" if final_loss is not None else "N/A"
         print(f"  Program {p.name}: loss = {loss_str}")
         if p.diagnostics:
@@ -89,8 +98,9 @@ def generate_samples(project: str):
 
     # 4. Generate Feedback Image (using first 2 as parents)
     print("Generating feedback image...")
+
     def _loss(p: Program) -> float:
-            return _safe_loss(p.program_losses.discover.final)
+        return _safe_loss(p.program_losses.discover.final)
 
     parents = sorted(programs, key=_loss, reverse=True)
     current = Program(
@@ -119,7 +129,6 @@ def generate_samples(project: str):
     print(
         f"  [OK] {fit_count}/{len(programs)} trajectory images generated in {output_dir}/image_trajectories/"
     )
-
 
     print(f"\nDone. View plots in: {output_dir}")
 
