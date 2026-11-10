@@ -8,6 +8,7 @@ from edgar.io.config import Config
 from edgar.io.task_spec import TaskSpec
 from edgar.llm.prompt_schema import PromptSchema
 from edgar.scoring.utils import apply_model_plain
+from edgar.scoring.utils import eval_fingerprint as default_eval_fingerprint
 
 
 def test_fromconfig():
@@ -141,6 +142,7 @@ def test_fromconfig():
     assert callable(taskspec.loss_fn)
     assert callable(taskspec.plot_fn)
     assert taskspec.apply_model_fn is apply_model_plain
+    assert taskspec.fingerprint_fn is default_eval_fingerprint
     seed_model_src = (Path("tests/io/test_task/seed_programs/model1.py")).read_text()
     assert taskspec.seed_programs[0].code.model in seed_model_src
     seed_model_src = (Path("tests/io/test_task/seed_programs/model2.py")).read_text()
@@ -188,6 +190,25 @@ def apply_model(model_fn, data, params):
     assert taskspec.apply_model_fn is not apply_model_plain
     assert taskspec.apply_model_fn.__name__ == "apply_model"
     assert jnp.allclose(result, jnp.array([[2.0, 4.0], [12.0, 16.0]]))
+
+
+def test_fromconfig_loads_custom_fingerprint(tmp_path):
+    source_project = Path("tests/io/test_task")
+    project_dir = tmp_path / "custom_fingerprint_task"
+    shutil.copytree(source_project, project_dir)
+    loader_path = project_dir / "data_loader" / "load_data.py"
+    loader_path.write_text(
+        loader_path.read_text()
+        + """
+from edgar.scoring.utils import eval_fingerprint as built_in
+
+def eval_fingerprint(model_fn, params, X_eval, apply_model_fn):
+    return built_in(model_fn, params, X_eval, apply_model_fn)
+"""
+    )
+    spec = TaskSpec.from_config(Config.from_yaml(project_dir / "config.yaml"))
+    assert spec.fingerprint_fn is not default_eval_fingerprint
+    assert spec.fingerprint_fn.__name__ == "eval_fingerprint"
 
 
 def test_schedule_model_list():

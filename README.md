@@ -320,6 +320,21 @@ def apply_model(model_fn, data, params):
     return jax.vmap(apply_one)(data["sequence"], params)
 ```
 
+#### Optional custom fingerprints
+
+In order to deduplicate programs, EDGAR builds a fingerprint which evalutes the model for a subset of data indices, resulting in a fingerprint of shape `(n1, n2,..)` for each program.
+The fingerprints of programs are compared by cosine similarity of the flattened fingerprint, above a threshold, programs are considered equivalent.
+
+By default EDGAR evaluates fingerprints with its built-in `eval_fingerprint`. A project may replace that behavior by defining this optional function in `data_loader/load_data.py`:
+
+```python
+def eval_fingerprint(model_fn, params, X_eval, apply_model_fn):
+    """Return a nonempty, finite numeric array for model comparison."""
+    # The helper owns parameter selection (including _sample_indices), model
+    # evaluation, and fingerprint construction.
+    return builtin_eval_fingerprint(model_fn, params, X_eval, apply_model_fn)
+```
+
 ### 3. Fill in seed programs
 
 By default, `model*.py` must define `def model(data, params):`. If the project

@@ -159,6 +159,7 @@ def _worker(
     split,
     apply_model_fn_bytes,
     diagnostics_bytes=None,
+    fingerprint_fn_bytes=None,
 ):
     """Scores one program inside a subprocess. It creates JAX arrays and returns results as non-JAX objects,
     ensuring that the memory allocated for JAX arrays is released when the subprocess exits.
@@ -203,6 +204,13 @@ def _worker(
     except Exception as e:
         print(f"[scoring] failed to find apply_model_fn, falling back to default: {e}")
         apply_model_fn = apply_model_plain
+    fingerprint_fn = eval_fingerprint
+    if fingerprint_fn_bytes is not None:
+        try:
+            fingerprint_fn = cloudpickle.loads(fingerprint_fn_bytes)
+        except Exception as e:
+            print(f"[scoring] failed to load fingerprint_fn (ignored): {e}")
+            fingerprint_fn = None
 
     data_train, data_test = resolve_scoring_data(data)
     data_train, data_test = _to_jax((data_train, data_test))
@@ -302,11 +310,22 @@ def _worker(
 
     # Fingerprint and sample losses are non-critical: failures here don't poison the loss.
     try:
-        fingerprint = (
-            eval_fingerprint(model_fn, params, X_eval, apply_model_fn)
-            if X_eval is not None
-            else None
-        )
+        fingerprint = None
+        if X_eval is not None and fingerprint_fn is not None:
+            value = fingerprint_fn(model_fn, params, X_eval, apply_model_fn)
+            if isinstance(value, dict):
+                raise ValueError(
+                    "fingerprint helper returned a dictionary; define a custom "
+                    "eval_fingerprint that returns a numeric array"
+                )
+            fingerprint = np.asarray(value)
+            if (
+                fingerprint.dtype.hasobject
+                or not np.issubdtype(fingerprint.dtype, np.number)
+                or fingerprint.size == 0
+                or not np.all(np.isfinite(fingerprint))
+            ):
+                raise ValueError("fingerprint must be a nonempty, finite numeric array")
     except Exception as e:
         print(f"[scoring] program #{program.idx} fingerprint failed (ignored): {e}")
         fingerprint = None
@@ -409,6 +428,7 @@ def _score_one_model(
     apply_model_fn=apply_model_plain,
     diagnostics=None,
     cpu_affinity: int | None = None,
+    fingerprint_fn=eval_fingerprint,
 ) -> tuple[
     float,
     float,
@@ -490,6 +510,13 @@ def _score_one_model(
         cloudpickle.dumps(diagnostics) if diagnostics is not None else None
     )
     try:
+        fingerprint_fn_bytes = cloudpickle.dumps(fingerprint_fn)
+    except Exception as e:
+        # A custom helper failing to serialize must not affect the model score,
+        # and must not silently switch comparison semantics to the default.
+        print(f"[scoring] failed to serialize fingerprint_fn (ignored): {e}")
+        fingerprint_fn_bytes = b"invalid fingerprint helper"
+    try:
         result = run_in_subprocess(
             _worker,
             args=(
@@ -501,6 +528,7 @@ def _score_one_model(
                 split,
                 apply_model_fn_bytes,
                 diagnostics_bytes,
+                fingerprint_fn_bytes,
             ),
             timeout=config["timeout_s"],
             cpu_affinity=cpu_affinity,
@@ -610,6 +638,7 @@ def _create_score_jobs(
     diagnostics,
     worker_limit: int,
     available_cpus: list[int],
+    fingerprint_fn,
 ) -> tuple[list, dict]:
     """Create threaded score jobs and score outcomes that need no worker."""
     backend = config.get("jax_backend") or jax.default_backend()
@@ -640,6 +669,7 @@ def _create_score_jobs(
                 apply_model_fn,
                 diagnostics=diagnostics,
                 cpu_affinity=cpu_affinity,
+                fingerprint_fn=fingerprint_fn,
             )
             return result, (time.monotonic() - started) * 1000.0
 
@@ -658,6 +688,7 @@ def _create_score_jobs(
                 split,
                 apply_model_fn,
                 diagnostics=diagnostics,
+                fingerprint_fn=fingerprint_fn,
             )
 
     return jobs, immediate
@@ -730,6 +761,7 @@ def score(
     split: str,
     apply_model_fn=apply_model_plain,
     diagnostics=None,
+    fingerprint_fn=eval_fingerprint,
 ) -> None:
     """Scores every program needing scoring on the given split.
 
@@ -800,6 +832,7 @@ def score(
             diagnostics,
             worker_limit,
             available_cpus,
+            fingerprint_fn,
         )
         tick_every = 1 if n_total <= 12 else 4
         total_latency_ms = 0.0

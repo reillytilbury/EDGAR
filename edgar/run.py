@@ -190,6 +190,7 @@ async def run(
                     split="discover",
                     diagnostics=spec.diagnostics,
                     apply_model_fn=spec.apply_model_fn,
+                    fingerprint_fn=spec.fingerprint_fn,
                     n_items=len(spec.seed_programs),
                 )
                 t_fits_seeds(spec, X_discover[1], population)
@@ -246,6 +247,7 @@ async def run(
                     split="discover",
                     diagnostics=spec.diagnostics,
                     apply_model_fn=spec.apply_model_fn,
+                    fingerprint_fn=spec.fingerprint_fn,
                     n_items=n_spawn,
                 )
                 t_fits(spec, X_discover[1], population)
@@ -291,6 +293,7 @@ async def run(
                 split="validate",
                 diagnostics=spec.diagnostics,
                 apply_model_fn=spec.apply_model_fn,
+                fingerprint_fn=spec.fingerprint_fn,
             )
             rank(population)
             metrics.finish_generation()

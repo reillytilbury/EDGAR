@@ -41,7 +41,10 @@ from ..llm.code_loading import load_function_from_source, load_class_from_source
 from ..llm.prompt_schema import PromptSchema
 from ..llm.response_schema import RESPONSE_SCHEMAS
 from ..projects.diagnostics import BaseDiagnostics
-from ..scoring.utils import apply_model_plain
+from ..scoring.utils import (
+    apply_model_plain,
+    eval_fingerprint as default_eval_fingerprint,
+)
 from .config import Config
 from .config import REPO_ROOT
 
@@ -220,6 +223,9 @@ class TaskSpec:
             program's `model_fn` over the data. Defaults to `apply_model_plain`
             (a single `vmap` over axis-0). A project may override it by defining
             `apply_model(model_fn, data, params)` in its `data_loader/load_data.py`.
+        fingerprint_fn (Callable): Fingerprint helper with signature
+            `(model_fn, params, X_eval, apply_model_fn)`. Defaults to EDGAR's
+            built-in helper; projects may override it in `data_loader/load_data.py`.
         creation_timestamp (str): Timestamp set at construction, used to create the
             hierarchical on-disk layout `<save_path>/<task_name>/YYYY-MM-DD/HH-MM-SS/`.
         seed_programs (list[Program]): Hand-written seed programs (typically 2) that
@@ -273,6 +279,8 @@ class TaskSpec:
     diagnostics: BaseDiagnostics | None = None
 
     apply_model_fn: Callable = field(default=None)
+
+    fingerprint_fn: Callable = field(default=default_eval_fingerprint)
 
     creation_timestamp: str = field(
         default_factory=lambda: datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
@@ -334,6 +342,10 @@ class TaskSpec:
         apply_model_fn = (
             load_function_from_source(data_loader_path.read_text(), "apply_model")
             or apply_model_plain
+        )
+        fingerprint_fn = (
+            load_function_from_source(data_loader_path.read_text(), "eval_fingerprint")
+            or default_eval_fingerprint
         )
 
         diagnostics = _load_diagnostics(config.project_dir)
@@ -419,6 +431,7 @@ class TaskSpec:
             loss_fn=loss_fn,
             diagnostics=diagnostics,
             apply_model_fn=apply_model_fn,
+            fingerprint_fn=fingerprint_fn,
             seed_programs=seed_programs,
             rng=np.random.default_rng(config.run.random_seed),
         )
