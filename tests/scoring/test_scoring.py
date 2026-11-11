@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 from edgar.evolution.program import Program, BirthCertificate, Code, NotValidated
 from edgar.evolution.population import Population
 from edgar.scoring.scoring import (
+    _get_params,
     _eval_loss,
     _optimize,
     _worker,
@@ -146,7 +147,7 @@ apply_model_fn_bytes = cloudpickle.dumps(apply_model_plain)
 
 
 def _make_program(
-    model_code, param_est=PARAM_EST_CODE, default_params={"w": jnp.array(0.5)}
+    model_code, param_est=PARAM_EST_CODE, default_params={"w": jnp.array([0.5])}
 ):
     return Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
@@ -562,6 +563,81 @@ def test_score_one_model_with_custom_apply_model():
     assert np.allclose(fingerprint, 2.0 * jnp.ones_like(eval_data["x"]), atol=5e-2)
 
 
+def test_get_params_falls_back_when_estimator_schema_differs():
+    defaults = {"w": jnp.array([0.5]), "b": jnp.array(1.0)}
+    data = {"x": jnp.ones((2, 3))}
+
+    def bad_estimator(sample):
+        return {"w": jnp.array([0.9, 1.0]), "extra": jnp.array(2.0)}
+
+    with pytest.warns(UserWarning, match="estimator keys differ"):
+        params = _get_params(bad_estimator, defaults, data)
+
+    np.testing.assert_array_equal(params["w"], [[0.5], [0.5]])
+    np.testing.assert_array_equal(params["b"], [1.0, 1.0])
+
+
+@pytest.mark.parametrize(
+    ("estimator_result", "warning"),
+    [
+        ({"w": jnp.array([0.9, 1.0])}, "parameter 'w' has shape"),
+        (jnp.array([0.9]), "expected dict"),
+    ],
+)
+def test_get_params_falls_back_on_wrong_shape_or_non_dict(estimator_result, warning):
+    defaults = {"w": jnp.array([0.5])}
+    data = {"x": jnp.ones((2, 3))}
+
+    with pytest.warns(UserWarning, match=warning):
+        params = _get_params(lambda sample: estimator_result, defaults, data)
+
+    np.testing.assert_array_equal(params["w"], [[0.5], [0.5]])
+
+
+def test_default_params_must_work_with_model_even_if_estimator_is_valid():
+    program = _make_program(
+        FAST_MODEL_CODE,
+        default_params={"wrong_key": jnp.array([0.5])},
+    )
+    result = _score_one_model(
+        program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+    )
+
+    assert result[0] == float("inf")
+    assert result[-1] == "inf"
+
+
+def test_default_params_with_incompatible_shape_fail_scoring():
+    model_code = """
+import jax.numpy as jnp
+def model(data, params):
+    return jnp.reshape(params['w'], (2,)) * data['x']
+"""
+    program = _make_program(
+        model_code,
+        default_params={"w": jnp.array([0.5])},
+    )
+    result = _score_one_model(
+        program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+    )
+
+    assert result[0] == float("inf")
+    assert result[-1] == "inf"
+
+
+def test_nonfinite_default_output_is_allowed_when_estimator_is_valid():
+    program = _make_program(
+        FAST_MODEL_CODE,
+        default_params={"w": jnp.array([jnp.nan])},
+    )
+    result = _score_one_model(
+        program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+    )
+
+    assert np.isfinite(result[0])
+    assert result[-1] == "ok"
+
+
 def test_score_one_model_perfect_fit_with_param_penalty():
     """w=1.0 with y=x should give near-param_penalty loss after optimization."""
     program = _make_program(FAST_MODEL_CODE)
@@ -664,7 +740,7 @@ def test_score_one_model_multiple_param_ests():
     program = _make_program(
         FAST_MODEL_CODE,
         param_est=[BAD_PARAM_EST_CODE, PARAM_EST_CODE, BROKEN_PARAM_EST_CODE],
-        default_params={"w": jnp.array(1.0)},
+        default_params={"w": jnp.array([1.0])},
     )
     data = (_make_data(), _make_data())
     (
@@ -942,7 +1018,7 @@ def test_score_assigns_best_param_est():
     program = _make_program(
         FAST_MODEL_CODE,
         param_est=[BAD_PARAM_EST_CODE, PARAM_EST_CODE, BROKEN_PARAM_EST_CODE],
-        default_params={"w": jnp.array(1.0)},
+        default_params={"w": jnp.array([1.0])},
     )
     pop.add(program)
     data = (_make_data(), _make_data())
