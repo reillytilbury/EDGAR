@@ -379,6 +379,9 @@ def _are_duplicates(
             return False
     y_i = p_i.eval_fingerprint.flatten()
     y_j = p_j.eval_fingerprint.flatten()
+    if y_i.shape != y_j.shape:
+        return False
+
     cosine = np.dot(y_i, y_j) / (np.linalg.norm(y_i) * np.linalg.norm(y_j) + 1e-6)
     return bool(cosine >= cosine_tol)
 

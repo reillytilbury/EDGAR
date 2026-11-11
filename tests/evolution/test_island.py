@@ -36,6 +36,14 @@ def test_seed():
         assert island == {0, 1}
 
 
+def test_incompatible_fingerprint_shapes_are_not_duplicates():
+    first = make_fingerprint_program(np.ones((2, 2)).tolist())
+    second = make_fingerprint_program(np.ones(3).tolist())
+    first.eval_fingerprint = np.ones((2, 2))
+    second.eval_fingerprint = np.ones(3)
+    assert not _are_duplicates(first, second, loss_tol=0.01, cosine_tol=0.95)
+
+
 def test_spawn():
     population = Population()
     seed_programs = make_seeds()

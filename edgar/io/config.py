@@ -37,6 +37,8 @@ ValidLLMs = Literal[
     "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
     "gemini-3.7-flash",
+    "gemini-3.8-flash",
+    "gemini-4-argon",
     "claude-haiku-4-5",
     "claude-sonnet-4-5",
     "claude-sonnet-4-6",
@@ -64,6 +66,15 @@ Provider = Literal["google", "anthropic"]
 ThinkingLevel = Literal["minimal", "low", "medium", "high", "xhigh"]
 """Reasoning effort levels, mapped by PydanticAI to each provider's setting (e.g.
 `thinking_level` for Gemini 3, a thinking token budget for Gemini 2.5)."""
+
+GenerationStage = Literal[
+    "generate_models", "generate_param_ests", "translate_programs"
+]
+GENERATION_STAGE_ORDER: tuple[GenerationStage, ...] = (
+    "generate_models",
+    "generate_param_ests",
+    "translate_programs",
+)
 
 
 _PROVIDER_MODEL_DEFAULTS: dict[Provider, dict[str, ValidLLMs]] = {
@@ -157,9 +168,25 @@ class RunConfig(_LaxModel):
     Attributes:
         random_seed: An optional integer seed for the random number generator
             to ensure reproducibility of runs. If None, a random seed will be used.
+        generation_stages: Ordered stages to execute for each new generation.
+            Omitting translation requires JAX-compatible model generation and seeds.
     """
 
     random_seed: int | None
+    generation_stages: list[GenerationStage]
+
+    @field_validator("generation_stages")
+    @classmethod
+    def check_generation_stages(
+        cls, stages: list[GenerationStage]
+    ) -> list[GenerationStage]:
+        if not stages or stages[0] != "generate_models":
+            raise ValueError("generation_stages must start with generate_models")
+        if len(stages) != len(set(stages)) or stages != [
+            stage for stage in GENERATION_STAGE_ORDER if stage in stages
+        ]:
+            raise ValueError("generation_stages must be unique and in canonical order")
+        return stages
 
 
 class IOConfig(_LaxModel):
@@ -474,7 +501,7 @@ class Config(BaseModel):
             such as parent selection, retry policies, and model choices.
         scoring: Configuration for evaluating model performance, including
             loss penalties, timeouts, and gradient descent settings.
-        run: General run-specific configuration, such as the random seed.
+        run: General run-specific configuration, including the model generation stages.
         project_params: A flexible dictionary for arbitrary, user-defined
             project-specific parameters that do not fit into the structured
             configuration sections.
@@ -593,8 +620,8 @@ class Config(BaseModel):
         Note that callables (e.g., `load_data_fn`, `loss_fn`), git state,
         and the run's creation timestamp are regenerated when a `TaskSpec` is
         later constructed from this `Config` object using `TaskSpec.from_config`.
-        Only the raw configuration dictionaries are preserved directly from
-        the `task_spec.yaml`.
+        Saved configuration takes precedence; missing run fields in older specs
+        are filled from `projects/config_default.yaml`.
 
         Args:
             path: The file system path to a `task_spec.yaml` file, typically
@@ -617,6 +644,10 @@ class Config(BaseModel):
             "parameter_estimator": schemas["param_est"],
             "jax_translator_model": schemas["jax_model"],
         }
+        default_run = (
+            yaml.safe_load((REPO_ROOT / "projects" / "config_default.yaml").read_text())
+            or {}
+        )["run"]
         return cls(
             task_name=record["task_name"],
             project_dir=Path(record["project_dir"])
@@ -627,6 +658,6 @@ class Config(BaseModel):
             llms=record.get("llms", {}),
             scoring=record.get("scoring", {}),
             project_params=record.get("project_params", {}),
-            run=record.get("run", {}),
+            run=_deep_merge(default_run, record.get("run") or {}),
             prompts=prompts,
         )

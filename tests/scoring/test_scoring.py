@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 from edgar.evolution.program import Program, BirthCertificate, Code, NotValidated
 from edgar.evolution.population import Population
 from edgar.scoring.scoring import (
+    _get_params,
     _eval_loss,
     _optimize,
     _worker,
@@ -57,6 +58,15 @@ def sample_scaled_apply_model(model_fn, data, params):
         return model_fn(model_data, sample_params)
 
     return jax.vmap(apply_one)(data, params)
+
+
+def parameter_fingerprint(model_fn, params, X_eval, apply_model_fn):
+    """Test override proving scoring passes the unselected batched parameters."""
+    return params["w"]
+
+
+def invalid_dict_fingerprint(model_fn, params, X_eval, apply_model_fn):
+    return {"output": np.ones(1)}
 
 
 def _make_basic_data(y_offset=0.0):
@@ -137,7 +147,7 @@ apply_model_fn_bytes = cloudpickle.dumps(apply_model_plain)
 
 
 def _make_program(
-    model_code, param_est=PARAM_EST_CODE, default_params={"w": jnp.array(0.5)}
+    model_code, param_est=PARAM_EST_CODE, default_params={"w": jnp.array([0.5])}
 ):
     return Program(
         birth=BirthCertificate(generation=0, island=0, batch_index=0),
@@ -313,6 +323,121 @@ def test_score_one_model_perfect_fit():
     assert outcome == "ok"
 
 
+def test_custom_fingerprint_is_called_in_scoring_subprocess():
+    program = _make_program(FAST_MODEL_CODE)
+    data = (_make_data(), _make_data())
+    eval_data = {**data[1], "_sample_indices": np.array([0])}
+    result = _score_one_model(
+        program,
+        data,
+        loss_fn,
+        BASE_CONFIG,
+        X_eval=eval_data,
+        fingerprint_fn=parameter_fingerprint,
+    )
+    assert result[-1] == "ok"
+    assert result[2].shape == (3, 1)  # all batched parameter rows were passed through
+    np.testing.assert_array_equal(result[2], result[3]["w"])
+
+
+def test_invalid_custom_fingerprint_does_not_invalidate_score():
+    program = _make_program(FAST_MODEL_CODE)
+    data = (_make_data(), _make_data())
+    eval_data = {**data[1], "_sample_indices": np.array([0])}
+    result = _score_one_model(
+        program,
+        data,
+        loss_fn,
+        BASE_CONFIG,
+        X_eval=eval_data,
+        fingerprint_fn=invalid_dict_fingerprint,
+    )
+    assert result[-1] == "ok"
+    assert np.isfinite(result[0])
+    assert result[2] is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, {}, [], [np.nan], [np.inf], ["text"], [True], np.array([1], dtype=object)],
+)
+def test_worker_rejects_invalid_fingerprint_outputs(monkeypatch, value):
+    """Invalid optional outputs leave fitted parameters and sample losses intact."""
+    from queue import Queue
+
+    monkeypatch.setattr(
+        "edgar.scoring.scoring._optimize",
+        lambda model, loss, inits, data, config, apply: (inits, None),
+    )
+
+    def fingerprint(model_fn, params, X_eval, apply_model_fn):
+        return value
+
+    queue = Queue()
+    data = _make_data()
+    _worker(
+        queue,
+        cloudpickle.dumps(_make_program(FAST_MODEL_CODE)),
+        (data, data),
+        cloudpickle.dumps(loss_fn),
+        BASE_CONFIG,
+        {**data, "_sample_indices": np.arange(3)},
+        "discover",
+        apply_model_fn_bytes,
+        fingerprint_fn_bytes=cloudpickle.dumps(fingerprint),
+    )
+    result = queue.get_nowait()
+    assert np.isfinite(result[0])
+    assert result[2] is None
+    assert result[3] is not None
+    assert np.all(np.isfinite(result[4]))
+
+
+@pytest.mark.parametrize("has_eval_data", [False, True])
+def test_failing_custom_fingerprint_is_optional(tmp_path, has_eval_data):
+    marker = tmp_path / "fingerprint-called"
+
+    def fingerprint(model_fn, params, X_eval, apply_model_fn):
+        marker.write_text("called")
+        raise RuntimeError("broken optional helper")
+
+    data = _make_data()
+    result = _score_one_model(
+        _make_program(FAST_MODEL_CODE),
+        (data, data),
+        loss_fn,
+        BASE_CONFIG,
+        X_eval=data if has_eval_data else None,
+        fingerprint_fn=fingerprint,
+    )
+    assert result[-1] == "ok"
+    assert result[2] is None
+    assert np.all(np.isfinite(result[4]))
+    assert marker.exists() is has_eval_data
+
+
+def test_unserializable_custom_fingerprint_does_not_invalidate_score():
+    class UnserializableFingerprint:
+        def __reduce__(self):
+            raise TypeError("cannot serialize helper")
+
+        def __call__(self, *args):
+            return [1.0]
+
+    data = _make_data()
+    result = _score_one_model(
+        _make_program(FAST_MODEL_CODE),
+        (data, data),
+        loss_fn,
+        BASE_CONFIG,
+        X_eval={**data, "_sample_indices": np.arange(3)},
+        fingerprint_fn=UnserializableFingerprint(),
+    )
+    assert result[-1] == "ok"
+    # Do not silently fall back to built-in comparison semantics.
+    assert result[2] is None
+
+
 def test_score_one_model_scipy_optimizer():
     program = _make_program(FAST_MODEL_CODE)
     data = (_make_data(), _make_data())
@@ -438,6 +563,81 @@ def test_score_one_model_with_custom_apply_model():
     assert np.allclose(fingerprint, 2.0 * jnp.ones_like(eval_data["x"]), atol=5e-2)
 
 
+def test_get_params_falls_back_when_estimator_schema_differs():
+    defaults = {"w": jnp.array([0.5]), "b": jnp.array(1.0)}
+    data = {"x": jnp.ones((2, 3))}
+
+    def bad_estimator(sample):
+        return {"w": jnp.array([0.9, 1.0]), "extra": jnp.array(2.0)}
+
+    with pytest.warns(UserWarning, match="estimator keys differ"):
+        params = _get_params(bad_estimator, defaults, data)
+
+    np.testing.assert_array_equal(params["w"], [[0.5], [0.5]])
+    np.testing.assert_array_equal(params["b"], [1.0, 1.0])
+
+
+@pytest.mark.parametrize(
+    ("estimator_result", "warning"),
+    [
+        ({"w": jnp.array([0.9, 1.0])}, "parameter 'w' has shape"),
+        (jnp.array([0.9]), "expected dict"),
+    ],
+)
+def test_get_params_falls_back_on_wrong_shape_or_non_dict(estimator_result, warning):
+    defaults = {"w": jnp.array([0.5])}
+    data = {"x": jnp.ones((2, 3))}
+
+    with pytest.warns(UserWarning, match=warning):
+        params = _get_params(lambda sample: estimator_result, defaults, data)
+
+    np.testing.assert_array_equal(params["w"], [[0.5], [0.5]])
+
+
+def test_default_params_must_work_with_model_even_if_estimator_is_valid():
+    program = _make_program(
+        FAST_MODEL_CODE,
+        default_params={"wrong_key": jnp.array([0.5])},
+    )
+    result = _score_one_model(
+        program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+    )
+
+    assert result[0] == float("inf")
+    assert result[-1] == "inf"
+
+
+def test_default_params_with_incompatible_shape_fail_scoring():
+    model_code = """
+import jax.numpy as jnp
+def model(data, params):
+    return jnp.reshape(params['w'], (2,)) * data['x']
+"""
+    program = _make_program(
+        model_code,
+        default_params={"w": jnp.array([0.5])},
+    )
+    result = _score_one_model(
+        program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+    )
+
+    assert result[0] == float("inf")
+    assert result[-1] == "inf"
+
+
+def test_nonfinite_default_output_is_allowed_when_estimator_is_valid():
+    program = _make_program(
+        FAST_MODEL_CODE,
+        default_params={"w": jnp.array([jnp.nan])},
+    )
+    result = _score_one_model(
+        program, (_make_data(), _make_data()), loss_fn, BASE_CONFIG
+    )
+
+    assert np.isfinite(result[0])
+    assert result[-1] == "ok"
+
+
 def test_score_one_model_perfect_fit_with_param_penalty():
     """w=1.0 with y=x should give near-param_penalty loss after optimization."""
     program = _make_program(FAST_MODEL_CODE)
@@ -540,7 +740,7 @@ def test_score_one_model_multiple_param_ests():
     program = _make_program(
         FAST_MODEL_CODE,
         param_est=[BAD_PARAM_EST_CODE, PARAM_EST_CODE, BROKEN_PARAM_EST_CODE],
-        default_params={"w": jnp.array(1.0)},
+        default_params={"w": jnp.array([1.0])},
     )
     data = (_make_data(), _make_data())
     (
@@ -818,7 +1018,7 @@ def test_score_assigns_best_param_est():
     program = _make_program(
         FAST_MODEL_CODE,
         param_est=[BAD_PARAM_EST_CODE, PARAM_EST_CODE, BROKEN_PARAM_EST_CODE],
-        default_params={"w": jnp.array(1.0)},
+        default_params={"w": jnp.array([1.0])},
     )
     pop.add(program)
     data = (_make_data(), _make_data())
@@ -844,6 +1044,7 @@ def test_score_forwards_custom_apply_model(monkeypatch):
     """Population scoring passes a custom apply function to model scoring."""
     pop = Population()
     pop.add(_make_program(FAST_MODEL_CODE))
+    pop[0].eval_fingerprint = np.array([3.0, 4.0])
     data = (_make_data(), _make_data())
     received = {}
 
@@ -857,6 +1058,7 @@ def test_score_forwards_custom_apply_model(monkeypatch):
         apply_model_fn=apply_model_plain,
         diagnostics=None,
         cpu_affinity=None,
+        fingerprint_fn=None,
     ):
         received["program"] = program
         received["data"] = scoring_data
@@ -865,6 +1067,7 @@ def test_score_forwards_custom_apply_model(monkeypatch):
         received["X_eval"] = X_eval
         received["split"] = split
         received["apply_model_fn"] = apply_model_fn
+        received["fingerprint_fn"] = fingerprint_fn
 
         return (
             0.0,
@@ -892,6 +1095,7 @@ def test_score_forwards_custom_apply_model(monkeypatch):
         loss_fn,
         split="discover",
         apply_model_fn=sample_scaled_apply_model,
+        fingerprint_fn=parameter_fingerprint,
     )
 
     assert received["program"] is pop[0]
@@ -901,6 +1105,8 @@ def test_score_forwards_custom_apply_model(monkeypatch):
     assert received["X_eval"] is None
     assert received["split"] == "discover"
     assert received["apply_model_fn"] is sample_scaled_apply_model
+    assert received["fingerprint_fn"] is parameter_fingerprint
+    assert np.array_equal(pop[0].eval_fingerprint, [3.0, 4.0])
 
     assert pop[0].program_losses.discover.init == 1.0
     assert pop[0].program_losses.discover.final == 0.0

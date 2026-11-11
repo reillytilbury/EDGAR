@@ -101,6 +101,27 @@ edgar run projects/orientation_tuning/config.yaml --evolution.n_generations=5
 edgar run projects/orientation_tuning/config.yaml --llms.model_llm=gemini-2.5-pro
 ```
 
+### Generation stages
+
+`run.generation_stages` selects the ordered LLM stages for each generation. The
+default in `projects/config_default.yaml` is
+`[generate_models, generate_param_ests, translate_programs]`. A project can
+override it in `config.yaml`:
+
+```yaml
+run:
+  generation_stages: [generate_models, generate_param_ests]
+```
+
+This skips translation for both seeds and new programs: model-generation prompts
+and seed model files **must already produce JAX-compatible code**. Override the
+default model-generation prompt in `prompts.yaml` accordingly. To use default
+parameter initialization instead of generating estimators, use
+`[generate_models]`; to translate without generating estimators, use
+`[generate_models, translate_programs]`. Seed-provided estimators remain in use.
+Stages cannot be reordered, repeated, or extended. The setting is saved in
+`task_spec.yaml` and restored on resume; old saved specs inherit the default.
+
 Run a quick test with reduced settings (1 generation, 2 islands, batch size 2) to verify the pipeline is wired correctly
 
 ```bash
@@ -297,6 +318,21 @@ def apply_model(model_fn, data, params):
         return predictions
 
     return jax.vmap(apply_one)(data["sequence"], params)
+```
+
+#### Optional custom fingerprints
+
+In order to deduplicate programs, EDGAR builds a fingerprint which evalutes the model for a subset of data indices, resulting in a fingerprint of shape `(n1, n2,..)` for each program.
+The fingerprints of programs are compared by cosine similarity of the flattened fingerprint, above a threshold, programs are considered equivalent.
+
+By default EDGAR evaluates fingerprints with its built-in `eval_fingerprint`. A project may replace that behavior by defining this optional function in `data_loader/load_data.py`:
+
+```python
+def eval_fingerprint(model_fn, params, X_eval, apply_model_fn):
+    """Return a nonempty, finite numeric array for model comparison."""
+    # The helper owns parameter selection (including _sample_indices), model
+    # evaluation, and fingerprint construction.
+    return builtin_eval_fingerprint(model_fn, params, X_eval, apply_model_fn)
 ```
 
 ### 3. Fill in seed programs

@@ -1,6 +1,7 @@
 #missing io field
 
 run:
+  generation_stages: [generate_models, generate_param_ests, translate_programs]
   random_seed: 42
 
 evolution:

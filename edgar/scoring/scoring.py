@@ -27,6 +27,7 @@ from ..evolution.program import (
 )
 from ..evolution.population import Population
 from ..io.metrics import get_active_metrics, stream_line
+from ..projects.diagnostics import is_compute_metrics_defined
 from ..process import (
     SubprocessTimeoutError,
     available_cpu_count,
@@ -51,13 +52,15 @@ def _get_params(param_est_fn, default_params, data_train):
     """Estimates initial parameters for a model, falling back to defaults if the parameter estimator fails.
 
     This function attempts to use the provided `param_est_fn` to derive initial
-    parameters for each sample in the training data. If the `param_est_fn` is
-    not provided or fails during execution, it falls back to stacking the
-    `default_params` for each sample.
+    parameters for each sample in the training data. Estimator outputs must have
+    the same keys and per-parameter shapes as `default_params`; otherwise it
+    falls back to stacking the defaults for each sample.
+    This ensures default_params is the single source of truth for the expected parameter schema.
 
     Args:
         param_est_fn: The parameter estimator function (callable) from the program.
-            Expected to take a single data sample (dict) and return a dict of parameters.
+            Expected to take a single data sample (dict) and return a dict with
+            the same keys and value shapes as `default_params`.
         default_params: A dictionary of default parameters for the model.
         data_train: A dictionary of training data, where keys are feature names
             and values are JAX arrays. Assumes the first dimension is the batch size.
@@ -74,6 +77,28 @@ def _get_params(param_est_fn, default_params, data_train):
         per_sample = [
             param_est_fn({k: v[i] for k, v in data_np.items()}) for i in range(n)
         ]
+        expected_keys = set(default_params)
+        for i, params in enumerate(per_sample):
+            if not isinstance(params, dict):
+                raise ValueError(
+                    f"estimator result for sample {i} is {type(params).__name__}, expected dict"
+                )
+            actual_keys = set(params)
+            if actual_keys != expected_keys:
+                missing = sorted(expected_keys - actual_keys)
+                extra = sorted(actual_keys - expected_keys)
+                raise ValueError(
+                    f"estimator keys differ from default_params for sample {i} "
+                    f"(missing: {missing}, extra: {extra})"
+                )
+            for key, default_value in default_params.items():
+                expected_shape = np.shape(default_value)
+                actual_shape = np.shape(params[key])
+                if actual_shape != expected_shape:
+                    raise ValueError(
+                        f"parameter {key!r} has shape {actual_shape} for sample {i}, "
+                        f"expected {expected_shape}"
+                    )
         return {
             k: jnp.stack([jnp.asarray(s[k]) for s in per_sample]) for k in per_sample[0]
         }
@@ -158,6 +183,7 @@ def _worker(
     split,
     apply_model_fn_bytes,
     diagnostics_bytes=None,
+    fingerprint_fn_bytes=None,
 ):
     """Scores one program inside a subprocess. It creates JAX arrays and returns results as non-JAX objects,
     ensuring that the memory allocated for JAX arrays is released when the subprocess exits.
@@ -202,6 +228,13 @@ def _worker(
     except Exception as e:
         print(f"[scoring] failed to find apply_model_fn, falling back to default: {e}")
         apply_model_fn = apply_model_plain
+    fingerprint_fn = eval_fingerprint
+    if fingerprint_fn_bytes is not None:
+        try:
+            fingerprint_fn = cloudpickle.loads(fingerprint_fn_bytes)
+        except Exception as e:
+            print(f"[scoring] failed to load fingerprint_fn (ignored): {e}")
+            fingerprint_fn = None
 
     data_train, data_test = resolve_scoring_data(data)
     data_train, data_test = _to_jax((data_train, data_test))
@@ -237,6 +270,15 @@ def _worker(
 
     try:
         penalty = config["param_penalty_weight"] * program.n_params
+
+        # 0.  Evaluate the model output with default parameters to ensure they are compatible with the model, they define the expected schema for the model.
+        default_params_batched = _get_params(None, program.default_params, data_train)
+        default_output = evaluate_model_output(
+            model_fn, default_params_batched, data_train, apply_model_fn
+        )
+        for leaf in jax.tree_util.tree_leaves(default_output):
+            if hasattr(leaf, "block_until_ready"):
+                leaf.block_until_ready()
 
         # 1. Obtain initial parameters for each estimator
         params_inits = [
@@ -301,11 +343,22 @@ def _worker(
 
     # Fingerprint and sample losses are non-critical: failures here don't poison the loss.
     try:
-        fingerprint = (
-            eval_fingerprint(model_fn, params, X_eval, apply_model_fn)
-            if X_eval is not None
-            else None
-        )
+        fingerprint = None
+        if X_eval is not None and fingerprint_fn is not None:
+            value = fingerprint_fn(model_fn, params, X_eval, apply_model_fn)
+            if isinstance(value, dict):
+                raise ValueError(
+                    "fingerprint helper returned a dictionary; define a custom "
+                    "eval_fingerprint that returns a numeric array"
+                )
+            fingerprint = np.asarray(value)
+            if (
+                fingerprint.dtype.hasobject
+                or not np.issubdtype(fingerprint.dtype, np.number)
+                or fingerprint.size == 0
+                or not np.all(np.isfinite(fingerprint))
+            ):
+                raise ValueError("fingerprint must be a nonempty, finite numeric array")
     except Exception as e:
         print(f"[scoring] program #{program.idx} fingerprint failed (ignored): {e}")
         fingerprint = None
@@ -340,7 +393,7 @@ def _worker(
     if diagnostics_bytes is not None:
         try:
             diagnostics = cloudpickle.loads(diagnostics_bytes)
-            if diagnostics is not None and hasattr(diagnostics, "compute_metrics"):
+            if is_compute_metrics_defined(diagnostics):
                 y_pred = _to_numpy(evaluate_model_output(model_fn, params, data_test))
                 computed = diagnostics.compute_metrics(
                     data=_to_numpy(data_test),
@@ -408,6 +461,7 @@ def _score_one_model(
     apply_model_fn=apply_model_plain,
     diagnostics=None,
     cpu_affinity: int | None = None,
+    fingerprint_fn=eval_fingerprint,
 ) -> tuple[
     float,
     float,
@@ -489,6 +543,13 @@ def _score_one_model(
         cloudpickle.dumps(diagnostics) if diagnostics is not None else None
     )
     try:
+        fingerprint_fn_bytes = cloudpickle.dumps(fingerprint_fn)
+    except Exception as e:
+        # A custom helper failing to serialize must not affect the model score,
+        # and must not silently switch comparison semantics to the default.
+        print(f"[scoring] failed to serialize fingerprint_fn (ignored): {e}")
+        fingerprint_fn_bytes = b"invalid fingerprint helper"
+    try:
         result = run_in_subprocess(
             _worker,
             args=(
@@ -500,6 +561,7 @@ def _score_one_model(
                 split,
                 apply_model_fn_bytes,
                 diagnostics_bytes,
+                fingerprint_fn_bytes,
             ),
             timeout=config["timeout_s"],
             cpu_affinity=cpu_affinity,
@@ -609,6 +671,7 @@ def _create_score_jobs(
     diagnostics,
     worker_limit: int,
     available_cpus: list[int],
+    fingerprint_fn,
 ) -> tuple[list, dict]:
     """Create threaded score jobs and score outcomes that need no worker."""
     backend = config.get("jax_backend") or jax.default_backend()
@@ -639,6 +702,7 @@ def _create_score_jobs(
                 apply_model_fn,
                 diagnostics=diagnostics,
                 cpu_affinity=cpu_affinity,
+                fingerprint_fn=fingerprint_fn,
             )
             return result, (time.monotonic() - started) * 1000.0
 
@@ -657,6 +721,7 @@ def _create_score_jobs(
                 split,
                 apply_model_fn,
                 diagnostics=diagnostics,
+                fingerprint_fn=fingerprint_fn,
             )
 
     return jobs, immediate
@@ -729,6 +794,7 @@ def score(
     split: str,
     apply_model_fn=apply_model_plain,
     diagnostics=None,
+    fingerprint_fn=eval_fingerprint,
 ) -> None:
     """Scores every program needing scoring on the given split.
 
@@ -799,6 +865,7 @@ def score(
             diagnostics,
             worker_limit,
             available_cpus,
+            fingerprint_fn,
         )
         tick_every = 1 if n_total <= 12 else 4
         total_latency_ms = 0.0
