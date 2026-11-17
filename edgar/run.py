@@ -36,7 +36,7 @@ from .llm.generate import (
 from .io.config import RetryConfig, RunConfig
 from .scoring.scoring import rank, score
 from .jax.utils import _to_numpy
-from .io.plotting import generate_program_images
+from .io.plotting import generate_program_images, generate_program_fits
 
 
 # Stage-timed aliases. Wraps the functions for individual timing and logging.
@@ -295,6 +295,7 @@ async def run(
                 apply_model_fn=spec.apply_model_fn,
                 fingerprint_fn=spec.fingerprint_fn,
             )
+            generate_program_fits(spec, X_validate[1], population, split="validate")
             rank(population)
             metrics.finish_generation()
 

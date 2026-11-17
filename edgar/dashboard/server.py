@@ -335,9 +335,24 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
             HTTPException: If the `run_id` is not found or the specified fit image path does not exist.
         """
         run_dir = _resolve(run_id)
-        img_path = run_dir / "image_fits" / f"P{idx:04d}.png"
+        img_path = run_dir / "image_fit" / "discover" / f"P{idx:04d}.png"
+        if not img_path.exists():
+            img_path = run_dir / "image_fits" / f"P{idx:04d}.png"
         if not img_path.exists():
             raise HTTPException(404, f"no fit image at {img_path}")
+        return FileResponse(img_path, media_type="image/png")
+
+    @app.get("/api/runs/{run_id}/fit_image/{idx}/{split}")
+    def split_fit_image(run_id: str, idx: int, split: str):
+        """Serve a split-specific fit; legacy discover images remain available."""
+        if split not in ("discover", "validate"):
+            raise HTTPException(404, "unknown fit split")
+        run_dir = _resolve(run_id)
+        img_path = run_dir / "image_fit" / split / f"P{idx:04d}.png"
+        if split == "discover" and not img_path.exists():
+            img_path = run_dir / "image_fits" / f"P{idx:04d}.png"
+        if not img_path.exists():
+            raise HTTPException(404, f"no {split} fit image at {img_path}")
         return FileResponse(img_path, media_type="image/png")
 
     @app.get("/api/runs/{run_id}/trajectory_image/{idx}")

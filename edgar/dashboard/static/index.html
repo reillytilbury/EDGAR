@@ -372,12 +372,12 @@
 
       <!-- tabs -->
       <div class="flex border-b border-zinc-800 text-sm bg-zinc-900/50">
-        <template x-for="t in ['code','latex','prompt','specs','lineage','fit','optimization']" :key="t">
+        <template x-for="t in ['code','latex','prompt','specs','lineage','fit','fit_validate','optimization']" :key="t">
           <button
             @click="panelTab = t"
             :class="panelTab === t ? 'bg-zinc-800 text-zinc-50 border-b border-emerald-500' : 'text-zinc-400 hover:text-zinc-100'"
             class="px-4 py-2 capitalize"
-            x-text="t"></button>
+            x-text="t === 'fit' ? 'Discover fit' : t === 'fit_validate' ? 'Validate fit' : t"></button>
         </template>
         </div>
 
@@ -497,9 +497,14 @@
           </div>
 
           <div x-show="programDetail.params" class="border border-zinc-800 rounded">
-            <div class="px-3 py-2 text-xs text-zinc-500 uppercase border-b border-zinc-800">Fitted parameters (means across samples)</div>
+            <div class="px-3 py-2 text-xs text-zinc-500 uppercase border-b border-zinc-800">Discover optimized parameters</div>
             <pre class="p-3 text-[11px] font-mono whitespace-pre overflow-auto max-h-72"
               x-text="paramsPretty(programDetail.params)"></pre>
+          </div>
+          <div x-show="programDetail.params_validate" class="border border-zinc-800 rounded">
+            <div class="px-3 py-2 text-xs text-zinc-500 uppercase border-b border-zinc-800">Validate optimized parameters</div>
+            <pre class="p-3 text-[11px] font-mono whitespace-pre overflow-auto max-h-72"
+              x-text="paramsPretty(programDetail.params_validate)"></pre>
           </div>
         </div>
 
@@ -547,6 +552,15 @@
           </div>
           <div x-show="!programDetail.fit_image_url" class="text-zinc-500 italic text-sm">
             No fit image was generated for this program (either not yet scored or plot_fn missing).
+          </div>
+        </div>
+        <div x-show="panelTab === 'fit_validate'">
+          <div x-show="programDetail.fit_image_validate_url">
+            <img :src="`/api/runs/${runId}/${programDetail.fit_image_validate_url}`" alt="validation model fit"
+              class="rounded border border-zinc-800 max-w-full" />
+          </div>
+          <div x-show="!programDetail.fit_image_validate_url" class="text-zinc-500 italic text-sm">
+            No validation fit image is available (the program may not have been validated or this run predates validation fit plots).
           </div>
         </div>
 

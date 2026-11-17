@@ -1116,11 +1116,15 @@ def load_program_detail(run_dir: Path, idx: int) -> dict | None:
             },
         },
         "params": params_clean,
+        "params_validate": _clean(p.params_validate)
+        if p.params_validate is not None
+        else None,
         "sample_losses_summary": sample_losses_summary,
         "fingerprint_shape": fingerprint_shape,
         "image_path": p.image_path,
         "image_url": _image_url_for(p),
-        "fit_image_url": _fit_image_url_for(p),
+        "fit_image_url": _fit_image_url_for(p, "discover", run_dir),
+        "fit_image_validate_url": _fit_image_url_for(p, "validate", run_dir),
         "trajectory_image_url": _trajectory_image_url_for(p),
         "parents_detail": [
             {
@@ -1170,10 +1174,12 @@ def _image_url_for(p: Program) -> str | None:
     return f"image/gen_{p.birth.generation:03d}/island_{p.birth.island:03d}/batch_{p.birth.batch_index:03d}"
 
 
-def _fit_image_url_for(p: Program) -> str | None:
+def _fit_image_url_for(
+    p: Program, split: str = "discover", run_dir: Path | None = None
+) -> str | None:
     """Generates a relative URL for the model fit image of a program.
 
-    The URL adheres to the convention `fit_image/{program_idx}`.
+    The URL adheres to the convention `fit_image/{program_idx}/{split}`.
     This image displays how well the program's model fits the data.
 
     Args:
@@ -1181,11 +1187,16 @@ def _fit_image_url_for(p: Program) -> str | None:
 
     Returns:
         A string representing the relative URL for the model fit image,
-        or None if the program's index or `fit_image_path` is missing.
+        or None if the program's index is missing.
     """
-    if p.idx is None or p.fit_image_path is None:
+    if p.idx is None:
         return None
-    return f"fit_image/{p.idx}"
+    if run_dir is not None:
+        current = run_dir / "image_fit" / split / f"P{p.idx:04d}.png"
+        legacy = run_dir / "image_fits" / f"P{p.idx:04d}.png"
+        if not current.is_file() and not (split == "discover" and legacy.is_file()):
+            return None
+    return f"fit_image/{p.idx}/{split}"
 
 
 def _trajectory_image_url_for(p: Program) -> str | None:

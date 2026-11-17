@@ -65,19 +65,23 @@ def _feedback_image_worker(
 
 
 def _program_fits_worker(
-    queue: mp.Queue, spec_bytes: bytes, data: dict, programs_bytes: bytes
+    queue: mp.Queue, spec_bytes: bytes, data: dict, programs_bytes: bytes, split: str
 ) -> None:
     try:
         data = _to_jax(data)
         spec = cloudpickle.loads(spec_bytes)
         programs = cloudpickle.loads(programs_bytes)
 
-        plot_dir = Path(spec.output_dir) / "image_fits"
+        plot_dir = Path(spec.output_dir) / "image_fit" / split
         plot_dir.mkdir(parents=True, exist_ok=True)
 
         results = []
         for p in programs:
-            if p.params_init is None or p.params is None:
+            params_init = (
+                p.params_init_validate if split == "validate" else p.params_init
+            )
+            params = p.params_validate if split == "validate" else p.params
+            if params_init is None or params is None:
                 continue
 
             save_path = plot_dir / f"P{p.idx:04d}.png"
@@ -90,12 +94,14 @@ def _program_fits_worker(
                     [p, p],
                     save_path=str(save_path),
                     losses=[
-                        p.program_losses.discover.init,
-                        p.program_losses.discover.final,
+                        getattr(p.program_losses, split).init,
+                        getattr(p.program_losses, split).final,
                     ],
-                    sample_losses=[p.sample_losses_init, p.sample_losses],
+                    sample_losses=[None, None]
+                    if split == "validate"
+                    else [p.sample_losses_init, p.sample_losses],
                     program_names=[f"{p.name} (Init)", f"{p.name} (Final)"],
-                    params=[p.params_init, p.params],
+                    params=[params_init, params],
                     rng=spec.rng,
                 )
                 results.append((p.idx, str(save_path)))
@@ -164,14 +170,14 @@ def generate_feedback_image(
 
 
 def generate_program_fits(
-    spec: TaskSpec, data: dict, programs: list[Program] | Any
+    spec: TaskSpec, data: dict, programs: list[Program] | Any, split: str = "discover"
 ) -> None:
     """Generates a comparison plot for each program showing initial and final model fits.
 
     For each provided program, this function uses the project-specific `plot_fn`
     to visualize the model's performance with its initial parameters (estimated
     by the parameter estimator) and its final, optimized parameters (after
-    gradient descent). These plots are saved to the `image_fits` directory
+    gradient descent). Plots are saved under `image_fit/<split>`.
     within the run output and are typically used for post-hoc analysis and
     dashboard display.
 
@@ -182,18 +188,27 @@ def generate_program_fits(
             to render the model's performance.
         programs: A list of `Program` objects for which comparison plots
             should be generated.
+        split: Data/result split to plot (`discover` or `validate`).
     """
     has_plot = spec is not None and getattr(spec, "diagnostics", None) is not None
     if not has_plot or data is None:
         return
 
     # Filter for programs that have valid parameters and have not been plotted yet
+    if split not in ("discover", "validate"):
+        raise ValueError("split must be 'discover' or 'validate'")
     pending = [
         p
         for p in programs
-        if p.params_init is not None
-        and p.params is not None
-        and getattr(p, "fit_image_path", None) is None
+        if (p.params_init_validate if split == "validate" else p.params_init)
+        is not None
+        and (p.params_validate if split == "validate" else p.params) is not None
+        and getattr(
+            p,
+            "fit_image_path_validate" if split == "validate" else "fit_image_path",
+            None,
+        )
+        is None
     ]
     if not pending:
         return
@@ -205,7 +220,7 @@ def generate_program_fits(
     try:
         results = run_in_subprocess(
             _program_fits_worker,
-            args=(spec_bytes, data, programs_bytes),
+            args=(spec_bytes, data, programs_bytes, split),
             timeout=timeout,
         )
     except SubprocessTimeoutError as e:
@@ -215,7 +230,10 @@ def generate_program_fits(
     for p_idx, save_path in results:
         for p in programs:
             if p.idx == p_idx:
-                p.fit_image_path = save_path
+                if split == "validate":
+                    p.fit_image_path_validate = save_path
+                else:
+                    p.fit_image_path = save_path
                 break
 
 

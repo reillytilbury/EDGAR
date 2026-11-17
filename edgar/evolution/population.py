@@ -42,6 +42,7 @@ Example usage:
 
 from __future__ import annotations
 import json
+import warnings
 from dataclasses import asdict
 import numpy as np
 from .program import NotValidated, Program, BirthCertificate, Code, LossStats, Losses
@@ -62,7 +63,17 @@ def _params_to_json(params: dict) -> dict:
         A dictionary where numpy arrays have been converted to Python lists,
         suitable for JSON serialization.
     """
-    return {k: v.tolist() if hasattr(v, "tolist") else v for k, v in params.items()}
+
+    def convert(value):
+        if hasattr(value, "tolist"):
+            return value.tolist()
+        if isinstance(value, dict):
+            return {k: convert(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [convert(v) for v in value]
+        return value
+
+    return convert(params)
 
 
 def _params_from_json(params: dict) -> dict:
@@ -80,7 +91,20 @@ def _params_from_json(params: dict) -> dict:
         A dictionary where Python lists representing numerical data have been
         converted back to numpy arrays, suitable for use as JAX pytree parameters.
     """
-    return {k: np.array(v) if isinstance(v, list) else v for k, v in params.items()}
+
+    def convert(value):
+        if isinstance(value, dict):
+            return {k: convert(v) for k, v in value.items()}
+        if isinstance(value, list):
+            if not any(isinstance(item, dict) for item in value):
+                try:
+                    return np.array(value)
+                except ValueError:
+                    pass
+            return [convert(item) for item in value]
+        return value
+
+    return convert(params)
 
 
 class Population:
@@ -178,6 +202,7 @@ class Population:
         buf = StringIO()
         for p in self._programs:
             d = asdict(p)
+            d["_format_version"] = 2
             d.pop("data", None)  # Do not serialize potentially large data attribute
             d.pop(
                 "eval_fingerprint", None
@@ -244,9 +269,22 @@ class Population:
             A new `Population` instance populated with the loaded programs.
         """
         pop = cls()
+        migrated_legacy = False
         with open(path) as f:
             for line in f:
                 d = json.loads(line.strip())
+                is_legacy = d.pop("_format_version", 1) < 2
+                legacy_validated = (
+                    is_legacy
+                    and not isinstance(
+                        d.get("program_losses", {}).get("validate", {}).get("final"),
+                        str,
+                    )
+                    and d.get("program_losses", {}).get("validate", {}).get("final")
+                    is not None
+                )
+                if legacy_validated:
+                    migrated_legacy = True
                 # idx is set automatically by add()
                 d.pop("idx", None)
                 raw_params = d.get("params")
@@ -254,6 +292,19 @@ class Population:
                 raw_default_params = d.get("_default_params")
                 raw_sample_losses = d.get("sample_losses")
                 raw_sample_losses_init = d.get("sample_losses_init")
+                if legacy_validated:
+                    raw_params_validate, raw_params_init_validate = (
+                        raw_params,
+                        raw_params_init,
+                    )
+                    raw_params = raw_params_init = None
+                    legacy_best_idx = d.get("best_estimator_idx")
+                    d["best_estimator_idx_validate"] = legacy_best_idx
+                    d["best_estimator_idx"] = None
+                    d["code"]["best_param_est"] = None
+                else:
+                    raw_params_validate = d.get("params_validate")
+                    raw_params_init_validate = d.get("params_init_validate")
                 # save() serializes the NotValidated sentinel as "NOTVALIDATED";
                 # restore the sentinel so rank() / prepare_validation_scoring
                 # see a real NotValidated() instance, not a bare string (which
@@ -288,6 +339,12 @@ class Population:
                     params_init=_params_from_json(raw_params_init)
                     if raw_params_init is not None
                     else None,
+                    params_validate=_params_from_json(raw_params_validate)
+                    if raw_params_validate is not None
+                    else None,
+                    params_init_validate=_params_from_json(raw_params_init_validate)
+                    if raw_params_init_validate is not None
+                    else None,
                     _default_params=_params_from_json(raw_default_params)
                     if isinstance(raw_default_params, dict)
                     else raw_default_params,
@@ -299,10 +356,19 @@ class Population:
                     else None,
                     image_path=d.get("image_path"),
                     fit_image_path=d.get("fit_image_path"),
+                    fit_image_path_validate=d.get("fit_image_path_validate"),
                     trajectory_image_path=d.get("trajectory_image_path"),
                     rank=d.get("rank"),
                     best_estimator_idx=d.get("best_estimator_idx"),
+                    best_estimator_idx_validate=d.get("best_estimator_idx_validate"),
                     diagnostics=d.get("diagnostics", {}),
                 )
                 pop.add(program)
+        if migrated_legacy:
+            warnings.warn(
+                "Loaded legacy population records where validation scoring overwrote discover parameters. "
+                "Surviving parameters were interpreted as validation parameters; original discover parameters cannot be recovered.",
+                UserWarning,
+                stacklevel=2,
+            )
         return pop

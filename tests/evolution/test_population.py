@@ -13,6 +13,7 @@ Covers:
 
 import json
 import numpy as np
+import pytest
 from edgar.evolution.population import Population, _params_to_json, _params_from_json
 from edgar.evolution.program import (
     NotValidated,
@@ -57,6 +58,53 @@ def initialize_program(i, model_code, param_est_code):
 
 
 class TestPopulation:
+    def test_validation_params_round_trip_independently(self, tmp_path):
+        pop = Population()
+        program = initialize_program(0, linear_model_code(), linear_param_est_code())
+        program.params = {"w": np.array([1.0])}
+        program.params_init = {"w": np.array([0.5])}
+        program.params_validate = {"w": np.array([3.0])}
+        program.params_init_validate = {"w": np.array([2.0])}
+        program.params_validate["matrix"] = np.array([[1.0, 2.0], [3.0, 4.0]])
+        program.fit_image_path_validate = "image_fit/validate/P0000.png"
+        pop.add(program)
+        path = tmp_path / "population.jsonl"
+        pop.save(path)
+        loaded = Population.load(path)[0]
+        np.testing.assert_array_equal(loaded.params["w"], [1.0])
+        np.testing.assert_array_equal(loaded.params_init["w"], [0.5])
+        np.testing.assert_array_equal(loaded.params_validate["w"], [3.0])
+        np.testing.assert_array_equal(
+            loaded.params_validate["matrix"], [[1.0, 2.0], [3.0, 4.0]]
+        )
+        np.testing.assert_array_equal(loaded.params_init_validate["w"], [2.0])
+        assert loaded.fit_image_path_validate == program.fit_image_path_validate
+
+    def test_legacy_validated_params_migrate_with_warning(self, tmp_path):
+        pop = Population()
+        program = initialize_program(0, linear_model_code(), linear_param_est_code())
+        program.params = {"w": np.array([3.0])}
+        program.params_init = {"w": np.array([2.0])}
+        pop.add(program)
+        path = tmp_path / "population.jsonl"
+        pop.save(path)
+        record = json.loads(path.read_text())
+        record.pop("_format_version")
+        record.pop("params_validate")
+        record.pop("params_init_validate")
+        record.pop("best_estimator_idx_validate")
+        record.pop("fit_image_path_validate")
+        record["program_losses"]["validate"]["final"] = 1.0
+        path.write_text(json.dumps(record) + "\n")
+        with pytest.warns(
+            UserWarning, match="original discover parameters cannot be recovered"
+        ):
+            loaded = Population.load(path)[0]
+        assert loaded.params is None
+        assert loaded.params_init is None
+        np.testing.assert_array_equal(loaded.params_validate["w"], [3.0])
+        np.testing.assert_array_equal(loaded.params_init_validate["w"], [2.0])
+
     def test_population_add_programs(self):
         pop = Population()
         assert len(pop) == 0

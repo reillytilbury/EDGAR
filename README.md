@@ -178,7 +178,7 @@ program_databases/
                     └── island_000/
                         └── batch_000/
                             └── image.png
-            └── image_fits/             # Only present if plot_fn is defined, plots each program before and after parameter optimization.
+            └── image_fit/               # discover/ and validate/ fit plots (initial vs optimized parameters)
                 └── P0000.png 
 ```
 
@@ -407,6 +407,32 @@ Must define:
 - `save_path`: file path to save the generated figure.
 
 If this file/function is left as a `pass` stub, no images will be generated or provided as LLM feedback.
+
+#### Model-fit plotting contract
+
+`plot_model_fits` is used for LLM image feedback (parent programs on discover data),
+discover fit images (initial and optimized discover parameters on discover test data),
+validation fit images (initial and optimized validation parameters on validation test
+data), and manual analysis. It must honor explicitly supplied plotting arguments:
+use `params[j]` to evaluate `programs[j]`, and only fall back to
+`program.params` when the whole `params` argument is `None`. Apply the same
+precedence to supplied losses, sample losses, and program names. The supplied
+`data` may belong to validation and may have a different sample count from discover.
+All parallel lists correspond positionally to `programs`; the same program may
+appear more than once with different parameters. `sample_losses=[None, None]`
+means sample-loss annotations are unavailable and must not trigger a fallback to
+discover losses.
+
+```python
+if params is None:
+    params = [program.params for program in programs]
+for program, model_params in zip(programs, params):
+    model_fn = program.compile_model()
+    # Evaluate with model_params (and the supplied data), not program.params.
+```
+
+Fit images are written to `image_fit/discover/P….png` and
+`image_fit/validate/P….png`.
 
 ### 7. Validate
 

@@ -765,16 +765,25 @@ def _apply_score_result(program: Program, result: tuple, split: str) -> str:
     loss_pair.all_final = all_final
 
     if best_idx is not None:
-        program.best_estimator_idx = best_idx
-        if program.code.param_est:
-            program.code.best_param_est = program.code.param_est[best_idx]
+        if split == "validate":
+            program.best_estimator_idx_validate = best_idx
+        else:
+            program.best_estimator_idx = best_idx
+            if program.code.param_est:
+                program.code.best_param_est = program.code.param_est[best_idx]
 
     if fingerprint is not None:
         program.eval_fingerprint = fingerprint
-    if params is not None:
-        program.params = params
-    if params_init is not None:
-        program.params_init = params_init
+    if split == "validate":
+        if params is not None:
+            program.params_validate = params
+        if params_init is not None:
+            program.params_init_validate = params_init
+    else:
+        if params is not None:
+            program.params = params
+        if params_init is not None:
+            program.params_init = params_init
     if sample_losses is not None and split == "discover":
         program.sample_losses = sample_losses
     if sample_losses_init is not None and split == "discover":
@@ -825,7 +834,9 @@ def score(
     Returns:
         None. The `population` object is mutated in place, updating
         `program.program_losses.<split>.{init, final}`, `program.eval_fingerprint`,
-        `program.params`, `program.params_init`, `program.sample_losses`,
+        discover scoring updates `program.params` and `program.params_init`; validation
+        scoring updates `program.params_validate` and `program.params_init_validate`.
+        Discover sample losses remain in `program.sample_losses` and
         `program.sample_losses_init`, and `program.diagnostics`.
     """
     queue = _needs_scoring(population, split)

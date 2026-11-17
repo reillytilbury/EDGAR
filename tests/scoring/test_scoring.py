@@ -34,11 +34,52 @@ from edgar.scoring.scoring import (
     _optimize,
     _worker,
     _score_one_model,
+    _apply_score_result,
     rank,
     score,
 )
 
 from edgar.scoring.utils import apply_model_plain
+
+
+def test_validation_score_keeps_discover_parameters_and_estimator():
+    p = Program(
+        birth=BirthCertificate(generation=0, island=0, batch_index=0),
+        code=Code(param_est=["discover-est", "validate-est"]),
+    )
+    p.params = {"w": np.array([1.0])}
+    p.params_init = {"w": np.array([0.5])}
+    p.sample_losses = np.array([2.0])
+    p.sample_losses_init = np.array([3.0])
+    p.best_estimator_idx = 0
+    p.code.best_param_est = "discover-est"
+    result = (
+        0.2,
+        0.4,
+        None,
+        {"w": np.array([4.0])},
+        np.array([0.2]),
+        {"w": np.array([3.0])},
+        np.array([0.4]),
+        None,
+        None,
+        1,
+        None,
+        {},
+        "ok",
+    )
+    _apply_score_result(p, result, "validate")
+    np.testing.assert_array_equal(p.params["w"], [1.0])
+    np.testing.assert_array_equal(p.params_init["w"], [0.5])
+    np.testing.assert_array_equal(p.sample_losses, [2.0])
+    np.testing.assert_array_equal(p.sample_losses_init, [3.0])
+    assert p.best_estimator_idx == 0
+    assert p.code.best_param_est == "discover-est"
+    np.testing.assert_array_equal(p.params_validate["w"], [4.0])
+    np.testing.assert_array_equal(p.params_init_validate["w"], [3.0])
+    assert p.best_estimator_idx_validate == 1
+    assert p.code.param_est[p.best_estimator_idx_validate] == "validate-est"
+
 
 # --- shared fixtures ---
 
