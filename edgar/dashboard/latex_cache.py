@@ -199,7 +199,17 @@ _LATEX_PROMPT = """\
 You are given the numpy source of a parametric model. Output ONLY the LaTeX
 equations the code implements - no prose, no explanation, no code fences.
 Wrap display equations in $$...$$ so they render in Markdown. Define every
-symbol you use in a brief variable-key block after the equations.
+symbol you use in a brief variable key after the equations, written as a
+Markdown bullet list with inline math (e.g. `- $\\sigma_1$: width of peak 1`),
+not as a LaTeX environment.
+
+The output is rendered with KaTeX, so:
+- Use short mathematical symbols with subscripts (e.g. $\\sigma_1$, $a_{{1,25}}$,
+  $s_\\theta$) instead of code variable names; never use underscores inside
+  \\text{{}} (write \\text{{width scale}} or a symbol, not \\text{{width\\_scale}}).
+- Escape percent signs as \\% inside math (a bare % starts a LaTeX comment).
+- Use only KaTeX-supported commands; write functions like clip or atan2 as
+  \\operatorname{{clip}}.
 
 Model: {name!r}
 

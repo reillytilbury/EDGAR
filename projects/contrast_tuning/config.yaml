@@ -1,0 +1,29 @@
+io:
+  # Dataset directory; the sessions to pool are listed under project_params.sessions.
+  data_path: /home/reilly/datasets/kaesha_contrasts
+project_params:
+  # Pool both sessions: exp10-26 (13421 cells, 4 reps) and exp11-10 (24531 cells, 5 reps).
+  # Cells from both are shuffled into discover / validate (stratified by session).
+  sessions: [responses_exp10-26.npz, responses_exp11-10.npz]
+  n_reps: 4   # drop exp11-10's 5th repeat so both sessions share a trial layout
+  # Based on figures/exploratory_contrasts.ipynb (EDGAR-main); thresholds raised from 0.4 to 0.5
+  sf_threshold: 0.5
+  conc_threshold: 0.5
+  filter_mode: pref   # 'pref': SF/conc at each cell's max-SF contrast; 'min': must pass at every contrast
+  shuffle_phases: true
+  shuffle_seed: 0
+  random_seed: 42
+  n_eval_samples: 100
+
+llms:
+  # Fast first run: flash for model generation and parameter estimators.
+  # For a full run, use a big model every generation, e.g. model_llm: gemini-4-argon
+  # (a list such as [gemini-4-argon, gemini-3.8-flash] alternates models generation by generation).
+  model_llm: gemini-3.8-flash
+  param_est_llm: gemini-3.8-flash
+  jax_model_translator_llm: gemini-3.5-flash-lite
+  max_tokens: 32000   # Gemini 3.x reasoning counts toward this; 10000 left no room for code
+
+scoring:
+  gradient_descent:
+    learning_rate: 0.01   # default 0.003 was still descending at 1000 steps

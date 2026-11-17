@@ -381,7 +381,18 @@ def build_app(run_roots: list[Path], default_run_dir: Path | None = None) -> Fas
             A `FileResponse` containing the `index.html` file located in the
             `static` directory.
         """
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(
+            STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"}
+        )
+
+    @app.middleware("http")
+    async def revalidate_static(request, call_next):
+        """Make browsers revalidate the frontend files on every load (cheap 304s), so a
+        dashboard update takes effect on a normal refresh instead of serving stale JS."""
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

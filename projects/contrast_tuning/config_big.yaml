@@ -1,0 +1,29 @@
+# Same project as config.yaml, but with big thinking models.
+io:
+  # Dataset directory; the sessions to pool are listed under project_params.sessions.
+  data_path: /home/reilly/datasets/kaesha_contrasts
+project_params:
+  # Pool both sessions; cells shuffled into discover / validate (stratified by session).
+  sessions: [responses_exp10-26.npz, responses_exp11-10.npz]
+  n_reps: 4   # drop exp11-10's 5th repeat so both sessions share a trial layout
+  # Based on figures/exploratory_contrasts.ipynb (EDGAR-main); thresholds raised from 0.4 to 0.5
+  sf_threshold: 0.5
+  conc_threshold: 0.5
+  filter_mode: pref   # 'pref': SF/conc at each cell's max-SF contrast; 'min': must pass at every contrast
+  shuffle_phases: true
+  shuffle_seed: 0
+  random_seed: 42
+  n_eval_samples: 100
+
+llms:
+  # Big thinking models for every generation (model generation and parameter estimators).
+  model_llm: gemini-4-argon
+  param_est_llm: gemini-4-argon
+  jax_model_translator_llm: gemini-3.5-flash-lite   # translation is mechanical; flash-lite is enough
+  model_thinking: high
+  param_est_thinking: high
+  max_tokens: 64000   # thinking tokens count toward this
+
+scoring:
+  gradient_descent:
+    learning_rate: 0.01   # default 0.003 was still descending at 1000 steps

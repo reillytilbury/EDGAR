@@ -9,6 +9,7 @@ import os
 import warnings
 import multiprocessing as mp
 import cloudpickle
+import numpy as np
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -144,7 +145,17 @@ def generate_feedback_image(
     if not has_plot or data is None:
         return None
 
-    spec_bytes = cloudpickle.dumps(spec)
+    # The subprocess gets a pickled copy of spec, so drawing from spec.rng there never
+    # advances the parent's generator: every image in a generation would start from the
+    # same state and show the same random samples. Give each image its own child
+    # generator, seeded from spec.rng here (advancing it), so programs see different
+    # samples while the run stays reproducible from run.random_seed.
+    parent_rng = spec.rng
+    spec.rng = np.random.default_rng(parent_rng.integers(2**63))
+    try:
+        spec_bytes = cloudpickle.dumps(spec)
+    finally:
+        spec.rng = parent_rng
     parents_bytes = cloudpickle.dumps(parents)
     program_bytes = cloudpickle.dumps(program)
 

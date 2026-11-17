@@ -1,0 +1,110 @@
+model:
+  base: 'You are an AI scientist. The {num_parents} programs below are biological models of neurons. The models are sorted from highest to lowest loss.
+
+    Your task is to create a new neuron model that has a lower loss than these models.
+
+    All models take two stimulus variables as input: the drifting-grating direction (theta) in radians, and the grating contrast (c) as a fraction between 0 and 1. Each neuron is recorded at three contrasts (25%, 50% and 100%) and every direction, and a single set of parameters must describe its responses at all contrasts, so the model has to capture how the tuning curve changes with contrast (for example its amplitude, width, shape and baseline).
+
+    Analyze the progression of the models, generalize the improvements, and create a new model that is better than these models.
+
+    '
+  explore: Use the models below as *inspiration*, but be *creative* and *invent* something new. Which features in the models below correlate with lower loss? Find these features and *extrapolate* them. You should also *combine* features from several models, and *experiment* with new ideas.
+  exploit: Use the models below as a *template* to create a new model. Which features correlate with lower loss? Find these features and *extrapolate* them. Focus on *exploiting* strengths and *eliminating* weaknesses or *redundancies*. You will be *penalized* for complexity.
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do NOT include any text other than the code.
+
+    * Model signature must be `def model(data, params):` where `data` is a dict with keys "stimulus" (direction in radians), "contrast" (fraction, 0-1) and "response", and `params` is a dict of named arrays/scalars. The model must return one response per trial and must use both data["stimulus"] and data["contrast"].
+
+    * Ensure all free parameters are numeric, not strings or functions.
+
+    * At the beginning of the code, clip the free parameters to a biologically plausible range.
+
+    * Cast to `int()` when using a numeric value as an array size, slice index, or `range()` argument (e.g. `n_bins = int(np.sqrt(len(x)))`).
+
+    * Ensure all string values in function call arguments are properly JSON-escaped
+
+    * You must also provide `default_params`: a dict of sensible numeric initial values for every key in `params`. Keys must exactly match those used inside the model. Values must be plain Python numbers or lists (no numpy arrays).
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Use a descriptive name for this model, not a version number.
+
+    * Briefly describe what the model computes.
+
+    '
+  image_analysis_instructions: |
+    **Image Analysis Instructions:**
+
+    Attached is an image comparing the two models listed below, **v1** and **v2**, with held-out (test) neural data for 9 example cells. v1 is the worse model (higher loss) and v2 is the better model (lower loss). The cells are arranged in a 3 x 3 grid, and each cell is a block of 4 panels:
+    * **Top left (data):** the cell's measured responses: binned means of the test trials, one **blue** line per contrast: sky blue = 25%, royal blue = 50%, navy = 100%. Line style also marks contrast in every tuning panel: dash-dot = 25%, dashed = 50%, solid = 100%. The grey band marks +-30 deg around the peak.
+    * **Top right (v1):** predictions of model v1 (worse) in shades of **green** (lime = 25%, green = 50%, dark green = 100%), drawn over the blue data curves. Its panel title and border are green.
+    * **Bottom left (v2):** predictions of model v2 (better) in shades of **red** (orange = 25%, red = 50%, maroon = 100%), drawn over the blue data curves. Its panel title and border are red.
+    * **Bottom right (contrast scatter):** response at 100% contrast against response at 25% contrast, for directions within +-30 deg of the peak. Blue points are the data, the green line is v1 and the red line is v2, and the dashed line is y = x. Points above the dashed line respond more at 100% than at 25%; the slope and curvature show how the response scales with contrast near the peak.
+    The three tuning panels in a block (data, v1, v2) share the same y-axis, so they can be compared directly. Each model panel's legend gives that model's loss for the cell at each contrast, and its title gives the loss for the cell overall.
+
+    Analyse the models' fits to the data. Identify systematic weaknesses by looking for patterns across many cells. For instance, consider:
+    * **Model Comparisons:** For each cell, which model's curves lie closer to the blue data curves? Which features of the models are responsible for the better fit?
+    * **Model Fit:** Where do even the better model's (v2) curves deviate most from the data? Use the per-contrast losses to find the contrasts where the models are weakest, and focus your improvements there.
+    * **Model Shape:** Do the models' shapes (peak sharpness, width, skewness, the relative size of the two direction peaks, baseline) match the data at every contrast? If not, how do they differ, and how could the model change to match?
+    * **Contrast Dependence:** How does the data change from 25% to 100% contrast: amplitude, width, peak sharpness, baseline, and the balance between the two peaks? Note that some cells respond more strongly at low contrast than at high contrast. Compare the data and model points in the contrast scatter panels: do the models reproduce the data's slope and curvature, or do they get one contrast right at the expense of the others?
+    * **Parameter Flexibility:** Are there free parameters that could be introduced or modified to capture these response profiles better? Use your analysis of the models' shortcomings to add free parameters or modify existing ones.
+
+    Use this analysis to inform the design of a new neuron model that improves upon the previous models.
+  parent_program_template: '**Model v{parent_number}: {name}**
+
+    loss: {program_losses.discover.final}
+
+    {code.model}
+
+    '
+parameter_estimator:
+  base: 'You are an AI scientist. Your task is to create a simple parameter estimator function to estimate the free parameters of the latest neuron model (shown last below). Also included are previous parent models and their parameter estimators.
+
+    The parameter should be estimated directly, using statistical principles and knowledge of what the parameters represent biologically.
+
+    Analyze the progression of the parameter estimators, generalize the improvements, and create a new parameter estimator that is better than all previous estimators.
+
+    '
+  explore: null
+  exploit: null
+  code_guidelines: '**Code Generation Guidelines:**
+
+    * Import any packages you use.
+
+    * Do not include any text other than the code.
+
+    * Return a parameter dict with the same keys expected by the model.
+
+    * Function signature must be `def parameter_estimator(data):`.
+
+    * data is a dictionary with three keys: "stimulus" (direction in radians), "contrast" (fraction, 0-1) and "response", each of shape (n_trials,). 
+    
+    * Your response **must** be less than {max_lines} lines. If it is longer, it will be immediately rejected.
+
+    * Do not attempt to fit the parameters using complex fitting functions like `curve_fit`, `least_squares` or `minimize`. This function should be a simple starting point.
+
+    '
+  docstring_guidelines: '**Docstring Guidelines:**
+
+    * Briefly describe the estimation method.
+
+    '
+  image_analysis_instructions: null
+  parent_program_template: |
+    **Parent model: {name}**
+    loss: {program_losses.discover.final}
+    model:
+    {code.model}
+    parameter_estimator:
+    {code.best_param_est}
+
+    ----------
+  current_program_template: |
+    **New model: {name}**
+    {code.model}
+    -----------
+

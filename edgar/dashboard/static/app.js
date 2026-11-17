@@ -581,10 +581,23 @@ function dashboard() {
 
     latexHtml(s) {
       if (!s) return '';
-      // Render the LLM output via marked so display equations stay $$...$$
-      // and KaTeX auto-render picks them up afterwards.
+      // Render the LLM output via marked, then let KaTeX auto-render the maths.
+      // Math is swapped out for placeholders first: otherwise marked reads the
+      // underscores in e.g. `w_{25} ... \text{base}_{25}` as emphasis and eats
+      // backslash escapes like `\_`, which breaks the equations.
+      const math = [];
+      const stash = (m) => {
+        math.push(m);
+        return `@@MATH${math.length - 1}@@`;
+      };
+      const protectedSrc = s.replace(
+        /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)[^$\n]+?\$/g,
+        stash,
+      );
       try {
-        return marked.parse(s);
+        return marked
+          .parse(protectedSrc)
+          .replace(/@@MATH(\d+)@@/g, (_, i) => escapeHtml(math[Number(i)]));
       } catch {
         return `<pre>${escapeHtml(s)}</pre>`;
       }
