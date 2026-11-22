@@ -1,0 +1,20 @@
+[project]
+name = "edgar-deepseek"
+version = "0.1.0"
+description = "Offline baseline and reproduction tools for the EDGAR study"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "anthropic==0.51.0",
+    "google-genai==1.19.0",
+    "jax==0.6.0",
+    "jaxopt==0.8.5",
+    "matplotlib==3.10.3",
+    "numpy==2.2.5",
+    "optax==0.2.4",
+    "pandas==2.2.3",
+    "pillow==11.2.1",
+    "python-dotenv==1.1.0",
+    "scipy==1.15.3",
+    "timeout-decorator==0.5.0",
+    "tqdm==4.65.0",
+]
