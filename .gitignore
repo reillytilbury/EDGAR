@@ -1,11 +1,15 @@
-# Environment variables
+# Credentials and environments
 .env
-
-# programs database
-git rm --cached -r program_databases
+.venv/
 
 # Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Local datasets, upstream checkouts and run artifacts
+data/
+results/
+upstream/
+program_databases/
