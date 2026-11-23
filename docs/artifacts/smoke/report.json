@@ -1,0 +1,59 @@
+{
+  "run_id": "20261123-004506-886860",
+  "models": {
+    "translator": "hy4-flash-free",
+    "proposer": "hy4-flash-free",
+    "estimator": "hy4-flash-free",
+    "large_proposer": "hy4-flash-free#high",
+    "image_reader": null
+  },
+  "status": "completed",
+  "wall_hours": 3.88,
+  "generations": 1,
+  "proposals_attempted": 48,
+  "programs_scored": 31,
+  "seed_losses": {
+    "0": 30.016000747680664,
+    "1": 28.85495948791504
+  },
+  "best_discovery_loss": 28.718557357788086,
+  "improvement_over_double_gaussian": 0.13640213012695312,
+  "per_generation": [
+    {
+      "generation": 0,
+      "scored": 31,
+      "failed": 17,
+      "best": 28.718557357788086,
+      "best_so_far": 28.718557357788086
+    }
+  ],
+  "requests": {
+    "proposal": {
+      "count": 48,
+      "ok": 48,
+      "truncated": 0,
+      "median_latency_s": 69.1505,
+      "output_tokens": 468733,
+      "input_tokens": 137856
+    },
+    "translation": {
+      "count": 48,
+      "ok": 48,
+      "truncated": 0,
+      "median_latency_s": 4.333500000000001,
+      "output_tokens": 37918,
+      "input_tokens": 71453
+    },
+    "estimator": {
+      "count": 48,
+      "ok": 48,
+      "truncated": 0,
+      "median_latency_s": 7.286,
+      "output_tokens": 64353,
+      "input_tokens": 160962
+    }
+  },
+  "list_cost_usd": 0.0,
+  "scored_programs_with_fitted_exponent": 26,
+  "first_generation_with_fitted_exponent": 0
+}

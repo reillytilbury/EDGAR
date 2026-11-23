@@ -1,0 +1,484 @@
+{
+  "selection_rule": "lowest selection-cell penalized score among the top 10 unique learned programs by discovery loss",
+  "cell_counts": {
+    "discovery": 1055,
+    "selection": 527,
+    "locked_test": 528
+  },
+  "winner": {
+    "id": "0_2_4",
+    "iteration": 0,
+    "discovery_loss": 28.71855735778809,
+    "upstream_eval_loss": 28.51470375061035,
+    "code": "import numpy as np\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0,\n                    width_1=0.6, sharpness_1=2.0, skew_1=0.0,\n                    amplitude_2=0.0, width_2=0.6, sharpness_2=2.0,\n                    skew_2=0.0, second_offset=0.0,\n                    broad_amplitude=0.0, broad_phase=0.0):\n    \"\"\"\n    parent_model_1: circular_gaussian_single_lobe_model\n    parent_model_2: antipodal_equal_width_two_gaussian_model\n\n    Image analysis:\n    In Cell 754, Cell 490, and Cell 88, the blue binned mean has one dominant\n    lobe, and both parents already follow it well, so this model must retain a\n    clean single-lobe limit. In Cell 456, Cell 523, Cell 436, and Cell 119, the\n    green single-lobe parent fails by inflating baseline/width to bridge two\n    separated lobes; the red two-lobe parent is much better because it keeps the\n    troughs low while representing opposing peaks. However, the red parent still\n    assumes both peaks have the same width and are exactly antipodal. Cell 456\n    shows a tall sharp first peak and a weaker, broader second peak; Cell 881 and\n    Cell 59 show weak broad shoulders/bumps that are not perfectly antipodal;\n    Cell 119 and Cell 436 show shallow nonzero valleys and broad flank structure\n    that the red curve slightly underestimates.\n\n    This model improves on the parents by using two circular generalized\n    Gaussian lobes with independent amplitudes, widths, tail/peak sharpness, and\n    left/right skew. A small broad sinusoidal background captures slow baseline\n    modulation and shallow valleys without forcing the main peaks to widen. The\n    second lobe is near, but not rigidly fixed to, the antipode. For single-peak\n    cells, amplitude_2=broad_amplitude=0, skew=0, and sharpness=2 recover a\n    single circular Gaussian response.\n\n    Equation:\n      Let wrap(x) = atan2(sin(x), cos(x)), mu1 = theta_pref,\n      mu2 = wrap(theta_pref + pi + second_offset),\n      d_j = wrap(theta - mu_j),\n      sigma_j(d) = clip(width_j * exp(skew_j * d / pi), 0.03, pi),\n      lobe_j(d) = amplitude_j * exp(-0.5 * (abs(d) / sigma_j(d))^sharpness_j),\n      background(theta) = broad_amplitude * (1 + cos(theta - broad_phase)) / 2.\n\n      rate(theta) = baseline + background(theta) + lobe_1(d1) + lobe_2(d2)\n\n    Free parameters:\n      theta_pref, baseline, amplitude_1, width_1, sharpness_1, skew_1,\n      amplitude_2, width_2, sharpness_2, skew_2, second_offset,\n      broad_amplitude, broad_phase.\n    \"\"\"\n    theta = np.asarray(theta, dtype=float)\n\n    theta_pref = np.clip(theta_pref, 0.0, 2.0 * np.pi)\n    baseline = np.clip(baseline, 0.0, 50.0)\n\n    amplitude_1 = np.clip(amplitude_1, 0.0, 100.0)\n    width_1 = np.clip(width_1, 0.03, np.pi)\n    sharpness_1 = np.clip(sharpness_1, 0.7, 4.0)\n    skew_1 = np.clip(skew_1, -1.0, 1.0)\n\n    amplitude_2 = np.clip(amplitude_2, 0.0, 100.0)\n    width_2 = np.clip(width_2, 0.03, np.pi)\n    sharpness_2 = np.clip(sharpness_2, 0.7, 4.0)\n    skew_2 = np.clip(skew_2, -1.0, 1.0)\n\n    second_offset = np.clip(second_offset, -0.5 * np.pi, 0.5 * np.pi)\n\n    broad_amplitude = np.clip(broad_amplitude, 0.0, 50.0)\n    broad_phase = np.clip(broad_phase, 0.0, 2.0 * np.pi)\n\n    def wrap(x):\n        return np.arctan2(np.sin(x), np.cos(x))\n\n    mu_1 = theta_pref\n    mu_2 = wrap(theta_pref + np.pi + second_offset)\n\n    d_1 = wrap(theta - mu_1)\n    d_2 = wrap(theta - mu_2)\n\n    sigma_1 = np.clip(width_1 * np.exp(skew_1 * d_1 / np.pi), 0.03, np.pi)\n    sigma_2 = np.clip(width_2 * np.exp(skew_2 * d_2 / np.pi), 0.03, np.pi)\n\n    lobe_1 = amplitude_1 * np.exp(\n        -0.5 * np.power(np.abs(d_1) / sigma_1, sharpness_1)\n    )\n    lobe_2 = amplitude_2 * np.exp(\n        -0.5 * np.power(np.abs(d_2) / sigma_2, sharpness_2)\n    )\n\n    broad_background = broad_amplitude * (\n        0.5 + 0.5 * np.cos(theta - broad_phase)\n    )\n\n    return baseline + broad_background + lobe_1 + lobe_2",
+    "jax_code": "import jax\nimport jax.numpy as jnp\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0,\n                    width_1=0.6, sharpness_1=2.0, skew_1=0.0,\n                    amplitude_2=0.0, width_2=0.6, sharpness_2=2.0,\n                    skew_2=0.0, second_offset=0.0,\n                    broad_amplitude=0.0, broad_phase=0.0):\n    theta = jnp.asarray(theta, dtype=jnp.float32)\n\n    theta_pref = jnp.clip(theta_pref, 0.0, 2.0 * jnp.pi)\n    baseline = jnp.clip(baseline, 0.0, 50.0)\n\n    amplitude_1 = jnp.clip(amplitude_1, 0.0, 100.0)\n    width_1 = jnp.clip(width_1, 0.03, jnp.pi)\n    sharpness_1 = jnp.clip(sharpness_1, 0.7, 4.0)\n    skew_1 = jnp.clip(skew_1, -1.0, 1.0)\n\n    amplitude_2 = jnp.clip(amplitude_2, 0.0, 100.0)\n    width_2 = jnp.clip(width_2, 0.03, jnp.pi)\n    sharpness_2 = jnp.clip(sharpness_2, 0.7, 4.0)\n    skew_2 = jnp.clip(skew_2, -1.0, 1.0)\n\n    second_offset = jnp.clip(second_offset, -0.5 * jnp.pi, 0.5 * jnp.pi)\n\n    broad_amplitude = jnp.clip(broad_amplitude, 0.0, 50.0)\n    broad_phase = jnp.clip(broad_phase, 0.0, 2.0 * jnp.pi)\n\n    def wrap(x):\n        return jnp.arctan2(jnp.sin(x), jnp.cos(x))\n\n    mu_1 = theta_pref\n    mu_2 = wrap(theta_pref + jnp.pi + second_offset)\n\n    d_1 = wrap(theta - mu_1)\n    d_2 = wrap(theta - mu_2)\n\n    sigma_1 = jnp.clip(width_1 * jnp.exp(skew_1 * d_1 / jnp.pi), 0.03, jnp.pi)\n    sigma_2 = jnp.clip(width_2 * jnp.exp(skew_2 * d_2 / jnp.pi), 0.03, jnp.pi)\n\n    lobe_1 = amplitude_1 * jnp.exp(\n        -0.5 * jnp.power(jnp.abs(d_1) / sigma_1, sharpness_1)\n    )\n    lobe_2 = amplitude_2 * jnp.exp(\n        -0.5 * jnp.power(jnp.abs(d_2) / sigma_2, sharpness_2)\n    )\n\n    broad_background = broad_amplitude * (\n        0.5 + 0.5 * jnp.cos(theta - broad_phase)\n    )\n\n    return baseline + broad_background + lobe_1 + lobe_2",
+    "selection": {
+      "score": 28.695350646972656,
+      "mse": 2.856535064697266,
+      "parameters": 13,
+      "median_fitted_params": {
+        "theta_pref": 3.187645196914673,
+        "baseline": 0.13149186968803406,
+        "amplitude_1": 3.7767086029052734,
+        "width_1": 0.2395472526550293,
+        "sharpness_1": 2.1410322189331055,
+        "skew_1": 0.031718894839286804,
+        "amplitude_2": 0.9723551273345947,
+        "width_2": 0.2529417872428894,
+        "sharpness_2": 2.111527919769287,
+        "skew_2": -2.0636391127482057e-05,
+        "second_offset": -0.004913185257464647,
+        "broad_amplitude": 0.3977610170841217,
+        "broad_phase": 3.433513641357422
+      }
+    },
+    "locked_test": {
+      "score": 28.34939956665039,
+      "mse": 2.821939956665039,
+      "parameters": 13,
+      "median_fitted_params": {
+        "theta_pref": 3.0891826152801514,
+        "baseline": 0.14912492036819458,
+        "amplitude_1": 3.7438161373138428,
+        "width_1": 0.2385152280330658,
+        "sharpness_1": 2.1342203617095947,
+        "skew_1": 0.08406244963407516,
+        "amplitude_2": 1.0343458652496338,
+        "width_2": 0.24765193462371826,
+        "sharpness_2": 2.144808530807495,
+        "skew_2": -0.007992198690772057,
+        "second_offset": 0.0,
+        "broad_amplitude": 0.4281720519065857,
+        "broad_phase": 3.45920467376709
+      }
+    }
+  },
+  "double_gaussian": {
+    "id": "seed_2",
+    "iteration": -1,
+    "discovery_loss": null,
+    "code": null,
+    "selection": {
+      "score": 28.861474990844727,
+      "mse": 2.8811474990844728,
+      "parameters": 5,
+      "median_fitted_params": {
+        "theta_pref": 3.1216745376586914,
+        "baseline": 0.4004097580909729,
+        "amplitude_1": 3.7644898891448975,
+        "amplitude_2": 0.6684597730636597,
+        "tuning_width": 0.2466566562652588
+      }
+    },
+    "locked_test": {
+      "score": 28.56483268737793,
+      "mse": 2.851483268737793,
+      "parameters": 5,
+      "median_fitted_params": {
+        "theta_pref": 3.0825541019439697,
+        "baseline": 0.4106706976890564,
+        "amplitude_1": 3.7496039867401123,
+        "amplitude_2": 0.7300665378570557,
+        "tuning_width": 0.24783176183700562
+      }
+    }
+  },
+  "single_gaussian": {
+    "id": "seed_1",
+    "iteration": -1,
+    "discovery_loss": null,
+    "code": null,
+    "selection": {
+      "score": 30.06233024597168,
+      "mse": 3.0022330245971682,
+      "parameters": 4,
+      "median_fitted_params": {
+        "theta_pref": 3.1859099864959717,
+        "baseline": 0.5709930658340454,
+        "amplitude": 3.678837537765503,
+        "tuning_width": 0.2228938639163971
+      }
+    },
+    "locked_test": {
+      "score": 29.73482322692871,
+      "mse": 2.9694823226928713,
+      "parameters": 4,
+      "median_fitted_params": {
+        "theta_pref": 3.083406925201416,
+        "baseline": 0.6028884053230286,
+        "amplitude": 3.6595358848571777,
+        "tuning_width": 0.2222614884376526
+      }
+    }
+  },
+  "delta_locked_test_vs_double_gaussian": 0.21543312072753906,
+  "candidates": [
+    {
+      "id": "seed_1",
+      "iteration": -1,
+      "discovery_loss": null,
+      "code": null,
+      "selection": {
+        "score": 30.06233024597168,
+        "mse": 3.0022330245971682,
+        "parameters": 4,
+        "median_fitted_params": {
+          "theta_pref": 3.1859099864959717,
+          "baseline": 0.5709930658340454,
+          "amplitude": 3.678837537765503,
+          "tuning_width": 0.2228938639163971
+        }
+      },
+      "locked_test": {
+        "score": 29.73482322692871,
+        "mse": 2.9694823226928713,
+        "parameters": 4,
+        "median_fitted_params": {
+          "theta_pref": 3.083406925201416,
+          "baseline": 0.6028884053230286,
+          "amplitude": 3.6595358848571777,
+          "tuning_width": 0.2222614884376526
+        }
+      }
+    },
+    {
+      "id": "seed_2",
+      "iteration": -1,
+      "discovery_loss": null,
+      "code": null,
+      "selection": {
+        "score": 28.861474990844727,
+        "mse": 2.8811474990844728,
+        "parameters": 5,
+        "median_fitted_params": {
+          "theta_pref": 3.1216745376586914,
+          "baseline": 0.4004097580909729,
+          "amplitude_1": 3.7644898891448975,
+          "amplitude_2": 0.6684597730636597,
+          "tuning_width": 0.2466566562652588
+        }
+      },
+      "locked_test": {
+        "score": 28.56483268737793,
+        "mse": 2.851483268737793,
+        "parameters": 5,
+        "median_fitted_params": {
+          "theta_pref": 3.0825541019439697,
+          "baseline": 0.4106706976890564,
+          "amplitude_1": 3.7496039867401123,
+          "amplitude_2": 0.7300665378570557,
+          "tuning_width": 0.24783176183700562
+        }
+      }
+    },
+    {
+      "id": "0_2_4",
+      "iteration": 0,
+      "discovery_loss": 28.71855735778809,
+      "upstream_eval_loss": 28.51470375061035,
+      "code": "import numpy as np\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0,\n                    width_1=0.6, sharpness_1=2.0, skew_1=0.0,\n                    amplitude_2=0.0, width_2=0.6, sharpness_2=2.0,\n                    skew_2=0.0, second_offset=0.0,\n                    broad_amplitude=0.0, broad_phase=0.0):\n    \"\"\"\n    parent_model_1: circular_gaussian_single_lobe_model\n    parent_model_2: antipodal_equal_width_two_gaussian_model\n\n    Image analysis:\n    In Cell 754, Cell 490, and Cell 88, the blue binned mean has one dominant\n    lobe, and both parents already follow it well, so this model must retain a\n    clean single-lobe limit. In Cell 456, Cell 523, Cell 436, and Cell 119, the\n    green single-lobe parent fails by inflating baseline/width to bridge two\n    separated lobes; the red two-lobe parent is much better because it keeps the\n    troughs low while representing opposing peaks. However, the red parent still\n    assumes both peaks have the same width and are exactly antipodal. Cell 456\n    shows a tall sharp first peak and a weaker, broader second peak; Cell 881 and\n    Cell 59 show weak broad shoulders/bumps that are not perfectly antipodal;\n    Cell 119 and Cell 436 show shallow nonzero valleys and broad flank structure\n    that the red curve slightly underestimates.\n\n    This model improves on the parents by using two circular generalized\n    Gaussian lobes with independent amplitudes, widths, tail/peak sharpness, and\n    left/right skew. A small broad sinusoidal background captures slow baseline\n    modulation and shallow valleys without forcing the main peaks to widen. The\n    second lobe is near, but not rigidly fixed to, the antipode. For single-peak\n    cells, amplitude_2=broad_amplitude=0, skew=0, and sharpness=2 recover a\n    single circular Gaussian response.\n\n    Equation:\n      Let wrap(x) = atan2(sin(x), cos(x)), mu1 = theta_pref,\n      mu2 = wrap(theta_pref + pi + second_offset),\n      d_j = wrap(theta - mu_j),\n      sigma_j(d) = clip(width_j * exp(skew_j * d / pi), 0.03, pi),\n      lobe_j(d) = amplitude_j * exp(-0.5 * (abs(d) / sigma_j(d))^sharpness_j),\n      background(theta) = broad_amplitude * (1 + cos(theta - broad_phase)) / 2.\n\n      rate(theta) = baseline + background(theta) + lobe_1(d1) + lobe_2(d2)\n\n    Free parameters:\n      theta_pref, baseline, amplitude_1, width_1, sharpness_1, skew_1,\n      amplitude_2, width_2, sharpness_2, skew_2, second_offset,\n      broad_amplitude, broad_phase.\n    \"\"\"\n    theta = np.asarray(theta, dtype=float)\n\n    theta_pref = np.clip(theta_pref, 0.0, 2.0 * np.pi)\n    baseline = np.clip(baseline, 0.0, 50.0)\n\n    amplitude_1 = np.clip(amplitude_1, 0.0, 100.0)\n    width_1 = np.clip(width_1, 0.03, np.pi)\n    sharpness_1 = np.clip(sharpness_1, 0.7, 4.0)\n    skew_1 = np.clip(skew_1, -1.0, 1.0)\n\n    amplitude_2 = np.clip(amplitude_2, 0.0, 100.0)\n    width_2 = np.clip(width_2, 0.03, np.pi)\n    sharpness_2 = np.clip(sharpness_2, 0.7, 4.0)\n    skew_2 = np.clip(skew_2, -1.0, 1.0)\n\n    second_offset = np.clip(second_offset, -0.5 * np.pi, 0.5 * np.pi)\n\n    broad_amplitude = np.clip(broad_amplitude, 0.0, 50.0)\n    broad_phase = np.clip(broad_phase, 0.0, 2.0 * np.pi)\n\n    def wrap(x):\n        return np.arctan2(np.sin(x), np.cos(x))\n\n    mu_1 = theta_pref\n    mu_2 = wrap(theta_pref + np.pi + second_offset)\n\n    d_1 = wrap(theta - mu_1)\n    d_2 = wrap(theta - mu_2)\n\n    sigma_1 = np.clip(width_1 * np.exp(skew_1 * d_1 / np.pi), 0.03, np.pi)\n    sigma_2 = np.clip(width_2 * np.exp(skew_2 * d_2 / np.pi), 0.03, np.pi)\n\n    lobe_1 = amplitude_1 * np.exp(\n        -0.5 * np.power(np.abs(d_1) / sigma_1, sharpness_1)\n    )\n    lobe_2 = amplitude_2 * np.exp(\n        -0.5 * np.power(np.abs(d_2) / sigma_2, sharpness_2)\n    )\n\n    broad_background = broad_amplitude * (\n        0.5 + 0.5 * np.cos(theta - broad_phase)\n    )\n\n    return baseline + broad_background + lobe_1 + lobe_2",
+      "jax_code": "import jax\nimport jax.numpy as jnp\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0,\n                    width_1=0.6, sharpness_1=2.0, skew_1=0.0,\n                    amplitude_2=0.0, width_2=0.6, sharpness_2=2.0,\n                    skew_2=0.0, second_offset=0.0,\n                    broad_amplitude=0.0, broad_phase=0.0):\n    theta = jnp.asarray(theta, dtype=jnp.float32)\n\n    theta_pref = jnp.clip(theta_pref, 0.0, 2.0 * jnp.pi)\n    baseline = jnp.clip(baseline, 0.0, 50.0)\n\n    amplitude_1 = jnp.clip(amplitude_1, 0.0, 100.0)\n    width_1 = jnp.clip(width_1, 0.03, jnp.pi)\n    sharpness_1 = jnp.clip(sharpness_1, 0.7, 4.0)\n    skew_1 = jnp.clip(skew_1, -1.0, 1.0)\n\n    amplitude_2 = jnp.clip(amplitude_2, 0.0, 100.0)\n    width_2 = jnp.clip(width_2, 0.03, jnp.pi)\n    sharpness_2 = jnp.clip(sharpness_2, 0.7, 4.0)\n    skew_2 = jnp.clip(skew_2, -1.0, 1.0)\n\n    second_offset = jnp.clip(second_offset, -0.5 * jnp.pi, 0.5 * jnp.pi)\n\n    broad_amplitude = jnp.clip(broad_amplitude, 0.0, 50.0)\n    broad_phase = jnp.clip(broad_phase, 0.0, 2.0 * jnp.pi)\n\n    def wrap(x):\n        return jnp.arctan2(jnp.sin(x), jnp.cos(x))\n\n    mu_1 = theta_pref\n    mu_2 = wrap(theta_pref + jnp.pi + second_offset)\n\n    d_1 = wrap(theta - mu_1)\n    d_2 = wrap(theta - mu_2)\n\n    sigma_1 = jnp.clip(width_1 * jnp.exp(skew_1 * d_1 / jnp.pi), 0.03, jnp.pi)\n    sigma_2 = jnp.clip(width_2 * jnp.exp(skew_2 * d_2 / jnp.pi), 0.03, jnp.pi)\n\n    lobe_1 = amplitude_1 * jnp.exp(\n        -0.5 * jnp.power(jnp.abs(d_1) / sigma_1, sharpness_1)\n    )\n    lobe_2 = amplitude_2 * jnp.exp(\n        -0.5 * jnp.power(jnp.abs(d_2) / sigma_2, sharpness_2)\n    )\n\n    broad_background = broad_amplitude * (\n        0.5 + 0.5 * jnp.cos(theta - broad_phase)\n    )\n\n    return baseline + broad_background + lobe_1 + lobe_2",
+      "selection": {
+        "score": 28.695350646972656,
+        "mse": 2.856535064697266,
+        "parameters": 13,
+        "median_fitted_params": {
+          "theta_pref": 3.187645196914673,
+          "baseline": 0.13149186968803406,
+          "amplitude_1": 3.7767086029052734,
+          "width_1": 0.2395472526550293,
+          "sharpness_1": 2.1410322189331055,
+          "skew_1": 0.031718894839286804,
+          "amplitude_2": 0.9723551273345947,
+          "width_2": 0.2529417872428894,
+          "sharpness_2": 2.111527919769287,
+          "skew_2": -2.0636391127482057e-05,
+          "second_offset": -0.004913185257464647,
+          "broad_amplitude": 0.3977610170841217,
+          "broad_phase": 3.433513641357422
+        }
+      },
+      "locked_test": {
+        "score": 28.34939956665039,
+        "mse": 2.821939956665039,
+        "parameters": 13,
+        "median_fitted_params": {
+          "theta_pref": 3.0891826152801514,
+          "baseline": 0.14912492036819458,
+          "amplitude_1": 3.7438161373138428,
+          "width_1": 0.2385152280330658,
+          "sharpness_1": 2.1342203617095947,
+          "skew_1": 0.08406244963407516,
+          "amplitude_2": 1.0343458652496338,
+          "width_2": 0.24765193462371826,
+          "sharpness_2": 2.144808530807495,
+          "skew_2": -0.007992198690772057,
+          "second_offset": 0.0,
+          "broad_amplitude": 0.4281720519065857,
+          "broad_phase": 3.45920467376709
+        }
+      }
+    },
+    {
+      "id": "0_0_2",
+      "iteration": 0,
+      "discovery_loss": 28.82584953308105,
+      "upstream_eval_loss": 28.8426456451416,
+      "code": "import numpy as np\n\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0,\n                    amplitude_2=0.0, tuning_width=1.0, second_offset=np.pi,\n                    second_width=1.0, left_width_scale_1=1.0,\n                    right_width_scale_1=1.0, left_width_scale_2=1.0,\n                    right_width_scale_2=1.0, shape_1=2.0, shape_2=2.0,\n                    baseline_modulation=0.0, baseline_center=0.0,\n                    baseline_width=1.2):\n    \"\"\"\n    parent_model_1: single_circular_gaussian_model\n    parent_model_2: fixed_opposition_double_gaussian_model\n\n    Image analysis:\n    The fixed_opposition_double_gaussian_model has lower loss because it adds a\n    second localized response and prevents the constant baseline from being\n    inflated to explain multi-lobed means. This is clearest in Cell 33, Cell 132,\n    and Cell 791, where the blue binned mean has two separated lobes and the\n    single_peak parent produces an overly flat elevated green curve. In Cell 791\n    the second peak also captures the wrap-around edge activity. However, the\n    second parent remains weak where the second lobe is not exactly pi away from\n    the main lobe: Cell 127 has a clear hump near theta ~ 3.8 while its main peak\n    is near theta ~ 2.2, and Cell 576/Cell 465 show smaller displaced shoulders.\n    The shared width also underfits peak shape: Cell 1016 and Cell 147 show a\n    main peak with sharper shoulders and slight skew, while Cell 270 needs a\n    narrow main peak plus a wider/smaller secondary lobe. Across raw scatter,\n    many samples sit near zero, so broad elevated floors increase loss; the\n    new model keeps a low baseline and puts modulation into localized circular\n    components.\n\n    Improvement:\n    This model uses two circular generalized/asymmetric Gaussian peaks with\n    independent amplitudes, center offset, widths, left/right width scales, and\n    sharpness exponents, plus an optional broad positive baseline bump. This\n    extrapolates from the fixed second peak by making the second peak location\n    and width flexible, and it fixes symmetric-peak weaknesses by allowing skew\n    and non-Gaussian sharpness.\n\n    Equation:\n        d(x, c) = atan2(sin(x - c), cos(x - c))\n        K(d; wl, wr, p) = exp(-0.5 * abs(d / (wr if d >= 0 else wl)) ** p)\n\n        r(theta) =\n            baseline\n          + amplitude_1 * K(d(theta, theta_pref);\n                            tuning_width*left_width_scale_1,\n                            tuning_width*right_width_scale_1,\n                            shape_1)\n          + amplitude_2 * K(d(theta, theta_pref + second_offset);\n                            second_width*left_width_scale_2,\n                            second_width*right_width_scale_2,\n                            shape_2)\n          + baseline_modulation\n            * K(d(theta, baseline_center);\n                baseline_width, baseline_width, 2)\n\n    Free parameters: theta_pref, baseline, amplitude_1, amplitude_2,\n    tuning_width, second_offset, second_width, left_width_scale_1,\n    right_width_scale_1, left_width_scale_2, right_width_scale_2,\n    shape_1, shape_2, baseline_modulation, baseline_center, baseline_width.\n    \"\"\"\n    theta = np.asarray(theta, dtype=float)\n\n    theta_pref = float(np.clip(theta_pref, 0.0, 2.0 * np.pi))\n    baseline = float(np.clip(baseline, 0.0, 50.0))\n    amplitude_1 = float(np.clip(amplitude_1, 0.0, 100.0))\n    amplitude_2 = float(np.clip(amplitude_2, 0.0, 100.0))\n    tuning_width = float(np.clip(tuning_width, 0.04, 2.5))\n    second_offset = float(np.clip(second_offset, 0.0, 2.0 * np.pi))\n    second_width = float(np.clip(second_width, 0.04, 2.5))\n\n    left_width_scale_1 = float(np.clip(left_width_scale_1, 0.2, 5.0))\n    right_width_scale_1 = float(np.clip(right_width_scale_1, 0.2, 5.0))\n    left_width_scale_2 = float(np.clip(left_width_scale_2, 0.2, 5.0))\n    right_width_scale_2 = float(np.clip(right_width_scale_2, 0.2, 5.0))\n\n    shape_1 = float(np.clip(shape_1, 1.0, 5.0))\n    shape_2 = float(np.clip(shape_2, 1.0, 5.0))\n\n    baseline_modulation = float(np.clip(baseline_modulation, 0.0, 50.0))\n    baseline_center = float(np.clip(baseline_center, 0.0, 2.0 * np.pi))\n    baseline_width = float(np.clip(baseline_width, 0.05, 3.0))\n\n    def circular_distance(x, center):\n        return np.arctan2(np.sin(x - center), np.cos(x - center))\n\n    def asymmetric_circular_kernel(d, left_width, right_width, shape):\n        width = np.where(d >= 0.0, right_width, left_width)\n        return np.exp(-0.5 * np.abs(d / width) ** shape)\n\n    main_dist = circular_distance(theta, theta_pref)\n    second_dist = circular_distance(theta, theta_pref + second_offset)\n    baseline_dist = circular_distance(theta, baseline_center)\n\n    main_kernel = asymmetric_circular_kernel(\n        main_dist,\n        tuning_width * left_width_scale_1,\n        tuning_width * right_width_scale_1,\n        shape_1,\n    )\n\n    second_kernel = asymmetric_circular_kernel(\n        second_dist,\n        second_width * left_width_scale_2,\n        second_width * right_width_scale_2,\n        shape_2,\n    )\n\n    baseline_kernel = np.exp(-0.5 * (baseline_dist / baseline_width) ** 2)\n\n    return (baseline\n            + amplitude_1 * main_kernel\n            + amplitude_2 * second_kernel\n            + baseline_modulation * baseline_kernel)",
+      "jax_code": "import jax\nimport jax.numpy as jnp\n\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0,\n                    amplitude_2=0.0, tuning_width=1.0, second_offset=jnp.pi,\n                    second_width=1.0, left_width_scale_1=1.0,\n                    right_width_scale_1=1.0, left_width_scale_2=1.0,\n                    right_width_scale_2=1.0, shape_1=2.0, shape_2=2.0,\n                    baseline_modulation=0.0, baseline_center=0.0,\n                    baseline_width=1.2):\n    theta = jnp.asarray(theta, dtype=jnp.float32)\n\n    theta_pref = jnp.clip(theta_pref, 0.0, 2.0 * jnp.pi)\n    baseline = jnp.clip(baseline, 0.0, 50.0)\n    amplitude_1 = jnp.clip(amplitude_1, 0.0, 100.0)\n    amplitude_2 = jnp.clip(amplitude_2, 0.0, 100.0)\n    tuning_width = jnp.clip(tuning_width, 0.04, 2.5)\n    second_offset = jnp.clip(second_offset, 0.0, 2.0 * jnp.pi)\n    second_width = jnp.clip(second_width, 0.04, 2.5)\n\n    left_width_scale_1 = jnp.clip(left_width_scale_1, 0.2, 5.0)\n    right_width_scale_1 = jnp.clip(right_width_scale_1, 0.2, 5.0)\n    left_width_scale_2 = jnp.clip(left_width_scale_2, 0.2, 5.0)\n    right_width_scale_2 = jnp.clip(right_width_scale_2, 0.2, 5.0)\n\n    shape_1 = jnp.clip(shape_1, 1.0, 5.0)\n    shape_2 = jnp.clip(shape_2, 1.0, 5.0)\n\n    baseline_modulation = jnp.clip(baseline_modulation, 0.0, 50.0)\n    baseline_center = jnp.clip(baseline_center, 0.0, 2.0 * jnp.pi)\n    baseline_width = jnp.clip(baseline_width, 0.05, 3.0)\n\n    def circular_distance(x, center):\n        return jnp.arctan2(jnp.sin(x - center), jnp.cos(x - center))\n\n    def asymmetric_circular_kernel(d, left_width, right_width, shape):\n        width = jnp.where(d >= 0.0, right_width, left_width)\n        return jnp.exp(-0.5 * jnp.abs(d / width) ** shape)\n\n    main_dist = circular_distance(theta, theta_pref)\n    second_dist = circular_distance(theta, theta_pref + second_offset)\n    baseline_dist = circular_distance(theta, baseline_center)\n\n    main_kernel = asymmetric_circular_kernel(\n        main_dist,\n        tuning_width * left_width_scale_1,\n        tuning_width * right_width_scale_1,\n        shape_1,\n    )\n\n    second_kernel = asymmetric_circular_kernel(\n        second_dist,\n        second_width * left_width_scale_2,\n        second_width * right_width_scale_2,\n        shape_2,\n    )\n\n    baseline_kernel = jnp.exp(-0.5 * (baseline_dist / baseline_width) ** 2)\n\n    return (baseline\n            + amplitude_1 * main_kernel\n            + amplitude_2 * second_kernel\n            + baseline_modulation * baseline_kernel)",
+      "selection": {
+        "score": 29.007585525512695,
+        "mse": 2.8847585525512693,
+        "parameters": 16,
+        "median_fitted_params": {
+          "theta_pref": 3.1600852012634277,
+          "baseline": 0.3324621021747589,
+          "amplitude_1": 4.108898162841797,
+          "amplitude_2": 1.441781997680664,
+          "tuning_width": 0.18736198544502258,
+          "second_offset": 3.1294684410095215,
+          "second_width": 0.12238074839115143,
+          "left_width_scale_1": 0.9615526795387268,
+          "right_width_scale_1": 0.9631413221359253,
+          "left_width_scale_2": 0.8231581449508667,
+          "right_width_scale_2": 0.9133815169334412,
+          "shape_1": 1.8253589868545532,
+          "shape_2": 0.9975658655166626,
+          "baseline_modulation": 0.959638774394989,
+          "baseline_center": 3.1217997074127197,
+          "baseline_width": 0.23649917542934418
+        }
+      }
+    },
+    {
+      "id": "0_4_1",
+      "iteration": 0,
+      "discovery_loss": 28.90922737121582,
+      "upstream_eval_loss": 28.87158966064453,
+      "code": "import numpy as np\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.1,\n                    amplitude_1=1.0, width_1=0.45, skew_1=0.0,\n                    amplitude_2=0.2, width_2=0.45, skew_2=0.0,\n                    amplitude_3=0.1, offset_3=1.5, width_3=0.8):\n    \"\"\"\n    parent_model_1: single_symmetric_circular_gaussian_model\n    parent_model_2: opposing_double_gaussian_tuning_model\n\n    Image-guided analysis:\n    The second parent model is clearly better in most subplots because it can\n    represent two opposing response lobes; for example, Cell 134, Cell 327,\n    and Cell 728 show that the red curve follows the sky-blue binned mean much\n    better than the single-lobe green curve. Cell 862 also shows that allowing\n    a low, separately fitted background is important: the green parent leaves\n    an unrealistically high baseline through the trough, while the red parent\n    drops close to the data.\n\n    However, the second parent still has systematic weaknesses. In Cell 108,\n    the blue mean has two narrow, sharp peaks, but the red curve is too broad\n    and too low because both peaks are forced to share one width. In Cell 778\n    and Cell 199 the blue peaks have asymmetric shoulders that symmetric\n    Gaussians cannot follow. In Cell 134 and Cell 327 there are smaller side\n    bumps/shoulders away from the two dominant lobes, and in Cell 986 the broad\n    wrap-around trough/shoulder structure is not captured by two fixed opposing\n    symmetric bumps.\n\n    This model improves on those parents by using circular von-Mises-like\n    Gaussian kernels with independent lobe widths, skew factors for the two\n    main lobes, and a third signed component whose center and width are free.\n    Independent widths fix the shared-width compromise in Cell 108/Cell 327;\n    skew fixes asymmetric peaks in Cell 199/Cell 778; the third component can\n    represent either an extra shoulder or an inhibitory surround, addressing\n    the residual side structure in Cell 134/Cell 327/Cell 986.\n\n    Equation:\n        R(theta) = max(0,\n            b\n            + A1 * W(delta1; w1) * (1 + s1 * sin(delta1))\n            + A2 * W(delta2; w2) * (1 + s2 * sin(delta2))\n            + A3 * W(delta3; w3)\n        )\n\n        W(delta; w) = exp((cos(delta) - 1) / w^2)\n        delta1 = angle(theta - theta_pref)\n        delta2 = angle(theta - (theta_pref + pi))\n        delta3 = angle(theta - (theta_pref + offset_3))\n\n    Free parameters:\n        theta_pref: preferred direction\n        b=baseline: tonic firing floor\n        A1, w1, s1: amplitude, width, and skew of the primary lobe\n        A2, w2, s2: amplitude, width, and skew of the opposite lobe\n        A3, offset_3, w3: signed third lobe for shoulder/inhibitory structure\n    \"\"\"\n    theta_pref = np.clip(theta_pref, 0.0, 2.0 * np.pi)\n    baseline = np.clip(baseline, 0.0, 20.0)\n\n    amplitude_1 = np.clip(amplitude_1, 0.0, 30.0)\n    width_1 = np.clip(width_1, 0.05, 2.5)\n    skew_1 = np.clip(skew_1, -0.85, 0.85)\n\n    amplitude_2 = np.clip(amplitude_2, 0.0, 30.0)\n    width_2 = np.clip(width_2, 0.05, 2.5)\n    skew_2 = np.clip(skew_2, -0.85, 0.85)\n\n    amplitude_3 = np.clip(amplitude_3, -10.0, 30.0)\n    offset_3 = np.clip(offset_3, 0.0, 2.0 * np.pi)\n    width_3 = np.clip(width_3, 0.05, 3.0)\n\n    theta = np.asarray(theta, dtype=float)\n\n    def signed_circular_distance(mu):\n        return np.arctan2(np.sin(theta - mu), np.cos(theta - mu))\n\n    def circular_kernel(delta, width):\n        return np.exp((np.cos(delta) - 1.0) / (width ** 2))\n\n    mu_1 = theta_pref\n    mu_2 = (theta_pref + np.pi) % (2.0 * np.pi)\n    mu_3 = (theta_pref + offset_3) % (2.0 * np.pi)\n\n    delta_1 = signed_circular_distance(mu_1)\n    delta_2 = signed_circular_distance(mu_2)\n    delta_3 = signed_circular_distance(mu_3)\n\n    lobe_1 = amplitude_1 * circular_kernel(delta_1, width_1) * (1.0 + skew_1 * np.sin(delta_1))\n    lobe_2 = amplitude_2 * circular_kernel(delta_2, width_2) * (1.0 + skew_2 * np.sin(delta_2))\n    lobe_3 = amplitude_3 * circular_kernel(delta_3, width_3)\n\n    response = baseline + lobe_1 + lobe_2 + lobe_3\n    return np.clip(response, 0.0, None)",
+      "jax_code": "import jax\nimport jax.numpy as jnp\n\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.1,\n                 amplitude_1=1.0, width_1=0.45, skew_1=0.0,\n                 amplitude_2=0.2, width_2=0.45, skew_2=0.0,\n                 amplitude_3=0.1, offset_3=1.5, width_3=0.8):\n    theta_pref = jnp.clip(theta_pref, 0.0, 2.0 * jnp.pi)\n    baseline = jnp.clip(baseline, 0.0, 20.0)\n\n    amplitude_1 = jnp.clip(amplitude_1, 0.0, 30.0)\n    width_1 = jnp.clip(width_1, 0.05, 2.5)\n    skew_1 = jnp.clip(skew_1, -0.85, 0.85)\n\n    amplitude_2 = jnp.clip(amplitude_2, 0.0, 30.0)\n    width_2 = jnp.clip(width_2, 0.05, 2.5)\n    skew_2 = jnp.clip(skew_2, -0.85, 0.85)\n\n    amplitude_3 = jnp.clip(amplitude_3, -10.0, 30.0)\n    offset_3 = jnp.clip(offset_3, 0.0, 2.0 * jnp.pi)\n    width_3 = jnp.clip(width_3, 0.05, 3.0)\n\n    theta = jnp.asarray(theta, dtype=jnp.float32)\n\n    def signed_circular_distance(mu):\n        return jnp.arctan2(jnp.sin(theta - mu), jnp.cos(theta - mu))\n\n    def circular_kernel(delta, width):\n        return jnp.exp((jnp.cos(delta) - 1.0) / (width ** 2))\n\n    mu_1 = theta_pref\n    mu_2 = (theta_pref + jnp.pi) % (2.0 * jnp.pi)\n    mu_3 = (theta_pref + offset_3) % (2.0 * jnp.pi)\n\n    delta_1 = signed_circular_distance(mu_1)\n    delta_2 = signed_circular_distance(mu_2)\n    delta_3 = signed_circular_distance(mu_3)\n\n    lobe_1 = amplitude_1 * circular_kernel(delta_1, width_1) * (1.0 + skew_1 * jnp.sin(delta_1))\n    lobe_2 = amplitude_2 * circular_kernel(delta_2, width_2) * (1.0 + skew_2 * jnp.sin(delta_2))\n    lobe_3 = amplitude_3 * circular_kernel(delta_3, width_3)\n\n    response = baseline + lobe_1 + lobe_2 + lobe_3\n    return jnp.clip(response, 0.0, None)",
+      "selection": {
+        "score": 29.063217163085938,
+        "mse": 2.895321716308594,
+        "parameters": 11,
+        "median_fitted_params": {
+          "theta_pref": 3.065037250518799,
+          "baseline": 0.3064308762550354,
+          "amplitude_1": 2.440678596496582,
+          "width_1": 0.21186605095863342,
+          "skew_1": 0.3963392674922943,
+          "amplitude_2": 0.6575682163238525,
+          "width_2": 0.38400375843048096,
+          "skew_2": -0.0313495509326458,
+          "amplitude_3": 2.2789547443389893,
+          "offset_3": 0.060039669275283813,
+          "width_3": 0.26473531126976013
+        }
+      }
+    },
+    {
+      "id": "0_0_0",
+      "iteration": 0,
+      "discovery_loss": 28.929723739624023,
+      "upstream_eval_loss": 31.78898429870605,
+      "code": "import numpy as np\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.0,\n                    amplitude_pref=1.0, amplitude_opp=0.0, amplitude_aux=0.0,\n                    width_pref=0.5, width_opp=0.5, width_aux=1.0,\n                    skew_pref=0.0, skew_opp=0.0, skew_aux=0.0,\n                    offset_pref=0.0, offset_opp=0.0, offset_aux=np.pi / 2.0,\n                    baseline_ripple=0.0, baseline_ripple_phase=0.0):\n    \"\"\"\n    parent_model_1: single_gaussian_tuning_model\n    parent_model_2: dual_opposite_gaussian_tuning_model\n\n    Image analysis:\n    - Across Cell 222 and Cell 683, the blue binned mean has strong lobes near\n      0/2*pi and a second lobe near pi. The single_gaussian_tuning_model leaves\n      a green flat baseline at one lobe, while the dual_opposite_gaussian model\n      correctly adds the opposing lobe. However, its red lobes are too symmetric\n      and use one shared width, so it misses sharper crests and shoulder asymmetries.\n    - In Cell 132 and Cell 582, the blue curve has a dominant narrow peak plus a\n      smaller separated lobe. The red curve finds the dominant peak but underfits\n      the smaller lobe because the two peaks must be exactly opposite and equally\n      shaped. This motivates independently controlled lobe centers, widths, and\n      amplitudes.\n    - In Cell 816 and Cell 589, the blue binned mean is visibly asymmetric and has\n      one-sided shoulders; both parent curves are smooth and symmetric there. This\n      motivates a skew term and an auxiliary broad component.\n    - In Cell 1015, Cell 195, and Cell 879, the red curve tracks the main peak well\n      but is slightly too smooth around the crest. Independent peak sharpness via\n      a circular von Mises-like width parameter should reduce this residual.\n\n    Equation:\n    Let D(theta, mu) = atan2(sin(theta - mu), cos(theta - mu)) be signed circular\n    distance. For components j in {pref, opp, aux}:\n        mu_pref = theta_pref + offset_pref\n        mu_opp  = theta_pref + pi + offset_opp\n        mu_aux  = theta_pref + offset_aux\n        kappa_j = 1 / width_j**2\n        K_j(theta) = exp( kappa_j * (cos(D_j) - 1 + skew_j * sin(D_j)\n                       - (-1 + sqrt(1 + skew_j**2))) )\n\n    The full response is:\n        R(theta) = max(0,\n            baseline\n            + baseline_ripple * cos(theta - baseline_ripple_phase)\n            + amplitude_pref * K_pref(theta)\n            + amplitude_opp  * K_opp(theta)\n            + amplitude_aux  * K_aux(theta))\n\n    This model improves on the parent models by keeping their successful wrapped\n    preferred/opposite tuning structure, but replacing the single shared symmetric\n    Gaussian width with independent circular widths, independent lobe offsets,\n    skew/asymmetry parameters, an optional auxiliary lobe, and a low-amplitude\n    baseline modulation term. These additions target the systematic residuals seen\n    in cells with double peaks, secondary lobes, narrow crests, and asymmetric shoulders.\n    \"\"\"\n    two_pi = 2.0 * np.pi\n\n    theta_pref = np.clip(theta_pref, 0.0, two_pi)\n    baseline = np.clip(baseline, 0.0, 50.0)\n\n    amplitude_pref = np.clip(amplitude_pref, 0.0, 50.0)\n    amplitude_opp = np.clip(amplitude_opp, 0.0, 50.0)\n    amplitude_aux = np.clip(amplitude_aux, 0.0, 50.0)\n\n    width_pref = np.clip(width_pref, 0.05, np.pi)\n    width_opp = np.clip(width_opp, 0.05, np.pi)\n    width_aux = np.clip(width_aux, 0.05, np.pi)\n\n    skew_pref = np.clip(skew_pref, -1.0, 1.0)\n    skew_opp = np.clip(skew_opp, -1.0, 1.0)\n    skew_aux = np.clip(skew_aux, -1.0, 1.0)\n\n    offset_pref = np.clip(offset_pref, -np.pi / 2.0, np.pi / 2.0)\n    offset_opp = np.clip(offset_opp, -np.pi / 2.0, np.pi / 2.0)\n    offset_aux = np.clip(offset_aux, 0.0, two_pi)\n\n    baseline_ripple = np.clip(baseline_ripple, 0.0, 20.0)\n    baseline_ripple_phase = np.clip(baseline_ripple_phase, 0.0, two_pi)\n\n    theta = np.asarray(theta, dtype=float)\n\n    def signed_circular_distance(a, b):\n        return np.arctan2(np.sin(a - b), np.cos(a - b))\n\n    def asymmetric_circular_kernel(delta, width, skew):\n        kappa = 1.0 / (width * width)\n        log_max = kappa * (-1.0 + np.sqrt(1.0 + skew * skew))\n        log_kernel = kappa * (np.cos(delta) - 1.0 + skew * np.sin(delta)) - log_max\n        return np.exp(log_kernel)\n\n    mu_pref = theta_pref + offset_pref\n    mu_opp = theta_pref + np.pi + offset_opp\n    mu_aux = theta_pref + offset_aux\n\n    delta_pref = signed_circular_distance(theta, mu_pref)\n    delta_opp = signed_circular_distance(theta, mu_opp)\n    delta_aux = signed_circular_distance(theta, mu_aux)\n\n    k_pref = asymmetric_circular_kernel(delta_pref, width_pref, skew_pref)\n    k_opp = asymmetric_circular_kernel(delta_opp, width_opp, skew_opp)\n    k_aux = asymmetric_circular_kernel(delta_aux, width_aux, skew_aux)\n\n    response = (\n        baseline\n        + baseline_ripple * np.cos(theta - baseline_ripple_phase)\n        + amplitude_pref * k_pref\n        + amplitude_opp * k_opp\n        + amplitude_aux * k_aux\n    )\n\n    return np.maximum(response, 0.0)",
+      "jax_code": "import jax\nimport jax.numpy as jnp\n\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.0,\n                 amplitude_pref=1.0, amplitude_opp=0.0, amplitude_aux=0.0,\n                 width_pref=0.5, width_opp=0.5, width_aux=1.0,\n                 skew_pref=0.0, skew_opp=0.0, skew_aux=0.0,\n                 offset_pref=0.0, offset_opp=0.0, offset_aux=jnp.pi / 2.0,\n                 baseline_ripple=0.0, baseline_ripple_phase=0.0):\n    two_pi = 2.0 * jnp.pi\n\n    theta_pref = jnp.clip(theta_pref, 0.0, two_pi)\n    baseline = jnp.clip(baseline, 0.0, 50.0)\n\n    amplitude_pref = jnp.clip(amplitude_pref, 0.0, 50.0)\n    amplitude_opp = jnp.clip(amplitude_opp, 0.0, 50.0)\n    amplitude_aux = jnp.clip(amplitude_aux, 0.0, 50.0)\n\n    width_pref = jnp.clip(width_pref, 0.05, jnp.pi)\n    width_opp = jnp.clip(width_opp, 0.05, jnp.pi)\n    width_aux = jnp.clip(width_aux, 0.05, jnp.pi)\n\n    skew_pref = jnp.clip(skew_pref, -1.0, 1.0)\n    skew_opp = jnp.clip(skew_opp, -1.0, 1.0)\n    skew_aux = jnp.clip(skew_aux, -1.0, 1.0)\n\n    offset_pref = jnp.clip(offset_pref, -jnp.pi / 2.0, jnp.pi / 2.0)\n    offset_opp = jnp.clip(offset_opp, -jnp.pi / 2.0, jnp.pi / 2.0)\n    offset_aux = jnp.clip(offset_aux, 0.0, two_pi)\n\n    baseline_ripple = jnp.clip(baseline_ripple, 0.0, 20.0)\n    baseline_ripple_phase = jnp.clip(baseline_ripple_phase, 0.0, two_pi)\n\n    theta = jnp.asarray(theta, dtype=jnp.float32)\n\n    def signed_circular_distance(a, b):\n        return jnp.arctan2(jnp.sin(a - b), jnp.cos(a - b))\n\n    def asymmetric_circular_kernel(delta, width, skew):\n        kappa = 1.0 / (width * width)\n        log_max = kappa * (-1.0 + jnp.sqrt(1.0 + skew * skew))\n        log_kernel = kappa * (jnp.cos(delta) - 1.0 + skew * jnp.sin(delta)) - log_max\n        return jnp.exp(log_kernel)\n\n    mu_pref = theta_pref + offset_pref\n    mu_opp = theta_pref + jnp.pi + offset_opp\n    mu_aux = theta_pref + offset_aux\n\n    delta_pref = signed_circular_distance(theta, mu_pref)\n    delta_opp = signed_circular_distance(theta, mu_opp)\n    delta_aux = signed_circular_distance(theta, mu_aux)\n\n    k_pref = asymmetric_circular_kernel(delta_pref, width_pref, skew_pref)\n    k_opp = asymmetric_circular_kernel(delta_opp, width_opp, skew_opp)\n    k_aux = asymmetric_circular_kernel(delta_aux, width_aux, skew_aux)\n\n    response = (\n        baseline\n        + baseline_ripple * jnp.cos(theta - baseline_ripple_phase)\n        + amplitude_pref * k_pref\n        + amplitude_opp * k_opp\n        + amplitude_aux * k_aux\n    )\n\n    return jnp.maximum(response, 0.0)",
+      "selection": {
+        "score": 31.89874839782715,
+        "mse": 3.173874839782715,
+        "parameters": 16,
+        "median_fitted_params": {
+          "theta_pref": 2.409416913986206,
+          "baseline": -0.021550752222537994,
+          "amplitude_pref": 2.5612432956695557,
+          "amplitude_opp": -0.02233932353556156,
+          "amplitude_aux": 3.384417772293091,
+          "width_pref": 0.0,
+          "width_opp": 3.3774118423461914,
+          "width_aux": 0.3882400095462799,
+          "skew_pref": 0.24575240910053253,
+          "skew_opp": -0.20806120336055756,
+          "skew_aux": 3.380303382873535,
+          "offset_pref": 0.5414161682128906,
+          "offset_opp": -0.20564520359039307,
+          "offset_aux": -0.01633913442492485,
+          "baseline_ripple": 0.8490530252456665,
+          "baseline_ripple_phase": 2.898333787918091
+        }
+      }
+    },
+    {
+      "id": "0_3_3",
+      "iteration": 0,
+      "discovery_loss": 28.99526023864746,
+      "upstream_eval_loss": 28.93980026245117,
+      "code": "import numpy as np\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.1,\n                    amplitude_1=3.0, amplitude_2=0.0,\n                    tuning_width_1=0.55, tuning_width_2=0.55,\n                    shape_power_1=2.0, shape_power_2=2.0,\n                    skew_1=0.0, skew_2=0.0,\n                    opposite_offset=np.pi):\n    \"\"\"\n    parent_model_1: single_circular_gaussian_model\n    parent_model_2: equal_width_anti_preferred_double_gaussian_model\n\n    Image analysis and design rationale:\n    - In Cell 402 and Cell 207 the sky-blue mean has clear two-lobed tuning, and the red\n      anti-preferred double Gaussian tracks it much better than the green single Gaussian.\n      This confirms that a baseline plus a second, roughly opposite lobe is a useful feature.\n    - In Cell 737 and Cell 200 a single dominant peak is sufficient, showing that the second\n      lobe must be allowed to vanish or become very small rather than being forced.\n    - In Cell 522 the binned mean has a much sharper peak than the red curve, while the green\n      curve can become too narrow/tall. This suggests that peak sharpness and width should be\n      separately adjustable.\n    - In Cell 464 and Cell 344, the two observed peaks are not perfectly equal in width or\n      exactly pi apart, and the wrap-around edge shape is asymmetric. The red parent curve\n      misses the depths of troughs and the shape near the 0/2pi boundary, so this model adds\n      independent lobe widths, independent shape powers, smooth circular skew, and a tunable\n      anti-preferred separation.\n    - In Cell 687 both parents fit the main peak fairly well, so the new flexibility is kept\n      nested around the earlier Gaussian-like solution and is clipped to plausible ranges.\n\n    Equation:\n        r(theta) = baseline\n                   + A1 * exp(-0.5 * abs(d1 / w1(d1))^p1)\n                   + A2 * exp(-0.5 * abs(d2 / w2(d2))^p2)\n\n        d1 = wrap(theta - theta_pref)\n        d2 = wrap(theta - theta_pref - opposite_offset)\n        wi(d) = wi * exp(si * sin(d))\n\n    Free parameters:\n        theta_pref, baseline, A1, A2, w1, w2, p1, p2, s1, s2, opposite_offset.\n\n    This model improves upon the parents by retaining the successful two-lobe structure while\n    allowing each lobe to have its own amplitude, width, sharpness, and skew. The tunable\n    opposite_offset captures anti-preferred peaks that are near but not exactly pi away, and\n    the circular formulation preserves continuity across the 0/2pi boundary.\n\n    Args:\n        theta (np.ndarray): Input angles in radians.\n        theta_pref (float): Preferred angle in radians.\n        baseline (float): Baseline firing rate.\n        amplitude_1 (float): Amplitude of the preferred-direction lobe.\n        amplitude_2 (float): Amplitude of the opposite-direction lobe.\n        tuning_width_1 (float): Width of the preferred-direction lobe.\n        tuning_width_2 (float): Width of the opposite-direction lobe.\n        shape_power_1 (float): Sharpness/tail exponent of the preferred lobe.\n        shape_power_2 (float): Sharpness/tail exponent of the opposite lobe.\n        skew_1 (float): Circular asymmetry of the preferred lobe.\n        skew_2 (float): Circular asymmetry of the opposite lobe.\n        opposite_offset (float): Separation between the two lobe centers.\n\n    Returns:\n        np.ndarray: Predicted firing rates.\n    \"\"\"\n    theta = np.asarray(theta, dtype=float)\n\n    theta_pref = np.clip(theta_pref, 0.0, 2.0 * np.pi)\n    baseline = np.clip(baseline, 0.0, 10.0)\n    amplitude_1 = np.clip(amplitude_1, 0.0, 20.0)\n    amplitude_2 = np.clip(amplitude_2, 0.0, 20.0)\n    tuning_width_1 = np.clip(tuning_width_1, 0.02, np.pi)\n    tuning_width_2 = np.clip(tuning_width_2, 0.02, np.pi)\n    shape_power_1 = np.clip(shape_power_1, 1.0, 4.0)\n    shape_power_2 = np.clip(shape_power_2, 1.0, 4.0)\n    skew_1 = np.clip(skew_1, -0.9, 0.9)\n    skew_2 = np.clip(skew_2, -0.9, 0.9)\n    opposite_offset = np.clip(opposite_offset, 2.0, 4.3)\n\n    def circ_diff(x, center):\n        return np.arctan2(np.sin(x - center), np.cos(x - center))\n\n    def shaped_lobe(d, amplitude, width, power, skew):\n        effective_width = width * np.exp(skew * np.sin(d))\n        effective_width = np.clip(effective_width, 0.01, np.pi)\n        return amplitude * np.exp(-0.5 * np.abs(d / effective_width) ** power)\n\n    center_1 = theta_pref\n    center_2 = np.mod(theta_pref + opposite_offset, 2.0 * np.pi)\n\n    d1 = circ_diff(theta, center_1)\n    d2 = circ_diff(theta, center_2)\n\n    lobe_1 = shaped_lobe(d1, amplitude_1, tuning_width_1, shape_power_1, skew_1)\n    lobe_2 = shaped_lobe(d2, amplitude_2, tuning_width_2, shape_power_2, skew_2)\n\n    return baseline + lobe_1 + lobe_2",
+      "jax_code": "import jax\nimport jax.numpy as jnp\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.1,\n                    amplitude_1=3.0, amplitude_2=0.0,\n                    tuning_width_1=0.55, tuning_width_2=0.55,\n                    shape_power_1=2.0, shape_power_2=2.0,\n                    skew_1=0.0, skew_2=0.0,\n                    opposite_offset=jnp.pi):\n    theta = jnp.asarray(theta, dtype=jnp.float32)\n\n    theta_pref = jnp.clip(theta_pref, 0.0, 2.0 * jnp.pi)\n    baseline = jnp.clip(baseline, 0.0, 10.0)\n    amplitude_1 = jnp.clip(amplitude_1, 0.0, 20.0)\n    amplitude_2 = jnp.clip(amplitude_2, 0.0, 20.0)\n    tuning_width_1 = jnp.clip(tuning_width_1, 0.02, jnp.pi)\n    tuning_width_2 = jnp.clip(tuning_width_2, 0.02, jnp.pi)\n    shape_power_1 = jnp.clip(shape_power_1, 1.0, 4.0)\n    shape_power_2 = jnp.clip(shape_power_2, 1.0, 4.0)\n    skew_1 = jnp.clip(skew_1, -0.9, 0.9)\n    skew_2 = jnp.clip(skew_2, -0.9, 0.9)\n    opposite_offset = jnp.clip(opposite_offset, 2.0, 4.3)\n\n    def circ_diff(x, center):\n        return jnp.arctan2(jnp.sin(x - center), jnp.cos(x - center))\n\n    def shaped_lobe(d, amplitude, width, power, skew):\n        effective_width = width * jnp.exp(skew * jnp.sin(d))\n        effective_width = jnp.clip(effective_width, 0.01, jnp.pi)\n        return amplitude * jnp.exp(-0.5 * jnp.abs(d / effective_width) ** power)\n\n    center_1 = theta_pref\n    center_2 = jnp.mod(theta_pref + opposite_offset, 2.0 * jnp.pi)\n\n    d1 = circ_diff(theta, center_1)\n    d2 = circ_diff(theta, center_2)\n\n    lobe_1 = shaped_lobe(d1, amplitude_1, tuning_width_1, shape_power_1, skew_1)\n    lobe_2 = shaped_lobe(d2, amplitude_2, tuning_width_2, shape_power_2, skew_2)\n\n    return baseline + lobe_1 + lobe_2",
+      "selection": {
+        "score": 29.066038131713867,
+        "mse": 2.8956038131713866,
+        "parameters": 11,
+        "median_fitted_params": {
+          "theta_pref": 3.161696672439575,
+          "baseline": 0.3397466838359833,
+          "amplitude_1": 4.103842258453369,
+          "amplitude_2": 0.8019200563430786,
+          "tuning_width_1": 0.21061411499977112,
+          "tuning_width_2": 0.16460099816322327,
+          "shape_power_1": 1.9127997159957886,
+          "shape_power_2": 0.9819896221160889,
+          "skew_1": -0.004373312462121248,
+          "skew_2": -0.08441807329654694,
+          "opposite_offset": 3.124601364135742
+        }
+      }
+    },
+    {
+      "id": "0_6_2",
+      "iteration": 0,
+      "discovery_loss": 29.050046920776367,
+      "upstream_eval_loss": 28.77921867370605,
+      "code": "import numpy as np\n\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.1, amplitude_1=3.0,\n                    amplitude_2=0.5, tuning_width_1=0.35, tuning_width_2=0.35,\n                    skew_1=0.0, skew_2=0.0, shape_1=2.0, shape_2=2.0,\n                    opposite_shift=0.0, baseline_mod_amp=0.0,\n                    baseline_mod_phase=0.0):\n    \"\"\"\n    parent_model_1: circular_gaussian_single_lobe_model\n    parent_model_2: antipodal_double_gaussian_model\n\n    Image-driven analysis:\n    The single-lobe parent in green fails most clearly in Cell 674 (top-left) and\n    Cell 914 (top-middle), where the sky-blue binned mean has two separated response\n    lobes; a single broad Gaussian spends probability mass in the troughs and therefore\n    sits far above the data between peaks. The antipodal two-lobe parent in red fixes\n    this gross bimodality and is better overall, but it still has systematic errors.\n    In Cell 914 (top-middle), Cell 555 (bottom-middle), and Cell 266 (bottom-right),\n    the red peaks are too symmetric and have a shared width, while the blue curves\n    have sharper or broader lobes on different sides. In Cell 831 (top-right) and\n    Cell 565 (bottom-left), a single narrow peak is well approximated by the red\n    model but is still slightly misplaced in width and peak shape. In Cell 3\n    (middle-right) and Cell 518 (middle-middle), the blue mean contains broad shoulder\n    or small secondary structure that the flat baseline of both parents cannot follow.\n\n    This model keeps the successful idea of two circular response lobes, but makes each\n    lobe independently flexible: different amplitudes, widths, asymmetry, and peak\n    sharpness. It also lets the second lobe move slightly away from exact antipodal\n    separation and adds a weak circular baseline modulation for broad nonuniform background\n    activity. These changes directly target the observed weaknesses: under/over-shooting\n    narrow peaks, symmetric lobes where the data are skewed, and flat troughs where the\n    binned mean has slow structure.\n\n    Equation:\n        d1 = wrap(theta - theta_pref)\n        d2 = wrap(theta - (theta_pref + pi + opposite_shift))\n        G(d; w, s, p) = exp[-0.5 * |d / (w * exp(s * d / pi))|^p]\n        R(theta) = max(0,\n                   baseline\n                   + baseline_mod_amp * cos(theta - baseline_mod_phase)\n                   + amplitude_1 * G(d1; tuning_width_1, skew_1, shape_1)\n                   + amplitude_2 * G(d2; tuning_width_2, skew_2, shape_2))\n\n    Free parameters: theta_pref, baseline, amplitude_1, amplitude_2,\n    tuning_width_1, tuning_width_2, skew_1, skew_2, shape_1, shape_2,\n    opposite_shift, baseline_mod_amp, baseline_mod_phase.\n    \"\"\"\n    theta_pref = np.clip(theta_pref, 0.0, 2.0 * np.pi)\n    baseline = np.clip(baseline, 0.0, 50.0)\n    amplitude_1 = np.clip(amplitude_1, 0.0, 50.0)\n    amplitude_2 = np.clip(amplitude_2, 0.0, 50.0)\n    tuning_width_1 = np.clip(tuning_width_1, 0.05, 2.0)\n    tuning_width_2 = np.clip(tuning_width_2, 0.05, 2.0)\n    skew_1 = np.clip(skew_1, -2.0, 2.0)\n    skew_2 = np.clip(skew_2, -2.0, 2.0)\n    shape_1 = np.clip(shape_1, 1.0, 4.0)\n    shape_2 = np.clip(shape_2, 1.0, 4.0)\n    opposite_shift = np.clip(opposite_shift, -0.5 * np.pi, 0.5 * np.pi)\n    baseline_mod_amp = np.clip(baseline_mod_amp, 0.0, 10.0)\n    baseline_mod_phase = np.clip(baseline_mod_phase, 0.0, 2.0 * np.pi)\n\n    theta = np.asarray(theta, dtype=float)\n\n    def wrap(angle):\n        return (angle + np.pi) % (2.0 * np.pi) - np.pi\n\n    def lobe(distance, width, skew, shape):\n        effective_width = width * np.exp(skew * distance / np.pi)\n        standardized = np.abs(distance / effective_width)\n        return np.exp(-0.5 * np.power(standardized, shape))\n\n    mu_1 = theta_pref\n    mu_2 = (theta_pref + np.pi + opposite_shift) % (2.0 * np.pi)\n\n    distance_1 = wrap(theta - mu_1)\n    distance_2 = wrap(theta - mu_2)\n\n    response = (\n        baseline\n        + baseline_mod_amp * np.cos(theta - baseline_mod_phase)\n        + amplitude_1 * lobe(distance_1, tuning_width_1, skew_1, shape_1)\n        + amplitude_2 * lobe(distance_2, tuning_width_2, skew_2, shape_2)\n    )\n\n    return np.maximum(response, 0.0)",
+      "jax_code": "import jax\nimport jax.numpy as jnp\n\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.1, amplitude_1=3.0,\n                 amplitude_2=0.5, tuning_width_1=0.35, tuning_width_2=0.35,\n                 skew_1=0.0, skew_2=0.0, shape_1=2.0, shape_2=2.0,\n                 opposite_shift=0.0, baseline_mod_amp=0.0,\n                 baseline_mod_phase=0.0):\n    theta_pref = jnp.clip(theta_pref, 0.0, 2.0 * jnp.pi)\n    baseline = jnp.clip(baseline, 0.0, 50.0)\n    amplitude_1 = jnp.clip(amplitude_1, 0.0, 50.0)\n    amplitude_2 = jnp.clip(amplitude_2, 0.0, 50.0)\n    tuning_width_1 = jnp.clip(tuning_width_1, 0.05, 2.0)\n    tuning_width_2 = jnp.clip(tuning_width_2, 0.05, 2.0)\n    skew_1 = jnp.clip(skew_1, -2.0, 2.0)\n    skew_2 = jnp.clip(skew_2, -2.0, 2.0)\n    shape_1 = jnp.clip(shape_1, 1.0, 4.0)\n    shape_2 = jnp.clip(shape_2, 1.0, 4.0)\n    opposite_shift = jnp.clip(opposite_shift, -0.5 * jnp.pi, 0.5 * jnp.pi)\n    baseline_mod_amp = jnp.clip(baseline_mod_amp, 0.0, 10.0)\n    baseline_mod_phase = jnp.clip(baseline_mod_phase, 0.0, 2.0 * jnp.pi)\n\n    theta = jnp.asarray(theta, dtype=jnp.float32)\n\n    def wrap(angle):\n        return (angle + jnp.pi) % (2.0 * jnp.pi) - jnp.pi\n\n    def lobe(distance, width, skew, shape):\n        effective_width = width * jnp.exp(skew * distance / jnp.pi)\n        standardized = jnp.abs(distance / effective_width)\n        return jnp.exp(-0.5 * jnp.power(standardized, shape))\n\n    mu_1 = theta_pref\n    mu_2 = (theta_pref + jnp.pi + opposite_shift) % (2.0 * jnp.pi)\n\n    distance_1 = wrap(theta - mu_1)\n    distance_2 = wrap(theta - mu_2)\n\n    response = (\n        baseline\n        + baseline_mod_amp * jnp.cos(theta - baseline_mod_phase)\n        + amplitude_1 * lobe(distance_1, tuning_width_1, skew_1, shape_1)\n        + amplitude_2 * lobe(distance_2, tuning_width_2, skew_2, shape_2)\n    )\n\n    return jnp.maximum(response, 0.0)",
+      "selection": {
+        "score": 28.941844940185547,
+        "mse": 2.8811844940185547,
+        "parameters": 13,
+        "median_fitted_params": {
+          "theta_pref": 3.1554574966430664,
+          "baseline": 0.2975776791572571,
+          "amplitude_1": 3.947021722793579,
+          "amplitude_2": 1.1540051698684692,
+          "tuning_width_1": 0.2225462645292282,
+          "tuning_width_2": 0.11421223729848862,
+          "skew_1": 0.06787074357271194,
+          "skew_2": 0.050545454025268555,
+          "shape_1": 2.4340953826904297,
+          "shape_2": 1.1263965368270874,
+          "opposite_shift": 0.0,
+          "baseline_mod_amp": 0.2055802345275879,
+          "baseline_mod_phase": 3.3008105754852295
+        }
+      }
+    },
+    {
+      "id": "0_5_4",
+      "iteration": 0,
+      "discovery_loss": 29.253353118896484,
+      "upstream_eval_loss": 28.720956802368164,
+      "code": "import numpy as np\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0,\n                    amplitude_2=0.0, kappa_1=4.0, kappa_2=3.0,\n                    skew_1=0.0, skew_2=0.0, opposite_offset=0.0,\n                    halo_amp=0.0, halo_kappa=0.6,\n                    baseline_cos_1=0.0, baseline_sin_1=0.0,\n                    baseline_cos_2=0.0, baseline_sin_2=0.0):\n    \"\"\"\n    parent_model_1: circular_gaussian_single_lobe_model\n    parent_model_2: dual_opposite_gaussian_model\n\n    Image analysis and generalization:\n        The two-lobe parent generally has the lower loss because many cells show\n        a second, weaker response region or wrap-around structure that the\n        single-lobe parent cannot express. For example, in Cell 462 and Cell 581\n        the blue binned mean remains elevated near theta=0 and theta=2*pi, and\n        the red two-lobe model partially follows this better than the green\n        single-lobe model. In Cell 893, Cell 198, and Cell 1025, where the blue\n        curve is dominated by one clean peak, both parents are close, showing\n        that the extra lobe should remain free and low-amplitude rather than\n        being forced.\n\n        The largest visible weaknesses are shape mismatches. In Cell 458 and\n        Cell 997, the blue peak is sharper and often slightly asymmetric while\n        the red/green Gaussian peaks are too smooth and too broad. In Cell 725\n        and Cell 241, small broader humps away from the main peak are missed or\n        are approximated with the wrong width. In Cell 462 and near the edges\n        of Cell 581, a single narrow Gaussian tail underestimates the circular\n        shoulder close to theta=0/2*pi. Thus, lower loss should correlate with\n        circular wrap handling, independent lobe widths/amplitudes, asymmetric\n        peak shape, and a low broad halo or harmonic baseline.\n\n        This model fixes those weaknesses by replacing circular Gaussians with\n        periodic von-Mises-like lobes controlled by independent sharpness and\n        skew parameters. It allows the second lobe to move away from exact\n        180 degrees, have its own sharpness, and be asymmetric. It also adds a\n        broad circular halo around the preferred direction to capture wrap\n        shoulders missed in Cell 462/Cell 581, plus first and second harmonic\n        baseline terms for weak broad humps such as those in Cell 725/Cell 241.\n\n    Equation:\n        w(x) = atan2(sin(x), cos(x))\n        d1 = w(theta - theta_pref)\n        d2 = w(theta - theta_pref - pi - opposite_offset)\n\n        V(d; k, beta) = exp(k * (cos(d + beta * sin(d)) - 1))\n        H(d; k_h) = exp(k_h * (cos(d) - 1))\n\n        R(theta) = max(0,\n            baseline\n            + baseline_cos_1 * cos(theta) + baseline_sin_1 * sin(theta)\n            + baseline_cos_2 * cos(2*theta) + baseline_sin_2 * sin(2*theta)\n            + halo_amp * H(d1; halo_kappa)\n            + amplitude_1 * V(d1; kappa_1, skew_1)\n            + amplitude_2 * V(d2; kappa_2, skew_2)\n        )\n\n        Free parameters:\n            theta_pref, baseline, amplitude_1, amplitude_2, kappa_1, kappa_2,\n            skew_1, skew_2, opposite_offset, halo_amp, halo_kappa,\n            baseline_cos_1, baseline_sin_1, baseline_cos_2, baseline_sin_2.\n    \"\"\"\n    theta_pref = np.clip(theta_pref, 0.0, 2.0 * np.pi)\n    baseline = np.clip(baseline, 0.0, 100.0)\n    amplitude_1 = np.clip(amplitude_1, 0.0, 100.0)\n    amplitude_2 = np.clip(amplitude_2, 0.0, 100.0)\n    kappa_1 = np.clip(kappa_1, 0.05, 100.0)\n    kappa_2 = np.clip(kappa_2, 0.05, 100.0)\n    skew_1 = np.clip(skew_1, -0.95, 0.95)\n    skew_2 = np.clip(skew_2, -0.95, 0.95)\n    opposite_offset = np.clip(opposite_offset, -0.5 * np.pi, 0.5 * np.pi)\n    halo_amp = np.clip(halo_amp, 0.0, 100.0)\n    halo_kappa = np.clip(halo_kappa, 0.02, 20.0)\n    baseline_cos_1 = np.clip(baseline_cos_1, -50.0, 50.0)\n    baseline_sin_1 = np.clip(baseline_sin_1, -50.0, 50.0)\n    baseline_cos_2 = np.clip(baseline_cos_2, -50.0, 50.0)\n    baseline_sin_2 = np.clip(baseline_sin_2, -50.0, 50.0)\n\n    theta = np.asarray(theta, dtype=float)\n\n    def wrap(x):\n        return np.arctan2(np.sin(x), np.cos(x))\n\n    def skewed_von_mises(d, kappa, skew):\n        warped_d = d + skew * np.sin(d)\n        return np.exp(kappa * (np.cos(warped_d) - 1.0))\n\n    d1 = wrap(theta - theta_pref)\n    d2 = wrap(theta - (theta_pref + np.pi + opposite_offset))\n\n    lobe_1 = amplitude_1 * skewed_von_mises(d1, kappa_1, skew_1)\n    lobe_2 = amplitude_2 * skewed_von_mises(d2, kappa_2, skew_2)\n    halo = halo_amp * np.exp(halo_kappa * (np.cos(d1) - 1.0))\n\n    harmonic_baseline = (\n        baseline\n        + baseline_cos_1 * np.cos(theta)\n        + baseline_sin_1 * np.sin(theta)\n        + baseline_cos_2 * np.cos(2.0 * theta)\n        + baseline_sin_2 * np.sin(2.0 * theta)\n    )\n\n    rate = harmonic_baseline + halo + lobe_1 + lobe_2\n    return np.maximum(rate, 0.0)",
+      "jax_code": "import jax\nimport jax.numpy as jnp\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.0, amplitude_1=1.0,\n                    amplitude_2=0.0, kappa_1=4.0, kappa_2=3.0,\n                    skew_1=0.0, skew_2=0.0, opposite_offset=0.0,\n                    halo_amp=0.0, halo_kappa=0.6,\n                    baseline_cos_1=0.0, baseline_sin_1=0.0,\n                    baseline_cos_2=0.0, baseline_sin_2=0.0):\n    theta_pref = jnp.clip(theta_pref, 0.0, 2.0 * jnp.pi)\n    baseline = jnp.clip(baseline, 0.0, 100.0)\n    amplitude_1 = jnp.clip(amplitude_1, 0.0, 100.0)\n    amplitude_2 = jnp.clip(amplitude_2, 0.0, 100.0)\n    kappa_1 = jnp.clip(kappa_1, 0.05, 100.0)\n    kappa_2 = jnp.clip(kappa_2, 0.05, 100.0)\n    skew_1 = jnp.clip(skew_1, -0.95, 0.95)\n    skew_2 = jnp.clip(skew_2, -0.95, 0.95)\n    opposite_offset = jnp.clip(opposite_offset, -0.5 * jnp.pi, 0.5 * jnp.pi)\n    halo_amp = jnp.clip(halo_amp, 0.0, 100.0)\n    halo_kappa = jnp.clip(halo_kappa, 0.02, 20.0)\n    baseline_cos_1 = jnp.clip(baseline_cos_1, -50.0, 50.0)\n    baseline_sin_1 = jnp.clip(baseline_sin_1, -50.0, 50.0)\n    baseline_cos_2 = jnp.clip(baseline_cos_2, -50.0, 50.0)\n    baseline_sin_2 = jnp.clip(baseline_sin_2, -50.0, 50.0)\n\n    theta = jnp.asarray(theta, dtype=jnp.result_type(theta, jnp.float32))\n\n    def wrap(x):\n        return jnp.arctan2(jnp.sin(x), jnp.cos(x))\n\n    def skewed_von_mises(d, kappa, skew):\n        warped_d = d + skew * jnp.sin(d)\n        return jnp.exp(kappa * (jnp.cos(warped_d) - 1.0))\n\n    d1 = wrap(theta - theta_pref)\n    d2 = wrap(theta - (theta_pref + jnp.pi + opposite_offset))\n\n    lobe_1 = amplitude_1 * skewed_von_mises(d1, kappa_1, skew_1)\n    lobe_2 = amplitude_2 * skewed_von_mises(d2, kappa_2, skew_2)\n    halo = halo_amp * jnp.exp(halo_kappa * (jnp.cos(d1) - 1.0))\n\n    harmonic_baseline = (\n        baseline\n        + baseline_cos_1 * jnp.cos(theta)\n        + baseline_sin_1 * jnp.sin(theta)\n        + baseline_cos_2 * jnp.cos(2.0 * theta)\n        + baseline_sin_2 * jnp.sin(2.0 * theta)\n    )\n\n    rate = harmonic_baseline + halo + lobe_1 + lobe_2\n    return jnp.maximum(rate, 0.0)",
+      "selection": {
+        "score": 28.93147850036621,
+        "mse": 2.8781478500366213,
+        "parameters": 15,
+        "median_fitted_params": {
+          "theta_pref": 3.157461166381836,
+          "baseline": 0.27818945050239563,
+          "amplitude_1": 3.3632593154907227,
+          "amplitude_2": -0.018015189096331596,
+          "kappa_1": 5.858183860778809,
+          "kappa_2": 4.0,
+          "skew_1": 0.9693803787231445,
+          "skew_2": 0.0,
+          "opposite_offset": 0.0,
+          "halo_amp": -0.01801597885787487,
+          "halo_kappa": 0.019999999552965164,
+          "baseline_cos_1": 0.0009519577724859118,
+          "baseline_sin_1": 0.015760501846671104,
+          "baseline_cos_2": 0.07013248652219772,
+          "baseline_sin_2": -0.0014668816002085805
+        }
+      }
+    },
+    {
+      "id": "0_1_3",
+      "iteration": 0,
+      "discovery_loss": 29.369579315185547,
+      "upstream_eval_loss": 29.18275451660156,
+      "code": "import numpy as np\n\ndef neuron_model(\n    theta,\n    theta_pref=0.0,\n    baseline=0.0,\n    amplitude_1=1.0,\n    amplitude_2=0.0,\n    tuning_width=0.45,\n    tuning_width_2=0.45,\n    peak_shape_1=2.0,\n    peak_shape_2=2.0,\n    asymmetry_1=1.0,\n    asymmetry_2=1.0,\n    second_peak_offset=np.pi,\n):\n    \"\"\"\n    parent_model_1: single_lobe_circular_gaussian_model\n    parent_model_2: fixed_antipodal_double_gaussian_model\n\n    Image-driven analysis:\n    - In Cell 1018 and Cell 630, parent_model_1 already tracks the sky-blue binned mean\n      very well, showing that a circular Gaussian is a strong unimodal response kernel.\n      This model preserves that behavior by allowing amplitude_2 to become zero.\n    - In Cell 408, Cell 169, Cell 756, Cell 674, and Cell 647, parent_model_2 is clearly\n      better than parent_model_1 because the sky-blue mean has two lobes near opposite\n      directions; the green single-lobe curve often collapses into an elevated baseline\n      and misses one lobe entirely.\n    - parent_model_2 still systematically underfits or over-smooths several features:\n      Cell 756 has a much taller, narrower primary lobe than the red curve; Cell 169 and\n      Cell 408 show sharper/taller sky-blue peaks than the red double Gaussian; Cell 674\n      has an underfit right lobe; Cell 850 and Cell 1050 suggest unequal lobe widths and\n      slight phase/width asymmetry. These residuals indicate that a shared tuning width,\n      fixed pi separation, and symmetric Gaussian shape are too restrictive.\n    - The isolated one-bin spike in Cell 647 is likely noisy, so this model keeps a smooth\n      tuned profile instead of adding parameters that chase a single irregular bin.\n\n    Equation:\n        delta_i = atan2(sin(theta - mu_i), cos(theta - mu_i))\n        mu_1 = theta_pref\n        mu_2 = theta_pref + second_peak_offset\n\n        s_i(delta_i) = tuning_width_i * asymmetry_i     if delta_i < 0\n                       tuning_width_i / asymmetry_i     otherwise\n\n        response(theta) = baseline\n                        + amplitude_1 * exp(-0.5 * abs(delta_1 / s_1(delta_1)) ** peak_shape_1)\n                        + amplitude_2 * exp(-0.5 * abs(delta_2 / s_2(delta_2)) ** peak_shape_2)\n\n    Free parameters:\n        theta_pref, baseline, amplitude_1, amplitude_2, tuning_width, tuning_width_2,\n        peak_shape_1, peak_shape_2, asymmetry_1, asymmetry_2, second_peak_offset.\n\n    Improvement:\n        This model generalizes parent_model_2 by giving each lobe its own amplitude,\n        width, sharpness/exponent, and left/right asymmetry, and by allowing the second\n        lobe to be near\u2014but not rigidly fixed to\u2014the antipodal direction. These changes\n        directly address the image residuals while retaining the strong unimodal and\n        bimodal circular-tuning behaviors of the parent models.\n    \"\"\"\n    theta_pref = np.clip(theta_pref, 0.0, 2.0 * np.pi)\n    baseline = np.clip(baseline, 0.0, 200.0)\n    amplitude_1 = np.clip(amplitude_1, 0.0, 200.0)\n    amplitude_2 = np.clip(amplitude_2, 0.0, 200.0)\n    tuning_width = np.clip(tuning_width, 0.05, np.pi)\n    tuning_width_2 = np.clip(tuning_width_2, 0.05, np.pi)\n    peak_shape_1 = np.clip(peak_shape_1, 0.75, 4.0)\n    peak_shape_2 = np.clip(peak_shape_2, 0.75, 4.0)\n    asymmetry_1 = np.clip(asymmetry_1, 0.35, 2.85)\n    asymmetry_2 = np.clip(asymmetry_2, 0.35, 2.85)\n    second_peak_offset = np.clip(second_peak_offset, 0.5 * np.pi, 1.5 * np.pi)\n\n    theta = np.asarray(theta, dtype=float)\n\n    mu_1 = theta_pref\n    mu_2 = theta_pref + second_peak_offset\n\n    delta_1 = np.arctan2(np.sin(theta - mu_1), np.cos(theta - mu_1))\n    delta_2 = np.arctan2(np.sin(theta - mu_2), np.cos(theta - mu_2))\n\n    scale_1 = np.where(delta_1 < 0.0, tuning_width * asymmetry_1, tuning_width / asymmetry_1)\n    scale_2 = np.where(delta_2 < 0.0, tuning_width_2 * asymmetry_2, tuning_width_2 / asymmetry_2)\n\n    lobe_1 = np.exp(-0.5 * np.abs(delta_1 / scale_1) ** peak_shape_1)\n    lobe_2 = np.exp(-0.5 * np.abs(delta_2 / scale_2) ** peak_shape_2)\n\n    return baseline + amplitude_1 * lobe_1 + amplitude_2 * lobe_2",
+      "jax_code": "import jax\nimport jax.numpy as jnp\n\ndef neuron_model(\n    theta,\n    theta_pref=0.0,\n    baseline=0.0,\n    amplitude_1=1.0,\n    amplitude_2=0.0,\n    tuning_width=0.45,\n    tuning_width_2=0.45,\n    peak_shape_1=2.0,\n    peak_shape_2=2.0,\n    asymmetry_1=1.0,\n    asymmetry_2=1.0,\n    second_peak_offset=jnp.pi,\n):\n    theta_pref = jnp.clip(theta_pref, 0.0, 2.0 * jnp.pi)\n    baseline = jnp.clip(baseline, 0.0, 200.0)\n    amplitude_1 = jnp.clip(amplitude_1, 0.0, 200.0)\n    amplitude_2 = jnp.clip(amplitude_2, 0.0, 200.0)\n    tuning_width = jnp.clip(tuning_width, 0.05, jnp.pi)\n    tuning_width_2 = jnp.clip(tuning_width_2, 0.05, jnp.pi)\n    peak_shape_1 = jnp.clip(peak_shape_1, 0.75, 4.0)\n    peak_shape_2 = jnp.clip(peak_shape_2, 0.75, 4.0)\n    asymmetry_1 = jnp.clip(asymmetry_1, 0.35, 2.85)\n    asymmetry_2 = jnp.clip(asymmetry_2, 0.35, 2.85)\n    second_peak_offset = jnp.clip(second_peak_offset, 0.5 * jnp.pi, 1.5 * jnp.pi)\n\n    theta = jnp.asarray(theta, dtype=jnp.float32)\n\n    mu_1 = theta_pref\n    mu_2 = theta_pref + second_peak_offset\n\n    delta_1 = jnp.arctan2(jnp.sin(theta - mu_1), jnp.cos(theta - mu_1))\n    delta_2 = jnp.arctan2(jnp.sin(theta - mu_2), jnp.cos(theta - mu_2))\n\n    scale_1 = jnp.where(\n        delta_1 < 0.0,\n        tuning_width * asymmetry_1,\n        tuning_width / asymmetry_1,\n    )\n    scale_2 = jnp.where(\n        delta_2 < 0.0,\n        tuning_width_2 * asymmetry_2,\n        tuning_width_2 / asymmetry_2,\n    )\n\n    lobe_1 = jnp.exp(-0.5 * jnp.abs(delta_1 / scale_1) ** peak_shape_1)\n    lobe_2 = jnp.exp(-0.5 * jnp.abs(delta_2 / scale_2) ** peak_shape_2)\n\n    return baseline + amplitude_1 * lobe_1 + amplitude_2 * lobe_2",
+      "selection": {
+        "score": 29.5235538482666,
+        "mse": 2.94135538482666,
+        "parameters": 11,
+        "median_fitted_params": {
+          "theta_pref": 3.157015800476074,
+          "baseline": 0.3845866322517395,
+          "amplitude_1": 3.6481592655181885,
+          "amplitude_2": 2.5281803607940674,
+          "tuning_width": 0.257016122341156,
+          "tuning_width_2": 0.04272644966840744,
+          "peak_shape_1": 2.3648605346679688,
+          "peak_shape_2": 3.2093636989593506,
+          "asymmetry_1": 0.9925075173377991,
+          "asymmetry_2": 0.9728756546974182,
+          "second_peak_offset": 3.091329574584961
+        }
+      }
+    },
+    {
+      "id": "0_3_0",
+      "iteration": 0,
+      "discovery_loss": 29.69057273864746,
+      "upstream_eval_loss": 29.251745223999023,
+      "code": "import numpy as np\n\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.5,\n                    baseline_cos1=0.0, baseline_phase1=0.0,\n                    baseline_cos2=0.0, baseline_phase2=0.0,\n                    amplitude_1=3.0, amplitude_2=1.0,\n                    peak_offset_1=0.0, peak_offset_2=0.0,\n                    width_1=0.45, width_2=0.45,\n                    width_asym_1=1.0, width_asym_2=1.0,\n                    shape_1=2.0, shape_2=2.0,\n                    skew_1=0.0, skew_2=0.0):\n    \"\"\"\n    parent_models:\n        single_circular_gaussian_model: a one-preferred-direction Gaussian tuning curve with a baseline.\n        equal_width_bidirectional_gaussian_model: two Gaussian peaks at theta_pref and theta_pref + pi with independent amplitudes but shared width.\n\n    Image-driven analysis:\n        In Cell 51 and Cell 525, the equal-width bidirectional parent follows the sky-blue binned mean around the dominant narrow peak much better than the single-peak parent, showing that a second peak or secondary drive is useful.\n        In Cell 329 and Cell 105, the two visible peaks have unequal amplitudes and slightly different widths; the shared-width bidirectional parent captures the locations but underfits the asymmetry of the peaks.\n        In Cell 745 and Cell 621, the binned mean has a very sharp high peak while the parent curves are too smooth or too low at the peak, indicating that peak sharpness needs its own free parameter.\n        In Cell 676, Cell 179, and Cell 295, the sky-blue mean has broad baseline modulation, edge activity, and small secondary lobes that are not captured by a constant baseline plus symmetric Gaussian peaks.\n        Overall, the lower loss of the bidirectional parent is associated with representing two opposite response lobes and independent lobe amplitudes. The remaining systematic errors are fixed-width lobes, fixed lobe locations, symmetric lobe shape, and an overly simple baseline.\n\n    Model equation:\n        mu_1 = wrap(theta_pref + peak_offset_1)\n        mu_2 = wrap(theta_pref + pi + peak_offset_2)\n        d_j = wrap(theta - mu_j)\n\n        sigma_left_j  = width_j / sqrt(width_asym_j)\n        sigma_right_j = width_j * sqrt(width_asym_j)\n        sigma_side_j  = sigma_left_j if d_j < 0 else sigma_right_j\n\n        G_j = exp(-(|d_j| / sigma_side_j) ** shape_j) * (1 + skew_j * sin(d_j))\n\n        response = max(0,\n            baseline\n            + baseline_cos1 * cos(theta - baseline_phase1)\n            + baseline_cos2 * cos(2 * theta - baseline_phase2)\n            + amplitude_1 * G_1\n            + amplitude_2 * G_2\n        )\n\n    Improvement:\n        This model keeps the successful bidirectional structure of the stronger parent, but generalizes it with independent peak offsets, independent peak widths, independent left/right width asymmetry, independent peak sharpness exponents, peak skew, and a low-order circular baseline. These features can reproduce narrow spikes, broad skirts, unequal lobes, slightly non-opposite peaks, and broad curved baselines seen in the subplots, while reducing to the stronger parent when asymmetries, offsets, skew, and baseline harmonics are set to neutral values.\n    \"\"\"\n    two_pi = 2.0 * np.pi\n    theta = np.asarray(theta, dtype=float)\n\n    theta_pref = np.clip(theta_pref, 0.0, two_pi)\n    baseline = np.clip(baseline, 0.0, 100.0)\n\n    baseline_cos1 = np.clip(baseline_cos1, -5.0, 5.0)\n    baseline_cos2 = np.clip(baseline_cos2, -5.0, 5.0)\n    baseline_phase1 = np.clip(baseline_phase1, 0.0, two_pi)\n    baseline_phase2 = np.clip(baseline_phase2, 0.0, two_pi)\n\n    amplitude_1 = np.clip(amplitude_1, 0.0, 100.0)\n    amplitude_2 = np.clip(amplitude_2, 0.0, 100.0)\n\n    peak_offset_1 = np.clip(peak_offset_1, -0.8, 0.8)\n    peak_offset_2 = np.clip(peak_offset_2, -0.8, 0.8)\n\n    width_1 = np.clip(width_1, 0.08, 2.5)\n    width_2 = np.clip(width_2, 0.08, 2.5)\n\n    width_asym_1 = np.clip(width_asym_1, 0.25, 4.0)\n    width_asym_2 = np.clip(width_asym_2, 0.25, 4.0)\n\n    shape_1 = np.clip(shape_1, 0.75, 3.0)\n    shape_2 = np.clip(shape_2, 0.75, 3.0)\n\n    skew_1 = np.clip(skew_1, -0.85, 0.85)\n    skew_2 = np.clip(skew_2, -0.85, 0.85)\n\n    def _wrapped_diff(x, center):\n        return np.arctan2(np.sin(x - center), np.cos(x - center))\n\n    def _asymmetric_peak(d, width, width_asym, shape, skew):\n        root_asym = np.sqrt(width_asym)\n        sigma_left = width / root_asym\n        sigma_right = width * root_asym\n        sigma_side = np.where(d < 0.0, sigma_left, sigma_right)\n        kernel = np.exp(-np.power(np.abs(d) / sigma_side, shape))\n        return kernel * (1.0 + skew * np.sin(d))\n\n    mu_1 = np.mod(theta_pref + peak_offset_1, two_pi)\n    mu_2 = np.mod(theta_pref + np.pi + peak_offset_2, two_pi)\n\n    d_1 = _wrapped_diff(theta, mu_1)\n    d_2 = _wrapped_diff(theta, mu_2)\n\n    g_1 = _asymmetric_peak(d_1, width_1, width_asym_1, shape_1, skew_1)\n    g_2 = _asymmetric_peak(d_2, width_2, width_asym_2, shape_2, skew_2)\n\n    response = (\n        baseline\n        + baseline_cos1 * np.cos(theta - baseline_phase1)\n        + baseline_cos2 * np.cos(2.0 * theta - baseline_phase2)\n        + amplitude_1 * g_1\n        + amplitude_2 * g_2\n    )\n\n    return np.maximum(response, 0.0)",
+      "jax_code": "import jax\nimport jax.numpy as jnp\n\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.5,\n                 baseline_cos1=0.0, baseline_phase1=0.0,\n                 baseline_cos2=0.0, baseline_phase2=0.0,\n                 amplitude_1=3.0, amplitude_2=1.0,\n                 peak_offset_1=0.0, peak_offset_2=0.0,\n                 width_1=0.45, width_2=0.45,\n                 width_asym_1=1.0, width_asym_2=1.0,\n                 shape_1=2.0, shape_2=2.0,\n                 skew_1=0.0, skew_2=0.0):\n    two_pi = 2.0 * jnp.pi\n    theta = jnp.asarray(theta, dtype=jnp.float32)\n\n    theta_pref = jnp.clip(theta_pref, 0.0, two_pi)\n    baseline = jnp.clip(baseline, 0.0, 100.0)\n\n    baseline_cos1 = jnp.clip(baseline_cos1, -5.0, 5.0)\n    baseline_cos2 = jnp.clip(baseline_cos2, -5.0, 5.0)\n    baseline_phase1 = jnp.clip(baseline_phase1, 0.0, two_pi)\n    baseline_phase2 = jnp.clip(baseline_phase2, 0.0, two_pi)\n\n    amplitude_1 = jnp.clip(amplitude_1, 0.0, 100.0)\n    amplitude_2 = jnp.clip(amplitude_2, 0.0, 100.0)\n\n    peak_offset_1 = jnp.clip(peak_offset_1, -0.8, 0.8)\n    peak_offset_2 = jnp.clip(peak_offset_2, -0.8, 0.8)\n\n    width_1 = jnp.clip(width_1, 0.08, 2.5)\n    width_2 = jnp.clip(width_2, 0.08, 2.5)\n\n    width_asym_1 = jnp.clip(width_asym_1, 0.25, 4.0)\n    width_asym_2 = jnp.clip(width_asym_2, 0.25, 4.0)\n\n    shape_1 = jnp.clip(shape_1, 0.75, 3.0)\n    shape_2 = jnp.clip(shape_2, 0.75, 3.0)\n\n    skew_1 = jnp.clip(skew_1, -0.85, 0.85)\n    skew_2 = jnp.clip(skew_2, -0.85, 0.85)\n\n    def _wrapped_diff(x, center):\n        return jnp.arctan2(jnp.sin(x - center), jnp.cos(x - center))\n\n    def _asymmetric_peak(d, width, width_asym, shape, skew):\n        root_asym = jnp.sqrt(width_asym)\n        sigma_left = width / root_asym\n        sigma_right = width * root_asym\n        sigma_side = jnp.where(d < 0.0, sigma_left, sigma_right)\n        kernel = jnp.exp(-jnp.power(jnp.abs(d) / sigma_side, shape))\n        return kernel * (1.0 + skew * jnp.sin(d))\n\n    mu_1 = jnp.mod(theta_pref + peak_offset_1, two_pi)\n    mu_2 = jnp.mod(theta_pref + jnp.pi + peak_offset_2, two_pi)\n\n    d_1 = _wrapped_diff(theta, mu_1)\n    d_2 = _wrapped_diff(theta, mu_2)\n\n    g_1 = _asymmetric_peak(d_1, width_1, width_asym_1, shape_1, skew_1)\n    g_2 = _asymmetric_peak(d_2, width_2, width_asym_2, shape_2, skew_2)\n\n    response = (\n        baseline\n        + baseline_cos1 * jnp.cos(theta - baseline_phase1)\n        + baseline_cos2 * jnp.cos(2.0 * theta - baseline_phase2)\n        + amplitude_1 * g_1\n        + amplitude_2 * g_2\n    )\n\n    return jnp.maximum(response, 0.0)",
+      "selection": {
+        "score": 30.145212173461914,
+        "mse": 2.9965212173461913,
+        "parameters": 18,
+        "median_fitted_params": {
+          "theta_pref": 3.114776611328125,
+          "baseline": 0.2922564446926117,
+          "baseline_cos1": 0.12976643443107605,
+          "baseline_phase1": 2.90140700340271,
+          "baseline_cos2": 0.15109188854694366,
+          "baseline_phase2": 4.646521091461182,
+          "amplitude_1": 3.3848488330841064,
+          "amplitude_2": 0.6366560459136963,
+          "peak_offset_1": -0.00017022047541104257,
+          "peak_offset_2": 0.026645544916391373,
+          "width_1": 0.31352198123931885,
+          "width_2": 2.3710238933563232,
+          "width_asym_1": 1.0157328844070435,
+          "width_asym_2": 1.016390323638916,
+          "shape_1": 2.635812997817993,
+          "shape_2": 0.7694962024688721,
+          "skew_1": -0.01712934486567974,
+          "skew_2": -0.00672244792804122
+        }
+      }
+    },
+    {
+      "id": "0_3_4",
+      "iteration": 0,
+      "discovery_loss": 30.4382438659668,
+      "upstream_eval_loss": 29.54596328735352,
+      "code": "import numpy as np\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.1, amplitude_1=1.0, amplitude_2=0.0,\n                    tuning_width_1=0.5, tuning_width_2=0.5, shape_1=2.0, shape_2=2.0,\n                    skew_1=0.0, skew_2=0.0, second_peak_shift=0.0,\n                    baseline_cos_1=0.0, baseline_sin_1=0.0,\n                    baseline_cos_2=0.0, baseline_sin_2=0.0):\n    \"\"\"parent_models:\n        parent_model_1: single_peak_gaussian_model\n        parent_model_2: antipodal_double_gaussian_model\n\n        Image analysis:\n        The antipodal_double_gaussian_model is better across most subplots: in Cell 900, Cell 754,\n        Cell 547, Cell 343, and Cell 981 its red curve follows the blue binned mean and wrap-around\n        peaks much better than the flat green curve of the single_peak_gaussian_model. Its main\n        remaining weaknesses are visible in several cells. In Cell 313, the blue mean has a sharp\n        second peak/shoulder near theta \u2248 4.6 rad that the red curve smooths and underpredicts,\n        showing that equal widths for the two lobes are too restrictive. In Cell 535 and Cell 900,\n        the peak is more sharply curved and differently tailed than a symmetric Gaussian, so a\n        fixed Gaussian exponent rounds the lobe incorrectly. In Cell 224, Cell 343, and Cell 981,\n        the valleys and edge-adjacent baseline are not constant, and the two lobes are not perfectly\n        pi-separated. These residuals indicate that this model should improve loss by adding\n        independent lobe widths/shapes, lobe asymmetry, an adjustable second-lobe offset, and a\n        low-order circular baseline modulation.\n\n        Equation:\n        Let d1 = wrap(theta - theta_pref), mu2 = wrap(theta_pref + pi + second_peak_shift),\n        d2 = wrap(theta - mu2), and\n\n            Q_i(theta) = exp(-0.5 * (abs(d_i) / (w_i * (1 + gamma_i * d_i))) ** p_i),  i = 1, 2\n\n            b(theta) = B * exp(c1*cos(theta) + s1*sin(theta) + c2*cos(2*theta) + s2*sin(2*theta))\n\n            R(theta) = b(theta) + A1*Q_1(theta) + A2*Q_2(theta)\n\n        Free parameters: theta_pref, second_peak_shift, B, A1, A2, w1, w2, p1, p2,\n        gamma1, gamma2, c1, s1, c2, s2.\n\n        Improvement:\n        This model generalizes the parent models by retaining their useful two-lobe circular tuning\n        while fixing their systematic residuals. Independent tuned widths and shape exponents allow\n        one peak to be narrow and another broad; skew parameters capture asymmetric peaks and wrap\n        edges; second_peak_shift relaxes exact antipodal symmetry; and the nonnegative harmonic\n        baseline tracks shallow troughs and broad firing-rate drift without creating negative rates.\n    \"\"\"\n    theta_pref = np.clip(theta_pref, 0.0, 2.0 * np.pi)\n    baseline = np.clip(baseline, 0.0, 100.0)\n    amplitude_1 = np.clip(amplitude_1, 0.0, 100.0)\n    amplitude_2 = np.clip(amplitude_2, 0.0, 100.0)\n    tuning_width_1 = np.clip(tuning_width_1, 0.03, np.pi)\n    tuning_width_2 = np.clip(tuning_width_2, 0.03, np.pi)\n    shape_1 = np.clip(shape_1, 0.4, 5.0)\n    shape_2 = np.clip(shape_2, 0.4, 5.0)\n    skew_1 = np.clip(skew_1, -0.3, 0.3)\n    skew_2 = np.clip(skew_2, -0.3, 0.3)\n    second_peak_shift = np.clip(second_peak_shift, -0.5 * np.pi, 0.5 * np.pi)\n    baseline_cos_1 = np.clip(baseline_cos_1, -1.5, 1.5)\n    baseline_sin_1 = np.clip(baseline_sin_1, -1.5, 1.5)\n    baseline_cos_2 = np.clip(baseline_cos_2, -1.5, 1.5)\n    baseline_sin_2 = np.clip(baseline_sin_2, -1.5, 1.5)\n\n    theta_arr = np.asarray(theta, dtype=float)\n\n    mu_1 = theta_pref\n    mu_2 = np.mod(theta_pref + np.pi + second_peak_shift, 2.0 * np.pi)\n\n    delta_1 = np.arctan2(np.sin(theta_arr - mu_1), np.cos(theta_arr - mu_1))\n    delta_2 = np.arctan2(np.sin(theta_arr - mu_2), np.cos(theta_arr - mu_2))\n\n    denom_1 = np.maximum(tuning_width_1 * (1.0 + skew_1 * delta_1), 0.02)\n    denom_2 = np.maximum(tuning_width_2 * (1.0 + skew_2 * delta_2), 0.02)\n\n    lobe_1 = amplitude_1 * np.exp(-0.5 * np.power(np.abs(delta_1) / denom_1, shape_1))\n    lobe_2 = amplitude_2 * np.exp(-0.5 * np.power(np.abs(delta_2) / denom_2, shape_2))\n\n    log_baseline = (\n        baseline_cos_1 * np.cos(theta_arr)\n        + baseline_sin_1 * np.sin(theta_arr)\n        + baseline_cos_2 * np.cos(2.0 * theta_arr)\n        + baseline_sin_2 * np.sin(2.0 * theta_arr)\n    )\n    modulated_baseline = baseline * np.exp(log_baseline)\n\n    return np.maximum(modulated_baseline + lobe_1 + lobe_2, 0.0)",
+      "jax_code": "import jax\nimport jax.numpy as jnp\n\ndef neuron_model(theta, theta_pref=0.0, baseline=0.1, amplitude_1=1.0, amplitude_2=0.0,\n                    tuning_width_1=0.5, tuning_width_2=0.5, shape_1=2.0, shape_2=2.0,\n                    skew_1=0.0, skew_2=0.0, second_peak_shift=0.0,\n                    baseline_cos_1=0.0, baseline_sin_1=0.0,\n                    baseline_cos_2=0.0, baseline_sin_2=0.0):\n    theta_pref = jnp.clip(theta_pref, 0.0, 2.0 * jnp.pi)\n    baseline = jnp.clip(baseline, 0.0, 100.0)\n    amplitude_1 = jnp.clip(amplitude_1, 0.0, 100.0)\n    amplitude_2 = jnp.clip(amplitude_2, 0.0, 100.0)\n    tuning_width_1 = jnp.clip(tuning_width_1, 0.03, jnp.pi)\n    tuning_width_2 = jnp.clip(tuning_width_2, 0.03, jnp.pi)\n    shape_1 = jnp.clip(shape_1, 0.4, 5.0)\n    shape_2 = jnp.clip(shape_2, 0.4, 5.0)\n    skew_1 = jnp.clip(skew_1, -0.3, 0.3)\n    skew_2 = jnp.clip(skew_2, -0.3, 0.3)\n    second_peak_shift = jnp.clip(second_peak_shift, -0.5 * jnp.pi, 0.5 * jnp.pi)\n    baseline_cos_1 = jnp.clip(baseline_cos_1, -1.5, 1.5)\n    baseline_sin_1 = jnp.clip(baseline_sin_1, -1.5, 1.5)\n    baseline_cos_2 = jnp.clip(baseline_cos_2, -1.5, 1.5)\n    baseline_sin_2 = jnp.clip(baseline_sin_2, -1.5, 1.5)\n\n    theta_arr = jnp.asarray(theta, dtype=jnp.float32)\n\n    mu_1 = theta_pref\n    mu_2 = jnp.mod(theta_pref + jnp.pi + second_peak_shift, 2.0 * jnp.pi)\n\n    delta_1 = jnp.arctan2(jnp.sin(theta_arr - mu_1), jnp.cos(theta_arr - mu_1))\n    delta_2 = jnp.arctan2(jnp.sin(theta_arr - mu_2), jnp.cos(theta_arr - mu_2))\n\n    denom_1 = jnp.maximum(tuning_width_1 * (1.0 + skew_1 * delta_1), 0.02)\n    denom_2 = jnp.maximum(tuning_width_2 * (1.0 + skew_2 * delta_2), 0.02)\n\n    lobe_1 = amplitude_1 * jnp.exp(-0.5 * jnp.power(jnp.abs(delta_1) / denom_1, shape_1))\n    lobe_2 = amplitude_2 * jnp.exp(-0.5 * jnp.power(jnp.abs(delta_2) / denom_2, shape_2))\n\n    log_baseline = (\n        baseline_cos_1 * jnp.cos(theta_arr)\n        + baseline_sin_1 * jnp.sin(theta_arr)\n        + baseline_cos_2 * jnp.cos(2.0 * theta_arr)\n        + baseline_sin_2 * jnp.sin(2.0 * theta_arr)\n    )\n    modulated_baseline = baseline * jnp.exp(log_baseline)\n\n    return jnp.maximum(modulated_baseline + lobe_1 + lobe_2, 0.0)",
+      "selection": {
+        "score": 30.16672706604004,
+        "mse": 3.001672706604004,
+        "parameters": 15,
+        "median_fitted_params": {
+          "theta_pref": -0.018011335283517838,
+          "baseline": 0.42587563395500183,
+          "amplitude_1": 0.5710756182670593,
+          "amplitude_2": 0.45780864357948303,
+          "tuning_width_1": 0.5545604228973389,
+          "tuning_width_2": 0.4416777193546295,
+          "shape_1": 1.9926334619522095,
+          "shape_2": 2.561464309692383,
+          "skew_1": -0.07501582056283951,
+          "skew_2": 0.03391554579138756,
+          "second_peak_shift": -0.092683345079422,
+          "baseline_cos_1": -0.08515580743551254,
+          "baseline_sin_1": -0.005253342445939779,
+          "baseline_cos_2": 0.12440069764852524,
+          "baseline_sin_2": -0.02898864820599556
+        }
+      }
+    }
+  ]
+}

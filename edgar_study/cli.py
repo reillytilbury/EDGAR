@@ -1,10 +1,9 @@
-"""Fit EDGAR's original Gaussian seeds without contacting a model provider."""
+"""EDGAR study commands: offline baseline, OpenCode Go preflight, search runs and locked-cell rescoring."""
 
 import argparse
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 
@@ -18,29 +17,7 @@ from edgar_study.datasets import (
     synthetic_recording,
 )
 
-UPSTREAM_COMMIT = "0943922dcb73b12dbee8e440b3e1ff700cb49c10"
-UPSTREAM_MODULES = (
-    "diagnostic", "genetic_helpers", "hypothesis_engine", "loss_functions", "seed_programs", "utils",
-)
-PENALTY = 0.01
-
-
-def import_upstream(checkout):
-    # Check the actual working-tree files, including partially checked-out repos.
-    for name in UPSTREAM_MODULES:
-        path = checkout / f"{name}.py"
-        expected = subprocess.check_output(
-            ["git", "-C", str(checkout), "show", f"{UPSTREAM_COMMIT}:{path.name}"]
-        )
-        if path.read_bytes() != expected:
-            raise ValueError(f"{path.name} differs from pinned upstream.")
-    sys.path.insert(0, str(checkout))
-    import hypothesis_engine
-    import loss_functions
-    import seed_programs
-    import utils
-
-    return hypothesis_engine.objective, loss_functions.quadratic_loss, seed_programs, utils
+from edgar_study.upstream import MSE_SCALE, PENALTY, UPSTREAM_COMMIT, import_upstream
 
 
 def run_baseline(args):
@@ -50,7 +27,10 @@ def run_baseline(args):
 
     if jax.default_backend() != "cpu":
         raise ValueError("The baseline requires a CPU JAX backend.")
-    objective, quadratic_loss, seeds, utils = import_upstream(args.upstream.resolve())
+    upstream = import_upstream(args.upstream.resolve())
+    objective = upstream["hypothesis_engine"].objective
+    quadratic_loss = upstream["loss_functions"].quadratic_loss
+    seeds, utils = upstream["seed_programs"], upstream["utils"]
     if args.synthetic:
         response, angles = synthetic_recording()
         sha256 = None
@@ -79,7 +59,7 @@ def run_baseline(args):
             count = params.shape[1]
             if not np.isfinite([initial_score, score, mse]).all():
                 raise ValueError(f"Nonfinite baseline metrics for {partition}/{label}.")
-            if not np.isclose(score, 10 * mse + PENALTY * count, rtol=1e-6, atol=1e-6):
+            if not np.isclose(score, MSE_SCALE * mse + PENALTY * count, rtol=1e-6, atol=1e-6):
                 raise ValueError(f"Upstream score differs from the recorded MSE for {partition}/{label}.")
             metrics[partition][label] = {
                 "initial_score": initial_score, "score": score, "mse": mse, "parameters": count,
@@ -123,16 +103,79 @@ def run_baseline(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    baseline = commands.add_parser("baseline", help="Fit and score the two Gaussian seeds.")
+
+    upstream = argparse.ArgumentParser(add_help=False)
+    upstream.add_argument("--upstream", type=Path, default=Path("."))
+    fitter = argparse.ArgumentParser(add_help=False)
+    fitter.add_argument("--fitter", choices=("auto", "upstream", "adam", "lm"), default=None,
+                        help="Per-cell parameter fitting. auto (run default): compiled Adam split across "
+                             "CPU cores when JAX has only a CPU, upstream's loop otherwise. lm is "
+                             "Levenberg-Marquardt, faster but scores differently. rescore defaults to "
+                             "the run's own fitter.")
+    dataset = argparse.ArgumentParser(add_help=False)
+    dataset.add_argument("--dataset", type=Path, required=True)
+    models = argparse.ArgumentParser(add_help=False)
+    models.add_argument("--model", default="hy4-flash-free", help="Translator, proposer and estimator model.")
+    models.add_argument("--image-model", default=None,
+                        help="Optional vision model that describes diagnostic images for --model.")
+    models.add_argument("--allow-paid", action="store_true",
+                        help="Permit models with a nonzero price (spend cap still applies).")
+    models.add_argument("--results", type=Path, default=Path("results"))
+    models.add_argument("--max-tokens", type=int, default=32_000)
+    models.add_argument("--reasoning-effort", default="none",
+                        help="Effort for translator, routine proposals and estimators "
+                             "(upstream's non-thinking Gemini 2.0 tiers).")
+
+    baseline = commands.add_parser("baseline", parents=[upstream], help="Fit and score the two Gaussian seeds.")
     source = baseline.add_mutually_exclusive_group(required=True)
     source.add_argument("--dataset", type=Path)
     source.add_argument("--synthetic", action="store_true")
-    baseline.add_argument("--upstream", type=Path, default=Path("."))
     baseline.add_argument("--output", type=Path, required=True)
     baseline.add_argument("--protocol", choices=("paper-fidelity", "strict-holdout-v1"),
                           default="strict-holdout-v1")
+    baseline.set_defaults(func=run_baseline)
+
+    preflight = commands.add_parser("preflight", parents=[models],
+                                    help="Check model availability, text and image calls.")
+    preflight.set_defaults(func=lambda args: _load("preflight", "preflight")(args))
+
+    run = commands.add_parser("run", parents=[models, dataset, upstream, fitter],
+                              help="Run the upstream EDGAR search with OpenCode Go models.")
+    run.add_argument("--iterations", type=int, default=12)
+    run.add_argument("--time-limit", type=float, default=600, help="Minutes.")
+    run.add_argument("--large-model", default=None,
+                     help="Model for every third generation (upstream's thinking tier). "
+                          "Defaults to --model with --large-reasoning-effort.")
+    run.add_argument("--large-reasoning-effort", default="high")
+    run.add_argument("--temperature-scale", type=float, default=0.5,
+                     help="Multiplies upstream's temperatures, which run from 1 to 2.")
+    run.add_argument("--concurrency", type=int, default=16)
+    run.add_argument("--no-images", action="store_true", help="Text-only feedback condition.")
+    run.add_argument("--islands", type=int, default=8)
+    run.add_argument("--batch-size", type=int, default=6, help="Proposals per island per generation.")
+    run.add_argument("--cell-fraction", type=float, default=1.0,
+                     help="Search on this random fraction of the discovery cells only (rescore still "
+                          "uses the full selection and locked-test cells).")
+    run.set_defaults(func=lambda args: _load("engine", "run")(args))
+
+    rescore = commands.add_parser("rescore", parents=[dataset, upstream, fitter],
+                                  help="Select on validation cells, score once on locked cells.")
+    rescore.add_argument("--run", type=Path, required=True)
+    rescore.add_argument("--top", type=int, default=10)
+    rescore.set_defaults(func=lambda args: _load("rescore", "rescore")(args))
+
+    report = commands.add_parser("report", help="Summarise a run and plot best-so-far discovery loss.")
+    report.add_argument("--run", type=Path, required=True)
+    report.set_defaults(func=lambda args: _load("report", "report")(args))
+
     args = parser.parse_args()
-    run_baseline(args)
+    args.func(args)
+
+
+def _load(module, name):
+    """Import subcommands lazily so the offline baseline needs no network client."""
+    import importlib
+    return getattr(importlib.import_module(f"edgar_study.{module}"), name)
 
 
 if __name__ == "__main__":

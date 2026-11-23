@@ -1,40 +1,113 @@
-# EDGAR × DeepSeek
+# EDGAR × OpenCode Go
 
-This fork starts with the offline baseline for the DeepSeek V4.1 Flash study. It fits EDGAR's original single- and double-Gaussian seeds with the upstream JAX evaluator, records Dataset 1 provenance, and saves exact cell and trial indices. Model integration and evolutionary search are pending.
+This fork runs [EDGAR](https://github.com/reillytilbury/EDGAR)'s published equation-discovery loop unchanged, with OpenCode Go models in place of Gemini. The upstream modules stay byte-identical to commit `0943922`; `edgar_study/` swaps only the LLM call layer at runtime.
 
-## Run the offline baseline
+- [docs/PHASE_0.md](docs/PHASE_0.md): the like-for-like replication, its protocol, and results.
+- [docs/ROADMAP.md](docs/ROADMAP.md): Phase 1 (agentic harness) and Phase 2 (custom harness) ideas.
+- [METHOD_DIFFS.md](METHOD_DIFFS.md): every known difference from the paper and from upstream.
 
-From a Git clone of this fork, with Git, Python 3.12 and uv available:
+Use [uv](https://docs.astral.sh/uv/) with Python 3.12. The upstream `requirements.txt` is kept for reference only; `pyproject.toml` and `uv.lock` are authoritative.
+
+## Setup
 
 ```bash
 uv sync --locked
-JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli baseline \
-  --synthetic --output results/synthetic
 ```
-
-For the original Stringer et al. recording, download the 859 MB file from [Janelia Figshare](https://janelia.figshare.com/articles/dataset/8279387). Figshare lists the dataset under CC BY-NC 4.0.
 
 ```bash
 mkdir -p data
 curl --fail --location https://ndownloader.figshare.com/files/15479246 \
   --output data/gratings_drifting_GT1_2019_04_12_1.npy
-
-JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli baseline \
-  --dataset data/gratings_drifting_GT1_2019_04_12_1.npy \
-  --output results/dataset1
 ```
 
-The runner checks the recording against the pinned SHA-256 before loading it. It verifies the six upstream Python modules against Git commit `0943922dcb73b12dbee8e440b3e1ff700cb49c10` before importing them. Use `--upstream /path/to/EDGAR` to point at a separate Git checkout.
+Dataset 1 is from [Stringer et al. on Janelia Figshare](https://janelia.figshare.com/articles/dataset/8279387) (859 MB, CC BY-NC 4.0). Every command that loads it checks it against a pinned SHA-256.
 
-Each new output directory contains `baseline.json` and `splits.npz`. The default `strict-holdout-v1` protocol reserves the locked test cells and scores discovery and model-selection cells. Pass `--protocol paper-fidelity` for the upstream 50/50 cell partition. See [METHOD_DIFFS.md](METHOD_DIFFS.md) for the preprocessing and scoring choices.
+Store the OpenCode Go key in a file outside the repository and point `OPENCODE_API_KEY_FILE` to it. `OPENCODE_API_KEY` also works. Request logs never contain the key.
 
-## Dataset 1 result
+## Offline baseline
 
-The pinned recording contains 20,616 cells and 4,282 trials. The upstream filters retained 2,110 cells and 1,712 trials per eligible cell. The default protocol assigned 1,055 discovery, 527 model-selection, and 528 locked test cells.
+Fits the single- and double-Gaussian seeds with the upstream JAX evaluator. Needs no key.
+
+```bash
+JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli baseline \
+  --dataset data/gratings_drifting_GT1_2019_04_12_1.npy --output results/dataset1
+```
+
+`--synthetic` replaces `--dataset` for a quick check. The default `strict-holdout-v1` protocol splits the 2,110 eligible cells into 1,055 discovery, 527 model-selection and 528 locked test cells. Discovery cells are identical to upstream's training half.
 
 | Gaussian seed | Discovery MSE | Selection MSE | Discovery penalized score | Selection penalized score |
 | --- | ---: | ---: | ---: | ---: |
 | Single | 2.997599 | 2.998546 | 30.015987 | 30.025467 |
 | Double | 2.880491 | 2.877630 | 28.854914 | 28.826298 |
 
-The baseline uses Linux CPU, Python 3.12.14 and JAX 0.6.0. No provider credentials or LLM requests are needed.
+## Search runs
+
+```bash
+uv run --locked python -m edgar_study.cli preflight --model hy4-flash-free
+```
+
+```bash
+JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli run --model hy4-flash-free \
+  --dataset data/gratings_drifting_GT1_2019_04_12_1.npy --iterations 12
+```
+
+For a run under 30 minutes on 4 CPU cores, search on a quarter of the discovery cells with a smaller search. `rescore` still tests on the full selection and locked-test cells:
+
+```bash
+JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli run --model hy4-flash-free \
+  --dataset data/gratings_drifting_GT1_2019_04_12_1.npy \
+  --iterations 2 --islands 4 --batch-size 6 --cell-fraction 0.25
+```
+
+```bash
+JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli rescore \
+  --run results/runs/<run-id> --dataset data/gratings_drifting_GT1_2019_04_12_1.npy
+```
+
+Each run directory holds:
+- `manifest.json`: models, settings, git SHAs and spend before and after.
+- `api_calls.jsonl`: one row per request attempt with role, status, latency and the provider's `usage` object.
+- `translations.jsonl`: NumPy → JAX translations, used by `rescore`.
+- upstream's own `program_databases/` output.
+
+`rescore` writes `rescore.json`.
+
+### Fitting speed
+
+Nearly all run time is per-cell curve fitting: 1,000 Adam steps over 1,055 cells for every program. `--fitter` picks how it runs:
+
+| `--fitter` | What it does | When |
+| --- | --- | --- |
+| `auto` (default) | `adam` if JAX has only a CPU, otherwise `upstream` | always safe |
+| `upstream` | upstream's Python loop, unchanged | GPU hosts, exact reproduction |
+| `adam` | the same Adam schedule compiled into one XLA loop, cells split across CPU cores (same scores to about 1e-4) | CPU hosts |
+| `lm` | Levenberg–Marquardt to convergence: much faster for small models, but scores differently | experiments only |
+
+`edgar_study/__init__.py` exposes one XLA CPU device per core so cells can be split across cores. `rescore` uses the run's own fitter unless `--fitter` is given.
+
+### Spending safeguards
+
+- Only models that the Go model list prices at zero (for example `hy4-flash-free`) can be called unless you pass `--allow-paid`. The price list is fetched at the start of every run.
+- Every request's list-equivalent cost is appended to `results/spend.jsonl`. New requests are refused once that ledger reaches $9.50.
+
+The paid run is the same command with the models swapped. DeepSeek V4.1 Flash has no `none` reasoning effort, so use `low` for its routine tiers:
+
+```bash
+JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli run --allow-paid \
+  --model deepseek-v4.1-flash --reasoning-effort low --image-model muse-spark-1.3-contributor \
+  --dataset data/gratings_drifting_GT1_2019_04_12_1.npy --iterations 12
+```
+
+## Tests
+
+```bash
+uv run --locked python tests.py
+```
+
+```bash
+uv run --locked python -m edgar_study.test_go_client
+```
+
+```bash
+JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.test_fitting
+```
