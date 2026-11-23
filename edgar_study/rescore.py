@@ -6,8 +6,8 @@ seeds are always scored as references. Settings match upstream's final evaluatio
 """
 
 import hashlib
+import inspect
 import json
-from pathlib import Path
 
 PENALTY = 0.01
 
@@ -70,7 +70,10 @@ def rescore(args, import_upstream):
         if not np.isfinite(total):
             return None
         count = int(params.shape[1])
-        return {"score": total, "mse": (total - PENALTY * count) / 10, "parameters": count}
+        names = [n for n in inspect.signature(candidate["model"]).parameters if n != "theta"]
+        medians = np.median(np.asarray(params), axis=0).tolist()
+        return {"score": total, "mse": (total - PENALTY * count) / 10, "parameters": count,
+                "median_fitted_params": dict(zip(names, medians)) if len(names) == count else medians}
 
     rows = []
     for candidate in candidates:

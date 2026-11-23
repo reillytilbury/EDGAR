@@ -174,8 +174,14 @@ def main():
     rescore.add_argument("--upstream", type=Path, default=Path("."))
     rescore.add_argument("--top", type=int, default=10)
 
+    summary = commands.add_parser("report", help="Summarise a run and plot best-so-far discovery loss.")
+    summary.add_argument("--run", type=Path, required=True)
+
     args = parser.parse_args()
-    if args.command == "baseline":
+    if args.command == "report":
+        from edgar_study.report import report
+        report(args)
+    elif args.command == "baseline":
         run_baseline(args)
     elif args.command == "preflight":
         from edgar_study.preflight import preflight
