@@ -1,4 +1,4 @@
-"""Fit EDGAR's original Gaussian seeds without contacting a model provider."""
+"""EDGAR study commands: offline baseline, OpenCode Go preflight, search runs and locked-cell rescoring."""
 
 import argparse
 import json
@@ -26,7 +26,7 @@ PENALTY = 0.01
 
 
 def import_upstream(checkout):
-    # Check the actual working-tree files, including partially checked-out repos.
+    """Import the six upstream modules after checking they match the pinned commit byte for byte."""
     for name in UPSTREAM_MODULES:
         path = checkout / f"{name}.py"
         expected = subprocess.check_output(
@@ -40,7 +40,8 @@ def import_upstream(checkout):
     import seed_programs
     import utils
 
-    return hypothesis_engine.objective, loss_functions.quadratic_loss, seed_programs, utils
+    return {"commit": UPSTREAM_COMMIT, "hypothesis_engine": hypothesis_engine,
+            "loss_functions": loss_functions, "seed_programs": seed_programs, "utils": utils}
 
 
 def run_baseline(args):
@@ -50,7 +51,10 @@ def run_baseline(args):
 
     if jax.default_backend() != "cpu":
         raise ValueError("The baseline requires a CPU JAX backend.")
-    objective, quadratic_loss, seeds, utils = import_upstream(args.upstream.resolve())
+    upstream = import_upstream(args.upstream.resolve())
+    objective = upstream["hypothesis_engine"].objective
+    quadratic_loss = upstream["loss_functions"].quadratic_loss
+    seeds, utils = upstream["seed_programs"], upstream["utils"]
     if args.synthetic:
         response, angles = synthetic_recording()
         sha256 = None
@@ -123,6 +127,7 @@ def run_baseline(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+
     baseline = commands.add_parser("baseline", help="Fit and score the two Gaussian seeds.")
     source = baseline.add_mutually_exclusive_group(required=True)
     source.add_argument("--dataset", type=Path)
@@ -131,8 +136,56 @@ def main():
     baseline.add_argument("--output", type=Path, required=True)
     baseline.add_argument("--protocol", choices=("paper-fidelity", "strict-holdout-v1"),
                           default="strict-holdout-v1")
+
+    def model_options(command):
+        command.add_argument("--model", default="hy4-flash-free",
+                             help="Translator, proposer and estimator model.")
+        command.add_argument("--image-model", default=None,
+                             help="Optional vision model that describes diagnostic images for --model.")
+        command.add_argument("--allow-paid", action="store_true",
+                             help="Permit models with a nonzero price (spend cap still applies).")
+        command.add_argument("--results", type=Path, default=Path("results"))
+        command.add_argument("--max-tokens", type=int, default=32_000)
+        command.add_argument("--reasoning-effort", default="none",
+                             help="Effort for translator, routine proposals and estimators "
+                                  "(upstream's non-thinking Gemini 2.0 tiers).")
+        command.add_argument("--temperature-scale", type=float, default=0.5,
+                             help="Multiplies upstream's temperatures, which run from 1 to 2.")
+        command.add_argument("--concurrency", type=int, default=8)
+
+    preflight = commands.add_parser("preflight", help="Check model availability, text and image calls.")
+    model_options(preflight)
+
+    run = commands.add_parser("run", help="Run the upstream EDGAR search with OpenCode Go models.")
+    model_options(run)
+    run.add_argument("--dataset", type=Path, required=True)
+    run.add_argument("--upstream", type=Path, default=Path("."))
+    run.add_argument("--iterations", type=int, default=12)
+    run.add_argument("--time-limit", type=float, default=600, help="Minutes.")
+    run.add_argument("--large-model", default=None,
+                     help="Model for every third generation (upstream's thinking tier). "
+                          "Defaults to --model with --large-reasoning-effort.")
+    run.add_argument("--large-reasoning-effort", default="high")
+    run.add_argument("--no-images", action="store_true", help="Text-only feedback condition.")
+
+    rescore = commands.add_parser("rescore", help="Select on validation cells, score once on locked cells.")
+    rescore.add_argument("--run", type=Path, required=True)
+    rescore.add_argument("--dataset", type=Path, required=True)
+    rescore.add_argument("--upstream", type=Path, default=Path("."))
+    rescore.add_argument("--top", type=int, default=10)
+
     args = parser.parse_args()
-    run_baseline(args)
+    if args.command == "baseline":
+        run_baseline(args)
+    elif args.command == "preflight":
+        from edgar_study.preflight import preflight
+        preflight(args)
+    elif args.command == "run":
+        from edgar_study.engine import run as run_search
+        run_search(args, import_upstream)
+    else:
+        from edgar_study.rescore import rescore as rescore_run
+        rescore_run(args, import_upstream)
 
 
 if __name__ == "__main__":
