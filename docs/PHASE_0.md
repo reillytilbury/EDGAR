@@ -42,4 +42,39 @@ The original plan was sound on scientific caution but rebuilt infrastructure EDG
 
 ## Results: free run (`hy4-flash-free`)
 
-_Pending._
+Everything below cost $0.00 in list-equivalent spend, according to the provider's `usage.opencode.list_cost` and the ledger.
+
+### Getting the free model to work
+
+The first smoke attempt ran upstream's settings directly and failed in two ways, both visible in `api_calls.jsonl`:
+
+- **Reasoning on (provider default):** every proposal spent its whole 16,000-token budget on hidden reasoning and returned no code (`finish_reason: length`, `content_chars: 0`).
+- **Reasoning off at upstream's Gemini temperatures (1–2):** the reply turned into multilingual word salad after about 30 lines of code.
+
+The fix keeps upstream's structure and changes only the model settings (see [METHOD_DIFFS.md](../METHOD_DIFFS.md)):
+
+- upstream's non-thinking Gemini 2.0 tiers map to reasoning `none`;
+- its every-third-generation Gemini 2.5 thinking tier maps to the same model with reasoning `high`;
+- all temperatures are halved, so the annealing schedule runs over (0.5, 1].
+
+### Smoke run: 1 generation, 48 proposals
+
+Artifacts are in [artifacts/smoke](artifacts/smoke). The run took 3.9 h of wall time; most of that was upstream's final refit of 63 programs on CPU.
+
+| | Count | Succeeded | Median latency | Input tokens | Output tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Proposals (reasoning `high`) | 48 | 48 | 69 s | 137,856 | 468,733 |
+| Translations | 48 | 48 | 4 s | 71,453 | 37,918 |
+| Estimators | 48 | 48 | 7 s | 160,962 | 64,353 |
+
+31 of 48 programs fitted and scored (65%). The rest failed in execution, translation or fitting, which upstream counts as failed programs.
+
+| Program | Parameters | Discovery score | Selection score (527 cells) | Locked test score (528 cells) | Locked test MSE |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Single Gaussian seed | 4 | 30.02 | 30.06 | 29.73 | — |
+| Double Gaussian seed | 5 | 28.85 | 28.86 | 28.56 | 2.851 |
+| **Selected program** (gen 0, island 2, batch 4) | 13 | 28.72 | 28.70 | **28.35** | **2.822** |
+
+The selected program improves the locked-test penalized score by 0.22 over the double Gaussian, and unpenalized MSE by 1.0%. [Its code](artifacts/smoke/winner.py) uses two generalized-Gaussian lobes, each with its own width, sharpness exponent and skew, plus a second lobe near (not fixed at) the antipode and a broad sinusoidal background. That is already most of the paper's structure. Its fitted sharpness exponents have a median of about 2.1, so this particular program is Gaussian-like rather than peaky.
+
+Shape exponents appeared immediately: 26 of the 31 scored generation-0 programs fit one (`** shape`, `np.power(|d|/σ, p)` and similar). The paper's model emerged over several generations; here it is the model's first guess. That points to prior knowledge, from this paper or from generalized Gaussians in general, rather than discovery driven by the search.
