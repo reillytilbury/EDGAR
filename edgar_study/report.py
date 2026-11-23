@@ -25,6 +25,24 @@ def _census(run_dir):
     return np.load(found[-1], allow_pickle=True)
 
 
+def _scored_programs(run_dir):
+    found = sorted(run_dir.glob("program_databases/*/*/hypothesis_engine.log"))
+    if not found:
+        return []
+    programs, generation, lines, collecting = [], None, [], False
+    for line in found[0].read_text(errors="replace").splitlines():
+        if line.startswith("id="):
+            generation = int(line[3:].split(",")[0])
+        elif line.startswith("Neuron Model: "):
+            collecting, lines = True, []
+        elif line.startswith("Neuron Model (JAX): ") and collecting:
+            programs.append((generation, "\n".join(lines)))
+            collecting = False
+        elif collecting:
+            lines.append(line)
+    return programs
+
+
 def report(args):
     import numpy as np
 
@@ -50,16 +68,10 @@ def report(args):
     for call in calls:
         by_role[call["role"]].append(call)
 
-    exponents = []
-    database = sorted(run_dir.glob("program_databases/*/*/combined/programs_db.csv"))
-    first_exponent_generation = None
-    if database:
-        import pandas as pd
-        frame = pd.read_csv(database[0])
-        for _, row in frame[frame["iteration_number"] >= 0].iterrows():
-            if EXPONENT.search(str(row["program_code_string"])):
-                exponents.append(int(row["iteration_number"]))
-        first_exponent_generation = min(exponents) if exponents else None
+    # Every scored program's NumPy source is in upstream's log, after an "id=generation,island,batch" line.
+    scored_code = _scored_programs(run_dir)
+    exponent_generations = sorted(g for g, code in scored_code if EXPONENT.search(code))
+    first_exponent_generation = exponent_generations[0] if exponent_generations else None
 
     per_generation = []
     for generation in range(generations):
@@ -84,7 +96,7 @@ def report(args):
                             "input_tokens": sum(r["usage"].get("prompt_tokens") or 0 for r in rows)}
                      for role, rows in by_role.items()},
         "list_cost_usd": sum(float((c["usage"].get("opencode") or {}).get("list_cost") or 0) for c in calls),
-        "programs_with_fitted_exponent_in_final_db": len(exponents),
+        "scored_programs_with_fitted_exponent": len(exponent_generations),
         "first_generation_with_fitted_exponent": first_exponent_generation,
     }
     (run_dir / "report.json").write_text(json.dumps(result, indent=2, default=float) + "\n")
@@ -101,14 +113,15 @@ def _plot(path, index, loss, best, seeds, manifest):
     figure, axis = plt.subplots(figsize=(8, 4.5), dpi=150, facecolor=SURFACE)
     axis.set_facecolor(SURFACE)
     double = seeds.get(1)
-    shown = loss[loss < double + 5] if double is not None else loss  # failures can score far off the scale
-    axis.scatter(index[loss < double + 5], shown, s=14, color=LIGHT_BLUE, edgecolor="none",
-                 label="Each scored program", zorder=2)
+    visible = loss < double + 5  # very poor programs would squash the interesting range
+    hidden = int((~visible).sum())
+    axis.scatter(index[visible], loss[visible], s=14, color=LIGHT_BLUE, edgecolor="none",
+                 label="Each scored program" + (f" ({hidden} above {double + 5:.0f} not shown)" if hidden else ""),
+                 zorder=2)
     axis.step(range(len(best)), best, where="post", color=BLUE, linewidth=2, label="Best so far", zorder=3)
     if double is not None:
-        axis.axhline(double, color=MUTED, linewidth=1, linestyle=(0, (4, 3)), zorder=1)
-        axis.annotate(f"Double Gaussian seed {double:.2f}", (len(best), double), xytext=(-4, 4),
-                      textcoords="offset points", ha="right", va="bottom", color=MUTED, fontsize=9)
+        axis.axhline(double, color=MUTED, linewidth=1, linestyle=(0, (4, 3)), zorder=1,
+                     label=f"Double Gaussian seed ({double:.2f})")
     for generation in range(1, len(best) // PROPOSALS_PER_GENERATION):
         axis.axvline(generation * PROPOSALS_PER_GENERATION, color="#e6e5e0", linewidth=0.8, zorder=0)
     axis.set_xlabel("Proposals attempted (failed proposals included)", color=TEXT)
