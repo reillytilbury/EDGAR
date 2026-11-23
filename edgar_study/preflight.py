@@ -5,9 +5,7 @@ import io
 import json
 import time
 
-import httpx
-
-from edgar_study.go_client import BASE_URL, USER_AGENT, GoClient, Ledger, load_key
+from edgar_study.go_client import GoClient, Ledger, fetch_models, is_free, load_key
 
 
 def _diagnostic_png():
@@ -28,35 +26,31 @@ def _diagnostic_png():
 
 
 def preflight(args):
-    key = load_key()
-    listing = httpx.get(f"{BASE_URL}/models", headers={"Authorization": f"Bearer {key}",
-                                                       "User-Agent": USER_AGENT}, timeout=30).json()
-    models = {entry["id"]: entry for entry in listing["data"]}
-    run_dir = args.results / "preflight" / time.strftime("%Y%m%d-%H%M%S")
+    models = fetch_models(load_key())
     report = {"models": {}}
     for name in filter(None, (args.model, args.image_model)):
-        entry = models.get(name)
-        if entry is None:
+        if name not in models:
             raise SystemExit(f"{name} is not in the OpenCode Go model list.")
-        report["models"][name] = {"price_per_mtok": entry["cost"]["text"],
-                                  "input_modalities": entry["modalities"]["input"]}
+        report["models"][name] = {"price_per_mtok": models[name]["cost"]["text"],
+                                  "input_modalities": models[name]["modalities"]["input"]}
 
-    client = GoClient(run_dir, Ledger(args.results / "spend.jsonl"), session_id="edgar-preflight",
-                      allow_paid=args.allow_paid, max_tokens=args.max_tokens,
-                      reasoning_effort=args.reasoning_effort, temperature_scale=args.temperature_scale)
+    run_dir = args.results / "preflight" / time.strftime("%Y%m%d-%H%M%S")
+    go = GoClient(run_dir, Ledger(args.results / "spend.jsonl"), session_id="edgar-preflight",
+                  free_models=[name for name, entry in models.items() if is_free(entry)],
+                  allow_paid=args.allow_paid, max_tokens=args.max_tokens)
 
     async def checks():
         try:
-            text = await client.chat(args.model, "Reply with exactly: ok", temperature=1.0)
-            vision_model = args.image_model or args.model
-            image = await client.chat(vision_model, "In one sentence: which curve has the sharper peak, "
-                                      "blue or red?", img_bytes=_diagnostic_png())
-            return text, image
+            return await asyncio.gather(
+                go.chat(args.model, "Reply with exactly: ok", temperature=0.5, effort=args.reasoning_effort),
+                go.chat(args.image_model or args.model, "In one sentence: which curve has the sharper "
+                        "peak, blue or red?", effort=args.reasoning_effort, img_bytes=_diagnostic_png()))
         finally:
-            await client.close()
+            await go.close()
 
     text, image = asyncio.run(checks())
-    report.update(text_reply=text, image_reply=image, spend_total_usd=client.ledger.total)
+    report.update(text_reply=text, image_reply=image, expected_image_reply="blue",
+                  spend_total_usd=go.ledger.total)
     (run_dir / "preflight.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     if text is None or image is None:

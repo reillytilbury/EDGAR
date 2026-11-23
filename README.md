@@ -66,14 +66,14 @@ Each run directory holds:
 
 ### Spending safeguards
 
-- Only models priced at zero (`hy4-flash-free`, `beam-free`, `iceman-contributor-free`) can be called unless you pass `--allow-paid`.
+- Only models that the Go model list prices at zero (for example `hy4-flash-free`) can be called unless you pass `--allow-paid`. The price list is fetched at the start of every run.
 - Every request's list-equivalent cost is appended to `results/spend.jsonl`. New requests are refused once that ledger reaches $9.50.
 
-The paid run is the same command with the models swapped:
+The paid run is the same command with the models swapped. DeepSeek V4.1 Flash has no `none` reasoning effort, so use `low` for its routine tiers:
 
 ```bash
 JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli run --allow-paid \
-  --model deepseek-v4.1-flash --image-model muse-spark-1.3-contributor \
+  --model deepseek-v4.1-flash --reasoning-effort low --image-model muse-spark-1.3-contributor \
   --dataset data/gratings_drifting_GT1_2019_04_12_1.npy --iterations 12
 ```
 

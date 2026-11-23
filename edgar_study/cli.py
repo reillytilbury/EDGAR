@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 
@@ -18,30 +17,7 @@ from edgar_study.datasets import (
     synthetic_recording,
 )
 
-UPSTREAM_COMMIT = "0943922dcb73b12dbee8e440b3e1ff700cb49c10"
-UPSTREAM_MODULES = (
-    "diagnostic", "genetic_helpers", "hypothesis_engine", "loss_functions", "seed_programs", "utils",
-)
-PENALTY = 0.01
-
-
-def import_upstream(checkout):
-    """Import the six upstream modules after checking they match the pinned commit byte for byte."""
-    for name in UPSTREAM_MODULES:
-        path = checkout / f"{name}.py"
-        expected = subprocess.check_output(
-            ["git", "-C", str(checkout), "show", f"{UPSTREAM_COMMIT}:{path.name}"]
-        )
-        if path.read_bytes() != expected:
-            raise ValueError(f"{path.name} differs from pinned upstream.")
-    sys.path.insert(0, str(checkout))
-    import hypothesis_engine
-    import loss_functions
-    import seed_programs
-    import utils
-
-    return {"commit": UPSTREAM_COMMIT, "hypothesis_engine": hypothesis_engine,
-            "loss_functions": loss_functions, "seed_programs": seed_programs, "utils": utils}
+from edgar_study.upstream import MSE_SCALE, PENALTY, UPSTREAM_COMMIT, import_upstream
 
 
 def run_baseline(args):
@@ -83,7 +59,7 @@ def run_baseline(args):
             count = params.shape[1]
             if not np.isfinite([initial_score, score, mse]).all():
                 raise ValueError(f"Nonfinite baseline metrics for {partition}/{label}.")
-            if not np.isclose(score, 10 * mse + PENALTY * count, rtol=1e-6, atol=1e-6):
+            if not np.isclose(score, MSE_SCALE * mse + PENALTY * count, rtol=1e-6, atol=1e-6):
                 raise ValueError(f"Upstream score differs from the recorded MSE for {partition}/{label}.")
             metrics[partition][label] = {
                 "initial_score": initial_score, "score": score, "mse": mse, "parameters": count,
@@ -128,70 +104,67 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    baseline = commands.add_parser("baseline", help="Fit and score the two Gaussian seeds.")
+    upstream = argparse.ArgumentParser(add_help=False)
+    upstream.add_argument("--upstream", type=Path, default=Path("."))
+    dataset = argparse.ArgumentParser(add_help=False)
+    dataset.add_argument("--dataset", type=Path, required=True)
+    models = argparse.ArgumentParser(add_help=False)
+    models.add_argument("--model", default="hy4-flash-free", help="Translator, proposer and estimator model.")
+    models.add_argument("--image-model", default=None,
+                        help="Optional vision model that describes diagnostic images for --model.")
+    models.add_argument("--allow-paid", action="store_true",
+                        help="Permit models with a nonzero price (spend cap still applies).")
+    models.add_argument("--results", type=Path, default=Path("results"))
+    models.add_argument("--max-tokens", type=int, default=32_000)
+    models.add_argument("--reasoning-effort", default="none",
+                        help="Effort for translator, routine proposals and estimators "
+                             "(upstream's non-thinking Gemini 2.0 tiers).")
+
+    baseline = commands.add_parser("baseline", parents=[upstream], help="Fit and score the two Gaussian seeds.")
     source = baseline.add_mutually_exclusive_group(required=True)
     source.add_argument("--dataset", type=Path)
     source.add_argument("--synthetic", action="store_true")
-    baseline.add_argument("--upstream", type=Path, default=Path("."))
     baseline.add_argument("--output", type=Path, required=True)
     baseline.add_argument("--protocol", choices=("paper-fidelity", "strict-holdout-v1"),
                           default="strict-holdout-v1")
+    baseline.set_defaults(func=run_baseline)
 
-    def model_options(command):
-        command.add_argument("--model", default="hy4-flash-free",
-                             help="Translator, proposer and estimator model.")
-        command.add_argument("--image-model", default=None,
-                             help="Optional vision model that describes diagnostic images for --model.")
-        command.add_argument("--allow-paid", action="store_true",
-                             help="Permit models with a nonzero price (spend cap still applies).")
-        command.add_argument("--results", type=Path, default=Path("results"))
-        command.add_argument("--max-tokens", type=int, default=32_000)
-        command.add_argument("--reasoning-effort", default="none",
-                             help="Effort for translator, routine proposals and estimators "
-                                  "(upstream's non-thinking Gemini 2.0 tiers).")
-        command.add_argument("--temperature-scale", type=float, default=0.5,
-                             help="Multiplies upstream's temperatures, which run from 1 to 2.")
-        command.add_argument("--concurrency", type=int, default=8)
+    preflight = commands.add_parser("preflight", parents=[models],
+                                    help="Check model availability, text and image calls.")
+    preflight.set_defaults(func=lambda args: _load("preflight", "preflight")(args))
 
-    preflight = commands.add_parser("preflight", help="Check model availability, text and image calls.")
-    model_options(preflight)
-
-    run = commands.add_parser("run", help="Run the upstream EDGAR search with OpenCode Go models.")
-    model_options(run)
-    run.add_argument("--dataset", type=Path, required=True)
-    run.add_argument("--upstream", type=Path, default=Path("."))
+    run = commands.add_parser("run", parents=[models, dataset, upstream],
+                              help="Run the upstream EDGAR search with OpenCode Go models.")
     run.add_argument("--iterations", type=int, default=12)
     run.add_argument("--time-limit", type=float, default=600, help="Minutes.")
     run.add_argument("--large-model", default=None,
                      help="Model for every third generation (upstream's thinking tier). "
                           "Defaults to --model with --large-reasoning-effort.")
     run.add_argument("--large-reasoning-effort", default="high")
+    run.add_argument("--temperature-scale", type=float, default=0.5,
+                     help="Multiplies upstream's temperatures, which run from 1 to 2.")
+    run.add_argument("--concurrency", type=int, default=16)
     run.add_argument("--no-images", action="store_true", help="Text-only feedback condition.")
+    run.set_defaults(func=lambda args: _load("engine", "run")(args))
 
-    rescore = commands.add_parser("rescore", help="Select on validation cells, score once on locked cells.")
+    rescore = commands.add_parser("rescore", parents=[dataset, upstream],
+                                  help="Select on validation cells, score once on locked cells.")
     rescore.add_argument("--run", type=Path, required=True)
-    rescore.add_argument("--dataset", type=Path, required=True)
-    rescore.add_argument("--upstream", type=Path, default=Path("."))
     rescore.add_argument("--top", type=int, default=10)
+    rescore.set_defaults(func=lambda args: _load("rescore", "rescore")(args))
 
-    summary = commands.add_parser("report", help="Summarise a run and plot best-so-far discovery loss.")
-    summary.add_argument("--run", type=Path, required=True)
+    report = commands.add_parser("report", help="Summarise a run and plot best-so-far discovery loss.")
+    report.add_argument("--run", type=Path, required=True)
+    report.set_defaults(func=lambda args: _load("report", "report")(args))
 
     args = parser.parse_args()
-    if args.command == "report":
-        from edgar_study.report import report
-        report(args)
-    elif args.command == "baseline":
-        run_baseline(args)
-    elif args.command == "preflight":
-        from edgar_study.preflight import preflight
-        preflight(args)
-    elif args.command == "run":
-        from edgar_study.engine import run as run_search
-        run_search(args, import_upstream)
-    else:
-        from edgar_study.rescore import rescore as rescore_run
-        rescore_run(args, import_upstream)
+    args.func(args)
+
+
+def _load(module, name):
+    """Import subcommands lazily so the offline baseline needs no network client."""
+    import importlib
+    return getattr(importlib.import_module(f"edgar_study.{module}"), name)
 
 
 if __name__ == "__main__":
