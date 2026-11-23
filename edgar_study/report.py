@@ -8,8 +8,6 @@ import statistics
 from edgar_study.go_client import list_cost
 from edgar_study.upstream import MSE_SCALE, PENALTY, combined_file
 
-PROPOSALS_PER_GENERATION = 48
-BATCH = 6
 # A fitted exponent applied to a distance-like term, e.g. `** p`, `np.power(x, shape)`, `** self_p`.
 EXPONENT = re.compile(r"\*\*\s*\(?\s*[A-Za-z_]\w*|np\.power\(\s*[^,]+,\s*[A-Za-z_]\w*")
 
@@ -52,15 +50,17 @@ def report(args):
 
     run_dir = args.run.resolve()
     manifest = json.loads((run_dir / "manifest.json").read_text())
+    batch = manifest.get("batch_size", 6)  # runs before these options existed used upstream's 8 × 6
+    per_generation_count = manifest.get("islands", 8) * batch
     census = _census(run_dir)
     seeds = {int(row[2]): float(row[4]) for row in census if row[0] == -1}  # 0: single, 1: double Gaussian
     learned = [row for row in census if row[0] >= 0]
     generations = int(max([row[0] for row in learned], default=-1)) + 1
 
     # Proposal index counts every attempted slot, so failed proposals leave flat segments.
-    index = np.array([row[0] * PROPOSALS_PER_GENERATION + row[1] * BATCH + row[2] for row in learned])
+    index = np.array([row[0] * per_generation_count + row[1] * batch + row[2] for row in learned], dtype=int)
     loss = np.array([float(row[4]) for row in learned])
-    attempted = generations * PROPOSALS_PER_GENERATION
+    attempted = generations * per_generation_count
     best = np.full(attempted, seeds[1])
     np.minimum.at(best, index, loss)
     best = np.minimum.accumulate(best)
@@ -77,11 +77,11 @@ def report(args):
 
     per_generation = []
     for generation in range(generations):
-        scored = loss[(index // PROPOSALS_PER_GENERATION) == generation]
+        scored = loss[(index // per_generation_count) == generation]
         per_generation.append({"generation": generation, "scored": int(scored.size),
-                               "failed": PROPOSALS_PER_GENERATION - int(scored.size),
+                               "failed": per_generation_count - int(scored.size),
                                "best": float(scored.min()) if scored.size else None,
-                               "best_so_far": float(best[(generation + 1) * PROPOSALS_PER_GENERATION - 1])})
+                               "best_so_far": float(best[(generation + 1) * per_generation_count - 1])})
 
     result = {
         "run_id": manifest["run_id"], "models": manifest["models"], "status": manifest.get("status"),
@@ -102,12 +102,12 @@ def report(args):
         "first_generation_with_fitted_exponent": first_exponent_generation,
     }
     (run_dir / "report.json").write_text(json.dumps(result, indent=2, default=float) + "\n")
-    _plot(run_dir / "best_so_far.png", index, loss, best, seeds, manifest)
+    _plot(run_dir / "best_so_far.png", index, loss, best, seeds, manifest, per_generation_count)
     print(json.dumps({k: v for k, v in result.items() if k != "per_generation"}, indent=2, default=float))
     return result
 
 
-def _plot(path, index, loss, best, seeds, manifest):
+def _plot(path, index, loss, best, seeds, manifest, per_generation_count):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -123,8 +123,8 @@ def _plot(path, index, loss, best, seeds, manifest):
     axis.step(range(len(best)), best, where="post", color=BLUE, linewidth=2, label="Best so far", zorder=3)
     axis.axhline(double, color=MUTED, linewidth=1, linestyle=(0, (4, 3)), zorder=1,
                  label=f"Double Gaussian seed ({double:.2f})")
-    for generation in range(1, len(best) // PROPOSALS_PER_GENERATION):
-        axis.axvline(generation * PROPOSALS_PER_GENERATION, color="#e6e5e0", linewidth=0.8, zorder=0)
+    for generation in range(1, len(best) // per_generation_count):
+        axis.axvline(generation * per_generation_count, color="#e6e5e0", linewidth=0.8, zorder=0)
     axis.set_xlabel("Proposals attempted (failed proposals included)", color=TEXT)
     axis.set_ylabel(f"Discovery loss ({MSE_SCALE}·MSE + {PENALTY}·params, lower is better)", color=TEXT)
     axis.set_title(f"EDGAR on {manifest['models']['proposer']}: best discovery loss", color=TEXT,

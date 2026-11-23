@@ -151,6 +151,11 @@ def main():
                      help="Multiplies upstream's temperatures, which run from 1 to 2.")
     run.add_argument("--concurrency", type=int, default=16)
     run.add_argument("--no-images", action="store_true", help="Text-only feedback condition.")
+    run.add_argument("--islands", type=int, default=8)
+    run.add_argument("--batch-size", type=int, default=6, help="Proposals per island per generation.")
+    run.add_argument("--cell-fraction", type=float, default=1.0,
+                     help="Search on this random fraction of the discovery cells only (rescore still "
+                          "uses the full selection and locked-test cells).")
     run.set_defaults(func=lambda args: _load("engine", "run")(args))
 
     rescore = commands.add_parser("rescore", parents=[dataset, upstream, fitter],

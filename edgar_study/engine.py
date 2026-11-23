@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 from edgar_study import fitting
-from edgar_study.datasets import ACTIVITY_THRESHOLD, CONCENTRATION_THRESHOLD
+from edgar_study.datasets import ACTIVITY_THRESHOLD, CONCENTRATION_THRESHOLD, load_dataset, prepare
 from edgar_study.go_client import GoClient, Ledger, fetch_models, is_free, load_key, role
 from edgar_study.upstream import PENALTY, code_key, import_upstream
 
@@ -109,6 +109,23 @@ def git_sha(path):
         return None
 
 
+def discovery_subset(dataset, extract_response, fraction, path):
+    """Write a recording holding only a random `fraction` of the discovery cells and return their IDs.
+
+    With n_pcs=0, upstream's response extraction is row-wise, so these cells' responses are exactly
+    those of the full recording. The search, including upstream's own 50/50 split and final
+    evaluation, then never sees the selection or locked-test cells used by `rescore`.
+    """
+    import numpy as np
+
+    response, angles, _ = load_dataset(dataset, extract_response)
+    _, _, _, indices = prepare(response, angles, "strict-holdout-v1")
+    discovery = indices["discovery_cell_ids"]  # recording rows, already in random order
+    cells = np.sort(discovery[:max(4, round(fraction * len(discovery)))])
+    np.save(path, {"sresp": response[cells], "istim": angles}, allow_pickle=True)
+    return cells
+
+
 def run(args):
     """Run hypothesis_engine.main with the configured models inside a fresh run directory."""
     args.dataset = args.dataset.resolve()  # the search runs from inside the run directory
@@ -136,8 +153,16 @@ def run(args):
         "use_image_feedback": not args.no_images, "max_tokens": args.max_tokens,
         "reasoning_effort": args.reasoning_effort, "temperature_scale": args.temperature_scale,
         "concurrency": args.concurrency, "fitter": fitter,
+        "islands": args.islands, "batch_size": args.batch_size,
         "spend_before_usd": ledger.total, "started": time.time(),
     }
+    if args.cell_fraction < 1:
+        data_path = run_dir / "search_cells.npy"
+        cells = discovery_subset(args.dataset, upstream["utils"].extract_stimulus_related_response,
+                                 args.cell_fraction, data_path)
+        manifest.update(cell_fraction=args.cell_fraction, search_cell_ids=cells.tolist())
+    else:
+        data_path = args.dataset
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Run directory: {run_dir}")
 
@@ -145,8 +170,8 @@ def run(args):
     previous = Path.cwd()
     os.chdir(run_dir)  # upstream writes program_databases/ under the working directory
     try:
-        asyncio.run(_main(hypothesis_engine, go, args))
-    except Exception as error:  # record the failure, then re-raise after the manifest is updated
+        asyncio.run(_main(hypothesis_engine, go, args, data_path))
+    except BaseException as error:  # record failures and interrupts, then re-raise
         status = f"failed: {type(error).__name__}: {error}"
         raise
     finally:
@@ -156,14 +181,17 @@ def run(args):
     return run_dir
 
 
-async def _main(hypothesis_engine, go, args):
+async def _main(hypothesis_engine, go, args, data_path):
+    ring = [(island + 1) % args.islands for island in range(args.islands)]  # upstream's migration topology
     try:
         await hypothesis_engine.main(
             n_iterations=args.iterations, time_limit=args.time_limit,
+            n_islands=args.islands, batch_size=args.batch_size,
+            exploration_topology=ring, exploitation_topology=ring,
             use_image_feedback=not args.no_images, use_large_every=3, param_penalty_weight=PENALTY,
             tiny_lm_name=args.model, little_lm_name=args.model, large_lm_name=large_model(args),
             activity_thresh=ACTIVITY_THRESHOLD, conc_thresh=CONCENTRATION_THRESHOLD,
-            data_path=str(args.dataset),
+            data_path=str(data_path),
         )
     finally:
         await go.close()
