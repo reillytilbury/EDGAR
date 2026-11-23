@@ -64,6 +64,19 @@ Each run directory holds:
 
 `rescore` writes `rescore.json`.
 
+### Fitting speed
+
+Nearly all run time is per-cell curve fitting: 1,000 Adam steps over 1,055 cells for every program. `--fitter` picks how it runs:
+
+| `--fitter` | What it does | When |
+| --- | --- | --- |
+| `auto` (default) | `adam` if JAX has only a CPU, otherwise `upstream` | always safe |
+| `upstream` | upstream's Python loop, unchanged | GPU hosts, exact reproduction |
+| `adam` | the same Adam schedule compiled into one XLA loop, cells split across CPU cores (same scores to about 1e-4) | CPU hosts |
+| `lm` | Levenberg–Marquardt to convergence: much faster for small models, but scores differently | experiments only |
+
+`edgar_study/__init__.py` exposes one XLA CPU device per core so cells can be split across cores. `rescore` uses the run's own fitter unless `--fitter` is given.
+
 ### Spending safeguards
 
 - Only models that the Go model list prices at zero (for example `hy4-flash-free`) can be called unless you pass `--allow-paid`. The price list is fetched at the start of every run.
@@ -85,4 +98,8 @@ uv run --locked python tests.py
 
 ```bash
 uv run --locked python -m edgar_study.test_go_client
+```
+
+```bash
+JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.test_fitting
 ```

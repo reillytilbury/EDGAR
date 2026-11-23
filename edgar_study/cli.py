@@ -106,6 +106,12 @@ def main():
 
     upstream = argparse.ArgumentParser(add_help=False)
     upstream.add_argument("--upstream", type=Path, default=Path("."))
+    fitter = argparse.ArgumentParser(add_help=False)
+    fitter.add_argument("--fitter", choices=("auto", "upstream", "adam", "lm"), default=None,
+                        help="Per-cell parameter fitting. auto (run default): compiled Adam split across "
+                             "CPU cores when JAX has only a CPU, upstream's loop otherwise. lm is "
+                             "Levenberg-Marquardt, faster but scores differently. rescore defaults to "
+                             "the run's own fitter.")
     dataset = argparse.ArgumentParser(add_help=False)
     dataset.add_argument("--dataset", type=Path, required=True)
     models = argparse.ArgumentParser(add_help=False)
@@ -133,7 +139,7 @@ def main():
                                     help="Check model availability, text and image calls.")
     preflight.set_defaults(func=lambda args: _load("preflight", "preflight")(args))
 
-    run = commands.add_parser("run", parents=[models, dataset, upstream],
+    run = commands.add_parser("run", parents=[models, dataset, upstream, fitter],
                               help="Run the upstream EDGAR search with OpenCode Go models.")
     run.add_argument("--iterations", type=int, default=12)
     run.add_argument("--time-limit", type=float, default=600, help="Minutes.")
@@ -147,7 +153,7 @@ def main():
     run.add_argument("--no-images", action="store_true", help="Text-only feedback condition.")
     run.set_defaults(func=lambda args: _load("engine", "run")(args))
 
-    rescore = commands.add_parser("rescore", parents=[dataset, upstream],
+    rescore = commands.add_parser("rescore", parents=[dataset, upstream, fitter],
                                   help="Select on validation cells, score once on locked cells.")
     rescore.add_argument("--run", type=Path, required=True)
     rescore.add_argument("--top", type=int, default=10)

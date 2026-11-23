@@ -8,6 +8,7 @@ seeds are always scored as references. Settings match upstream's final evaluatio
 import inspect
 import json
 
+from edgar_study import fitting
 from edgar_study.upstream import code_key, combined_file, import_upstream, score_program
 
 MAX_ITER = 2_000  # upstream's final evaluation
@@ -22,6 +23,9 @@ def rescore(args):
     upstream = import_upstream(args.upstream.resolve())
     utils, seeds = upstream["utils"], upstream["seed_programs"]
     run_dir = args.run.resolve()
+    # Score with the run's own fitter unless told otherwise; runs before --fitter existed used upstream's.
+    run_fitter = json.loads((run_dir / "manifest.json").read_text()).get("fitter", "upstream")
+    fitter = fitting.install(upstream["hypothesis_engine"], args.fitter or run_fitter)
     database = combined_file(run_dir, "programs_db.csv")
     if database is None:
         raise SystemExit(f"No combined programs_db.csv under {run_dir}; has the run finished?")
@@ -77,6 +81,7 @@ def rescore(args):
 
     single, double = candidates[:2]
     result = {
+        "fitter": fitter,
         "selection_rule": "lowest selection-cell penalized score among the top "
                           f"{args.top} unique learned programs by discovery loss",
         "cell_counts": {name: int(len(cells)) for name, cells in groups.items()},

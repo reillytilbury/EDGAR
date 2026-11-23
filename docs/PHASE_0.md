@@ -78,3 +78,32 @@ Artifacts are in [artifacts/smoke](artifacts/smoke). The run took 3.9 h of wall 
 The selected program improves the locked-test penalized score by 0.22 over the double Gaussian, and unpenalized MSE by 1.0%. [Its code](artifacts/smoke/winner.py) uses two generalized-Gaussian lobes, each with its own width, sharpness exponent and skew, plus a second lobe near (not fixed at) the antipode and a broad sinusoidal background. That is already most of the paper's structure. Its fitted sharpness exponents have a median of about 2.1, so this particular program is Gaussian-like rather than peaky.
 
 Shape exponents appeared immediately: 26 of the 31 scored generation-0 programs fit one (`** shape`, `np.power(|d|/σ, p)` and similar). The paper's model emerged over several generations; here it is the model's first guess. That points to prior knowledge, from this paper or from generalized Gaussians in general, rather than discovery driven by the search.
+
+### Full run up to Phase 0.1 (stopped by decision after 4 of 12 generations)
+
+The 12-generation free run was paused after generation 4 (240 proposals attempted, all logged) and that point declared the end of Phase 0.1. On 4 CPU cores each generation took 1.3–1.6 h, nearly all of it per-cell fitting, so the full paper-sized run would have needed about 24 h in total.
+
+- **Requests:** 720 of 724 succeeded and none were truncated.
+- **Valid programs per generation:** 75%, 77%, 73%, 75%.
+- **Best discovery score:** 28.72, against the double Gaussian's 28.85, essentially flat after generation 0.
+
+The best program so far (generation 3, island 7) has the paper's structure: two peaks of the form `A·exp(−(|θ−φ|/σ±)^p)`, a separate exponent and left/right width per peak, and a free peak separation (median fit 169°). On top of that it adds a 4-parameter structured baseline, for 15 parameters against the paper's 11. A check fit on 300 discovery cells gave min(p₁, p₂) a median of **1.20** (IQR 0.88–1.64), with 63% of cells having a dominant-peak exponent below 2. That is peaky, like the paper's p ≈ 1. Because this form was proposed from generation 0, it looks like recall more than discovery. This program has not been through the locked-cell rescore.
+
+## Fitting speed on CPU
+
+Where the time goes, for one 1,055-cell fit of the double Gaussian: the estimator takes 0.1 s and upstream's checks 1.6 s. Each Adam value-and-gradient step takes about 80–106 ms, mostly `sin`, `cos`, `arctan2` and `exp` over 451,540 points. XLA keeps only about 2.3 of 4 cores busy. The time is in the steps themselves, not Python overhead: compiling upstream's loop into one XLA call saved only 15–25%.
+
+Fitters compared on all 1,055 discovery cells with a 1,000-step budget, 4 CPU cores:
+
+| Program | Fitter | Seconds | Train loss | Score |
+| --- | --- | ---: | ---: | ---: |
+| double Gaussian (5 params) | upstream | 89.0 | 28.2144 | 28.8550 |
+| double Gaussian (5 params) | adam (compiled, sharded) | 42.3 | 28.2144 | 28.8549 |
+| double Gaussian (5 params) | lm | 8.4 | 28.1960 | 28.8837 |
+| gen-3 best (15 params) | upstream | 38.4 | 27.5517 | 28.7230 |
+| gen-3 best (15 params) | adam (compiled, sharded) | 26.0 | 27.5517 | 28.7230 |
+| gen-3 best (15 params) | lm | 29.8 | 27.4733 | 28.9196 |
+
+- **Compiled, sharded Adam** gives the same answer 1.5–2.1× faster, so `--fitter auto` now uses it whenever JAX has only a CPU.
+- **Levenberg–Marquardt** is the better curve fitter: lower training loss, and 10× faster for small models. But it scores *worse* on held-out trials. Upstream's 1,000 small Adam steps never reach convergence, so they act as early stopping. EDGAR's score therefore rewards equations that fit well from the estimator's starting point under that budget. LM removes that regularisation and penalises flexible models more, which would change which equations win. It stays opt-in. A later phase could pair LM with explicit regularisation or validation-based stopping, as the paper's own post-hoc fits do.
+- For larger speed-ups, use a GPU. The paper's run took 45 minutes for 576 programs.

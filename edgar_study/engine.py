@@ -19,6 +19,7 @@ import time
 import uuid
 from pathlib import Path
 
+from edgar_study import fitting
 from edgar_study.datasets import ACTIVITY_THRESHOLD, CONCENTRATION_THRESHOLD
 from edgar_study.go_client import GoClient, Ledger, fetch_models, is_free, load_key, role
 from edgar_study.upstream import PENALTY, code_key, import_upstream
@@ -113,6 +114,7 @@ def run(args):
     args.dataset = args.dataset.resolve()  # the search runs from inside the run directory
     upstream = import_upstream(args.upstream.resolve())
     hypothesis_engine = upstream["hypothesis_engine"]
+    fitter = fitting.install(hypothesis_engine, args.fitter or "auto")
 
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     run_dir = (args.results / "runs" / run_id).resolve()
@@ -133,7 +135,8 @@ def run(args):
                    "large_proposer": large_model(args), "image_reader": args.image_model},
         "use_image_feedback": not args.no_images, "max_tokens": args.max_tokens,
         "reasoning_effort": args.reasoning_effort, "temperature_scale": args.temperature_scale,
-        "concurrency": args.concurrency, "spend_before_usd": ledger.total, "started": time.time(),
+        "concurrency": args.concurrency, "fitter": fitter,
+        "spend_before_usd": ledger.total, "started": time.time(),
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Run directory: {run_dir}")
