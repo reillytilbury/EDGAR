@@ -1,11 +1,12 @@
 [project]
 name = "edgar-deepseek"
 version = "0.1.0"
-description = "Offline baseline and reproduction tools for the EDGAR study"
+description = "Reproduction tools for running EDGAR with OpenCode Go models"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "anthropic==0.51.0",
     "google-genai==1.19.0",
+    "httpx==0.28.1",
     "jax==0.6.0",
     "jaxopt==0.8.5",
     "matplotlib==3.10.3",
