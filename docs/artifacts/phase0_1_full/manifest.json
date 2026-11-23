@@ -1,0 +1,24 @@
+{
+  "run_id": "20261123-010621-bb5b44",
+  "repo_sha": "880199f44c47ef8324d9af4049b5f24e12f15581",
+  "upstream_commit": "0943922dcb73b12dbee8e440b3e1ff700cb49c10",
+  "dataset": "/home/user/edgar-deepseek/data/gratings_drifting_GT1_2019_04_12_1.npy",
+  "iterations": 12,
+  "time_limit_min": 4000.0,
+  "models": {
+    "translator": "hy4-flash-free",
+    "proposer": "hy4-flash-free",
+    "estimator": "hy4-flash-free",
+    "large_proposer": "hy4-flash-free#high",
+    "image_reader": null
+  },
+  "use_image_feedback": true,
+  "max_tokens": 32000,
+  "reasoning_effort": "none",
+  "temperature_scale": 0.5,
+  "concurrency": 16,
+  "spend_before_usd": 0.0,
+  "started": 1795395981.1194508,
+  "status": "stopped by decision after generation 4 of 12 (Phase 0.1); upstream's final evaluation did not run",
+  "finished": 1795425830.4755008
+}

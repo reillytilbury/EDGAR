@@ -1,0 +1,80 @@
+{
+  "run_id": "20261123-010621-bb5b44",
+  "models": {
+    "translator": "hy4-flash-free",
+    "proposer": "hy4-flash-free",
+    "estimator": "hy4-flash-free",
+    "large_proposer": "hy4-flash-free#high",
+    "image_reader": null
+  },
+  "status": "stopped by decision after generation 4 of 12 (Phase 0.1); upstream's final evaluation did not run",
+  "wall_hours": 8.29,
+  "generations": 4,
+  "proposals_attempted": 192,
+  "programs_scored": 144,
+  "seed_losses": {
+    "0": 30.016000747680664,
+    "1": 28.85495948791504
+  },
+  "best_discovery_loss": 28.723026275634766,
+  "improvement_over_double_gaussian": 0.13193321228027344,
+  "per_generation": [
+    {
+      "generation": 0,
+      "scored": 36,
+      "failed": 12,
+      "best": 28.725027084350586,
+      "best_so_far": 28.725027084350586
+    },
+    {
+      "generation": 1,
+      "scored": 37,
+      "failed": 11,
+      "best": 28.82309341430664,
+      "best_so_far": 28.725027084350586
+    },
+    {
+      "generation": 2,
+      "scored": 35,
+      "failed": 13,
+      "best": 28.811298370361328,
+      "best_so_far": 28.725027084350586
+    },
+    {
+      "generation": 3,
+      "scored": 36,
+      "failed": 12,
+      "best": 28.723026275634766,
+      "best_so_far": 28.723026275634766
+    }
+  ],
+  "requests": {
+    "proposal": {
+      "count": 244,
+      "ok": 240,
+      "truncated": 0,
+      "median_latency_s": 63.608000000000004,
+      "output_tokens": 1482315,
+      "input_tokens": 1138728
+    },
+    "translation": {
+      "count": 240,
+      "ok": 240,
+      "truncated": 0,
+      "median_latency_s": 6.3735,
+      "output_tokens": 368047,
+      "input_tokens": 619031
+    },
+    "estimator": {
+      "count": 240,
+      "ok": 240,
+      "truncated": 0,
+      "median_latency_s": 8.6655,
+      "output_tokens": 391386,
+      "input_tokens": 1846104
+    }
+  },
+  "list_cost_usd": 0.0,
+  "scored_programs_with_fitted_exponent": 170,
+  "first_generation_with_fitted_exponent": 0
+}

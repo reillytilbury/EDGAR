@@ -51,6 +51,14 @@ JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli run --model hy4-flas
   --dataset data/gratings_drifting_GT1_2019_04_12_1.npy --iterations 12
 ```
 
+For a run under 30 minutes on 4 CPU cores, search on a quarter of the discovery cells with a smaller search. `rescore` still tests on the full selection and locked-test cells:
+
+```bash
+JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli run --model hy4-flash-free \
+  --dataset data/gratings_drifting_GT1_2019_04_12_1.npy \
+  --iterations 2 --islands 4 --batch-size 6 --cell-fraction 0.25
+```
+
 ```bash
 JAX_PLATFORMS=cpu uv run --locked python -m edgar_study.cli rescore \
   --run results/runs/<run-id> --dataset data/gratings_drifting_GT1_2019_04_12_1.npy

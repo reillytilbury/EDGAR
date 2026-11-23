@@ -6,8 +6,10 @@ Issues are disabled on this repository, so later phases are tracked here. Only P
 
 Run EDGAR's unchanged discovery loop with OpenCode Go models in place of Gemini. See [PHASE_0.md](PHASE_0.md).
 
-- [x] Free-model run on `hy4-flash-free` (no spend): 1-generation smoke run and a full 12-generation run, with the winner rescored on locked test cells.
-- [ ] Paid run: DeepSeek V4.1 Flash writes all code; Muse Spark 1.3 Contributor reads diagnostic images only. Total budget $10.
+- [x] Phase 0.1, free model `hy4-flash-free` ($0): a 1-generation smoke run with locked-cell rescore, and a 12-generation run stopped by decision after 4 generations.
+- [x] Faster CPU fitting (compiled, core-sharded Adam) and a 24-minute fast run with locked-cell rescore.
+- [ ] Paid run: DeepSeek V4.1 Flash writes all code; Muse Spark 1.3 Contributor reads diagnostic images only. Total budget $10. Run paper-sized searches on a GPU.
+- [ ] rcvPCA eigenspectrum check of the selected equations against the paper's slopes (4.26 / 4.34).
 
 ## Phase 1: off-the-shelf agentic harness (idea)
 
